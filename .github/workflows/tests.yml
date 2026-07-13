@@ -132,7 +132,7 @@ jobs:
       sca: ${{ steps.filter.outputs.sca }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
-      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -218,7 +218,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -228,14 +228,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
 
       - name: Restore venv from cache
         id: venv-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -252,7 +252,7 @@ jobs:
 
       - name: Save venv to cache
         if: steps.venv-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -283,7 +283,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -292,7 +292,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -313,7 +313,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -327,7 +327,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -336,7 +336,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -349,7 +349,7 @@ jobs:
         run: chmod +x $VENV_PATH/bin/*
 
       - name: Cache Python bytecode
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           # __pycache__ contents are deterministic per (Python version,
           # source contents). Caching by source-tree hash recovers the
@@ -425,7 +425,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -434,7 +434,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -455,7 +455,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -469,7 +469,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -478,7 +478,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -513,7 +513,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -522,7 +522,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -543,7 +543,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -557,7 +557,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -566,7 +566,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -600,7 +600,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -609,7 +609,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -630,7 +630,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -644,7 +644,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -653,7 +653,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -691,7 +691,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -706,7 +706,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends coccinelle
           spatch --version
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -727,7 +727,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -741,7 +741,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -750,7 +750,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -785,7 +785,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -816,7 +816,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
@@ -876,14 +876,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -904,7 +904,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -918,7 +918,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -927,7 +927,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
