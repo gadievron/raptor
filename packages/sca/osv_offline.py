@@ -144,7 +144,7 @@ class OsvOfflineDB:
             except json.JSONDecodeError:
                 continue
             if version is None or _record_matches_version(
-                record, ecosystem, version,
+                record, ecosystem, version, name=name,
             ):
                 out.append(parse_osv_record(record))
         return out
@@ -226,10 +226,6 @@ class OsvOfflineDB:
         added = 0
         skipped = 0
         assert self._conn is not None
-        # Wipe stale advisories for this ecosystem before re-ingesting
-        # so removed (deprecated) IDs don't linger.
-        self._conn.execute(
-            "DELETE FROM advisories WHERE ecosystem = ?", (ecosystem,))
 
         # Substrate-based safe walk. ``core.zip.extract_files_from_zip``
         # centralises zip-slip / symlink / oversize / compression-bomb /
@@ -266,6 +262,11 @@ class OsvOfflineDB:
             )
             return None
         skipped += expected_json_entries - len(files)
+        # Wipe stale advisories for this ecosystem before re-ingesting
+        # so removed (deprecated) IDs don't linger. Placed after zip
+        # validation so a corrupt download doesn't destroy the cache.
+        self._conn.execute(
+            "DELETE FROM advisories WHERE ecosystem = ?", (ecosystem,))
         for filename, raw in files.items():
             try:
                 record = json.loads(raw)
@@ -366,9 +367,10 @@ def _our_ecosystem(osv_value: str) -> Optional[str]:
 
 def _record_matches_version(
     record: Dict, ecosystem: str, version: str,
+    name: Optional[str] = None,
 ) -> bool:
     """True if ``version`` falls inside any of the record's affected
-    ranges for this ecosystem."""
+    ranges for this ecosystem (and package ``name`` when given)."""
     affected = record.get("affected") or []
     for blk in affected:
         if not isinstance(blk, dict):
@@ -379,6 +381,11 @@ def _record_matches_version(
         blk_eco = _our_ecosystem(pkg.get("ecosystem", ""))
         if blk_eco != ecosystem:
             continue
+        if name is not None:
+            blk_name = pkg.get("name")
+            if isinstance(blk_name, str):
+                if _canonical_name(ecosystem, blk_name) != _canonical_name(ecosystem, name):
+                    continue
         for rng in blk.get("ranges") or []:
             if not isinstance(rng, dict):
                 continue

@@ -175,17 +175,19 @@ def _apply_one_from(
         rf"(\s|$|@|#)",              # boundary
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    matches = list(pattern.finditer(text))
+    if not matches:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_tag = match.group(2)
-    if current_tag == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if current_tag != edit.old_value:
+    target_matches = [m for m in matches if m.group(2) == edit.old_value]
+    if not target_matches:
+        already_done = [m for m in matches if m.group(2) == edit.new_value]
+        if already_done:
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
+        current_tag = matches[0].group(2)
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
@@ -193,11 +195,13 @@ def _apply_one_from(
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    # Group 1 = prefix-up-to-colon, group 3 = boundary char.
-    new_text = pattern.sub(
-        rf"\g<1>{edit.new_value}\g<3>",
-        text, count=1,
-    )
+    new_text = text
+    for m in reversed(target_matches):
+        new_text = (
+            new_text[:m.start(2)]
+            + edit.new_value
+            + new_text[m.end(2):]
+        )
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )

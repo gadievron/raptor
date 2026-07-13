@@ -57,6 +57,7 @@ def render_html_report(
     cache_misses: Optional[int] = None,
     cache_evictions: Optional[int] = None,
     generated_at: Optional[datetime] = None,
+    parse_failures: Sequence = (),
 ) -> str:
     """Return the full report as a single HTML string."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -105,6 +106,8 @@ def render_html_report(
         ),
         _filter_bar(ecosystems),
     ]
+    if parse_failures:
+        parts.append(_parse_failures_section(parse_failures))
     if sorted_vulns:
         parts.append(_vuln_section(sorted_vulns))
     if sorted_supply:
@@ -242,6 +245,20 @@ def _summary_section(
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"<dl class=\"counts\">{counts_html}</dl>"
         "</section>"
+    )
+
+
+def _parse_failures_section(failures: Sequence) -> str:
+    items = "".join(
+        f"<li><code>{escape(str(f.path))}</code> &mdash; "
+        f"{escape(str(f.reason)[:200])}</li>"
+        for f in failures
+    )
+    return (
+        "<section><h2>Parser warnings</h2>"
+        f"<p><em>{len(failures)} manifest(s) could not be parsed &mdash; "
+        "the dependency set below DOES NOT include their contents.</em></p>"
+        f"<ul>{items}</ul></section>"
     )
 
 

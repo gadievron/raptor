@@ -174,6 +174,9 @@ def _build_dep(
         return None
     image = image.strip()
 
+    if image.startswith("./") or image.startswith("../"):
+        return None
+
     name, version = _split_image_ref(image)
     if not name:
         return None
@@ -193,10 +196,13 @@ def _build_dep(
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            "high",
+            "high" if version else "medium",
             reason=(
                 f"docker-compose service {service_name!r} pinned to "
                 f"{image}"
+            ) if version else (
+                f"docker-compose service {service_name!r} references "
+                f"{image} with no tag (implicitly :latest)"
             ),
         ),
         source_kind="compose",
@@ -215,6 +221,8 @@ def _split_image_ref(ref: str) -> tuple:
     # Digest pin first (``name@sha256:...``).
     if "@" in ref:
         name, _, digest = ref.rpartition("@")
+        if ":" in name.rsplit("/", 1)[-1]:
+            name = name.rsplit(":", 1)[0]
         return name, digest if digest else None
     # Tag pin (last colon, but only AFTER the last slash so we
     # don't confuse a registry port like ``localhost:5000``).

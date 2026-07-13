@@ -119,11 +119,13 @@ def refine_rubygems_verdicts(
     for d in candidates:
         qualified_names = rubygems_symbol_map[d.key()]
         results = []
+        analyzed_names = []
         for qn in qualified_names:
             if "." not in qn:
                 continue
             try:
                 results.append(function_called(inventory, qn))
+                analyzed_names.append(qn)
             except ValueError:
                 continue
         if not results:
@@ -132,7 +134,7 @@ def refine_rubygems_verdicts(
         if Verdict.CALLED in verdicts:
             evidence: List[str] = []
             called: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            for qn, r in zip(analyzed_names, results):
                 if r.verdict == Verdict.CALLED:
                     called.append(qn)
                     evidence.extend(f"{p}:{ln}" for p, ln in r.evidence)
@@ -154,7 +156,7 @@ def refine_rubygems_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"gem imported but the {len(qualified_names)} "
+                        f"gem imported but the {len(results)} "
                         f"OSV-listed affected symbol(s) are not called "
                         f"from non-test Ruby source"
                     ),

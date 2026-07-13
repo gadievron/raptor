@@ -194,16 +194,15 @@ def _parse_github_url(url: str) -> Optional[str]:
 
 def _detect_default_branch(client, owner_repo: str) -> Optional[str]:
     """Ask GitHub for the repo's default branch via
-    ``GET /repos/{owner}/{repo}``. Falls back to ``main`` when the
-    API call fails — the operator-most-common name. Truly weird
-    defaults (``trunk``, ``develop``) are surfaced by the API call;
-    we don't try to be clever."""
+    ``GET /repos/{owner}/{repo}``. Returns None when the API call
+    fails — the caller no-ops, consistent with the module's
+    'better silent than wrong' contract."""
     info = client.get_repo_info(owner_repo)
     if isinstance(info, dict):
         branch = info.get("default_branch")
         if isinstance(branch, str) and branch:
             return branch
-    return "main"
+    return None
 
 
 def _placeholder_host(target: Path, owner_repo: str) -> Dependency:

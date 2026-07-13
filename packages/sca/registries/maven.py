@@ -157,7 +157,9 @@ def _extract_versions(data: dict) -> List[str]:
                                        "milestone")):
                 continue
             import re as _re
-            if _re.search(r"[-.](rc|cr|m)\d+", lo):
+            if _re.search(r"[-.](rc|cr)\d*", lo):
+                continue
+            if _re.search(r"[-.](m)\d+", lo):
                 continue
         seen.add(v)
         out.append(v)

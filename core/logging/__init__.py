@@ -91,13 +91,12 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
 
-        # Add extra fields if present
-        if hasattr(record, "job_id"):
-            log_obj["job_id"] = record.job_id
-        if hasattr(record, "tool"):
-            log_obj["tool"] = record.tool
-        if hasattr(record, "duration"):
-            log_obj["duration"] = record.duration
+        _STANDARD_ATTRS = frozenset(logging.LogRecord(
+            "", 0, "", 0, "", (), None,
+        ).__dict__)
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_ATTRS and key not in log_obj:
+                log_obj[key] = value
 
         # `default=str` so non-JSON-native types in `extra` (Path,
         # datetime, UUID, custom dataclass repr) serialise as their

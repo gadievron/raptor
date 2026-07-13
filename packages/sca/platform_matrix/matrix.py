@@ -183,14 +183,14 @@ def _walk_dockerfile(
         logger.debug("platform_matrix: failed to read %s: %s", path, e)
         return
 
+    known_stages: set = set()
     for match in _FROM_RE.finditer(text):
         platform_flag = match.group(1)  # may be None
         image_ref = match.group(2)
-        # Skip multi-stage FROM-AS references (``FROM build AS rt``
-        # where ``build`` is a prior stage name, not an image).
-        if ":" not in image_ref and "/" not in image_ref:
-            # No tag + no registry — looks like a stage name. The
-            # ``FROM stage AS new_stage`` pattern is the case.
+        as_m = re.search(r'\bAS\s+(\S+)', match.group(0), re.IGNORECASE)
+        if as_m:
+            known_stages.add(as_m.group(1))
+        if image_ref in known_stages:
             continue
         # Strip variant suffixes like ``-slim``, ``-alpine`` keep
         # the distro lookup focused: ``python:3.13-slim-bookworm``
@@ -452,10 +452,10 @@ def _walk_gha_workflows(
 
     runs_on_re = re.compile(r"^\s*runs-on:\s*([^\n#]+)", re.MULTILINE)
     matrix_os_re = re.compile(
-        r"^\s*os:\s*\[\s*([^\]]+)\s*\]", re.MULTILINE,
+        r"^\s*(?:os|platform):\s*\[\s*([^\]]+)\s*\]", re.MULTILINE,
     )
 
-    for wf in workflows_dir.glob("*.yml"):
+    for wf in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
         try:
             text = wf.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -496,7 +496,7 @@ def _walk_gha_workflows(
 # grammar-incomplete workflow (in-flight edit, typo) doesn't take
 # down discovery.
 _BUILD_PUSH_USES_RE = re.compile(
-    r"^\s*-\s*uses:\s*docker/build-push-action@[^\s\n]+",
+    r"^\s*-?\s*uses:\s*docker/build-push-action@[^\s\n]+",
     re.MULTILINE,
 )
 _NEXT_STEP_BOUNDARY_RE = re.compile(
@@ -536,6 +536,8 @@ def _extract_gha_build_push_platforms(
         if platforms_match is None:
             continue
         value = platforms_match.group(1).strip().strip("'\"")
+        if value in ("|", ">", "|+", ">+", "|-", ">-"):
+            continue
         # ``platforms: linux/amd64,linux/arm64`` — comma-separated.
         # Also handle YAML list inline shape: ``[linux/amd64, ...]``.
         value = value.strip("[]")
@@ -602,9 +604,8 @@ def _add_runner(
         ))
         return
     if runner_ref.startswith("macos-"):
-        # Modern macOS runners are aarch64 (Apple Silicon).
-        arch = "aarch64"
         macos_version = _parse_macos_runner_version(runner_ref)
+        arch = "aarch64" if macos_version is None or macos_version[0] >= 14 else "x86_64"
         matrix.add(PlatformPair(
             arch=arch, libc=None,
             source=f"GHA runs-on: {runner_ref} in {workflow.name}",

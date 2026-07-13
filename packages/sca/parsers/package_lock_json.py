@@ -97,7 +97,8 @@ def _parse_v2_or_v3(data: Dict[str, Any], path: Path) -> List[Dependency]:
         scope = _scope_from_packages_entry(entry)
 
         pin_style, version_for_record = _classify_packages_entry(entry, version)
-        is_direct = name in direct_names
+        is_direct = (key.count("node_modules/") == 1
+                     and name in direct_names)
 
         deps.append(Dependency(
             ecosystem=ECOSYSTEM,
@@ -167,7 +168,7 @@ def _classify_packages_entry(
             return PinStyle.PATH, version
         if resolved.startswith(("http://", "https://")):
             # HTTP tarball — version field is still authoritative.
-            return PinStyle.EXACT if version else PinStyle.PATH, version
+            return PinStyle.EXACT if version else PinStyle.WILDCARD, version
     if version is None:
         return PinStyle.WILDCARD, None
     return PinStyle.EXACT, version

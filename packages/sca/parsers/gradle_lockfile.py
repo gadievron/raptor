@@ -130,7 +130,13 @@ def _scope_from_configs(configs: Set[str]) -> str:
         return "test"
     if configs & _BUILD_CONFIGS:
         return "build"
-    return "main"   # safest default: assume runtime-relevant
+    lc = {c.lower() for c in configs}
+    if any("test" in c for c in lc):
+        return "test"
+    if any(kw in c for c in lc
+           for kw in ("annotationprocessor", "kapt", "ksp")):
+        return "build"
+    return "main"
 
 
 register(filenames=["gradle.lockfile"])(parse)

@@ -114,7 +114,8 @@ def _iter_files(root: Path) -> Iterable[Path]:
         try:
             if p.is_file():
                 yield p
-        except OSError:
+        except OSError as e:
+            logger.debug("sca.cache_eviction: is_file %s failed: %s", p, e)
             continue
 
 

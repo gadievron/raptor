@@ -746,3 +746,61 @@ class TestMarkdownHeadingNeutralisation:
         # support `\r` is intentional rather than accidental.
         out = neutralize_tag_forgery("a\r## b")
         assert "\\##" not in out
+
+
+# ---------------------------------------------------------------------------
+# Passthrough dash-boundary neutralization
+# ---------------------------------------------------------------------------
+
+
+class TestPassthroughDashNeutralization:
+    """Attacker content inside a passthrough envelope must not be able
+    to forge the --- boundary that closes the envelope."""
+
+    def _render(self, content, kind="content"):
+        from core.security.prompt_envelope import _render_passthrough
+
+        block = UntrustedBlock(content=content, kind=kind, origin="test")
+        profile = ModelDefenseProfile(
+            name="passthrough",
+            tag_style="passthrough",
+        )
+        return _render_passthrough(block, nonce="deadbeef", profile=profile)
+
+    def test_standalone_triple_dash_neutralized(self):
+        result = self._render("before\n---\nafter")
+        lines = result.split("\n")
+        interior = lines[1:-1]
+        for line in interior:
+            assert line.strip() != "---", (
+                f"Standalone --- survived in passthrough content: {line!r}"
+            )
+
+    def test_quad_dash_neutralized(self):
+        result = self._render("before\n----\nafter")
+        interior = result.split("\n")[1:-1]
+        for line in interior:
+            stripped = line.strip()
+            assert not re.fullmatch(r'-{3,}', stripped), (
+                f"Dash boundary survived: {stripped!r}"
+            )
+
+    def test_indented_dash_boundary_neutralized(self):
+        result = self._render("before\n  ---  \nafter")
+        interior = result.split("\n")[1:-1]
+        for line in interior:
+            stripped = line.strip()
+            assert not re.fullmatch(r'-{3,}', stripped), (
+                f"Indented dash boundary survived: {stripped!r}"
+            )
+
+    def test_inline_dashes_preserved(self):
+        """Dashes within a line of text should NOT be neutralized."""
+        result = self._render("value is --- important")
+        assert "important" in result
+
+    def test_label_still_neutralized(self):
+        """The kind/origin label side must still neutralize ---."""
+        result = self._render("hello", kind="---evil---")
+        first_line = result.split("\n")[0]
+        assert "---evil---" not in first_line

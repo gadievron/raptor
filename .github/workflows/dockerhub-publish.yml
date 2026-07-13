@@ -32,6 +32,7 @@ permissions:
 
 jobs:
   build-push:
+    if: github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -72,3 +73,4 @@ jobs:
           for tag in ${TAGS//,/ }; do
             docker push "${tag}"
           done
+

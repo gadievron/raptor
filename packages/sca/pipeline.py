@@ -798,6 +798,7 @@ def run_sca(
                 _suppressions.apply_to_findings(vuln_findings, entries)
                 + _suppressions.apply_to_findings(hygiene_findings, entries)
                 + _suppressions.apply_to_findings(supply_chain_findings, entries)
+                + _suppressions.apply_to_findings(license_findings, entries)
             )
             logger.info(
                 "sca.pipeline: %d finding(s) suppressed by %s",
@@ -1363,12 +1364,17 @@ def _run_triage(
     if client is None:
         return (False, 0.0)
 
-    # Convert findings to dicts for the triage stage.
-    findings_path = output_dir / "findings.json"
-    if findings_path.exists():
-        rows = _json_mod.loads(findings_path.read_text(encoding="utf-8"))
-    else:
-        rows = []
+    from .findings import (
+        _vuln_finding_to_row, _hygiene_finding_to_row,
+        _supply_chain_finding_to_row,
+    )
+    rows = []
+    for f in vuln_findings:
+        rows.append(_vuln_finding_to_row(f))
+    for f in hygiene_findings:
+        rows.append(_hygiene_finding_to_row(f))
+    for f in supply_chain_findings:
+        rows.append(_supply_chain_finding_to_row(f))
 
     rows = [r for r in rows if isinstance(r, dict)]
     sca_rows = [r for r in rows if r.get("vuln_type", "").startswith("sca:")]
@@ -1531,6 +1537,8 @@ def _classify_inline_source(path: Path) -> str:
         for j in range(len(parts) - 2):
             if parts[j] == ".github" and parts[j + 1] == "workflows":
                 return "gha_workflow"
+        if name in ("action.yml", "action.yaml"):
+            return "gha_workflow"
     return "shell_script"
 
 

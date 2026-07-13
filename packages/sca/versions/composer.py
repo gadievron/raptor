@@ -64,7 +64,7 @@ def _is_dev(v: str) -> bool:
 
 _STAB_RE = re.compile(
     r"^(?P<base>v?\d[\d.]*)(?:[-.]?(?P<stab>"
-    r"alpha|beta|rc|pre|stable|release|dev|a|b)(?P<idx>\d*))?",
+    r"alpha|beta|rc|pre|stable|release|dev|a|b)\.?(?P<idx>\d*))?",
     re.IGNORECASE,
 )
 

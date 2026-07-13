@@ -130,6 +130,15 @@ Start by creating a project so all your runs land in one place:
 /project findings                              # review everything in one place
 ```
 
+For a compiled artefact, the equivalent starting point is:
+
+```text
+/binary investigate /path/to/binary            # build the evidence-backed binary map
+/binary graph <run-dir> --edges --json         # query the persisted graph
+/binary trace-parser <run-dir>                 # collect runtime parser evidence
+/binary harness <run-dir>                      # draft a harness only when the boundary is explicit
+```
+
 `/understand` builds a context map of entry points, trust boundaries, and sinks before a line of scanning happens. `/agentic` then runs Semgrep and CodeQL, deduplicates findings, and dispatches each one for validation using the exploitation-validator methodology:
 
 With `--threat-model`, RAPTOR runs the map first, creates `threat-model.json` and `THREAT_MODEL.md` if the project does not already have them, then feeds a compact version into `/understand`, autonomous analysis, and `/validate`. Existing project threat models are preserved unless you pass `--threat-model-refresh`; stale fallback maps are refused unless you explicitly pass `--threat-model-use-stale`. It also turns mapped unchecked flows into candidate SARIF so scanner misses do not kill the run. It is operator-owned context, not magic proof: findings still need code evidence or oracle-backed confirmation. See `docs/threat-model.md`.

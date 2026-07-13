@@ -400,6 +400,12 @@ def _parse_plugins(
                         )
                         via_ref = True
                         ref_name = ref
+                else:
+                    for k in ("strictly", "require", "prefer"):
+                        v = ver_field.get(k)
+                        if isinstance(v, str) and v:
+                            version = v
+                            break
             out[alias] = CatalogPlugin(
                 alias=alias, plugin_id=plugin_id, version=version,
                 version_via_ref=via_ref, version_ref_name=ref_name,

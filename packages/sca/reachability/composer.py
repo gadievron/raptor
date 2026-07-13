@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_DEPTH = 12
 
-_TEST_DIR_NAMES = {"tests", "test", "Tests", "spec"}
+_TEST_DIR_NAMES = {"tests", "test", "Tests", "Test", "spec"}
 
 # ``use Vendor\Class;`` / ``use function Vendor\fn;`` / ``use const ...``
 _PHP_USE_RE = re.compile(
@@ -184,7 +184,7 @@ def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
     if any(p in _TEST_DIR_NAMES for p in rel_parts):
         return True
-    if path.stem.endswith(("Test", "Tests")) or path.stem.startswith("Test"):
+    if path.stem.endswith(("Test", "Tests")):
         return True
     return False
 

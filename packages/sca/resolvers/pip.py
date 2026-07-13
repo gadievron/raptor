@@ -544,13 +544,13 @@ class PipResolver:
         except subprocess.TimeoutExpired:
             return ResolverResult(
                 ecosystem=self.ecosystem, success=False, available=True,
-                error=f"PEP 668 venv pipeline timed out after {timeout}s",
+                error=f"venv pipeline timed out after {timeout}s",
             )
         raw = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode != 0:
             return ResolverResult(
                 ecosystem=self.ecosystem, success=False, available=True,
-                error=("PEP 668 venv pipeline failed: "
+                error=("venv pipeline failed: "
                        + (proc.stderr.strip() or "exit non-zero")),
                 raw_output=raw,
             )

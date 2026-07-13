@@ -20,6 +20,7 @@ import pytest
 from core.inventory.fixture_detection import (
     FixtureVerdict,
     HarnessEvidence,
+    _default_qualified_name,
     detect_fixture,
     is_fixture_path,
 )
@@ -325,3 +326,33 @@ class TestAdversarial:
             qualified_name="tests.conftest.f",
         )
         assert v.likely_test_harness == "candidate"
+
+
+# ---------------------------------------------------------------------------
+# Java extension handling in qualified name builder
+# ---------------------------------------------------------------------------
+
+class TestJavaQualifiedName:
+
+    def test_java_extension_stripped(self):
+        qname = _default_qualified_name("src/test/java/TestFoo.java", "testBar")
+        assert qname == "src.test.java.TestFoo.testBar"
+        assert not qname.endswith(".java.testBar")
+
+    def test_java_test_file_detected_as_fixture(self):
+        matched, label = is_fixture_path("src/test/java/TestFoo.java")
+        assert matched
+        assert "Java" in label or "test" in label.lower()
+
+    def test_java_qualified_name_matches_inventory(self):
+        qname = _default_qualified_name("tests/TestAuth.java", "checkCreds")
+        parts = qname.split(".")
+        assert "java" not in parts, (
+            f".java extension leaked into qualified name: {qname}"
+        )
+
+    def test_other_extensions_still_work(self):
+        assert ".py" not in _default_qualified_name("tests/test_foo.py", "test_bar")
+        assert ".js" not in _default_qualified_name("tests/foo.test.js", "it")
+        assert ".go" not in _default_qualified_name("pkg/foo_test.go", "TestFoo")
+        assert ".rb" not in _default_qualified_name("spec/foo_spec.rb", "it")

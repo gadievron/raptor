@@ -326,7 +326,7 @@ def _default_qualified_name(file_path: str, function: str) -> str:
     # Strip extension; common Python / JS / Go cases. Other
     # languages fall back to bare function name (rejected as
     # too-coarse by the resolver).
-    for ext in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb"):
+    for ext in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb", ".java"):
         if norm.endswith(ext):
             norm = norm[: -len(ext)]
             break

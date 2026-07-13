@@ -156,7 +156,7 @@ def refine_cargo_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"crate imported but the {len(qualified_names)} "
+                        f"crate imported but the {len(results)} "
                         f"OSV-listed affected symbol(s) are not called "
                         f"from non-test Rust source"
                     ),

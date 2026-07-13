@@ -157,15 +157,19 @@ def _split_packages_key(key: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _strip_version_suffix(version: str) -> str:
-    """Drop pnpm's trailing ``(peer-key)`` annotations from a version.
+    """Drop pnpm's trailing peer-dep annotations from a version.
 
-    pnpm sometimes encodes peer-dep resolution into the lockfile key
-    like ``29.0.3(typescript@5.0)``. The OSV-relevant version is just
-    the leading version; the parenthesised tail is metadata.
+    pnpm encodes peer-dep resolution into the lockfile key in two forms:
+    v6+: ``29.0.3(typescript@5.0)`` (parenthesised)
+    v5:  ``29.0.3_typescript@5.0.0`` (underscore-separated)
+    The OSV-relevant version is just the leading version; the tail is metadata.
     """
     paren = version.find("(")
     if paren > 0:
         return version[:paren]
+    underscore = version.find("_")
+    if underscore > 0:
+        return version[:underscore]
     return version
 
 

@@ -85,9 +85,10 @@ def parse_manifest(path: Path) -> List[Dependency]:
                 ),
                 source_kind="manifest",
             )
-            if dep.key() in seen_keys:
+            scoped_key = f"{scope}:{dep.key()}"
+            if scoped_key in seen_keys:
                 continue
-            seen_keys.add(dep.key())
+            seen_keys.add(scoped_key)
             out.append(dep)
     return out
 
@@ -190,6 +191,8 @@ def _classify_version_spec(spec: str) -> Tuple[PinStyle, Optional[str]]:
         # Take the bare version after the operator chars.
         bare = re.sub(r"^[<>=]+", "", s).strip()
         return PinStyle.RANGE, bare or None
+    if "*" in s:
+        return PinStyle.WILDCARD, None
     if re.match(r"^v?\d[\w.\-+]*$", s):
         return PinStyle.EXACT, s
     return PinStyle.UNKNOWN, None
@@ -199,7 +202,14 @@ _RELEASE_TAG_RE = re.compile(r"^v?\d+(\.\d+)*[\w.\-+]*$")
 
 
 def _looks_like_release_tag(version: str) -> bool:
-    """Heuristic: ``1.2.3`` / ``v1.2.3`` is a release; ``dev-master`` isn't."""
+    """Heuristic: ``1.2.3`` / ``v1.2.3`` is a release; ``dev-master`` isn't.
+
+    Also rejects Composer's numeric dev-branch aliases (``1.0-dev``,
+    ``1.2.x-dev``) which satisfy the release regex but represent
+    moving branch pins, not immutable tags.
+    """
+    if version.endswith("-dev") or ".x-dev" in version:
+        return False
     return bool(_RELEASE_TAG_RE.match(version))
 
 

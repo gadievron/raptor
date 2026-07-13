@@ -778,20 +778,23 @@ class UrllibClient:
                     )
                     if transitioned:
                         logger.warning(
-                            "core.http: opening circuit breaker for "
-                            "%s:%d (recent 429/5xx threshold reached); "
-                            "subsequent requests will fail-fast for the "
-                            "cooldown window",
+                            "core.http: circuit breaker opened for "
+                            "%s:%d — fail-fast for cooldown",
                             cb_host, cb_port,
                         )
+                    if self._circuit_breaker.is_open(cb_host, cb_port)[0]:
+                        raise HttpError(
+                            f"Circuit open for {cb_host}:{cb_port}; "
+                            f"aborting retry: "
+                            f"{_safe_url_for_log(url)}",
+                        ) from e
                 if not is_transient:
                     raise
                 last_exc = e
                 if is_last_attempt:
                     continue
-                # Retry-After honoured by _fetch_once if present.
                 sleep_for = e.retry_after or delay
-                logger.info(
+                logger.debug(
                     "core.http: %s %s -> %d; sleeping %ds (retry %d)",
                     method, _safe_url_for_log(url), e.status,
                     sleep_for, attempt + 1,
@@ -856,7 +859,7 @@ class UrllibClient:
                 last_exc = e
                 if is_last_attempt:
                     continue
-                logger.info(
+                logger.debug(
                     "core.http: %s %s proxy error: %s; backoff %ds",
                     method, _safe_url_for_log(url), e, delay,
                 )
@@ -882,7 +885,7 @@ class UrllibClient:
                 last_exc = e
                 if is_last_attempt:
                     continue
-                logger.info(
+                logger.debug(
                     "core.http: %s %s network error: %s; backoff %ds",
                     method, _safe_url_for_log(url), e, delay,
                 )

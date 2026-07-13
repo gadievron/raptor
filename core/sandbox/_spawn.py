@@ -452,6 +452,8 @@ def run_sandboxed(
     etc_overlay: Optional[dict] = None,
     skip_pid_ns: bool = False,
     skip_mount_ns: bool = False,
+    proxy_unix_socket: Optional[str] = None,
+    proxy_forwarder_port: Optional[int] = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -863,6 +865,20 @@ def run_sandboxed(
             os.set_inheritable(t_ready_w, True)
             _parent_fds.update({t_ready_r, t_ready_w})
 
+        # Capture proxy bridge functions as local references BEFORE the
+        # fork. After pivot_root the RAPTOR source tree is invisible in
+        # the mount-ns, so `from core.sandbox._proxy_bridge import ...`
+        # inside the child would fail with ModuleNotFoundError. Binding
+        # the function objects here means the child only needs the
+        # in-memory references, no filesystem import.
+        _proxy_loopback_fn = None
+        _proxy_forwarder_fn = None
+        if proxy_unix_socket and proxy_forwarder_port:
+            from core.sandbox._proxy_bridge import (
+                _bring_up_loopback as _proxy_loopback_fn,
+                _run_forwarder as _proxy_forwarder_fn,
+            )
+
         # Suppress Python 3.12+ DeprecationWarning about multi-threaded
         # fork(). Our post-fork code does namespace setup via ctypes
         # syscalls + Landlock + seccomp + execvp — no Python objects,
@@ -1144,6 +1160,50 @@ def run_sandboxed(
                         pass
                     os._exit(127)
 
+            # Step 9.7: proxy netns bridge. When the child is in an
+            # empty netns with an egress proxy, bring up loopback and
+            # fork a TCP-to-Unix relay so the target can reach the proxy
+            # at 127.0.0.1:<port> via HTTPS_PROXY. The forwarder forks
+            # BEFORE Landlock/seccomp so it runs unrestricted — it needs
+            # AF_UNIX socket() which seccomp blocks for the target.
+            _forwarder_pid = 0
+            _forwarder_death_w = -1
+            if _proxy_loopback_fn is not None and _proxy_forwarder_fn is not None:
+                try:
+                    _proxy_loopback_fn()
+                except OSError as e:
+                    warn_post_fork(
+                        b"_spawn: loopback bringup failed (errno=%d)"
+                        b"; proxy bridge will not work\n"
+                        % (e.errno or 0)
+                    )
+                else:
+                    _fwd_death_r, _fwd_death_w = os.pipe()
+                    _forwarder_death_w = _fwd_death_w
+                    import warnings as _w2
+                    with _w2.catch_warnings():
+                        _w2.filterwarnings(
+                            "ignore", category=DeprecationWarning,
+                            message=r".*fork.*may lead to deadlocks.*",
+                        )
+                        _forwarder_pid = os.fork()
+                    if _forwarder_pid == 0:
+                        os.close(_fwd_death_w)
+                        os.close(status_w)
+                        # p_ready_w was closed at step 5 — do NOT close
+                        # here; the fd number may have been reused by
+                        # the death pipe allocated above.
+                        try:
+                            _proxy_forwarder_fn(
+                                proxy_forwarder_port,
+                                proxy_unix_socket,
+                                _fwd_death_r,
+                            )
+                        except BaseException:
+                            pass
+                        os._exit(0)
+                    os.close(_fwd_death_r)
+
             # Step 10: Landlock. Must run BEFORE seccomp so seccomp
             # inherits PR_SET_NO_NEW_PRIVS.
             if landlock_fn:
@@ -1278,19 +1338,30 @@ def run_sandboxed(
                 #     exit to the parent and silently defeat the
                 #     crash/sanitizer diagnostics.
                 _, status = os.waitpid(grand, 0)
+                # Clean up the proxy bridge forwarder before
+                # mirroring exit status.
+                if _forwarder_pid > 0:
+                    try:
+                        os.kill(_forwarder_pid, 9)  # SIGKILL
+                        os.waitpid(_forwarder_pid, 0)
+                    except (ProcessLookupError, ChildProcessError,
+                            OSError):
+                        pass
+                if _forwarder_death_w >= 0:
+                    try:
+                        os.close(_forwarder_death_w)
+                    except OSError:
+                        pass
                 if os.WIFEXITED(status):
                     os._exit(os.WEXITSTATUS(status))
                 if os.WIFSIGNALED(status):
                     sig = os.WTERMSIG(status)
                     import signal as _signal
-                    # Clear any inherited handler/mask; re-raise by
-                    # SIGDFL + kill(self).
                     try:
                         _signal.signal(sig, _signal.SIG_DFL)
                     except (OSError, ValueError):
                         pass
                     os.kill(os.getpid(), sig)
-                    # Fallback if the signal was blocked/ignored.
                     os._exit(128 + sig)
                 os._exit(255)
         except BaseException:

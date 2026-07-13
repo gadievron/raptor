@@ -416,3 +416,21 @@ def test_aggregator_chain_plus_bedrock():
     assert family_of(
         "openrouter/together/us.anthropic.claude-opus-4-7",
     ) == "anthropic"
+
+
+# ---------------------------------------------------------------------------
+# Regression: exact stem match without trailing hyphen
+# ---------------------------------------------------------------------------
+
+def test_exact_stem_match_resolves_without_trailing_hyphen():
+    """Bare model IDs like 'o1' returned 'unknown' because the old code
+    only checked ``startswith(stem + "-")``, which fails for exact matches
+    (no trailing hyphen).  After the fix, ``needle == stem`` is checked
+    first, so 'o1' correctly resolves to 'openai'."""
+    assert family_of("o1") == "openai"
+    # Also verify the prefixed form still works (regression gate).
+    assert family_of("o1-preview") == "openai"
+    assert family_of("o1-mini") == "openai"
+    # Same pattern for o3/o4 stems.
+    assert family_of("o3") == "openai"
+    assert family_of("o4") == "openai"

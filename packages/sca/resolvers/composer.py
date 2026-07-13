@@ -1,10 +1,9 @@
 """Composer resolver wrapper.
 
-Runs ``composer update --lock --no-install --no-interaction`` against
-the project's ``composer.json``. ``--lock`` re-resolves and writes
-``composer.lock`` without populating ``vendor/``; ``--no-install``
-makes the no-install intent explicit; ``--no-interaction`` keeps the
-subprocess non-blocking.
+Runs ``composer update --no-install --no-interaction`` against
+the project's ``composer.json``. ``--no-install`` re-resolves and
+writes ``composer.lock`` without populating ``vendor/``;
+``--no-interaction`` keeps the subprocess non-blocking.
 
 Composer's resolution is mostly metadata-only — packages aren't
 unpacked or executed during ``update --no-install``. The sandbox
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class ComposerResolver:
-    """``composer update --lock --no-install`` wrapper."""
+    """``composer update --no-install`` wrapper."""
 
     ecosystem = "Packagist"
     MANIFEST_FILES = ("composer.json", "composer.lock")
@@ -73,7 +72,7 @@ class ComposerResolver:
 
             try:
                 proc = _run(
-                    ["composer", "update", "--lock",
+                    ["composer", "update",
                      "--no-install", "--no-interaction",
                      "--no-progress"],
                     cwd=tmp_path,

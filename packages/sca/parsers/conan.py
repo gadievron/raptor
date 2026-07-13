@@ -56,7 +56,7 @@ _REF_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9._\-+]+)"
     r"/(?P<version>\[[^\]]+\]|[A-Za-z0-9._\-+]+)"
     r"(?:@(?P<userchannel>[A-Za-z0-9._\-+]+/[A-Za-z0-9._\-+]+))?"
-    r"(?:#[A-Fa-f0-9]+)?$"
+    r"(?:#[A-Fa-f0-9]+(?:%[0-9.]+)?)?$"
 )
 
 
@@ -166,7 +166,13 @@ def _refs_from_value(node: ast.AST) -> Iterable[str]:
         return
     if isinstance(node, (ast.Tuple, ast.List)):
         for elt in node.elts:
-            yield from _refs_from_value(elt)
+            if (isinstance(elt, (ast.Tuple, ast.List))
+                    and elt.elts
+                    and isinstance(elt.elts[0], ast.Constant)
+                    and isinstance(elt.elts[0].value, str)):
+                yield elt.elts[0].value
+            else:
+                yield from _refs_from_value(elt)
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +247,8 @@ def _build_dep_from_ref(
         parser_confidence=Confidence(
             "high" if version else "medium",
             reason=(
-                "conan.lock pinned ref" if is_lockfile
+                "conan.lock pinned ref" if is_lockfile and version
+                else "conan.lock ref without version" if is_lockfile
                 else "conanfile structured ref"
                 if version else "conanfile ref without version"
             ),

@@ -200,27 +200,38 @@ def _run_scan(target: Path, out: Path) -> Tuple[float, float, str]:
 
 
 # ---------------------------------------------------------------------------
+# Shared fixture — builds the monorepo once, runs the scan once, shares
+# (elapsed, rss_mb, stderr, out_dir, repo_dir) across both tests. Saves
+# one full build+scan cycle (~5s) vs the old per-test approach.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def _monorepo_scan_result(tmp_path_factory):
+    base = tmp_path_factory.mktemp("sca_perf")
+    repo = base / "monorepo"
+    _build_large_monorepo(repo)
+    out = base / "out"
+    elapsed, rss_mb, stderr = _run_scan(repo, out)
+    total_files = sum(1 for _ in repo.rglob("*") if _.is_file())
+    return elapsed, rss_mb, stderr, out, total_files
+
+
+# ---------------------------------------------------------------------------
 # The actual perf gate
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-def test_10k_dep_monorepo_within_budget(tmp_path: Path) -> None:
+def test_10k_dep_monorepo_within_budget(_monorepo_scan_result) -> None:
     """A ~10k-dep multi-ecosystem fixture scans within
     ``RUNTIME_BUDGET_S`` seconds and ``RSS_BUDGET_MB`` MiB.
 
     Surfaces the full breakdown on failure so a regression
     points at the responsible stage."""
-    repo = tmp_path / "monorepo"
-    _build_large_monorepo(repo)
+    elapsed, rss_mb, stderr, out, total_files = _monorepo_scan_result
 
-    # Sanity: fixture is the size we declared
-    total_files = sum(1 for _ in repo.rglob("*") if _.is_file())
     assert total_files > 50, (
         f"fixture too small: only {total_files} files generated"
     )
-
-    out = tmp_path / "out"
-    elapsed, rss_mb, stderr = _run_scan(repo, out)
 
     print(
         f"\n[perf-baseline 10k-dep monorepo]\n"
@@ -245,24 +256,16 @@ def test_10k_dep_monorepo_within_budget(tmp_path: Path) -> None:
     assert findings.is_file()
     data = json.loads(findings.read_text())
     items = data if isinstance(data, list) else data.get("findings", [])
-    # At minimum: hygiene findings for the manifests-without-lockfiles.
-    # We don't gate on exact count (varies with caching) but expect SOME.
     assert len(items) > 0, "monorepo scan produced ZERO findings"
 
 
 @pytest.mark.slow
-def test_per_stage_progress_emitted(tmp_path: Path) -> None:
+def test_per_stage_progress_emitted(_monorepo_scan_result) -> None:
     """Progress reporter emits identifiable stage markers; the
     perf baseline depends on these to attribute time to stages
     when a regression hits.
     """
-    repo = tmp_path / "monorepo"
-    _build_large_monorepo(repo)
-    out = tmp_path / "out"
-
-    _, _, stderr = _run_scan(repo, out)
-    # Stages we expect somewhere in stderr from the multi-stage
-    # progress UI.
+    _, _, stderr, _, _ = _monorepo_scan_result
     stage_markers = ["discovery", "join", "osv"]
     found = [s for s in stage_markers if s in stderr.lower()]
     assert found, (

@@ -474,7 +474,7 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
     ``{cve_id: {epss, percentile, fetched_date}}``.
 
     EPSS is FIRST.org's free-for-any-use feed. We page through the
-    FIRST API for every CVE with EPSS ≥ 0.05, following the
+    FIRST API for every CVE with EPSS > 0.05, following the
     ``offset``/``total`` envelope to completeness — a single capped
     ``limit`` silently dropped the tail once the matching set grew
     past one page.
@@ -532,7 +532,7 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
             "fetched_at": _utcnow(),
             "provenance": (
                 "Exploit Prediction Scoring System — FIRST.org. "
-                "Filtered to CVEs with EPSS ≥ 0.05 to keep the "
+                "Filtered to CVEs with EPSS > 0.05 to keep the "
                 "corpus tractable."
             ),
         },

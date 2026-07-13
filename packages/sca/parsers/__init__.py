@@ -90,6 +90,8 @@ class _ParseFailureCollector(logging.Handler):
         self.failures: List[ParseFailure] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        if getattr(_TLS, 'collector', None) is not self:
+            return
         try:
             msg = record.getMessage()
         except Exception:                               # noqa: BLE001
@@ -212,7 +214,8 @@ def parse_manifest(manifest: Manifest) -> List[Dependency]:
         return fn(manifest.path)
     except Exception:  # noqa: BLE001 — parsers must never break the pipeline
         logger.warning(
-            "sca.parsers: parser raised on %s; emitting empty dep list",
+            "sca.parsers.dispatch: uncaught parse failed for %s: "
+            "parser raised an unhandled exception",
             manifest.path,
             exc_info=True,
         )

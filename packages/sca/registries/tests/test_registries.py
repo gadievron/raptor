@@ -534,3 +534,38 @@ def test_nuget_lowercases_id_in_url() -> None:
     client = NugetClient(http)
     client.list_versions("Newtonsoft.Json")
     assert "newtonsoft.json" in http.calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Regression: Packagist prerelease filter — additional edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_packagist_prerelease_regex_matches_dev_prefixed() -> None:
+    """Versions like 'dev-master', 'dev-main' leaked through the
+    prerelease filter. After fix: _PRERELEASE_RE matches the
+    ``^dev-`` prefix form."""
+    from packages.sca.registries.packagist import _PRERELEASE_RE
+    # Must match (prerelease — should be filtered out).
+    assert _PRERELEASE_RE.search("dev-master") is not None
+    assert _PRERELEASE_RE.search("dev-main") is not None
+    assert _PRERELEASE_RE.search("1.0-alpha.1") is not None
+    assert _PRERELEASE_RE.search("2.0-rc2") is not None
+    assert _PRERELEASE_RE.search("3.0-beta") is not None
+    assert _PRERELEASE_RE.search("1.0.0-dev") is not None
+
+
+def test_packagist_prerelease_regex_spares_stable_versions() -> None:
+    """Stable versions must NOT match the prerelease regex."""
+    from packages.sca.registries.packagist import _PRERELEASE_RE
+    # Must NOT match (stable versions).
+    assert _PRERELEASE_RE.search("1.0.0") is None
+    assert _PRERELEASE_RE.search("2.3.4") is None
+
+
+def test_packagist_prerelease_regex_spares_tools_suffix() -> None:
+    """A legitimate version like '1.0-tools' must not be treated
+    as a prerelease. The regex must not match arbitrary hyphenated
+    suffixes."""
+    from packages.sca.registries.packagist import _PRERELEASE_RE
+    assert _PRERELEASE_RE.search("1.0-tools") is None

@@ -891,6 +891,12 @@ def _load_findings_with_labels(
         for f in findings:
             if not isinstance(f, dict):
                 continue
+            rc = f.get("risk_components")
+            final = rc.get("final") if isinstance(rc, dict) else None
+            if not isinstance(final, (int, float)):
+                final = f.get("raptor_risk_estimate")
+            if not isinstance(final, (int, float)):
+                continue
             cve_ids = _extract_cve_ids(f.get("advisory") or {})
             label = 1 if any(c in signals for c in cve_ids) else 0
             out.append((f, label))

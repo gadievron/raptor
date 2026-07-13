@@ -193,7 +193,7 @@ def _scan_shell_lines(
         for sub in _split_compound(cleaned):
             best: Optional[Tuple[_PkgManager, "re.Match[str]"]] = None
             for mgr in _MANAGERS:
-                if mgr.ecosystem in skip_ecosystems:
+                if mgr.ecosystem in skip_ecosystems and not commented:
                     continue
                 m = mgr.pattern.search(sub)
                 if not m:
@@ -765,11 +765,14 @@ def _load_jsonc(text: str) -> dict:
 
 
 def _flatten_command(val) -> List[str]:
-    """devcontainer command fields can be string OR list-of-strings."""
+    """devcontainer command fields can be string, list-of-strings, or
+    object (dict of named parallel commands)."""
     if isinstance(val, str):
         return [val]
     if isinstance(val, list):
         return [v for v in val if isinstance(v, str)]
+    if isinstance(val, dict):
+        return [v for v in val.values() if isinstance(v, str)]
     return []
 
 

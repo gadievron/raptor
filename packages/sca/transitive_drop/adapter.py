@@ -28,10 +28,17 @@ def to_supply_chain_findings(
     return out
 
 
+_ECO_PURL_TYPE = {
+    "PyPI": "pypi", "npm": "npm", "Cargo": "cargo",
+    "Packagist": "composer", "RubyGems": "gem",
+    "Maven": "maven", "NuGet": "nuget", "Go": "golang",
+}
+
+
 def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
-    # Synthetic dep coordinate for the transitive being dropped.
+    purl_type = _ECO_PURL_TYPE.get(d.ecosystem, d.ecosystem.lower())
     placeholder_dep = Dependency(
-        ecosystem="PyPI",
+        ecosystem=d.ecosystem,
         name=d.transitive_name,
         version=d.transitive_version,
         declared_in=Path("/<transitive_drop>"),
@@ -39,7 +46,7 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
         is_lockfile=False,
         pin_style=PinStyle.EXACT,
         direct=False,
-        purl=f"pkg:pypi/{d.transitive_name}@{d.transitive_version}",
+        purl=f"pkg:{purl_type}/{d.transitive_name}@{d.transitive_version}",
         parser_confidence=Confidence(
             "high", reason="transitive_drop detector",
         ),
@@ -76,7 +83,7 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
 
     return SupplyChainFinding(
         finding_id=(
-            f"sca:supply_chain:transitive_now_optional:PyPI:"
+            f"sca:supply_chain:transitive_now_optional:{d.ecosystem}:"
             f"{d.transitive_name}:{d.parent_name}"
         ),
         kind="transitive_now_optional",
@@ -96,6 +103,10 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
         severity=severity,
         confidence=Confidence(
             "high",
-            reason="PyPI requires_dist diff across parent versions",
+            reason=(
+                "PyPI requires_dist diff: dep moved behind optional extra"
+                if d.transitive_status_in_latest == "extras-gated"
+                else "PyPI requires_dist diff across parent versions"
+            ),
         ),
     )

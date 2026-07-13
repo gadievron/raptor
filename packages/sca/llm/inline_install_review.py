@@ -63,7 +63,7 @@ def review_inline_installs(
 
     content = file_content[:_MAX_FILE_CHARS]
 
-    mechanical_names = {(d.ecosystem, d.name) for d in mechanical_deps}
+    mechanical_names = {(d.ecosystem.lower(), d.name.lower()) for d in mechanical_deps}
     mechanical_summary = "\n".join(
         f"  - {d.ecosystem}/{d.name}@{d.version or '?'}"
         for d in mechanical_deps[:50]
@@ -104,7 +104,7 @@ def review_inline_installs(
 
     new_deps: List[Dependency] = []
     for item in verdict.missed_installs:
-        if (item.ecosystem, item.name) in mechanical_names:
+        if (item.ecosystem.lower(), item.name.lower()) in mechanical_names:
             continue
 
         eco_lower = item.ecosystem.lower().replace("pypi", "pypi")

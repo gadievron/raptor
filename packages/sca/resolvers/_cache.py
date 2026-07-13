@@ -255,6 +255,7 @@ def cached_dry_run_batch(
     cached_results: Dict[int, ResolverResult] = {}
     miss_indices: List[int] = []
     miss_dirs: List[Path] = []
+    probe_hashes: Dict[int, str] = {}
     for idx, project_dir in enumerate(project_dirs):
         hsh = manifest_hash(resolver, project_dir)
         if hsh is None:
@@ -268,6 +269,7 @@ def cached_dry_run_batch(
             if result is not None:
                 cached_results[idx] = result
                 continue
+        probe_hashes[idx] = hsh
         miss_indices.append(idx)
         miss_dirs.append(project_dir)
 
@@ -285,8 +287,8 @@ def cached_dry_run_batch(
             resolver, miss_dirs,
             common_root=common_root, timeout=timeout,
         )
-        for project_dir, result in zip(miss_dirs, fresh):
-            hsh = manifest_hash(resolver, project_dir)
+        for idx, result in zip(miss_indices, fresh):
+            hsh = probe_hashes.get(idx)
             if hsh is None:
                 continue
             key = _cache_key(resolver, hsh)

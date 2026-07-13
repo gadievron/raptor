@@ -201,11 +201,13 @@ def refine_go_verdicts(
     for d in candidates:
         qualified_names = go_symbol_map[d.key()]
         results = []
+        evaluated_names = []
         for qualified in qualified_names:
             if not qualified or "." not in qualified:
                 continue
             try:
                 results.append(function_called(inventory, qualified))
+                evaluated_names.append(qualified)
             except ValueError:
                 continue
 
@@ -216,7 +218,7 @@ def refine_go_verdicts(
         if Verdict.CALLED in verdicts:
             evidence_lines: List[str] = []
             called_qns: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            for qn, r in zip(evaluated_names, results):
                 if r.verdict == Verdict.CALLED:
                     called_qns.append(qn)
                     evidence_lines.extend(
@@ -241,7 +243,7 @@ def refine_go_verdicts(
                     "high",
                     reason=(
                         f"Go module imported but the "
-                        f"{len(qualified_names)} OSV-listed "
+                        f"{len(results)} OSV-listed "
                         f"affected symbol(s) are not called from "
                         f"non-test Go source"
                     ),

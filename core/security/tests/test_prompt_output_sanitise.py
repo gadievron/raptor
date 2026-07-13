@@ -115,3 +115,27 @@ def test_code_caps_length():
 def test_code_default_cap_is_generous():
     s = sanitise_code("x" * 5000)
     assert len(s) == 5000
+
+
+# ---------------------------------------------------------------------------
+# Regression: zero-width chars between markdown heading chars
+# ---------------------------------------------------------------------------
+
+
+def test_zwj_between_markdown_heading_chars_stripped_before_defang():
+    """Zero-width joiner (U+200D) between two '#' chars at line start.
+
+    Before the fix: _strip_autofetch_markup ran AFTER _LINE_LEAD_MD_RE.sub,
+    so the ZWJ prevented the regex from seeing '##' (it saw '#\\u200d#'
+    which doesn't match the [#] character class grouping), and the heading
+    markup survived into the output.
+
+    After the fix: _strip_autofetch_markup runs FIRST, stripping the
+    invisible char, then _LINE_LEAD_MD_RE correctly matches '##' and
+    defangs it.
+    """
+    # U+200D = zero-width joiner; inserted between two '#' chars.
+    payload = "#‍# heading"
+    result = sanitise_string(payload, max_chars=500)
+    # Both heading chars must be removed by the defanging regex.
+    assert "#" not in result

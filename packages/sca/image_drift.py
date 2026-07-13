@@ -155,13 +155,13 @@ def _drift_for_ref(
         )
         return None, None
 
-    baseline = load_fingerprint(fingerprint_store_dir, ref)
     # Always save the new fingerprint AFTER computing the drift
     # — the previous baseline is what we compare against, then
     # the current fingerprint becomes the next-scan baseline.
-    save_fingerprint(fingerprint_store_dir, ref, current)
+    baseline = load_fingerprint(fingerprint_store_dir, ref)
     if baseline is None:
         # First scan of this ref — no baseline, no signal yet.
+        save_fingerprint(fingerprint_store_dir, ref, current)
         logger.debug(
             "sca.image_drift: first baseline for %s; no drift signal",
             ref,
@@ -170,11 +170,13 @@ def _drift_for_ref(
 
     drift = detect_drift(baseline, current)
     if drift.is_empty():
+        save_fingerprint(fingerprint_store_dir, ref, current)
         return None, current
 
     finding = _drift_finding(
         ref=ref, drift=drift, declared_in=declared_in,
     )
+    save_fingerprint(fingerprint_store_dir, ref, current)
     return finding, current
 
 

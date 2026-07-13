@@ -39,6 +39,7 @@ class DropOnBumpFinding:
     bumping its parent. Pipeline wraps it into a
     SupplyChainFinding for the wider system."""
 
+    ecosystem: str
     transitive_name: str
     transitive_version: str
     transitive_finding_severity: str   # severity inherited from the
@@ -217,6 +218,7 @@ def detect_droppable_transitives(
                     transitive_status = "removed"
                     extra_name = None
                 findings.append(DropOnBumpFinding(
+                    ecosystem=sample.ecosystem,
                     transitive_name=sample.name,
                     transitive_version=sample.version or "",
                     transitive_finding_severity=underlying_sev,

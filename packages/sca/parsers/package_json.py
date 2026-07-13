@@ -85,6 +85,7 @@ _DEP_BUCKETS = (
 # ">=1.0.0 <2.0.0" or "1.0.0 - 2.0.0". Used after ruling out caret/tilde.
 _RANGE_CHARS = set("<>=|") | {" - "}
 _HEX_SHA = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+_BARE_VERSION = re.compile(r"^v?\d+(?:\.\d+){0,2}(?:[-+].+)?$")
 
 
 def parse(path: Path) -> List[Dependency]:
@@ -107,8 +108,6 @@ def parse(path: Path) -> List[Dependency]:
         )
         return []
 
-    project_license = _extract_license(data)
-
     deps: List[Dependency] = []
     for key, scope in _DEP_BUCKETS:
         block = data.get(key)
@@ -117,12 +116,6 @@ def parse(path: Path) -> List[Dependency]:
         for name, raw_spec in block.items():
             d = _build_dep(name, raw_spec, scope, path)
             if d is not None:
-                # Manifest-level license describes the project itself,
-                # not its deps. We attach it as ``declared_license`` only
-                # on rows that *are* the project (no manifests do that
-                # by default; keep slot for SBOM use anyway).
-                if project_license:
-                    d.declared_license = project_license
                 deps.append(d)
 
     # bundleDependencies / bundledDependencies — array of names already
@@ -472,7 +465,10 @@ def _classify(spec: str) -> Tuple[PinStyle, Optional[str], Optional[str]]:
     if _HEX_SHA.match(spec):
         return PinStyle.GIT, spec, None
 
-    return PinStyle.EXACT, spec, None
+    if _BARE_VERSION.match(spec):
+        return PinStyle.EXACT, spec, None
+
+    return PinStyle.UNKNOWN, spec, None
 
 
 def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:

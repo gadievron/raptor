@@ -57,7 +57,8 @@ from ...models import Confidence, Dependency, PinStyle
 # scope tight and excludes generic ARGs that aren't version pins
 # (``ARG BUILD_TARGET=runtime``, ``ARG USER=raptor``).
 _ARG_RE = re.compile(
-    r"^\s*ARG\s+(\w+_VERSION)\s*=\s*(\S+?)\s*(?:#\s*(.+?)\s*)?$"
+    r"^\s*ARG\s+(\w+_VERSION)\s*=\s*(\S+?)\s*(?:#\s*(.+?)\s*)?$",
+    re.IGNORECASE,
 )
 
 # Operator override inside the comment:
@@ -171,11 +172,17 @@ def _resolve_mapping(
                 return None
             eco, _, name = spec.partition(":")
             if eco and name:
-                return (eco.strip(), name.strip())
+                eco_raw = eco.strip()
+                canonical = {
+                    "pypi": "PyPI", "npm": "npm", "maven": "Maven",
+                    "cargo": "Cargo", "go": "Go", "rubygems": "RubyGems",
+                    "nuget": "NuGet", "packagist": "Packagist",
+                }.get(eco_raw.lower(), eco_raw)
+                return (canonical, name.strip())
     # No override → built-in map. ``None`` value = "known boilerplate
     # ARG with no SCA ecosystem"; missing key = "unknown ARG, skip".
-    if arg_name in _BUILTIN_ARG_MAP:
-        return _BUILTIN_ARG_MAP[arg_name]
+    if arg_name.upper() in _BUILTIN_ARG_MAP:
+        return _BUILTIN_ARG_MAP[arg_name.upper()]
     return None
 
 

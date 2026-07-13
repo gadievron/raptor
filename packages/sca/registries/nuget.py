@@ -159,6 +159,8 @@ def _add_nuspec_methods():
         if resp.status_code != 200:
             return None
         if not _DEFUSEDXML_AVAILABLE:
+            if self._cache is not None:
+                self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
         try:
             root = _safe_xml_fromstring(resp.content)

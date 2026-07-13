@@ -140,7 +140,7 @@ def _build_dep(
             purl = f"pkg:github/{owner}/{repo}"
             version = git_tag
             pin_style = (
-                PinStyle.EXACT if version else PinStyle.WILDCARD
+                PinStyle.GIT if version else PinStyle.WILDCARD
             )
         else:
             ecosystem = "CMake-FetchContent"
@@ -148,7 +148,7 @@ def _build_dep(
             purl = f"pkg:generic/{name}"
             version = git_tag
             pin_style = (
-                PinStyle.EXACT if version else PinStyle.WILDCARD
+                PinStyle.GIT if version else PinStyle.WILDCARD
             )
         if version:
             purl = f"{purl}@{version}"
@@ -209,8 +209,13 @@ def _parse_kv(args_text: str) -> dict:
     everything until the next key. Quoting (``"..."``) is
     respected for values; comments (``# ...``) are stripped.
     """
-    # Strip ``# ...`` end-of-line comments before tokenising.
-    text = re.sub(r"#[^\n]*", " ", args_text)
+    # Strip ``# ...`` end-of-line comments before tokenising,
+    # preserving any ``#`` inside double-quoted strings.
+    text = re.sub(
+        r'"[^"]*"|#[^\n]*',
+        lambda m: m.group(0) if m.group(0).startswith('"') else " ",
+        args_text,
+    )
     # CMake keys we recognise — keeps the parser narrow + safe.
     KEYS = {
         "GIT_REPOSITORY", "GIT_TAG", "GIT_SHALLOW", "GIT_PROGRESS",

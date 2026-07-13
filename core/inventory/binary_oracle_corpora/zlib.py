@@ -100,12 +100,18 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
     if src.exists():
         shutil.rmtree(src)
     logger.info("zlib: cloning %s → %s", ZLIB_URL, src)
-    if not clone_repository(ZLIB_URL, src, depth=None):
+    if not clone_repository(ZLIB_URL, src, depth=1):
         raise RuntimeError(f"zlib: clone failed for {ZLIB_URL}")
     subprocess.run(
-        safe_git_command("-C", str(src), "checkout", ZLIB_SHA),
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", ZLIB_SHA),
         env=get_safe_git_env(), check=True, timeout=60,
     )
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
+        env=get_safe_git_env(), check=True, timeout=60,
+    )
+    shutil.rmtree(src / ".git", ignore_errors=True)
 
     for build_dir, cflags, ldflags, run_tests in [
         (build_o0,
@@ -116,7 +122,11 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
     ]:
         if build_dir.exists():
             shutil.rmtree(build_dir)
-        shutil.copytree(src, build_dir)
+        build_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["cp", "-a", f"{src}/.", str(build_dir)],
+            check=True, timeout=120,
+        )
         env = {**os.environ, "CFLAGS": cflags, "LDFLAGS": ldflags}
         subprocess.run(["./configure", "--static"], cwd=build_dir,
                        env=env, check=True, timeout=120)

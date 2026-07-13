@@ -76,6 +76,9 @@ def exfil_destinations_block() -> Optional[UntrustedBlock]:
         label = entry.get("host") or entry.get("tld") or entry.get("pattern", "?")
         by_category.setdefault(cat, []).append(label)
 
+    if not by_category:
+        return None
+
     lines = [
         "Known exfiltration / payload-staging patterns (URLs matching "
         "these categories in source code are suspicious):\n",

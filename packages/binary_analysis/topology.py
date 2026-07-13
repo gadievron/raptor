@@ -15,15 +15,17 @@ from typing import Any
 
 
 def _find_declared_artifact(bundle_root: Path, name: str) -> Path | None:
+    if not name or os.path.isabs(name) or ".." in name.split(os.sep):
+        return None
+    resolved_root = bundle_root.resolve()
     preferred = [
         bundle_root / "Contents" / "Library" / "HelperTools" / name,
         bundle_root / "Contents" / "Resources" / name,
         bundle_root / "Contents" / "MacOS" / name,
     ]
     for path in preferred:
-        if path.is_file():
+        if path.is_file() and path.resolve().is_relative_to(resolved_root):
             return path
-    resolved_root = bundle_root.resolve()
     try:
         for path in bundle_root.rglob(name):
             if path.is_file() and path.resolve().is_relative_to(resolved_root):

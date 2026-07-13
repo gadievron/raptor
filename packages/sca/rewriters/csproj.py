@@ -129,10 +129,12 @@ def rewrite_csproj(
         try:
             _atomic_write(path, new_text)
         except OSError as e:
-            return [RewriteResult(
-                edit=r.edit, applied=False,
-                reason=f"error: write failed: {e}",
-            ) for r in results]
+            return [
+                RewriteResult(edit=r.edit, applied=False,
+                              reason=f"error: write failed: {e}")
+                if r.applied else r
+                for r in results
+            ]
     return results
 
 
