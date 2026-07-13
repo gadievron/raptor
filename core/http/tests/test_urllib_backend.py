@@ -429,26 +429,39 @@ class TestErrors:
 
     @patch("core.http.urllib_backend.time.sleep")
     def test_429_retries_with_backoff(self, _mock_sleep):
-        # Two 429s, then success.
-        client, pool = _client_with_mock_pool([
+        # Two 429s, then success. Use a high-threshold breaker so the
+        # retry-then-recover path is exercised without tripping the
+        # circuit mid-loop.
+        pool = MagicMock()
+        pool.request.side_effect = [
             _stub_response(b"", status=429, reason="Too Many"),
             _stub_response(b"", status=429, reason="Too Many"),
             _stub_response(b'{"ok": true}'),
-        ])
+        ]
+        client = UrllibClient(
+            _http=pool,
+            circuit_breaker=_HostCircuitBreaker(threshold=10),
+        )
         result = client.get_json("https://example.com/api")
         assert result == {"ok": True}
         assert pool.request.call_count == 3
 
     @patch("core.http.urllib_backend.time.sleep")
     def test_500_retries_then_raises(self, _mock_sleep):
-        # Always 500 for every attempt — default = 1 initial + DEFAULT_RETRIES.
-        attempts = DEFAULT_RETRIES + 1
-        responses = [_stub_response(b"err", status=500, reason="Internal")
-                     for _ in range(attempts)]
-        client, pool = _client_with_mock_pool(responses)
+        # Always 500 — circuit breaker trips after 2 failures and
+        # aborts the retry loop immediately.
+        pool = MagicMock()
+        pool.request.side_effect = [
+            _stub_response(b"err", status=500, reason="Internal")
+            for _ in range(DEFAULT_RETRIES + 1)
+        ]
+        client = UrllibClient(
+            _http=pool,
+            circuit_breaker=_HostCircuitBreaker(threshold=10),
+        )
         with pytest.raises(HttpError, match="Exhausted retries"):
             client.get_json("https://example.com/api")
-        assert pool.request.call_count == attempts
+        assert pool.request.call_count == DEFAULT_RETRIES + 1
 
     def test_size_limit_enforced(self):
         # Build a stub whose stream() yields 200 bytes; max_bytes=100.
@@ -695,9 +708,16 @@ class TestRetriesOptOut:
 
     @patch("core.http.urllib_backend.time.sleep")
     def test_retries_three_means_four_attempts(self, _mock_sleep):
-        """retries=3 → up to 4 total attempts (1 initial + 3 retries)."""
-        responses = [_stub_response(b"", status=503) for _ in range(8)]
-        client, pool = _client_with_mock_pool(responses)
+        """retries=3 → up to 4 total attempts (1 initial + 3 retries).
+        High-threshold breaker so all 4 attempts execute."""
+        pool = MagicMock()
+        pool.request.side_effect = [
+            _stub_response(b"", status=503) for _ in range(8)
+        ]
+        client = UrllibClient(
+            _http=pool,
+            circuit_breaker=_HostCircuitBreaker(threshold=10),
+        )
         with pytest.raises(HttpError, match="Exhausted retries"):
             client.get_json("https://example.com/api", retries=3)
         assert pool.request.call_count == 4
