@@ -1513,7 +1513,7 @@ class EgressProxy:
         # below the logger threshold — every CONNECT used to pay the
         # f-string formatting cost regardless of whether anything
         # consumed the line.
-        logger.info(
+        logger.debug(
             "egress proxy: OPEN %s:%s -> %s",
             host, port, event.get("resolved_ip", "?"),
         )
@@ -1573,7 +1573,7 @@ class EgressProxy:
                          bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
                          duration=time.monotonic() - t_start)
             if not self._stopping:
-                logger.info(
+                logger.debug(
                     "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
                     host, port, total["c2u"], total["u2c"],
                 )

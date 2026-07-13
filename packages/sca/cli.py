@@ -227,6 +227,7 @@ def _run_analyse(argv: List[str]) -> int:
 
     output_dir = _resolve_output_dir(args.out, prefix="sca")
     output_dir.mkdir(parents=True, exist_ok=True)
+    _configure_logging(args.verbose, log_dir=output_dir)
 
     from ._scan_args import apply_no_llm_umbrella, options_from_args
     apply_no_llm_umbrella(args)
@@ -374,7 +375,11 @@ def _parse_analyse_args(argv: Sequence[str]) -> argparse.Namespace:
 # Shared helpers — re-exported for libexec shim + sub-command modules
 # ---------------------------------------------------------------------------
 
-def _configure_logging(verbosity: int) -> None:
+def _configure_logging(
+    verbosity: int,
+    *,
+    log_dir: Optional[Path] = None,
+) -> None:
     if verbosity <= 0:
         level = logging.WARNING
     elif verbosity == 1:
@@ -382,9 +387,21 @@ def _configure_logging(verbosity: int) -> None:
     else:
         level = logging.DEBUG
     logging.basicConfig(
-        level=level,
+        level=min(level, logging.DEBUG) if log_dir else level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+if log_dir:
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(log_dir / "debug.log", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+    ))
+    root.addHandler(fh)
+    for h in root.handlers:
+        if isinstance(h, logging.StreamHandler) and h is not fh:
+            h.setLevel(level)
 
 
 def _resolve_output_dir(

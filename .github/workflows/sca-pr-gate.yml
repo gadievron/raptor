@@ -175,6 +175,18 @@ jobs:
           fi
           echo "posted=true" >> "$GITHUB_OUTPUT"
 
+
+      - name: Upload debug logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: sca-pr-gate-${{ github.event.pull_request.number }}
+          path: |
+            /tmp/sca-pr/debug.log
+            /tmp/sca-base/debug.log
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Fail on high-severity regressions
         if: steps.diff.outputs.exit != '0'
         run: |

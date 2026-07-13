@@ -87,9 +87,21 @@ jobs:
           )
 
           import logging
+          debug_log = Path.home() / ".raptor/cache/sca/stress/debug.log"
+          debug_log.parent.mkdir(parents=True, exist_ok=True)
           logging.basicConfig(
-              level=logging.INFO, format="%(message)s",
+              level=logging.DEBUG, format="%(message)s",
           )
+          root = logging.getLogger()
+          fh = logging.FileHandler(debug_log, encoding="utf-8")
+          fh.setLevel(logging.DEBUG)
+          fh.setFormatter(logging.Formatter(
+              "%(asctime)s %(levelname)s %(name)s: %(message)s",
+          ))
+          root.addHandler(fh)
+          for h in root.handlers:
+              if isinstance(h, logging.StreamHandler) and h is not fh:
+                  h.setLevel(logging.INFO)
           print(f"running {len(PROJECT_SAMPLES)} samples...", flush=True)
           results = run_stress_sweep(
               samples=PROJECT_SAMPLES,
