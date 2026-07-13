@@ -1178,7 +1178,7 @@ class TestUrllibClientCircuitBreakerWiring:
         assert pool2.request.call_count == 0
 
 @patch("core.http.urllib_backend.time.sleep")
-def test_circuit_break_attribute_on_pre_request_check(self, _mock_sleep):
+def test_circuit_break_attribute_on_pre_request_check(_mock_sleep):
     """When the breaker is already open, the pre-request check
     raises HttpError with circuit_break=True so downstream log
     helpers can demote the noise to DEBUG."""
@@ -1195,7 +1195,7 @@ def test_circuit_break_attribute_on_pre_request_check(self, _mock_sleep):
     assert pool.request.call_count == 0
 
 @patch("core.http.urllib_backend.time.sleep")
-def test_circuit_break_attribute_on_mid_retry_abort(self, _mock_sleep):
+def test_circuit_break_attribute_on_mid_retry_abort(_mock_sleep):
     """When a retry loop trips the breaker, the mid-loop abort
     raises HttpError with circuit_break=True."""
     cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
