@@ -888,6 +888,22 @@ class LLMClient:
             # and learns the command exists. Best-effort print to stderr.
             try:
                 import sys as _sys
+                # Test-run noise suppression: under pytest, a scorecard
+                # line for a zero-cost run (stub providers, cache-only
+                # replay) is pure noise — hundreds of $0.0000 lines
+                # per test session with no actionable signal. Skip
+                # emission in that case. Operator runs (pytest not in
+                # sys.modules) still see zero-cost lines so a cache-
+                # only replay is visibly distinct from a non-firing
+                # command.
+                #
+                # ``"pytest" in sys.modules`` (not
+                # ``PYTEST_CURRENT_TEST``) because most of these flushes
+                # run in ``atexit`` handlers at interpreter shutdown,
+                # after pytest has already unset the per-test env var.
+                # sys.modules entry persists for the process lifetime.
+                if "pytest" in _sys.modules and tot_cost == 0.0:
+                    return
                 avg_ms = (tot_lat_ms // tot_calls) if tot_calls else 0
                 # Four-decimal format always: preserves sub-penny
                 # detail for small runs (cache-heavy / cheap-tier

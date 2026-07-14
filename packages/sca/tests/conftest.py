@@ -20,7 +20,50 @@ Net effect on the dev box: removes ~1s from every test that calls
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# LLM isolation: default-deny live API calls
+# ---------------------------------------------------------------------------
+#
+# SCA tests must NOT hit real LLM providers by default. Prior state:
+# several pipeline/verify tests exercised the full SCA pipeline —
+# including the triage / inline-review / upgrade-impact passes — and
+# those passes call ``packages.sca.llm.get_llm_client()`` internally.
+# When those tests ran without an explicit stub, ``get_llm_client()``
+# read the operator's local LLM config, resolved to a real provider,
+# and made live API calls to whatever model was auto-selected
+# (Gemini-flash-lite in the observed case), silently costing money
+# per test run and shipping fixture content over the wire.
+#
+# The autouse fixture below patches ``get_llm_client`` to return
+# ``None`` for every SCA test. SCA pipeline code paths already handle
+# the ``None`` case gracefully — they treat it as "LLM disabled — skip
+# the review pass" — so tests exercising pipeline logic that isn't
+# specifically about LLM behaviour continue to pass unchanged.
+#
+# Tests that need a stubbed client (e.g. ``@patch("...get_llm_client")``
+# with a MagicMock return value) work as before: the inner context-
+# managed patch shadows this fixture's outer patch for the duration
+# of the test.
+#
+# Tests that genuinely need a live LLM (e.g. a specific-model smoke
+# test) opt in with ``@pytest.mark.integration``, which the root
+# ``pytest.ini`` deselects by default anyway.
+
+
+@pytest.fixture(autouse=True)
+def _sca_no_live_llm(request):
+    """Deny live LLM calls in SCA tests; see comment above."""
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+    with patch("packages.sca.llm.get_llm_client", return_value=None):
+        yield
+
 
 # Tool probes the resolver registry runs. Conservative — real list
 # lives in the per-resolver ``is_available`` methods. Adding more here
