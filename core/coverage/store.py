@@ -32,11 +32,11 @@ import contextlib
 import hashlib
 import json
 import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from core.atomic_fs import write_text_atomically
 from core.logging import get_logger as _get_logger
 
 from .registry import category_of
@@ -560,20 +560,14 @@ class CoverageStore:
         }
 
     def save(self) -> Path:
-        """Atomically write ``coverage.json`` (tempfile + os.replace)."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        """Atomically write ``coverage.json``.
+
+        Atomic write: coverage.json is a merged per-run artefact that
+        downstream tools (gap analysis, diff between runs, project
+        report) load as canonical. A torn write on interrupt would
+        leave malformed JSON that fails to parse and blocks every
+        subsequent read.
+        """
         payload = json.dumps(self.to_dict(), indent=2, sort_keys=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(self.path.parent), prefix=".coverage-", suffix=".json.tmp",
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-            os.replace(tmp, self.path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        write_text_atomically(self.path, payload, tmp_prefix=".coverage-")
         return self.path

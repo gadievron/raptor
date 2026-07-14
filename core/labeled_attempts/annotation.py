@@ -20,10 +20,10 @@ for everything else.
 from __future__ import annotations
 
 import json
-import os
-import secrets
 from pathlib import Path
 from typing import Optional
+
+from core.atomic_fs import write_text_atomically
 
 from .types import FailureMode, LabeledAttempt
 
@@ -33,19 +33,11 @@ __all__ = ["set_failure_mode"]
 def _atomic_replace(path: Path, payload: str) -> None:
     """Write ``payload`` to a same-directory temp + rename onto
     ``path``. Atomic under POSIX rename semantics."""
-    parent = path.parent
-    # Same directory so rename is atomic (cross-FS rename is not).
-    tmp = parent / f".{path.name}.{secrets.token_hex(3)}.tmp"
-    fd = os.open(
-        tmp,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o644,
-    )
-    try:
-        os.write(fd, payload.encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+    # Atomic write: operator triage rewrites an existing labeled_attempt
+    # record; a torn write would corrupt the JSON and hide the record
+    # from downstream aggregation. Same-tier reasoning as
+    # core/annotations/storage.py — reuse the shared primitive.
+    write_text_atomically(path, payload)
 
 
 def set_failure_mode(
