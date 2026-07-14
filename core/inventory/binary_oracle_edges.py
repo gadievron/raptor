@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from core.atomic_fs import write_text_atomically
+
 from .binary_oracle import read_build_id
 
 logger = logging.getLogger(__name__)
@@ -184,9 +186,13 @@ def _save_cached_index(cache_file: Path, idx: BinaryEdgeIndex) -> None:
                 for e in idx.edges
             ],
         }
-        tmp = cache_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, cache_file)
+        # Atomic write: edge-index cache is the per-build-id snapshot
+        # the reachability chokepoint consults. A torn write leaves
+        # JSON that fails to parse and drops the cached edges — the
+        # next run re-extracts from scratch (slow, ~10-30s per binary).
+        write_text_atomically(
+            cache_file, json.dumps(payload), tmp_prefix=".edge-cache-",
+        )
     except OSError as e:
         logger.debug("binary_oracle_edges: cache write failed: %s", e)
 

@@ -12,11 +12,11 @@ pass an adapter around ``LLMClient.generate_structured``.
 from __future__ import annotations
 
 import logging
-import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+
+from core.atomic_fs import write_text_atomically
 
 from .languages import detect_engine
 from .models import (
@@ -140,25 +140,13 @@ def _write_rule(
     other intact.
     """
     rules_dir = out_dir / "checkers"
-    rules_dir.mkdir(parents=True, exist_ok=True)
     path = rules_dir / f"{rule.rule_id}{_rule_extension(rule.engine)}"
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8",
-        dir=rules_dir, prefix=".rule-", suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(rule.body)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except Exception:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-        raise
+    # Atomic write: concurrent synthesises on the same seed (an
+    # /audit driver parallel-fanning hypothesis tests) can each write
+    # the same rule_id filename. Primitive's random-suffix tempfile
+    # keeps their writes isolated; readers see one or the other
+    # intact, never partial content.
+    write_text_atomically(path, rule.body, tmp_prefix=".rule-")
     return path
 
 

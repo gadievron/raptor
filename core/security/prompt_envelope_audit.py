@@ -798,15 +798,13 @@ def _update_allowlist_in_source(source_path: Path) -> int:
     them. That's sufficient because the literal is always formatted
     with the closing paren on its own column-0 line.
 
-    Atomic write: produces the new content in a sibling tempfile and
-    then ``os.replace`` swaps it into place. Without this an
-    interrupted ``--update`` (Ctrl-C, OOM kill, sandbox preempt) could
-    leave the audit module half-written on disk and break every
-    subsequent import — including the audit's own test, blocking
-    recovery via the same CLI.
+    Atomic write: an interrupted ``--update`` (Ctrl-C, OOM kill,
+    sandbox preempt) leaves the audit module half-written on disk and
+    breaks every subsequent import — including the audit's own test,
+    blocking recovery via the same CLI. Primitive keeps consumers
+    seeing either the OLD complete module or the NEW complete module.
     """
-    import os
-    import tempfile
+    from core.atomic_fs import write_text_atomically
     text = source_path.read_text(encoding="utf-8")
     lines = text.splitlines()
     start = None
@@ -829,26 +827,9 @@ def _update_allowlist_in_source(source_path: Path) -> int:
     out_lines = lines[:start] + new_block + lines[end + 1 :]
     new_text = "\n".join(out_lines) + "\n"
 
-    # Atomic write: write to a sibling tempfile, then os.replace.
-    # NamedTemporaryFile with delete=False so we can keep the path
-    # alive past the ``with`` block; cleanup-on-error handled below.
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=source_path.name + ".",
-        suffix=".tmp",
-        dir=source_path.parent,
+    write_text_atomically(
+        source_path, new_text, tmp_prefix=source_path.name + ".",
     )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(new_text)
-        os.replace(tmp_path, source_path)
-    except Exception:
-        # If anything went wrong before the replace, drop the partial
-        # tempfile so it doesn't litter the source tree.
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
     return len(violations)
 
 

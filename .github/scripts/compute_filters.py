@@ -37,6 +37,7 @@ FILTERS: dict[str, list[str]] = {
     # .github/tests/test_filter_coverage.py).
     "sandbox": [
         "core/sandbox/**",
+        "core/atomic_fs/**",
         "core/config/**",
         "core/run/**",
         "core/security/**",
@@ -55,6 +56,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/exploit_feasibility/**",
         "packages/binary_analysis/**",
         "packages/codeql/smt_path_validator.py",
+        "core/atomic_fs/**",
         "core/config/**",
         "core/function_taxonomy/**",
         "core/hash/**",
@@ -152,6 +154,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/cve_diff/**",
         "packages/nvd/**",
         "packages/osv/**",
+        "core/atomic_fs/**",
         "core/config/**",
         "core/git/**",
         "core/http/**",
@@ -202,6 +205,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/binary_analysis/**",
         "packages/cvss/**",
         "packages/osv/**",
+        "core/atomic_fs/**",
         "core/binary/**",
         "core/config/**",
         "core/coverage/**",

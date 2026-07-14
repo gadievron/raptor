@@ -51,6 +51,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from core.atomic_fs import write_text_atomically
+
 
 logger = logging.getLogger("raptor.security")
 logger.propagate = True
@@ -323,30 +325,19 @@ class DefenseTelemetry:
     def write_summary(self, output_dir: str | Path) -> Path:
         """Write the summary to defense-telemetry.json in output_dir.
 
-        Atomic write: temp file + os.replace. Pre-fix
-        `path.write_text(...)` was non-atomic — a process killed
-        mid-write left the JSON file half-written. The downstream
-        consumer (orchestration report aggregation) then JSONDecode-
-        crashed on the partial file and either skipped the section
-        or aborted report generation. The atomic temp+rename pattern
-        guarantees consumers see either the OLD complete file or the
-        NEW complete file, never a truncated transition.
+        Atomic write: orchestration-report aggregation reads this file
+        after every run; a torn write would JSONDecode-crash the
+        aggregator and either drop the defense-telemetry section or
+        abort the whole report. Primitive keeps consumers seeing
+        either the OLD complete file or the NEW complete file.
         """
-        import os as _os
         path = Path(output_dir) / "defense-telemetry.json"
         data = self.summary()
-        tmp = path.with_name(f"{path.name}.tmp.{_os.getpid()}")
-        try:
-            tmp.write_text(
-                json.dumps(data, indent=2) + "\n", encoding="utf-8",
-            )
-            _os.replace(str(tmp), str(path))
-        except BaseException:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        write_text_atomically(
+            path,
+            json.dumps(data, indent=2) + "\n",
+            tmp_prefix=".defense-telemetry-",
+        )
         return path
 
     @property
