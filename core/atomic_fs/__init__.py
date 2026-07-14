@@ -40,15 +40,16 @@ one-shot corpus generators) shouldn't use it — the fsync overhead is
 unearned for outputs that just get re-run on failure.
 
 Consumers:
-  * ``packages/sca`` fixer / rewriter modules for manifest writes.
-    (Future migrations will add persistent state stores, sandbox
-    files, and LLM state persistence — see the atomic_fs adoption
-    PR for the full list.)
-
-Historical note: ``packages/sca/_atomic.py`` implemented the same
-primitives independently; that module is retained as a thin re-export
-for backwards compatibility inside sca while the sca callers migrate
-to :mod:`core.atomic_fs` directly.
+  * ``packages/sca`` fixer / rewriter modules — via the thin
+    ``packages/sca/_atomic.py`` wrapper (delegates atomic_write_text
+    / atomic_write_bytes to the primitive; preserves the sca-side
+    positional-args API for 15+ existing call sites).
+  * Every ``core.json.save_json`` caller (threat models, checklists,
+    run reports, LLM detection cache, scorecard) transitively via
+    ``save_json``'s delegation.
+  * Direct-call consumers: core annotations, labeled attempts, binary
+    fingerprint store, witness store, coverage store, sandbox
+    calibration cache, sandbox summary + audit-degraded markers.
 """
 
 from __future__ import annotations
