@@ -57,6 +57,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/binary_analysis/**",
         "packages/codeql/smt_path_validator.py",
         "core/atomic_fs/**",
+        "core/binary/glibc_versions.py",
         "core/config/**",
         "core/function_taxonomy/**",
         "core/hash/**",
