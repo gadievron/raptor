@@ -83,106 +83,14 @@ jobs:
           TAG: ${{ steps.tag.outputs.name }}
           REPO: ${{ github.repository }}
         run: |
-          PREV_TAG=$(git tag --sort=version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | awk -v tag="${TAG}" '$0 == tag {exit} {last=$0} END {print last}')
-
-          if [ -z "$PREV_TAG" ]; then
-            echo "No previous tag found, using all commits"
-            COMMITS=$(git log --pretty=format:"%s" HEAD)
-          else
-            echo "Comparing ${PREV_TAG}..${TAG}"
-            COMMITS=$(git log --pretty=format:"%s" "${PREV_TAG}..HEAD")
-          fi
-
-          FEATURES=$(echo "$COMMITS" | grep -iE '^feat(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
-          FIXES=$(echo "$COMMITS" | grep -iE '^fix(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
-          SECURITY=$(echo "$COMMITS" | grep -iE '^(security|sec)(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
-          DOCS=$(echo "$COMMITS" | grep -iE '^docs(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
-          OTHER=$(echo "$COMMITS" | grep -ivE '^(feat|fix|security|sec|docs|release|chore|ci|test|build|style)(\(.+\))?:' | sed 's/^/- /' || true)
-
-          CHANGELOG="## What's changed in ${TAG}"
-          if [ -n "$PREV_TAG" ]; then
-            CHANGELOG="${CHANGELOG} (since ${PREV_TAG})"
-          fi
-          CHANGELOG="${CHANGELOG}
-
-          "
-
-          [ -n "$FEATURES" ] && CHANGELOG="${CHANGELOG}### New features
-          ${FEATURES}
-
-          "
-          [ -n "$SECURITY" ] && CHANGELOG="${CHANGELOG}### Security
-          ${SECURITY}
-
-          "
-          [ -n "$FIXES" ] && CHANGELOG="${CHANGELOG}### Bug fixes
-          ${FIXES}
-
-          "
-          [ -n "$DOCS" ] && CHANGELOG="${CHANGELOG}### Docs
-          ${DOCS}
-
-          "
-          [ -n "$OTHER" ] && CHANGELOG="${CHANGELOG}### Other changes
-          ${OTHER}
-
-          "
-
-          if [ -n "$PREV_TAG" ]; then
-            CHANGELOG="${CHANGELOG}**Full diff:** https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
-          fi
-
-          echo "$CHANGELOG" > /tmp/changelog.md
+          python3 .github/scripts/changelog-generator --raw --repo "${REPO}" "${TAG}" > /tmp/changelog.md
           cat /tmp/changelog.md
           echo "file=/tmp/changelog.md" >> "$GITHUB_OUTPUT"
 
       - name: Stamp release version
         env:
           TAG: ${{ steps.tag.outputs.name }}
-        run: |
-          python3 -c "
-          import sys, re
-          tag = sys.argv[1]
-          ver = tag.lstrip('v')
-
-          # The startup banner (core/startup/assets/raptor-offset) is NOT
-          # stamped: it carries a __VERSION__ placeholder and banner.py injects
-          # RaptorConfig.effective_version() at render time (git-describe in a
-          # checkout, else the baked VERSION below). So a clone shows its true
-          # position past the last tag and an archive shows the stamped VERSION.
-
-          # core/config VERSION (lives in the package __init__)
-          CONFIG = 'core/config/__init__.py'
-          text = open(CONFIG).read()
-          text = re.sub(
-              r'^(\s+VERSION = \")[^\"]+(\")' ,
-              lambda m: m.group(1) + ver + m.group(2),
-              text, count=1, flags=re.MULTILINE)
-          open(CONFIG, 'w').write(text)
-
-          # CITATION.cff version (semver, no leading 'v')
-          CITATION = 'CITATION.cff'
-          text = open(CITATION).read()
-          text = re.sub(
-              r'^(version: \")[^\"]+(\")',
-              lambda m: m.group(1) + ver + m.group(2),
-              text, count=1, flags=re.MULTILINE)
-          open(CITATION, 'w').write(text)
-
-          # README.md banner — 'Based on Claude Code (vX.Y.Z)' inside box
-          text = open('README.md').read()
-          def replace_readme(m):
-              prefix = m.group(1)
-              content = prefix + tag + ')'
-              pad = 76 - len(content)
-              return content + ' ' * pad + '║'
-          text = re.sub(r'(║\s+Based on Claude Code \()[^)]+\)[^║]*║', replace_readme, text)
-          open('README.md', 'w').write(text)
-          " "$TAG"
-          echo "Stamped:"
-          grep 'VERSION = ' core/config/__init__.py | head -1
-          grep '^version: ' CITATION.cff
-          grep "Based on Claude Code" README.md
+        run: python3 .github/scripts/stamp-version "${TAG}"
 
       # Push the version-stamp commit and re-tag using a request-scoped
       # Authorization header. Pre-fix this step relied on the embedded
@@ -214,6 +122,7 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
+          set -euo pipefail
           NAME="raptor-${TAG}"
 
           git archive --format=tar --prefix="${NAME}/" HEAD | tar -x -C /tmp
@@ -231,14 +140,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.name }}
         run: |
+          set -euo pipefail
           NAME="raptor-${TAG}"
 
-          gh release delete "${TAG}" --yes 2>/dev/null || true
-
-          gh release create "${TAG}" \
-            --verify-tag \
-            --title "RAPTOR ${TAG}" \
-            --notes-file /tmp/changelog.md \
-            /tmp/${NAME}.zip \
-            /tmp/${NAME}.tar.gz \
-            /tmp/${NAME}-checksums.txt
+          if gh release view "${TAG}" &>/dev/null; then
+            gh release edit "${TAG}" \
+              --title "RAPTOR ${TAG}" \
+              --notes-file /tmp/changelog.md
+            gh release upload "${TAG}" --clobber \
+              "/tmp/${NAME}.zip" \
+              "/tmp/${NAME}.tar.gz" \
+              "/tmp/${NAME}-checksums.txt"
+          else
+            gh release create "${TAG}" \
+              --verify-tag \
+              --title "RAPTOR ${TAG}" \
+              --notes-file /tmp/changelog.md \
+              "/tmp/${NAME}.zip" \
+              "/tmp/${NAME}.tar.gz" \
+              "/tmp/${NAME}-checksums.txt"
+          fi
