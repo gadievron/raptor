@@ -448,9 +448,8 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
     """Persist a profile. mode 0600, dir mode 0700."""
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # 0o700 = owner-only — most restrictive POSIX mode.
-        os.chmod(_CACHE_DIR, 0o700)
+        os.chmod(_CACHE_DIR, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
     except OSError as exc:
         logger.warning("calibrate: cache dir setup failed: %s", exc)
         return
@@ -460,8 +459,8 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
     # (the shared primitive's default 0o644 would widen; the cache is
     # owner-scoped, not shared). Primitive adds fsync-file + fsync-
     # parent-dir durability the old direct-write lacked.
-    # nosemgrep: python.lang.security.audit.insecure-file-permissions
     # 0o600 = owner-only file mode.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions
     try:
         write_text_atomically(
             path, profile.to_json(),
