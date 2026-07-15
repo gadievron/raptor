@@ -740,7 +740,7 @@ class DatabaseManager:
         # Auto-detect toolchain-home env vars (JAVA_HOME, GOROOT, etc.)
         # per build system's env_detect list. Per-subprocess scope —
         # these land only in this build invocation, not in other sandbox
-        # calls. See ~/design/env-handling.md and core/build/toolchain.py.
+        # calls. See the design memo and core/build/toolchain.py.
         if build_system and build_system.env_detect:
             from core.build.toolchain import apply_toolchain_env
             apply_toolchain_env(env, build_system.env_detect)

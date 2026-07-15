@@ -42,7 +42,7 @@ class BuildSystem:
     # Env var NAMES to auto-detect at build time. Each name must have
     # a corresponding detector in core.build.toolchain.DETECTORS. The
     # detected value (if non-None) is merged into the build
-    # subprocess's env alongside env_vars. See ~/design/env-handling.md.
+    # subprocess's env alongside env_vars.
     env_detect: List[str] = field(default_factory=list)
 
 
@@ -972,7 +972,7 @@ class BuildDetector:
          - lib/ exists but has no .jar files
          - repo_path doesn't resolve (shouldn't happen)
 
-        Rationale & edge cases in ~/design/env-handling.md (Q6).
+        Rationale & edge cases in the design memo (Q6).
         Repo-scoped construction — does NOT inherit any host CLASSPATH.
         """
         lib_dir = self.repo_path / "lib"
@@ -1212,7 +1212,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         inject it into the script's env. Without this, javac is found
         via PATH but the JDK layout (tools.jar, rt.jar on older JDKs)
         may not resolve. Scoped to this one subprocess — see
-        ~/design/env-handling.md.
+        the design memo
         """
         # Build env: sanitised base + toolchain auto-detection for the
         # language. For Java synthesised-build path, this is JAVA_HOME.

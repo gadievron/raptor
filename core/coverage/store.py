@@ -18,7 +18,7 @@ This is the (file,function)-keyed coverage sink. Per-run provenance
 separately from the run manifest (``.raptor-run.json``) and joined in by
 callers -- coverage does not embed it, and keys on file *content* SHA
 (via the inventory), so it is identical whether the target arrived as a
-git clone or a zip extraction. See ``~/design/coverage-layer.md``.
+git clone or a zip extraction. See the design memo.
 
 Intervals are inclusive ``[lo, hi]`` line ranges, kept sorted and
 coalesced per tool. (Bitmap fallback for files with very many intervals

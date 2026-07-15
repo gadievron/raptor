@@ -1102,7 +1102,7 @@ class LLMConfig:
     # ``None`` (default) DISABLES weighting — counts are summed unweighted,
     # identical to the pre-freshness behaviour. Enabling lowers the effective
     # sample size, so confirm the cold-start impact with the offline measurement
-    # before turning it on by default. See ~/design/scorecard-model-versioning.md.
+    # before turning it on by default. See the design memo.
     scorecard_freshness_half_life_days: Optional[float] = None
 
     def __post_init__(self) -> None:

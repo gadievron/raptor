@@ -9,7 +9,7 @@ Usage:
 Runs the given CodeQL queries on the pre- and post-fix databases and emits
 labeled corpus entries: a finding still flagged on the post-fix DB is a
 false-positive CANDIDATE (the fix added a sanitizer CodeQL doesn't model);
-pre-fix findings are true positives. See ~/design/trust-witness.md.
+pre-fix findings are true positives.
 
 Output is CANDIDATE labels — hand-verify before gating anything (an incomplete
 fix can leave a real TP mislabeled FP).

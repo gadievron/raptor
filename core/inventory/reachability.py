@@ -2484,7 +2484,7 @@ def binary_oracle_absent(
     binary (no extraction approximation, no 1-hop assumption). But
     BUILD-SPECIFIC: the verdict is about THIS binary's symbol table,
     not a universal source-level claim. ``earns_suppression=True`` per
-    two layers of evidence (``~/design/binary-oracle-reachability.md``
+    two layers of evidence (the design memo
     §9): (1) consistency check 1952/1952 across 6 iteratively-tuned
     corpora; (2) honest hold-out 187/187 on zstd v1.5.6 with no
     classifier tuning — rule-of-three 95% UB miss rate ≤1.6% on

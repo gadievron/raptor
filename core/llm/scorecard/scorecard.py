@@ -72,7 +72,7 @@ logger = get_logger()
 # (``events[type] = {"2026-05": {"correct", "incorrect"}, ...}``) instead of a
 # flat ``{"correct", "incorrect"}``, so reads can freshness-weight by bucket age.
 # Migration from v1 folds the flat counts into a single bucket keyed by the
-# cell's last-seen month. See ``freshness.py`` + ``~/design/scorecard-model-versioning.md``.
+# cell's last-seen month. See ``freshness.py`` + the design memo.
 SCHEMA_VERSION = 2
 
 # Wilson 95% upper bound is the gate; this many failures (or failure
