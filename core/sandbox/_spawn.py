@@ -1538,10 +1538,10 @@ def run_sandboxed(
                     ]
                     if _audit_config_path is not None:
                         tracer_argv.append(_audit_config_path)
-                    # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
                     # tracer_env is hand-crafted: 2 keys
                     # (PYTHONPATH + PATH), no inheritance. Explicitly
                     # safer than os.environ-copy.
+                    # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
                     os.execvpe(
                         sys.executable, tracer_argv, tracer_env,
                     )

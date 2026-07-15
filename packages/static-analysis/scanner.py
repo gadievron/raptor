@@ -1839,6 +1839,14 @@ def main():
         ),
     )
 
+    ap.add_argument(
+        "--show-suppressed", action="store_true",
+        dest="show_suppressed",
+        help="Include nosemgrep-suppressed findings in the output summary. "
+             "The SARIF always contains all findings regardless of this flag; "
+             "it only controls the presentation layer.",
+    )
+
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
@@ -2083,6 +2091,7 @@ def main():
         merged = out_dir / "combined.sarif"
         exclude_globs = args.exclude_dir
         excluded_count = 0
+        nosemgrep_count = 0
         if sarif_inputs:
             logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
             try:
@@ -2099,6 +2108,14 @@ def main():
                         f"--exclude-dir dropped {excluded_count} results "
                         f"from combined.sarif ({exclude_globs})"
                     )
+                # Annotate SARIF results whose source lines carry
+                # nosemgrep inline-suppression comments.  The annotation
+                # lives in result.properties.nosemgrep so any downstream
+                # consumer (/validate, external SARIF viewers) can see
+                # that a finding was developer-suppressed.
+                nosemgrep_count = semgrep_pkg.annotate_sarif(
+                    merged_data, str(repo_path),
+                )
                 save_json(merged, merged_data)
                 logger.info(f"Merged SARIF created: {merged}")
             except Exception as e:
@@ -2120,9 +2137,22 @@ def main():
         # tracked this, nothing failed") rather than absent-key
         # (couldn't-be-bothered).
         metrics["semgrep_failed_packs"] = semgrep_failed
+        metrics["nosemgrep_suppressed_count"] = nosemgrep_count
+        metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
         save_json(out_dir / "scan_metrics.json", metrics)
 
-        logger.info(f"Scan complete: {metrics['total_findings']} findings in {metrics['total_files_scanned']} files")
+        if nosemgrep_count:
+            _active = metrics['total_findings'] - nosemgrep_count
+            logger.info(
+                f"Scan complete: {_active} findings + "
+                f"{nosemgrep_count} developer-suppressed "
+                f"in {metrics['total_files_scanned']} files"
+            )
+        else:
+            logger.info(
+                f"Scan complete: {metrics['total_findings']} findings "
+                f"in {metrics['total_files_scanned']} files"
+            )
 
         # Write coverage records and derive total_files_scanned from them
         try:

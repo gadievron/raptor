@@ -250,10 +250,9 @@ class LLMDispatcher:
 
         # L1 — filesystem isolation.
         self._sock_dir = Path(tempfile.mkdtemp(prefix=f"raptor-llm-{run_id}-"))
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # 0o700 = owner-only — the socket lives here and must not be
         # group/other-readable on a multi-user host.
-        os.chmod(self._sock_dir, 0o700)
+        os.chmod(self._sock_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
         self.socket_path = self._sock_dir / "llm.sock"
 
         # Audit log
@@ -516,12 +515,12 @@ class LLMDispatcher:
         else:
             level = logging.INFO
         # Always log via stdlib logger for terminal visibility.
-        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         # ``ev.token_id`` is a 12-character correlation prefix (see
         # ``AuditEvent.token_id`` docstring) — explicitly NOT the
         # full token. Operator visibility for the auth flow needs
         # SOME identifier; the prefix gives correlation without
         # disclosure.
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         _logger.log(
             level,
             "llm-dispatcher %s %s pid=%s uid=%s token=%s label=%s%s",
