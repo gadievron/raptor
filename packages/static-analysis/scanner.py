@@ -2180,19 +2180,6 @@ def main():
         metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
         save_json(out_dir / "scan_metrics.json", metrics)
 
-        if nosemgrep_count:
-            _active = metrics['total_findings'] - nosemgrep_count
-            logger.info(
-                f"Scan complete: {_active} findings + "
-                f"{nosemgrep_count} developer-suppressed "
-                f"in {metrics['total_files_scanned']} files"
-            )
-        else:
-            logger.info(
-                f"Scan complete: {metrics['total_findings']} findings "
-                f"in {metrics['total_files_scanned']} files"
-            )
-
         # Write coverage records and derive total_files_scanned from them
         try:
             from core.coverage.record import (
@@ -2233,6 +2220,19 @@ def main():
                 save_json(out_dir / "scan_metrics.json", metrics)
         except Exception as e:
             logger.debug(f"Coverage record write failed (non-fatal): {e}")
+
+        if nosemgrep_count:
+            _active = metrics['total_findings'] - nosemgrep_count
+            logger.info(
+                f"Scan complete: {_active} findings + "
+                f"{nosemgrep_count} developer-suppressed "
+                f"in {metrics['total_files_scanned']} files"
+            )
+        else:
+            logger.info(
+                f"Scan complete: {metrics['total_findings']} findings "
+                f"in {metrics['total_files_scanned']} files"
+            )
 
         # Provenance manifest. MUST be composed BEFORE cleanup runs,
         # because cleanup deletes most of the per-pack SARIFs we hash.
