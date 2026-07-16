@@ -118,6 +118,40 @@ def _pack_tuple_for_id(pack_id: str) -> Tuple[str, str]:
     return (f"semgrep_{safe}", full_id)
 
 
+def _drop_unreachable_registry_packs(
+    configs: List[Tuple[str, str]],
+) -> List[Tuple[str, str]]:
+    """Drop uncached registry packs when semgrep.dev is unreachable.
+
+    A 3-second TCP probe distinguishes "airgapped" from "slow link".
+    Cached packs (resolved to local paths by ``get_semgrep_config``)
+    and local rule directories pass through unchanged.
+    """
+    needs_network = [
+        (n, c) for n, c in configs
+        if c.startswith("p/") or c.startswith("category/")
+    ]
+    if not needs_network:
+        return configs
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(3)
+    try:
+        sock.connect(("semgrep.dev", 443))
+        sock.close()
+        return configs
+    except (OSError, socket.timeout):
+        sock.close()
+        dropped = [n for n, _ in needs_network]
+        logger.warning(
+            "semgrep.dev unreachable (3 s probe failed) — "
+            "dropping %d uncached registry pack(s): %s",
+            len(dropped), ", ".join(dropped),
+        )
+        drop_set = {c for _, c in needs_network}
+        return [(n, c) for n, c in configs if c not in drop_set]
+
+
 def _resolve_baseline_packs(
     repo_path: Optional[Path],
 ) -> List[Tuple[str, str]]:
@@ -1062,6 +1096,8 @@ def semgrep_scan_parallel(
         _used_names.add(unique)
         configs.append((unique, extra))
 
+    configs = _drop_unreachable_registry_packs(configs)
+
     logger.info(f"Starting {len(configs)} Semgrep scans in parallel (max {RaptorConfig.MAX_SEMGREP_WORKERS} workers)")
     logger.info(f"  - Local rule directories: {len([c for c in configs if c[0].startswith('category_')])}")
     logger.info(f"  - Standard/baseline packs: {len([c for c in configs if not c[0].startswith('category_')])}")
@@ -1217,6 +1253,8 @@ def semgrep_scan_sequential(
         _used_names.add(unique)
         configs.append((unique, extra))
 
+    configs = _drop_unreachable_registry_packs(configs)
+
     for idx, (name, config) in enumerate(configs, 1):
         logger.info(f"Running scan {idx}/{len(configs)}: {name}")
         sarif_path, success = run_single_semgrep(
@@ -1332,6 +1370,7 @@ def run_codeql(
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, start_new_session=True,
+            env=RaptorConfig.get_safe_env(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=3600)
