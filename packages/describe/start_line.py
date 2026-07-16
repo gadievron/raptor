@@ -68,9 +68,9 @@ def format_start_line(target_path: Path) -> Optional[str]:
     if primary and shape.build_systems and primary in shape.build_systems:
         parts.append(shape.build_systems[primary])
 
-    # Catalog target type (skip the bland "generic" default —
-    # adds noise to the line when no real type matched).
-    if shape.target_type and shape.target_type != "generic":
+    # Catalog target type (skip generic fallbacks — the language
+    # is already shown from extension detection).
+    if shape.target_type and not shape.target_type.endswith("generic"):
         parts.append(shape.target_type)
 
     head_str = ", ".join(parts) if parts else None
