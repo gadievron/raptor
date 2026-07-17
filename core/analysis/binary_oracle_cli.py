@@ -153,11 +153,12 @@ def _filter_locally_built(
             except ValueError:
                 continue
             try:
+                from core.config import RaptorConfig
                 proc = subprocess.run(
                     ["git", "-C", str(repo), "ls-files",
                      "--error-unmatch", "--", str(rel)],
                     capture_output=True, text=True, check=False,
-                    timeout=10,
+                    timeout=10, env=RaptorConfig.get_safe_env(),
                 )
             except subprocess.TimeoutExpired:
                 repo_committed.append(c)

@@ -2094,6 +2094,10 @@ Examples:
             # "0 findings". Kill the sibling codeql child first.
             if codeql_proc and codeql_proc.poll() is None:
                 codeql_proc.kill()
+                try:
+                    codeql_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             raise SandboxSetupError(
                 "the semgrep scan subprocess reported the sandbox could not "
                 f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above",

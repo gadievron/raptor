@@ -140,10 +140,12 @@ def _resolved_pack_pointers() -> Dict[str, Path]:
     if not binary:
         return {}
     try:
+        from core.config import RaptorConfig
         proc = subprocess.run(
             [binary, "resolve", "qlpacks", "--format=json"],
             capture_output=True, text=True,
             timeout=_RESOLVE_TIMEOUT_SECS,
+            env=RaptorConfig.get_safe_env(),
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.debug("codeql resolve qlpacks failed: %s", e)

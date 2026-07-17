@@ -383,9 +383,10 @@ def _git_log_provenance(
     ]
     cmd.extend(paths)
     try:
+        from core.config import RaptorConfig
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=60,
-            check=False,
+            check=False, env=RaptorConfig.get_safe_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug(

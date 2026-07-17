@@ -1077,12 +1077,17 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                 raise RuntimeError(msg + " (require_sanitisation=True)")
             logger.warning("Sandbox: %s; identity surfaces will be host-real.", msg)
         else:
+            import shutil as _shutil
             import tempfile as _tf
             _persona_tmpdir = _tf.mkdtemp(prefix="raptor-persona-")
             _effective_cpu_count = cpu_count if cpu_count is not None else 4
-            _persona = build_persona(
-                Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
-            )
+            try:
+                _persona = build_persona(
+                    Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
+                )
+            except BaseException:
+                _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+                raise
     elif cpu_count is not None:
         # cpu_count without the master switch is a caller mistake — the
         # CPU-mask change is part of the fingerprint persona, not an

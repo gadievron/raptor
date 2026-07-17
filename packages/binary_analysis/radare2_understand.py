@@ -392,6 +392,7 @@ class BinaryUnderstand:
             if proc is not None:
                 try:
                     proc.kill()
+                    proc.wait(timeout=2)
                 except Exception:
                     pass
             # Give kill time to land; the worker thread is daemon so

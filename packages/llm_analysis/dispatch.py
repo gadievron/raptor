@@ -473,7 +473,10 @@ def dispatch_task(
                 else:
                     status = "done"
                 cost = processed.get("cost_usd")
-                cost_str = f"  ${cost:.2f}" if cost else ""
+                try:
+                    cost_str = f"  ${float(cost):.2f}" if cost else ""
+                except (ValueError, TypeError):
+                    cost_str = ""
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} {status}{cost_str}")
 

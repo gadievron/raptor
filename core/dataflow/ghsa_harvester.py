@@ -149,21 +149,27 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional
     so we don't bother caching the clone."""
     with tempfile.TemporaryDirectory(prefix="ghsa-resolve-") as td:
         td_p = Path(td)
+        from core.config import RaptorConfig
+        _env = RaptorConfig.get_safe_env()
         try:
             subprocess.run(["git", "init", "-q", str(td_p)],
-                           check=True, timeout=15, capture_output=True)
+                           check=True, timeout=15, capture_output=True,
+                           env=_env)
             subprocess.run(["git", "-C", str(td_p), "remote", "add", "origin", repo_url],
-                           check=True, timeout=15, capture_output=True)
+                           check=True, timeout=15, capture_output=True,
+                           env=_env)
             r = subprocess.run(
                 ["git", "-C", str(td_p), "fetch", "-q", "--depth", "2",
                  "origin", fix_hash],
                 check=False, timeout=timeout, capture_output=True,
+                env=_env,
             )
             if r.returncode != 0:
                 return None
             r = subprocess.run(
                 ["git", "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash],
                 check=False, timeout=15, capture_output=True, text=True,
+                env=_env,
             )
             if r.returncode != 0:
                 return None

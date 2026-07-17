@@ -178,7 +178,10 @@ def _sca_exploit_priority(f: Dict) -> float:
         score += 50.0
     epss = sca.get("epss")
     if epss is not None:
-        score += float(epss) * 30.0
+        try:
+            score += float(epss) * 30.0
+        except (ValueError, TypeError):
+            pass
     reach = sca.get("reachability", "not_evaluated")
     if reach == "likely_called":
         score += 20.0
@@ -186,7 +189,10 @@ def _sca_exploit_priority(f: Dict) -> float:
         score += 10.0
     cvss = sca.get("cvss_score")
     if cvss is not None:
-        score += float(cvss)
+        try:
+            score += float(cvss)
+        except (ValueError, TypeError):
+            pass
     return score
 
 
@@ -204,7 +210,10 @@ def _build_sca_exploit_prompt(finding: Dict) -> str:
     if sca.get("in_kev"):
         lines.append("KEV: YES — known exploited in the wild")
     if sca.get("epss") is not None:
-        lines.append(f"EPSS: {sca['epss']:.1%}")
+        try:
+            lines.append(f"EPSS: {float(sca['epss']):.1%}")
+        except (ValueError, TypeError):
+            lines.append(f"EPSS: {sca['epss']}")
     lines.append(f"Reachability: {sca.get('reachability', 'not_evaluated')}")
     if sca.get("fixed_version"):
         lines.append(f"Fixed in: {sca['fixed_version']}")

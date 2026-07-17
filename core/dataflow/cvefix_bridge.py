@@ -568,15 +568,17 @@ def synthesize_from_results(
     if search_path is None:
         search_path = _default_search_path()
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
-    sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
-           "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
-    params: tuple = ()
-    if languages:
-        sql += f" AND repo_language IN ({','.join('?' * len(languages))})"
-        params = tuple(languages)
-    sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
-    rows = con.execute(sql, params).fetchall()
-    con.close()
+    try:
+        sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
+               "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
+        params: tuple = ()
+        if languages:
+            sql += f" AND repo_language IN ({','.join('?' * len(languages))})"
+            params = tuple(languages)
+        sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
+        rows = con.execute(sql, params).fetchall()
+    finally:
+        con.close()
 
     syn = sqlite3.connect(str(synth_db))
     try:
