@@ -429,7 +429,7 @@ def write_report(reports: Sequence[CorpusReport], out_dir: Path) -> Path:
         "corpora": [r.to_dict() for r in reports],
         # The aggregate is the headline; bake it into the JSON so
         # downstream tooling (CI gates, drift detection, the
-        # ~/design/binary-oracle-reachability.md §9 table) reads from
+        # the design memo §9 table) reads from
         # ONE source of truth.
         "aggregate": _aggregate(reports),
     }

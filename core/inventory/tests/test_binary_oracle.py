@@ -2,9 +2,9 @@
 builds the C fixture at ``fixtures/binary_oracle/`` and asserts each
 source function classifies to the verdict its source comment predicts.
 
-This is Stage A of the binary-oracle validation plan (per
-~/design/binary-oracle-reachability.md §5): correctness of the
-classifier, before any precision-on-real-corpus measurement.
+This is Stage A of the binary-oracle validation plan (the design
+memo §5): correctness of the classifier, before any
+precision-on-real-corpus measurement.
 
 Skips gracefully when the toolchain is missing — the fixture needs a
 C compiler + GNU binutils (``cc``, ``make``, ``nm``, ``objdump``,

@@ -12,7 +12,7 @@ precision/recall but:
   * **defer_rate** — share left ``uncertain``.
   * **suppression_precision** — of everything suppressed, how much was a real FP.
 
-See ``~/design/trust-witness.md``.
+.
 """
 
 from __future__ import annotations

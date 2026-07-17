@@ -23,6 +23,14 @@ from .evidence import EvidenceRecord, EvidenceTier, make_evidence
 logger = logging.getLogger(__name__)
 
 
+def _addr(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, int):
+        return hex(v)
+    return str(v)
+
+
 @dataclass(frozen=True)
 class ExternalIngressCandidate:
     id: str
@@ -150,7 +158,7 @@ def recover_external_ingress(
         return (
             str(exact.get("id") or ""),
             str(exact.get("name") or ""),
-            str(exact.get("address") or ""),
+            _addr(exact.get("address")),
         )
 
     def add(
@@ -244,7 +252,7 @@ def recover_external_ingress(
             confidence="candidate",
             bound_function_id=str(item.get("id") or ""),
             bound_function_name=name,
-            address=str(item.get("address") or ""),
+            address=_addr(item.get("address")),
             existing_evidence_ids=list(item.get("evidence_ids") or []),
         )
 
@@ -269,7 +277,7 @@ def recover_external_ingress(
             confidence="candidate",
             bound_function_id=str(item.get("bound_function_id") or ""),
             bound_function_name=str(item.get("bound_function_name") or ""),
-            address=str(item.get("address") or ""),
+            address=_addr(item.get("address")),
             details={"selector": selector, "class_name": item.get("class_name")},
             existing_evidence_ids=list(item.get("evidence_ids") or []),
         )

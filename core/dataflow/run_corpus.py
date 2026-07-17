@@ -105,11 +105,11 @@ def load_validator(spec: str) -> Validator:
         raise ValueError(
             f"validator spec must be `module.path:ClassName`, got {spec!r}"
         )
-    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     # ``module_path`` is from the operator's ``--validator`` CLI
     # flag. The operator invoking RAPTOR can already execute any
     # Python; importing the validator they explicitly named adds
     # no privilege. Not a public API, not attacker-controllable.
+    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
     instance = cls()

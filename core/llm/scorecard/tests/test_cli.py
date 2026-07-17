@@ -885,6 +885,156 @@ def test_summary_json_dashboard(tmp_path):
     assert parsed["cheapest_short_circuit"]["model"] == "haiku"
 
 
+def test_chain_closure_ranks_by_success_rate(tmp_path):
+    """`chain-closure` ranks models by EXPLOIT_CHAIN_CLOSURE success
+    rate — the /exploit engine's chain-closure reliability. Highest
+    rate wins, ties break on cost, then on evidence (n)."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    # haiku: 7/10 success, opus: 4/5 success. opus wins on rate.
+    for _ in range(7):
+        sc.record_event("exploit_chain_closure", "haiku",
+                        EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    for _ in range(3):
+        sc.record_event("exploit_chain_closure", "haiku",
+                        EventType.EXPLOIT_CHAIN_CLOSURE, "incorrect")
+    for _ in range(4):
+        sc.record_event("exploit_chain_closure", "opus",
+                        EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    for _ in range(1):
+        sc.record_event("exploit_chain_closure", "opus",
+                        EventType.EXPLOIT_CHAIN_CLOSURE, "incorrect")
+    rc, out, _ = _capture(
+        cli_mod.cmd_chain_closure,
+        _make_args(path=tmp_path / "sc.json", cwe=None),
+    )
+    assert rc == 0
+    # opus should appear first (80% > 70%).
+    opus_pos = out.index("opus")
+    haiku_pos = out.index("haiku")
+    assert opus_pos < haiku_pos
+    assert "80.0%" in out
+    assert "70.0%" in out
+
+
+def test_chain_closure_scoped_to_specific_cwe(tmp_path):
+    """--cwe scopes to a per-CWE cell; the aggregate is not surfaced."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    # Only haiku has cwe-121 data; opus only has aggregate data.
+    sc.record_event("exploit_chain_closure:cwe-121", "haiku",
+                    EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    sc.record_event("exploit_chain_closure", "opus",
+                    EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    rc, out, _ = _capture(
+        cli_mod.cmd_chain_closure,
+        _make_args(path=tmp_path / "sc.json", cwe="cwe-121"),
+    )
+    assert rc == 0
+    assert "haiku" in out
+    # opus's aggregate cell should NOT appear under a cwe-121 scope.
+    assert "opus" not in out
+
+
+def test_chain_closure_empty_reports_clearly(tmp_path):
+    """No chain-closure data → informational message to stderr,
+    exit 0 (informational, not error). Points operators at
+    --scorecard flag on /exploit."""
+    ModelScorecard(tmp_path / "sc.json")
+    rc, _, err = _capture(
+        cli_mod.cmd_chain_closure,
+        _make_args(path=tmp_path / "sc.json", cwe=None),
+    )
+    assert rc == 0
+    assert "no chain-closure data" in err
+    assert "/exploit with --scorecard" in err
+
+
+def test_chain_closure_rate_zero_never_recommended(tmp_path):
+    """F5 fix: a cheap 0/N all-failures model must NOT top the
+    recommendation. Pre-fix, sort key collapsed rate=0.0 identically
+    to rate=None, letting a proven-failing model beat rate=None
+    cells; recommendation then picked it up because rows[0]["n"]>0."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    # cheap model: 10 failures, cost cheap.
+    for _ in range(10):
+        sc.record_event("exploit_chain_closure", "cheap-loser",
+                        EventType.EXPLOIT_CHAIN_CLOSURE, "incorrect")
+    sc.register_uses([{
+        "model": "cheap-loser", "decision_class": "_usage",
+        "calls": 10, "cost_usd": 0.01,
+    }])
+    # expensive model: 3 correct, 1 incorrect, expensive.
+    for _ in range(3):
+        sc.record_event("exploit_chain_closure", "pricey-winner",
+                        EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    sc.record_event("exploit_chain_closure", "pricey-winner",
+                    EventType.EXPLOIT_CHAIN_CLOSURE, "incorrect")
+    sc.register_uses([{
+        "model": "pricey-winner", "decision_class": "_usage",
+        "calls": 4, "cost_usd": 2.0,
+    }])
+    rc, out, _ = _capture(
+        cli_mod.cmd_chain_closure,
+        _make_args(path=tmp_path / "sc.json", cwe=None, json=True),
+    )
+    assert rc == 0
+    import json as _json
+    parsed = _json.loads(out)
+    # pricey-winner (75% success) should be recommended, NOT
+    # cheap-loser despite lower cost.
+    assert parsed["recommendation"] == "pricey-winner"
+    # Verify cheap-loser is present but sorted after.
+    models_order = [c["model"] for c in parsed["candidates"]]
+    assert models_order.index("pricey-winner") < models_order.index("cheap-loser")
+
+
+def test_chain_closure_rate_none_sorts_to_tail(tmp_path):
+    """Rate=None (n=0, e.g. a cell that only carries per-usage data)
+    should sort AFTER any cell with real evidence — never appear as
+    the "recommendation". Post-fix, rate=None sort key = +inf."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    # cell with evidence.
+    sc.record_event("exploit_chain_closure", "measured",
+                    EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    # Ensure a cell exists with the correct decision_class but no
+    # evaluable events on our slot. Direct call: register a stray
+    # decision-class cell via record_event on a different event
+    # type — the exploit_chain_closure event bucket stays empty so
+    # the count sums to zero.
+    sc.record_event("exploit_chain_closure", "unmeasured",
+                    EventType.SCHEMA_VALID, "correct")
+    rc, out, _ = _capture(
+        cli_mod.cmd_chain_closure,
+        _make_args(path=tmp_path / "sc.json", cwe=None, json=True),
+    )
+    assert rc == 0
+    import json as _json
+    parsed = _json.loads(out)
+    assert parsed["recommendation"] == "measured"
+    # measured should appear before unmeasured.
+    order = [c["model"] for c in parsed["candidates"]]
+    assert order.index("measured") < order.index("unmeasured")
+
+
+def test_chain_closure_json_emits_recommendation(tmp_path):
+    """JSON output carries decision_class, sorted candidates, and
+    the top-ranked model as `recommendation`."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    sc.record_event("exploit_chain_closure", "haiku",
+                    EventType.EXPLOIT_CHAIN_CLOSURE, "correct")
+    sc.record_event("exploit_chain_closure", "opus",
+                    EventType.EXPLOIT_CHAIN_CLOSURE, "incorrect")
+    rc, out, _ = _capture(
+        cli_mod.cmd_chain_closure,
+        _make_args(path=tmp_path / "sc.json", cwe=None, json=True),
+    )
+    assert rc == 0
+    import json as _json
+    parsed = _json.loads(out)
+    assert parsed["decision_class"] == "exploit_chain_closure"
+    assert parsed["recommendation"] == "haiku"
+    assert len(parsed["candidates"]) == 2
+
+
 def test_compare_text_includes_cost_and_calls(tmp_path):
     """Extended `compare` shows $$ + calls per side, not just reliability."""
     _seed_minimal(tmp_path / "sc.json")

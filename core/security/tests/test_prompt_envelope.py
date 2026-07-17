@@ -668,8 +668,9 @@ class TestPreflightWiring:
     def test_preflight_called_during_dispatch(self):
         """preflight() is imported and called in the dispatch loop."""
         import importlib
+        from pathlib import Path
         source = importlib.util.find_spec("packages.llm_analysis.dispatch")
-        text = open(source.origin).read()
+        text = Path(source.origin).read_text(encoding="utf-8")
         assert "from core.security.prompt_input_preflight import preflight" in text
         assert "preflight(prompt" in text
         assert "record_preflight" in text

@@ -85,6 +85,12 @@ class RetrievedExemplar:
     #                  distinction so the model treats reproducers
     #                  as starting points, not as finished work.
     tier: str = "exploit"
+    # Optional v3 §self-critique-12 chain-of-thought distillation:
+    # ~200-token post-mortem describing what the agent tried + where
+    # it got stuck. Empty string when no summariser ran on this
+    # record (back-compat for older records and runs without
+    # ``--summariser-model``).
+    distilled_summary: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -141,7 +147,15 @@ def _is_verified_trigger_or_beyond(record: LabeledAttempt) -> bool:
 
 
 def _cwe_matches(record: LabeledAttempt, query_cwe: str) -> bool:
-    return record.cwe.strip().upper() == query_cwe.strip().upper()
+    """Compare two CWE identifiers for equality via the canonical
+    normaliser. Handles ``"CWE-121"`` vs ``"cwe-121"`` vs
+    ``"cwe121"`` uniformly. Non-CWE strings fall back to raw
+    upper-stripped comparison so a record with a legacy free-form
+    tag still round-trips."""
+    from core.cve.cwe import canonicalize_cwe
+    r_canon = canonicalize_cwe(record.cwe) or record.cwe.strip().upper()
+    q_canon = canonicalize_cwe(query_cwe) or query_cwe.strip().upper()
+    return r_canon == q_canon
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +256,7 @@ def _render(record: LabeledAttempt) -> RetrievedExemplar:
         environment=_describe_environment(record),
         timestamp=record.timestamp,
         tier=tier,
+        distilled_summary=getattr(record, "distilled_summary", "") or "",
     )
 
 
@@ -344,6 +359,67 @@ def retrieve_exemplars(
         chosen.extend(leftover[: k - len(chosen)])
 
     return [_render(r) for r in chosen]
+
+
+# --------------------------------------------------------------------------
+# Cross-CWE probe — adversarial refuter input
+# --------------------------------------------------------------------------
+
+
+def retrieve_cross_cwe_probe(
+    *,
+    exclude_cwe: str,
+    project_dir: Optional[Path] = None,
+    include_bundled: bool = True,
+    include_global: bool = False,
+    recency_half_life_days: float = 90.0,
+    now: Optional[datetime] = None,
+) -> Optional[RetrievedExemplar]:
+    """Return one exemplar from a CWE class DIFFERENT from
+    ``exclude_cwe`` — the sycophancy probe per v3 design §4.
+
+    The refuter shows this sample to itself when judging a proposed
+    lesson: a genuinely generalisable lesson should NOT apply
+    confidently to a mismatched CWE. If the refuter happily ACCEPTs
+    the lesson when shown a different-CWE context, that's a
+    sycophancy signal and the lesson gets REJECTed.
+
+    Returns the most-recent decisive-outcome record from any CWE
+    other than ``exclude_cwe``. None when the pool has no
+    non-matching records (e.g., the pool is fresh and only carries
+    one CWE class).
+    """
+    now_dt = now or datetime.now(timezone.utc)
+    candidates = list(read_all(
+        project_dir=project_dir,
+        include_bundled=include_bundled,
+        include_global=include_global,
+    ))
+    # Canonicalise both sides so records stored with any accepted
+    # spelling (``"cwe121"``, ``"CWE-121"``, ``"CWE 121"``) exclude
+    # correctly against a caller-supplied ``exclude_cwe`` in any
+    # spelling. Without this, a record with ``cwe="cwe121"`` and
+    # ``exclude_cwe="CWE-121"`` slip through the exclude and get fed
+    # to the refuter as a "different CWE" probe, defeating
+    # sycophancy detection on the same-class case the exclusion is
+    # designed to prevent.
+    from .store import _canon_cwe
+    target_cwe = _canon_cwe(exclude_cwe)
+    candidates = [
+        r for r in candidates
+        if _canon_cwe(r.cwe or "") != target_cwe
+        and (_is_verified_success(r) or _is_verified_trigger_or_beyond(r))
+    ]
+    if not candidates:
+        return None
+    # Most-recent first by recency weight (older records are noise).
+    candidates.sort(
+        key=lambda r: _recency_weight(
+            _record_age_days(r, now_dt), recency_half_life_days,
+        ),
+        reverse=True,
+    )
+    return _render(candidates[0])
 
 
 # --------------------------------------------------------------------------

@@ -311,11 +311,11 @@ def nonce_leaked_in(nonce: str, text: str) -> bool:
 #   ­     — soft hyphen
 #   ‪-E   — bidi embedding / override controls  # nosemgrep: contains-bidirectional-characters
 #   ⁦-9   — bidi isolate controls  # nosemgrep: contains-bidirectional-characters
-# nosemgrep: generic.unicode.security.bidi.contains-bidirectional-characters
 # RAPTOR's anti-BiDi defense: ``_BYPASS_CHAR_RE`` IS the
 # defense — by definition contains the BiDi/control characters
 # the rule wants to flag. Stripping them would defeat the
 # defense. Suppressed at every literal-occurring line below.
+# nosemgrep: generic.unicode.security.bidi.contains-bidirectional-characters
 _BYPASS_CHAR_RE = re.compile(
     '[\x00­​‌‍﻿'  # nosemgrep: contains-bidirectional-characters
     '‪‫‬‭‮'  # nosemgrep: contains-bidirectional-characters

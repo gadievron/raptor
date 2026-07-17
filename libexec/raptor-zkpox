@@ -54,6 +54,7 @@ import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+import core.startup.process_init  # noqa: E402,F401
 
 
 def _cmd_eligible(args) -> int:

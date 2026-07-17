@@ -137,12 +137,25 @@ def _normalize_cwe(cwe: str) -> str:
     """Accept ``"CWE-79"``, ``"cwe-79"``, ``"79"``, ``"CWE-079"`` and
     return the canonical ``"CWE-79"`` form. Returns the input
     unchanged when it doesn't look like a CWE id so unknown lookups
-    return a clean empty set rather than raising."""
-    raw = cwe.strip().upper()
-    if raw.startswith("CWE-"):
-        raw = raw[4:]
+    return a clean empty set rather than raising.
+
+    Delegates to :func:`core.cwe.canonicalize_cwe` with a
+    bare-number fallback (the shared canonicaliser rejects plain
+    ``"79"`` since it isn't prefixed) and preserves the
+    return-raw-on-unknown semantics the catalog's lookup depends on.
+    """
+    from core.cve.cwe import canonicalize_cwe, format_cwe
+    canon = canonicalize_cwe(cwe)
+    if canon is not None:
+        # canonicalize_cwe preserves leading zeros in the number
+        # group; re-run through format_cwe to strip them (CWE-079 →
+        # CWE-79 for consistent catalog keys).
+        return format_cwe(canon.split("-", 1)[1]) or canon
+    # Bare number (``"79"``) is not accepted by the shared
+    # canonicaliser but the sanitizer catalog historically has.
+    raw = cwe.strip()
     if raw.isdigit():
-        return f"CWE-{int(raw)}"
+        return format_cwe(raw) or cwe
     return cwe
 
 

@@ -181,6 +181,69 @@ def provider_of(model_id: str) -> str:
     return provider_for_family(family_of(model_id))
 
 
+def resolve_model_shorthand(
+    model_id: str, candidate_names: Iterable[str],
+) -> Optional[str]:
+    """Resolve a bare tier-token shorthand to a configured model name.
+
+    An operator typing ``--model haiku`` gets back the full configured
+    name (``"claude-haiku-4-5-20251001"``) when exactly one configured
+    model has ``"haiku"`` as one of its hyphen-separated tokens.
+    Ambiguous input (two haiku variants configured) raises with the
+    candidate list so the operator can pick; missing input returns
+    ``None`` so the caller falls through to its usual failure path.
+
+    Match rule: shorthand equals one of the hyphen-separated tokens
+    of a configured model's :func:`bare_model_id` (case-insensitive).
+    ``"haiku"`` matches ``"claude-haiku-4-5-...`` but ``"pus"`` does
+    NOT match ``"claude-opus-4-7"`` — substring matches are too easy
+    to trigger accidentally on real names.
+
+    Only activated when the input:
+      * has NO ``/`` or ``.`` (provider-qualified / Bedrock IDs never
+        take this branch);
+      * is at least 3 characters (avoids ``"4"`` matching version
+        tokens);
+      * is not purely numeric (avoids ``"45"`` matching a version).
+
+    Callers dedupe ``candidate_names`` first when multiple entries
+    can refer to the same model (e.g. an alias + its dated snapshot);
+    this helper treats each name in the iterable as a distinct
+    candidate so it can raise a truthful ambiguity error.
+    """
+    if not model_id or "/" in model_id or "." in model_id:
+        return None
+    if len(model_id) < 3 or model_id.isdigit():
+        return None
+    needle = model_id.lower()
+    matches: list[str] = []
+    for name in candidate_names:
+        if not name:
+            continue
+        bare = bare_model_id(name).lower()
+        tokens = bare.replace(".", "-").split("-")
+        if needle in tokens:
+            matches.append(name)
+    # Dedupe while preserving order — the caller may pass duplicate
+    # candidates when the same underlying model is referenced multiple
+    # times (primary + fallback + specialized).
+    seen: set[str] = set()
+    unique: list[str] = []
+    for m in matches:
+        if m not in seen:
+            seen.add(m)
+            unique.append(m)
+    if len(unique) == 1:
+        return unique[0]
+    if len(unique) > 1:
+        listed = ", ".join(sorted(unique))
+        raise ValueError(
+            f"ambiguous model shorthand {model_id!r}: matches "
+            f"{listed}. Pass the full model name to disambiguate."
+        )
+    return None
+
+
 def unknown_model_message(model_id: str) -> str:
     """Operator-facing hint for a model id whose provider can't be resolved.
 

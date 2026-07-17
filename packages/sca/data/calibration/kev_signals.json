@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-07T09:22:53Z",
+    "fetched_at": "2026-07-14T07:46:21Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -97,6 +97,13 @@
       "product": "VirtualBox",
       "ransomware_use": false,
       "vendor": "Oracle"
+    },
+    "CVE-2008-4128": {
+      "date_added": "2026-07-13",
+      "kev": true,
+      "product": "IOS",
+      "ransomware_use": false,
+      "vendor": "Cisco"
     },
     "CVE-2008-4250": {
       "date_added": "2026-05-20",
@@ -10182,7 +10189,7 @@
       "date_added": "2025-05-05",
       "kev": true,
       "product": "Langflow",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Langflow"
     },
     "CVE-2025-32701": {
@@ -11361,6 +11368,13 @@
       "ransomware_use": false,
       "vendor": "LiteSpeed"
     },
+    "CVE-2026-48282": {
+      "date_added": "2026-07-07",
+      "kev": true,
+      "product": "ColdFusion",
+      "ransomware_use": false,
+      "vendor": "Adobe"
+    },
     "CVE-2026-48558": {
       "date_added": "2026-06-29",
       "kev": true,
@@ -11374,6 +11388,20 @@
       "product": "Joomla Content Editor ",
       "ransomware_use": false,
       "vendor": "Widget Factory"
+    },
+    "CVE-2026-48908": {
+      "date_added": "2026-07-07",
+      "kev": true,
+      "product": "SP Page Builder",
+      "ransomware_use": false,
+      "vendor": "JoomShaper"
+    },
+    "CVE-2026-48939": {
+      "date_added": "2026-07-10",
+      "kev": true,
+      "product": "iCagenda",
+      "ransomware_use": false,
+      "vendor": "iCagenda"
     },
     "CVE-2026-50751": {
       "date_added": "2026-06-08",
@@ -11395,6 +11423,27 @@
       "product": "cPanel Plugin",
       "ransomware_use": false,
       "vendor": "LiteSpeed"
+    },
+    "CVE-2026-55255": {
+      "date_added": "2026-07-07",
+      "kev": true,
+      "product": "Langflow",
+      "ransomware_use": false,
+      "vendor": "Langflow"
+    },
+    "CVE-2026-56290": {
+      "date_added": "2026-07-07",
+      "kev": true,
+      "product": "Page Builder",
+      "ransomware_use": false,
+      "vendor": "Joomlack"
+    },
+    "CVE-2026-56291": {
+      "date_added": "2026-07-10",
+      "kev": true,
+      "product": "Forms",
+      "ransomware_use": false,
+      "vendor": "Balbooa"
     },
     "CVE-2026-6973": {
       "date_added": "2026-05-07",

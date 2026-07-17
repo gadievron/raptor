@@ -47,6 +47,7 @@ __all__ = [
     "write",
     "read_all",
     "find_by_cwe",
+    "find_by_failure_mode",
     "find_by_finding_signature",
     "bundled_corpus_path",
     "global_pool_path",
@@ -65,6 +66,13 @@ def bundled_corpus_path() -> Path:
     Relative to RAPTOR's source tree, not the operator's filesystem.
     The bundled corpus is read-only at runtime (ships with each
     release).
+
+    Resolves ``RAPTOR_DIR`` (set by the RAPTOR launcher). Hard-fail
+    on missing — matches the CLAUDE.md rule "never add anything to
+    ``sys.path`` except ``os.environ['RAPTOR_DIR']``. Use the hard
+    lookup." A ``parents[N]`` fallback would silently point at a
+    foreign directory if this module is ever imported from a
+    namespace shadow.
     """
     raptor_dir = Path(os.environ["RAPTOR_DIR"])
     return (
@@ -238,6 +246,21 @@ def read_all(
         yield from _iter_records_in_dir(global_pool_path())
 
 
+def _canon_cwe(raw: str) -> str:
+    """Canonical CWE key for filtering. Delegates to
+    :func:`core.cve.cwe.canonicalize_cwe` for the CWE-N shape.
+
+    Non-CWE-shaped input (legacy free-form tags like ``"legacy-heap"``)
+    falls back to ``raw.strip().upper()`` — NOT full CWE canonicalisation.
+    So ``"legacy-heap"`` and ``"LEGACY-HEAP"`` match, but callers should
+    not expect ``"legacy heap"`` (space) to match either. Only the
+    canonicaliser normalises separators; the fallback is identity-modulo-
+    whitespace/case.
+    """
+    from core.cve.cwe import canonicalize_cwe
+    return canonicalize_cwe(raw) or raw.strip().upper()
+
+
 def find_by_cwe(
     cwe: str,
     *,
@@ -248,16 +271,52 @@ def find_by_cwe(
     """Filter ``read_all`` to a specific CWE class.
 
     For L3 retrieval the common case is "find me the verified
-    successes for CWE-X" — this is the convenience wrapper.
+    successes for CWE-X" — this is the convenience wrapper. CWE
+    comparison is canonicalised so ``"cwe121"`` matches
+    ``"CWE-121"``.
     """
-    cwe_norm = cwe.strip().upper()
+    cwe_norm = _canon_cwe(cwe)
     for attempt in read_all(
         project_dir=project_dir,
         include_bundled=include_bundled,
         include_global=include_global,
     ):
-        if attempt.cwe.strip().upper() == cwe_norm:
+        if _canon_cwe(attempt.cwe) == cwe_norm:
             yield attempt
+
+
+def find_by_failure_mode(
+    failure_mode_value: str,
+    *,
+    project_dir: Optional[Path] = None,
+    include_bundled: bool = True,
+    include_global: bool = False,
+    exclude_cwe: Optional[str] = None,
+) -> Iterable[LabeledAttempt]:
+    """Filter ``read_all`` to records with a specific failure_mode.
+
+    ``failure_mode_value`` matches ``LabeledAttempt.failure_mode.value``
+    (the raw enum string, e.g. ``"trigger_fired_no_controlled_effect"``).
+    Records with ``failure_mode is None`` are skipped.
+
+    ``exclude_cwe`` (canonicalised via ``core.cwe``) drops records
+    tagged with that CWE — used by extract_lesson's cross-CWE
+    fallback to enumerate adjacent-CWE evidence when the same-CWE
+    pool is thin.
+    """
+    exclude_norm = _canon_cwe(exclude_cwe) if exclude_cwe else None
+    for attempt in read_all(
+        project_dir=project_dir,
+        include_bundled=include_bundled,
+        include_global=include_global,
+    ):
+        if attempt.failure_mode is None:
+            continue
+        if attempt.failure_mode.value != failure_mode_value:
+            continue
+        if exclude_norm and _canon_cwe(attempt.cwe) == exclude_norm:
+            continue
+        yield attempt
 
 
 def find_by_finding_signature(

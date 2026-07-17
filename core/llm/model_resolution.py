@@ -162,9 +162,8 @@ def _fetch_inventory(api_key: str) -> list[str]:
     """
     import requests
 
-    # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
     # Hardcoded Anthropic API hostname — not SSRF.
-    r = requests.get(
+    r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
         "https://api.anthropic.com/v1/models",
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
         timeout=5,

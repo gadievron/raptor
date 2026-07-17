@@ -201,7 +201,7 @@ def _pick_primary(breakdown: Dict[str, float]) -> Optional[str]:
     detected. Ties broken by alphabetical name (deterministic)."""
     if not breakdown:
         return None
-    return max(breakdown.items(), key=lambda x: (x[1], -ord(x[0][0])))[0]
+    return sorted(breakdown.items(), key=lambda x: (-x[1], x[0]))[0][0]
 
 
 def _detect_build_systems(

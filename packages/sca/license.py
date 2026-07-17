@@ -527,7 +527,7 @@ def enrich_licenses(
             else:
                 return False
         except Exception as e:                          # noqa: BLE001
-            logger.debug(
+            logger.warning(
                 "sca.license: enrichment failed for %s:%s (%s)",
                 d.ecosystem, d.name, e,
             )

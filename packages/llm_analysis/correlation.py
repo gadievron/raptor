@@ -77,10 +77,10 @@ def correlate_results(results_by_id: Dict[str, Dict]) -> Dict[str, Any]:
             confidence[fid] = "disputed"
 
             exploitable_models = [
-                a["model"] for a in analyses if a.get("is_exploitable")
+                a.get("model", "?") for a in analyses if a.get("is_exploitable")
             ]
             non_exploitable_models = [
-                a["model"] for a in analyses if not a.get("is_exploitable")
+                a.get("model", "?") for a in analyses if not a.get("is_exploitable")
             ]
             minority = (exploitable_models if len(exploitable_models) < len(non_exploitable_models)
                         else non_exploitable_models)

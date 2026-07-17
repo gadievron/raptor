@@ -66,7 +66,7 @@ from pathlib import Path
 # happens to land on the repo root because we live here, but explicit
 # is safer than implicit.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
+import core.startup.process_init  # noqa: E402,F401
 from core.run.output import get_output_dir, resolve_default_target, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
 from core.run.safe_io import safe_run_mkdir

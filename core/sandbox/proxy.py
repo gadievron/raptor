@@ -429,6 +429,7 @@ class EgressProxy:
         self._audit_lock = threading.Lock()
         self._audit_count = 1 if audit_log_only else 0
         self._idle_timeout = idle_timeout
+        self._idle_timeout_lock = threading.Lock()
         self._total_timeout = total_timeout
         self._max_tunnels = max_tunnels
         self._buffer_size = buffer_size
@@ -558,6 +559,22 @@ class EgressProxy:
         """Extend the allowlist. Idempotent. Thread-safe."""
         with self._hosts_lock:
             self._allowed_hosts.update(h.lower() for h in hosts)
+
+    def update_idle_timeout(self, seconds: float) -> None:
+        """Raise the idle timeout if *seconds* exceeds the current value.
+
+        Max semantics: callers can widen the window but never shrink it,
+        so a late caller (e.g. LLM egress needing 1800s for thinking
+        models) doesn't regress the timeout for earlier callers.
+        """
+        with self._idle_timeout_lock:
+            if seconds > self._idle_timeout:
+                prev = self._idle_timeout
+                self._idle_timeout = seconds
+                logger.info(
+                    "egress proxy: idle timeout raised %.0fs → %.0fs",
+                    prev, seconds,
+                )
 
     def acquire_audit_log_only(self) -> None:
         """Increment the audit-mode reference count and ensure
@@ -1513,7 +1530,7 @@ class EgressProxy:
         # below the logger threshold — every CONNECT used to pay the
         # f-string formatting cost regardless of whether anything
         # consumed the line.
-        logger.info(
+        logger.debug(
             "egress proxy: OPEN %s:%s -> %s",
             host, port, event.get("resolved_ip", "?"),
         )
@@ -1573,7 +1590,7 @@ class EgressProxy:
                          bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
                          duration=time.monotonic() - t_start)
             if not self._stopping:
-                logger.info(
+                logger.debug(
                     "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
                     host, port, total["c2u"], total["u2c"],
                 )
@@ -1635,11 +1652,22 @@ async def _read_line(reader: asyncio.StreamReader, max_len: int) -> Optional[str
 
 # ----- module-level singleton API -----
 
-def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
+def get_proxy(
+    allowed_hosts: Iterable[str],
+    *,
+    idle_timeout: float | None = None,
+) -> EgressProxy:
     """Return the process-wide proxy singleton, creating it on first call.
 
     Additional calls mutate the allowlist in place (UNION semantics) and
     return the same instance. Thread-safe.
+
+    *idle_timeout* widens the per-tunnel idle timeout via max semantics:
+    on first call it overrides the default (300s); on subsequent calls
+    it raises the singleton's timeout if the new value is higher.
+    Callers that need longer tunnels (e.g. LLM thinking models) pass
+    their own timeout; callers that don't care omit it and get the
+    default or whatever a previous caller already raised it to.
 
     Upstream proxy autodetect: reads HTTPS_PROXY / https_proxy and
     NO_PROXY / no_proxy from the parent process env at FIRST-CALL time.
@@ -1701,6 +1729,8 @@ def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
                 )
         else:
             _instance.add_hosts(allowed_hosts)
+        if idle_timeout is not None:
+            _instance.update_idle_timeout(idle_timeout)
         return _instance
 
 

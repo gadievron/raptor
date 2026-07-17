@@ -1176,3 +1176,36 @@ class TestUrllibClientCircuitBreakerWiring:
         # Confirm pool2 was never invoked — the second client benefits
         # from the first client's discovery without redoing the work.
         assert pool2.request.call_count == 0
+
+@patch("core.http.urllib_backend.time.sleep")
+def test_circuit_break_attribute_on_pre_request_check(_mock_sleep):
+    """When the breaker is already open, the pre-request check
+    raises HttpError with circuit_break=True so downstream log
+    helpers can demote the noise to DEBUG."""
+    cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+    cb.record_failure("noisy.example.com", 443)
+    cb.record_failure("noisy.example.com", 443)
+
+    pool = MagicMock()
+    client = UrllibClient(_http=pool, circuit_breaker=cb)
+    with pytest.raises(HttpError) as exc_info:
+        client.get_json("https://noisy.example.com/pkg")
+    assert exc_info.value.circuit_break is True
+    assert exc_info.value.status is None
+    assert pool.request.call_count == 0
+
+@patch("core.http.urllib_backend.time.sleep")
+def test_circuit_break_attribute_on_mid_retry_abort(_mock_sleep):
+    """When a retry loop trips the breaker, the mid-loop abort
+    raises HttpError with circuit_break=True."""
+    cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+    r429 = _stub_response(b"", status=429, reason="Too Many")
+    pool = MagicMock()
+    pool.request.return_value = r429
+    client = UrllibClient(_http=pool, circuit_breaker=cb)
+    with pytest.raises(HttpError) as exc_info:
+        client.get_json(
+            "https://tripped.example.com/x",
+            total_timeout=60, retries=2,
+        )
+    assert exc_info.value.circuit_break is True

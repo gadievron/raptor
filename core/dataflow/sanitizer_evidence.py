@@ -5,7 +5,7 @@ the existing dataflow validator's LLM prompts — *not* a verdict.
 The earlier draft of this design tried a ``verdict`` field with
 short-circuit behaviour; it was rejected because collapsing the
 suppression decision to a single LLM call is the worst class of
-failure for security tooling. See ``~/design/dataflow-sanitizer-bypass.md``
+failure for security tooling.
 for the rationale.
 
 Three records:

@@ -227,7 +227,7 @@ def read_parity_records(path: Union[str, Path]) -> List[ParityRecord]:
             continue
         try:
             out.append(ParityRecord.from_json(json.loads(line)))
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             continue
     return out
 

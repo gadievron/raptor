@@ -20,6 +20,7 @@ if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 from packages.binary_analysis.graph_store import (
     graph_path_for_run,

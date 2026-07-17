@@ -224,6 +224,7 @@ def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     assert decision is None
 
 
+@pytest.mark.slow 
 def test_e2e_hostile_planted_binary_is_dropped(tmp_path: Path) -> None:
     """The hostile-ELF attack shape: a binary with completely
     unrelated symbols (planted in the target tree by an attacker)

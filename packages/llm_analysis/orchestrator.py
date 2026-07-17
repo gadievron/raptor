@@ -253,7 +253,11 @@ def build_llm_config_from_flags(
     """
     from core.llm.config import LLMConfig, _model_config_from_entry, _get_configured_models
     from core.llm.model_data import PROVIDER_ENV_KEYS
-    from core.security.llm_family import provider_of, bare_model_id
+    from core.security.llm_family import (
+        bare_model_id,
+        provider_of,
+        resolve_model_shorthand,
+    )
 
     models = models or []
     llm_config = None
@@ -270,6 +274,35 @@ def build_llm_config_from_flags(
         # field would produce ``anthropic/anthropic/claude-haiku-4-5``
         # when downstream re-prepends the provider — the SDK ships
         # that to Anthropic which 404s as an unknown model.
+        #
+        # Shorthand pass first: bare tier tokens (``haiku`` / ``opus`` /
+        # ``sonnet``) that don't parse as a real model id resolve to a
+        # unique configured entry when possible, then re-enter the
+        # provider-lookup path with the full name. Ambiguous shorthand
+        # raises inside resolve_model_shorthand with the candidate
+        # list. Missing shorthand returns None → falls through to the
+        # existing loud-failure path unchanged.
+        if provider_of(name) == "":
+            # Pass only the canonical ``model`` field per configured
+            # entry. The ``_configured_model`` alias is deliberately
+            # excluded — including both would raise a false ambiguity
+            # error when they're just two names for the same entry
+            # (e.g. ``claude-haiku-4-5`` alias + ``claude-haiku-4-5-
+            # 20251001`` canonical, both with token "haiku"). Operators
+            # who want to select an entry by an alias-specific token
+            # can pass the alias directly — the exact-match path below
+            # handles that.
+            configured_names = [
+                cfg_entry.get("model") or ""
+                for cfg_entry in _get_configured_models()
+            ]
+            resolved = resolve_model_shorthand(name, configured_names)
+            if resolved is not None and resolved != name:
+                # Substitute the resolved full name and continue. The
+                # dated-snapshot lookup below still runs on the
+                # resolved name, so an aggregator-hosted or Bedrock-
+                # shaped configured model resolves correctly.
+                name = resolved
         provider = provider_of(name)
         bare = bare_model_id(name)
         entry: Dict[str, Any] = {"model": bare, "provider": provider, "role": role}
@@ -878,11 +911,13 @@ def orchestrate(
             # path was running with weaker defences than the
             # primary path even though the same Claude model was
             # behind it.
+            _external_failures = list(analysis_results)
             analysis_results = dispatch_task(
                 AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
         findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
+            analysis_results = _external_failures + analysis_results
 
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
@@ -1645,7 +1680,11 @@ def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
                 "Cross-family checker: %s (auto-detected from %s)",
                 model_name, env_key,
             )
-            return ModelConfig(provider=provider, model_name=model_name)
+            return ModelConfig(
+                provider=provider,
+                model_name=model_name,
+                api_key=os.environ.get(env_key),
+            )
     return None
 
 
@@ -1841,10 +1880,9 @@ def _merge_results(
     for finding in results:
         fid = finding.get("finding_id")
         cc = cc_by_id.get(fid)
-        if not cc or "error" in cc:
-            # No CC result or failed — keep prep data, mark as unanalysed
-            finding["cc_error"] = cc.get("error") if cc else "not dispatched"
-            if cc and cc.get("cc_debug_file"):
+        if cc is None or "error" in cc:
+            finding["cc_error"] = cc.get("error") if cc is not None else "not dispatched"
+            if cc is not None and cc.get("cc_debug_file"):
                 finding["cc_debug_file"] = cc["cc_debug_file"]
             continue
 

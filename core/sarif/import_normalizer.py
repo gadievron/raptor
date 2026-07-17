@@ -67,7 +67,8 @@ def _infer_cwe(rule_id: str, message: str) -> Optional[str]:
 
     m = _CWE_RE.search(combined)
     if m:
-        return f"CWE-{m.group(1)}"
+        from core.cve.cwe import format_cwe
+        return format_cwe(m.group(1))
 
     for pattern, cwe in _CWE_MESSAGE_PATTERNS:
         if pattern.search(combined):

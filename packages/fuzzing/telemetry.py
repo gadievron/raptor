@@ -212,6 +212,7 @@ class FuzzingTelemetry:
             "plateau", "first_path", "fuzzer_error",
         }
         self._announced_first_path = False
+        self._plateau_announced = False
 
     def start(self) -> None:
         with self._lock:
@@ -300,11 +301,13 @@ class FuzzingTelemetry:
             # New paths reset plateau timer
             if self.stats.paths_found > old_paths:
                 self.stats.last_path_at = time.time()
+                self._plateau_announced = False
 
             # Plateau detection
             since_last = time.time() - self.stats.last_path_at
             self.stats.plateau_seconds = int(since_last)
-            if since_last > self.plateau_threshold and since_last - self.stats.plateau_seconds < 1:
+            if since_last > self.plateau_threshold and not self._plateau_announced:
+                self._plateau_announced = True
                 self._emit(FuzzEvent(
                     kind="plateau",
                     timestamp=time.time(),

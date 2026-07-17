@@ -230,26 +230,9 @@ def _apply_sha_pinned(
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Atomic tempfile + rename (same pattern as the other
-    Dockerfile rewriters)."""
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Atomic tempfile + rename via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees
+    (concurrent-reader safety, mode preservation, PID-suffix
+    isolation, BaseException catch)."""
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, content)

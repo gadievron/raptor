@@ -4,7 +4,7 @@ Wires the shipped CodeQL runner (:mod:`core.dataflow.codeql_augmented_run`)
 to the generator (:mod:`core.dataflow.cvefix_corpus_generator`). Runs the
 *same* (stock) queries on the pre- and post-fix CodeQL databases — the
 diff in what's flagged is what the generator labels (post-fix-still-flagged
-→ FP candidate, pre-fix → TP). See ``~/design/trust-witness.md``.
+→ FP candidate, pre-fix → TP).
 
 This is corpus *generation*, distinct from the sound-tier *measurement*
 (baseline vs custom-``.ql`` isBarrier on the same post-fix DB) which uses the

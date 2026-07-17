@@ -466,7 +466,7 @@ class AutonomousCodeQLAnalyzer:
             level=result.get("level", "warning"),
             file_path=artifact.get("uri", ""),
             start_line=region.get("startLine", 0),
-            end_line=region.get("endLine", 0),
+            end_line=region.get("endLine") or region.get("startLine", 0),
             snippet=region.get("snippet", {}).get("text", ""),
             cwe=cwe,
             has_dataflow=has_dataflow,
@@ -1307,7 +1307,8 @@ class AutonomousCodeQLAnalyzer:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Save analysis
-        analysis_file = out_dir / f"{finding.rule_id}_{finding.start_line}_analysis.json"
+        safe_id = f"{finding.rule_id}_{finding.start_line}".replace("/", "_")
+        analysis_file = out_dir / f"{safe_id}_analysis.json"
         analysis_data = {
             "finding": asdict(finding),
             "analysis": asdict(analysis),
@@ -1344,7 +1345,7 @@ class AutonomousCodeQLAnalyzer:
                 exploit_ext = ".rb"
             else:
                 exploit_ext = ".py"
-            exploit_file = out_dir / f"{finding.rule_id}_{finding.start_line}_exploit{exploit_ext}"
+            exploit_file = out_dir / f"{safe_id}_exploit{exploit_ext}"
             with open(exploit_file, 'w') as f:
                 f.write(exploit_code)
             self.logger.info(f"✓ Exploit saved: {exploit_file}")

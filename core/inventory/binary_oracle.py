@@ -148,6 +148,13 @@ def _stream(argv: List[str], timeout: int) -> Iterator[str]:
                 break
             yield line.rstrip("\n")
     finally:
+        # Explicit stdout close: the generator may be abandoned mid-
+        # iteration (caller breaks early, raises, or gets GC'd),
+        # which leaves proc.stdout open until Popen.__del__ finalises
+        # it — firing a ResourceWarning under ``-W default``. Closing
+        # here ties the fd lifetime to the generator's finally scope.
+        if proc.stdout is not None:
+            proc.stdout.close()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:

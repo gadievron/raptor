@@ -162,27 +162,24 @@ def refine_npm_verdicts(
 
     for d in candidates:
         funcs = npm_symbol_map[d.key()]
-        results = []
-        skipped = 0
+        paired = []
         for fn in funcs:
             qualified = _qualified_name(d.name, fn)
             if qualified is None:
-                skipped += 1
                 continue
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((fn, function_called(inventory, qualified)))
             except ValueError:
-                skipped += 1
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_fn_names: List[str] = []
-            for fn, r in zip(funcs, results):
+            evidence_lines: list[str] = []
+            called_fn_names: list[str] = []
+            for fn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_fn_names.append(fn)
                     evidence_lines.extend(
@@ -201,17 +198,14 @@ def refine_npm_verdicts(
         elif Verdict.UNCERTAIN in verdicts:
             continue
         else:
-            analyzed = len(results)
-            conf = "medium" if skipped > 0 else "high"
             out[d.key()] = Reachability(
                 verdict="not_function_reachable",
                 confidence=Confidence(
-                    conf,
+                    "high",
                     reason=(
-                        f"npm dep imported but {analyzed} of "
-                        f"{len(funcs)} OSV-listed affected "
-                        f"function(s) checked are not called "
-                        f"from non-test JS / TS source"
+                        f"npm dep imported but the {len(paired)} "
+                        f"OSV-listed affected function(s) are not "
+                        f"called from non-test JS / TS source"
                     ),
                 ),
                 evidence=[],

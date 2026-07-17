@@ -270,18 +270,44 @@ def _set_rlimits(limits: dict) -> None:
 
 
 def _kill_and_reap(pid: int) -> None:
-    """SIGKILL `pid` and reap it. Both ops are best-effort — if the
-    child already exited (ProcessLookupError) or was reaped elsewhere
-    (ChildProcessError), we just return. Used on every error path
-    where the parent has to abandon the child mid-setup.
+    """SIGKILL `pid` AND its descendants, then reap. Best-effort — if
+    the child already exited (ProcessLookupError) or was reaped
+    elsewhere (ChildProcessError), we just return.
 
-    On Linux 5.3+ uses pidfd_open + pidfd_send_signal so the SIGKILL
-    cannot land on a reused PID if the original child is gone. Falls
-    back to os.kill() on older kernels or when pidfd_open() is missing
-    from this Python build (3.9+ has it stdlib).
+    Crucially this also kills the child's PROCESS GROUP, not just the
+    direct child PID. Children spawned via ``start_new_session=True``
+    become session leaders, and their descendants (think: codeql Java
+    spawning python_tracer.py + multiprocessing forkserver workers)
+    live in the same session group as the leader. ``os.kill(pid, …)``
+    and ``pidfd_send_signal(pidfd, …)`` only target the leader; the
+    descendants get reparented to init and run forever as orphans.
+    Pre-fix this produced wedged codeql trees that accumulated CPU
+    time for weeks. ``os.killpg(pgid, …)`` sends the signal to every
+    process whose PGID matches the leader's — which is what we want.
+
+    The pidfd path is kept as a defence-in-depth FIRST send (kills the
+    leader's thread group reliably even if the leader has changed its
+    PGID via setpgid). The killpg send follows to cover any descendants
+    that stayed in the original group. Both raise ProcessLookupError
+    silently — by the time the second call fires the first may have
+    swept the leader; that's fine.
     """
     pidfd_open = getattr(os, "pidfd_open", None)
     pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    # Capture the PGID FIRST — before any signal fires. If the leader
+    # has been reaped elsewhere already, ``getpgid`` raises
+    # ProcessLookupError and we skip the killpg cleanly; if the
+    # leader called ``setpgid()`` to migrate to a different group, we
+    # get the actual current PGID rather than assuming it equals
+    # ``pid``. Both cases are why we CAN'T fall back to
+    # ``os.killpg(pid, ...)`` after the pidfd/kill send lands: by
+    # then the PID may have been reused by an unrelated process, and
+    # ``killpg`` would signal whichever group that new process
+    # happens to lead.
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        pgid = None
     if pidfd_open is not None and pidfd_send_signal is not None:
         pidfd = -1
         try:
@@ -304,6 +330,15 @@ def _kill_and_reap(pid: int) -> None:
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
+            pass
+    # Belt-and-braces: kill the whole process group so descendants
+    # (codeql java → index.py → python_tracer.py → forkserver workers)
+    # don't get orphaned to init. Uses the PGID captured pre-signal
+    # above so we never target a group led by a PID-reuse victim.
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
     try:
         os.waitpid(pid, 0)

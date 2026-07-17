@@ -342,8 +342,10 @@ def _build_hunt_strategy_block(pattern: str) -> str:
     except Exception:
         return ""
 
+    from core.cve.cwe import format_cwe
     candidate_cwes = tuple(
-        f"CWE-{m.group(1)}" for m in _CWE_RE.finditer(pattern)
+        c for m in _CWE_RE.finditer(pattern)
+        for c in [format_cwe(m.group(1))] if c
     )
     try:
         picked = pick_strategies(

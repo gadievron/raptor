@@ -724,6 +724,7 @@ class UrllibClient:
                 f"(cooldown {seconds_left:.0f}s remaining); "
                 f"recent 429/5xx history. Skipping request to avoid "
                 f"retry-storm: {_safe_url_for_log(url)}",
+                circuit_break=True,
             )
 
         last_exc: Optional[Exception] = None
@@ -787,6 +788,7 @@ class UrllibClient:
                             f"Circuit open for {cb_host}:{cb_port}; "
                             f"aborting retry: "
                             f"{_safe_url_for_log(url)}",
+                            circuit_break=True,
                         ) from e
                 if not is_transient:
                     raise

@@ -52,11 +52,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
 
+from core.atomic_fs import write_text_atomically
 from core.binary.fingerprint import (
     FINGERPRINT_SCHEMA_VERSION,
     CapabilityFingerprint,
@@ -108,31 +107,20 @@ def save_fingerprint(
         "fingerprint": fingerprint.to_dict(),
     }
     final_path = store_dir / _ref_filename(ref)
-    # Atomic write: tmp file in the same dir (so rename is on
-    # the same filesystem and stays atomic), then os.replace.
+    # Atomic write: fingerprint is the drift-detector's on-disk baseline.
+    # A torn write would corrupt JSON, get skipped as unreadable, and
+    # silently disable drift signal for that ref until the next scan.
     try:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=".tmp-", suffix=".json", dir=store_dir,
+        write_text_atomically(
+            final_path,
+            json.dumps(payload, sort_keys=True, indent=2),
+            tmp_prefix=".fingerprint-",
         )
-    except OSError as e:
-        logger.warning(
-            "core.binary.fingerprint_store: tempfile failed for %s: %s",
-            store_dir, e,
-        )
-        return None
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(payload, f, sort_keys=True, indent=2)
-        os.replace(tmp_name, final_path)
     except OSError as e:
         logger.warning(
             "core.binary.fingerprint_store: write failed for %s: %s",
             final_path, e,
         )
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
         return None
     return final_path
 

@@ -1702,12 +1702,29 @@ Examples:
         try:
             from packages.exploit_feasibility import analyze_binary, format_analysis_summary
 
+            # Optional source_intel wire: hand the reconciler the
+            # target's compile-time _FORTIFY_SOURCE level (extracted
+            # from compile_commands.json / Makefile / kconfig by
+            # ``core.build.build_flags.extract_flags``) so the %n
+            # verdict can override the ELF-derived ``__printf_chk``
+            # heuristic when they disagree. Defensive — returns an
+            # empty BuildFlagsContext on missing build metadata, which
+            # leaves the reconciler's pre-wire behaviour intact.
+            from core.build.build_flags import extract_flags
+            _agentic_build_flags = extract_flags(
+                Path(args.repo) if args.repo else Path.cwd()
+            )
+
             # --binary is action='append' (list) for binary-oracle's
             # hybrid multi-binary case; mitigation analysis is per-binary,
             # so analyse the FIRST declared binary.
             binary_path = (
                 str(Path(args.binary[0])) if args.binary else None)
-            mitigation_result = analyze_binary(binary_path, output_dir=str(out_dir))
+            mitigation_result = analyze_binary(
+                binary_path,
+                output_dir=str(out_dir),
+                build_flags=_agentic_build_flags,
+            )
 
             # Display formatted summary
             print(format_analysis_summary(mitigation_result, verbose=True))

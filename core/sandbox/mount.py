@@ -90,9 +90,8 @@ def _build_mount_script(target: Optional[str], output: Optional[str]) -> Optiona
             os.write(fd, ("\n".join(lines) + "\n").encode())
         finally:
             os.close(fd)
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # 0o700 = owner-only (executable bind-mount helper script).
-        os.chmod(path, 0o700)
+        os.chmod(path, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
     except OSError:
         try:
             os.unlink(path)

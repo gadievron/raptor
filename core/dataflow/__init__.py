@@ -10,7 +10,7 @@ results, and future dynamic-web producers all convert into a
 :class:`Finding` via per-producer adapters under
 ``core.dataflow.adapters`` so downstream consumers see one shape.
 
-See ``~/design/dataflow-sanitizer-bypass.md`` for the design.
+See the design memo for the design.
 """
 
 from .finding import SCHEMA_VERSION, Finding, Step

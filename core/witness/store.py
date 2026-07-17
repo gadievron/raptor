@@ -26,11 +26,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import threading
 from pathlib import Path
 from typing import Iterator, Optional
 
+from core.atomic_fs import write_bytes_atomically, write_text_atomically
 from core.witness.types import Witness, compute_bytes_hash
 
 
@@ -155,46 +154,23 @@ class WitnessStore:
         blob_path = self._blobs_dir / f"{witness.bytes_hash}.bin"
         manifest_path = self._manifests_dir / f"{witness.bytes_hash}.json"
 
-        # Atomic blob write: write to .tmp + os.replace. POSIX
-        # guarantees the rename is atomic. Pre-fix ``write_bytes``
-        # was direct and a crash mid-write left a partial blob
-        # that subsequent puts would skip (since blob_path.exists()
-        # was True), producing on-disk corruption invisible to
-        # later readers.
-        # ``.tmp`` paths are made unique per (pid, thread) so two
-        # concurrent ``put()`` calls writing the same hash don't
-        # race on the same temp file — the original ``.bin.tmp`` /
-        # ``.json.tmp`` suffix collided when N threads wrote identical
-        # bytes, with N-1 callers raising ``FileNotFoundError`` on
-        # the second ``os.replace`` (the first one had already
-        # consumed the shared tempfile). End state was still correct
-        # (dedup by hash) but most callers got an exception. The
-        # pid+tid suffix keeps the existing crash-mid-write guarantee
-        # (each tempfile is still atomically renamed onto the final
-        # path) while making same-hash concurrent writes succeed.
-        suffix = f".{os.getpid()}.{threading.get_ident()}.tmp"
+        # Atomic blob write: witness blob is the durable per-scan
+        # artefact; a torn write would leave a partial blob that
+        # dedup would trust as canonical for that hash. The shared
+        # primitive's PID+TID+random tempfile suffix keeps
+        # concurrent same-hash puts from racing on one tempfile
+        # (previously N callers raised FileNotFoundError on the
+        # second os.replace; end state was still correct via
+        # dedup-by-hash, but the exceptions surfaced up).
         if not blob_path.exists():
-            blob_tmp = blob_path.with_suffix(".bin" + suffix)
-            blob_tmp.write_bytes(data)
-            try:
-                os.replace(blob_tmp, blob_path)
-            except FileNotFoundError:
-                # Lost the race: another writer replaced the .tmp out
-                # from under us. The final blob_path now holds the
-                # same bytes (verified by hash); nothing to do.
-                pass
+            write_bytes_atomically(blob_path, data, tmp_prefix=".blob-")
 
-        # Atomic manifest write. Pre-fix ``write_text`` was direct
-        # and a crash mid-write left a malformed JSON file forever
-        # — list_witnesses skipped it with a warning but get_witness
-        # raised, and there was no recovery path other than manual
-        # cleanup.
-        manifest_tmp = manifest_path.with_suffix(".json" + suffix)
-        manifest_tmp.write_text(manifest_text, encoding="utf-8")
-        try:
-            os.replace(manifest_tmp, manifest_path)
-        except FileNotFoundError:
-            pass
+        # Atomic manifest write. Same reasoning: a torn manifest
+        # left get_witness raising forever with no recovery path
+        # other than manual cleanup.
+        write_text_atomically(
+            manifest_path, manifest_text, tmp_prefix=".manifest-",
+        )
 
         logger.debug(
             "WitnessStore.put: hash=%s len=%d source=%s outcome=%s",

@@ -43,7 +43,11 @@ def _finding_key(f: Dict[str, Any]) -> Tuple[Any, Any, Any]:
     key stable across runs (the same issue re-found at the same line matches
     even if its per-run id differs)."""
     file = f.get("file") or f.get("file_path") or f.get("path")
-    line = f.get("line") or f.get("line_start") or f.get("start_line")
+    line = next(
+        (v for k in ("line", "line_start", "start_line")
+         if (v := f.get(k)) is not None),
+        None,
+    )
     issue = (f.get("rule_id") or f.get("cwe_id") or f.get("vuln_type")
              or f.get("rule") or f.get("id") or f.get("finding_id"))
     loc = ("L", line) if line is not None else ("I", f.get("id") or f.get("finding_id"))

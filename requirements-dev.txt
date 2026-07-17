@@ -25,7 +25,7 @@ gcovr==8.6
 # affecting the user-facing "Optional: For web scanning package" path.
 # Tests retain their @skipUnless guards as defense-in-depth for devs
 # running pytest without bs4 installed.
-beautifulsoup4==4.14.3
+beautifulsoup4==4.15.0
 
 # ZKPoX Tier 2/3 (packages/zkpox/{disclosure,anchor,envelope,prove}).
 # Optional at runtime — kept out of requirements.txt to preserve the

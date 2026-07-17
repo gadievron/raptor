@@ -23,13 +23,16 @@ pytestmark = _pytest.mark.skipif(
     reason="Linux-only sandbox internals",
 )
 
-from unittest.mock import patch
+# pytestmark must be declared before Linux-only imports so pytest
+# can collect + skip cleanly on non-Linux hosts.
+from unittest.mock import patch  # noqa: E402
 
 
-def _run_envcheck(strict_env: bool):
+def _run_envcheck(strict_env: bool, env_caller_filtered: bool = False):
     """Run a ``profile="none"`` sandbox with a caller-supplied ``env=``
-    and the given ``strict_env``. Captures every ``logger.warning``
-    call made during the run and returns the formatted messages.
+    and the given ``strict_env`` + ``env_caller_filtered``. Captures
+    every ``logger.warning`` call made during the run and returns the
+    formatted messages.
 
     profile="none" means no kernel sandbox engagement — the child
     just exec's /usr/bin/true. Fast, no real-sandbox cost; the env-
@@ -51,6 +54,7 @@ def _run_envcheck(strict_env: bool):
                     ["/usr/bin/true"],
                     env={"FOO": "bar"},
                     strict_env=strict_env,
+                    env_caller_filtered=env_caller_filtered,
                     text=True, capture_output=True,
                 )
             except Exception:
@@ -87,3 +91,31 @@ class TestEnvWarningSilencedUnderStrictEnv:
             "pass strict_env=True as the mitigation; firing it after "
             f"they comply is contradictory noise); captured: {msgs}"
         )
+
+    def test_warning_silenced_when_env_caller_filtered_true(self):
+        """``env_caller_filtered=True`` is the "I know what I'm doing
+        AND I can't use strict_env" escape valve — added for the
+        /exploit engine's local_lowpriv_shell scenario, where the
+        producer's LD_PRELOAD-class env additions ARE intentional
+        exploit primitives that ``strict_env=True`` would silently
+        strip. With this flag, the operational-hygiene warning
+        suppresses but the sandbox still leaves the caller's env
+        verbatim."""
+        msgs = _run_envcheck(strict_env=False, env_caller_filtered=True)
+        env_warning_count = sum(
+            1 for m in msgs if "get_safe_env() not applied" in m
+        )
+        assert env_warning_count == 0, (
+            "expected the env-supplied warning to be silenced when "
+            "env_caller_filtered=True; captured: "
+            f"{msgs}"
+        )
+
+    def test_warning_fires_when_both_flags_false(self):
+        """Belt-and-braces: with neither opt-in flag, the warning
+        fires (this is the legitimate "stray env=" case)."""
+        msgs = _run_envcheck(strict_env=False, env_caller_filtered=False)
+        env_warning_count = sum(
+            1 for m in msgs if "get_safe_env() not applied" in m
+        )
+        assert env_warning_count >= 1

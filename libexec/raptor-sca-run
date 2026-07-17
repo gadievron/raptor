@@ -45,6 +45,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import core.startup.process_init  # noqa: E402,F401
 
 from core.run.metadata import complete_run, fail_run, start_run     # noqa: E402
 from core.run.output import get_output_dir                           # noqa: E402
