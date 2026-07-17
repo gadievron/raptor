@@ -16,6 +16,7 @@ from .runner import build_cmd, is_available, run_rule, run_rules, version
 from .models import SemgrepFinding, SemgrepResult
 from .findings import to_findings
 from .coverage import to_coverage_record
+from .nosemgrep import annotate_sarif, extract_nosemgrep
 
 __all__ = [
     "build_cmd",
@@ -27,4 +28,6 @@ __all__ = [
     "SemgrepResult",
     "to_findings",
     "to_coverage_record",
+    "annotate_sarif",
+    "extract_nosemgrep",
 ]

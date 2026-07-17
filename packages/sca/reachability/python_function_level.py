@@ -2,7 +2,7 @@
 
 Sits on top of the module-level Python scan (``packages.sca
 .reachability.python``) and the cross-language resolver
-(``core.inventory.reachability``). For PyPI deps that already came
+(``core.analysis.reachability``). For PyPI deps that already came
 back ``imported`` from the module-level pass AND have at least one
 OSV advisory carrying ``affected_functions`` data, this module asks
 the function-level resolver: "is the affected function actually
@@ -10,14 +10,16 @@ called from this project's source?".
 
 Three downgrade outcomes:
 
-  * **All affected functions return CALLED** → upgrade verdict to
-    ``likely_called`` (matches the Go pattern).
+  * **Any affected function returns CALLED** → upgrade verdict to
+    ``likely_called`` (matches the Go pattern). A mix of
+    CALLED + NOT_CALLED still upgrades — the dep is exercising
+    vulnerable code even if not every listed function is hit.
   * **All affected functions return NOT_CALLED, none UNCERTAIN** →
     downgrade to ``not_function_reachable``. Same risk-multiplier
     weight as ``not_reachable``: we have positive evidence the
     vulnerable code path isn't exercised.
-  * **Anything UNCERTAIN OR mix of CALLED/NOT_CALLED** → leave the
-    verdict at ``imported``. Honest reporting beats false confidence.
+  * **Any UNCERTAIN (with no CALLED)** → leave the verdict at
+    ``imported``. Honest reporting beats false confidence.
 
 When OSV doesn't carry ``affected_functions`` for a dep's
 advisories, this tier doesn't fire — the existing module-level
@@ -177,32 +179,29 @@ def refine_pypi_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )
 
     for d in candidates:
         funcs = pypi_symbol_map[d.key()]
-        results = []
+        paired = []
         for fn in funcs:
             qualified = f"{d.name}.{fn}"
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((fn, function_called(inventory, qualified)))
             except ValueError:
-                # Bare name (no dots) — shouldn't happen since we
-                # always prepend dep_name, but keep the resolver
-                # contract intact by ignoring unrunnable queries.
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_fn_names: List[str] = []
-            for fn, r in zip(funcs, results):
+            evidence_lines: list[str] = []
+            called_fn_names: list[str] = []
+            for fn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_fn_names.append(fn)
                     evidence_lines.extend(
@@ -229,7 +228,7 @@ def refine_pypi_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"dep imported but the {len(funcs)} OSV-listed "
+                        f"dep imported but the {len(paired)} OSV-listed "
                         f"affected function(s) are not called from "
                         f"non-test project source"
                     ),

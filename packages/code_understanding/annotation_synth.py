@@ -167,7 +167,7 @@ def _binary_oracle_body_line(func: Dict[str, Any]) -> str:
 def _hash_metadata(
     repo_root: Path, file_path: str, func: Dict[str, Any],
 ) -> Dict[str, str]:
-    """Return ``{hash, start_line, end_line}`` if the function has
+    """Return ``{hash, line_start, line_end}`` if the function has
     line bounds in the inventory. Empty dict otherwise."""
     line_start = func.get("line_start")
     line_end = func.get("line_end")
@@ -179,8 +179,8 @@ def _hash_metadata(
         return {}
     return {
         "hash": h,
-        "start_line": str(line_start),
-        "end_line": str(line_end),
+        "line_start": str(line_start),
+        "line_end": str(line_end),
     }
 
 
@@ -316,7 +316,7 @@ def _emit_site_annotations(
             kind = item.get("kind") or "site"
             g["kinds"].append(kind)
             head = f"- {category} site: {kind}"
-            if line:
+            if line is not None:
                 head += f" (line {line})"
             detail = [head]
             for k in ("allocator", "free_fn", "name", "grade", "role",

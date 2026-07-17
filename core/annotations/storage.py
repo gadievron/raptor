@@ -36,11 +36,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from core.atomic_fs import write_text_atomically
 
 try:
     import fcntl  # POSIX
@@ -406,25 +407,13 @@ def write_annotation(
         by_name[ann.function] = ann
         rendered = _render_file(ann.file, by_name.values())
 
-        # Atomic write — tempfile in same directory so rename is on
-        # the same filesystem (cross-fs rename isn't atomic).
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8",
-            dir=path.parent, prefix=".annotation-", suffix=".tmp",
-            delete=False,
+        # Atomic write: each save operation is a per-function annotation
+        # an operator relies on; a torn write on interrupt would lose
+        # the annotation with no recovery path. write_text_atomically
+        # gives us tempfile+fsync+rename with a fully audited implementation.
+        write_text_atomically(
+            path, rendered, tmp_prefix=".annotation-",
         )
-        try:
-            tmp.write(rendered)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp.close()
-            os.replace(tmp.name, path)
-        except Exception:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
     return path
 
 
@@ -450,23 +439,12 @@ def remove_annotation(
                 pass
             return True
         rendered = _render_file(source_file, remaining)
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8",
-            dir=path.parent, prefix=".annotation-", suffix=".tmp",
-            delete=False,
+        # Atomic write: same reasoning as write_annotation above — the
+        # remove path also rewrites the on-disk file, and a torn write
+        # would lose the survivor annotations.
+        write_text_atomically(
+            path, rendered, tmp_prefix=".annotation-",
         )
-        try:
-            tmp.write(rendered)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp.close()
-            os.replace(tmp.name, path)
-        except Exception:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
     return True
 
 

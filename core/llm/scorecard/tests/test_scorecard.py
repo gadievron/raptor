@@ -617,11 +617,20 @@ def _bump_in_subprocess(path_str: str, dc: str, model: str, n: int):
         )
 
 
+@pytest.mark.slow
 def test_concurrent_writes_do_not_lose_updates(tmp_path):
     """Two processes recording on different cells of the same
     sidecar must each see all of their own increments preserved.
     Without flock, a read-modify-write race would lose one set of
-    increments."""
+    increments.
+
+    Marked ``slow`` because it forks 4 Python subprocesses and runs
+    100 record-event calls end-to-end (~7s). Under contended CI
+    load the subprocess startup timing can drift enough to flake
+    despite the flock being correct — nightly slow-tier runs
+    where the box isn't juggling 12k other tests give the stress
+    test the headroom it needs.
+    """
     path = tmp_path / "sc.json"
 
     procs = []

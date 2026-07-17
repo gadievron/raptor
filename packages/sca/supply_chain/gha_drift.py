@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 _USES_RE = re.compile(
     r"""
     ^\s*-?\s*uses\s*:\s*
-    (?P<spec>[A-Za-z0-9_./-]+@[A-Za-z0-9_./-]+)
+    (?P<spec>[A-Za-z0-9_./+-]+@[A-Za-z0-9_./+-]+)
     \s*(?:\#.*)?$
     """,
     re.VERBOSE,

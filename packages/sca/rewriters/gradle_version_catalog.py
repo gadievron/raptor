@@ -133,6 +133,21 @@ def _inline_plugin_version_pattern(alias: str) -> "re.Pattern":
     )
 
 
+def _inline_plugin_string_pattern(alias: str) -> "re.Pattern":
+    """Match the string-shorthand plugin form:
+    ``alias = "plugin.id:VERSION"``. Update only the
+    version segment."""
+    a = re.escape(alias)
+    return re.compile(
+        r"(?P<hdr>^\s*\[plugins\]\s*$)"
+        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
+        rf"(?P<lead>^\s*{a}\s*=\s*['\"][^'\":]+:)"
+        r"(?P<version>[^'\"]+)"
+        r"(?P<tail>['\"])",
+        re.MULTILINE,
+    )
+
+
 @register(predicate=_is_libs_versions_toml)
 def rewrite_libs_versions_toml(
     path: Path, edits: List[RewriteEdit],
@@ -187,7 +202,7 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
             _inline_library_string_pattern,
         ]
     elif section == "plugin":
-        candidates = [_inline_plugin_version_pattern]
+        candidates = [_inline_plugin_version_pattern, _inline_plugin_string_pattern]
     else:
         return text, RewriteResult(
             edit=edit, applied=False,
@@ -222,8 +237,11 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    from packages.sca._atomic import atomic_write_text
-    atomic_write_text(path, content)
-
+    """Atomic tempfile + rename via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees
+    (concurrent-reader safety, mode preservation, PID-suffix
+    isolation, BaseException catch)."""
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, content)
 
 __all__ = ["rewrite_libs_versions_toml"]

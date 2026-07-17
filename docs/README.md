@@ -165,7 +165,7 @@ SINK: executeQuery(query)
 **Problem Solved**: Traditional tools (checksec, readelf) show what protections exist but not what's actually possible. This package answers:
 - Can I write to that GOT entry? (Full RELRO blocks both GOT AND .fini_array)
 - Will my ROP chain work? (strcpy null bytes break x86_64 addresses)
-- Does %n work? (glibc 2.38+ may block it - tested empirically)
+- Does %n work? Tri-state verdict (works / disabled / conditional-on-call-site) from a two-probe empirical test: baseline `-U_FORTIFY_SOURCE` compile establishes glibc's baseline `%n` capability; FORTIFY-with-writable-format compile confirms host runtime behavior. Cross-checked against target ELF's `__printf_chk` presence and optional source-tree `_FORTIFY_SOURCE` level. Conditional verdict surfaces case-analysis prose for the LLM to case-split by call site.
 
 **Key Features**:
 - Empirical verification (actually tests %n, doesn't just check version)

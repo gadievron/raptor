@@ -1123,7 +1123,7 @@ class TestRustExtraction:
         assert meta["public_api"]["visibility"] == "pub"
 
     def test_rust_dispatch_verdicts(self, tmp_path):
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(name):
@@ -1252,7 +1252,7 @@ class TestGoReachability:
         # Verdicts compose over the Go call graph → need tree-sitter-go.
         import pytest
         pytest.importorskip("tree_sitter_go")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(rel, name):
@@ -1295,7 +1295,7 @@ class TestGoInterfaceDispatch:
 
     def test_go_interface_dispatched_method_is_uncertain(self, tmp_path):
         pytest.importorskip("tree_sitter_go")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "go.mod").write_text("module x\ngo 1.21\n")
         (tmp_path / "m.go").write_text(self._SRC)
         inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
@@ -1372,7 +1372,7 @@ class TestJavaFrameworkEntries:
         # hard suppression.
         import core.inventory.extractors as ex
         monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
         saw = False
         for f in inv["files"]:
@@ -1387,7 +1387,7 @@ class TestJavaFrameworkEntries:
 
     def test_java_framework_entry_verdicts(self, tmp_path):
         pytest.importorskip("tree_sitter_java")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(rel, name):
@@ -1420,7 +1420,7 @@ class TestJavaFrameworkEntries:
         # interface-dispatch residuals type-free: Spring Data repos + dispatched
         # framework-interface @Override impls).
         pytest.importorskip("tree_sitter_java")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "OwnerRepository.java").write_text(
             "package x;\npublic interface OwnerRepository "
             "extends JpaRepository<Owner,Integer> {\n  Owner findByLastName(String n);\n}\n")
@@ -1483,7 +1483,7 @@ class TestVirtualDispatchCHA:
 
     def test_override_dispatched_reads_uncertain(self, tmp_path):
         pytest.importorskip("tree_sitter_java")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         for rel, c in self._FILES.items():
             (tmp_path / rel).write_text(c)
         inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
@@ -1526,7 +1526,7 @@ class TestTypeScriptCHA:
 
     def test_ts_override_dispatched_reads_uncertain(self, tmp_path):
         pytest.importorskip("tree_sitter_typescript")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "shapes.ts").write_text(
             "interface IShape { area(): number; }\n"
             "class Circle implements IShape { area(): number { return 1; } }\n"
@@ -1662,7 +1662,7 @@ class TestTypeScriptCoverage:
 
     def test_ts_framework_entry_verdicts(self, tmp_path):
         pytest.importorskip("tree_sitter_typescript")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(rel, name):
@@ -1688,7 +1688,7 @@ class TestTypeScriptCoverage:
         # A private helper reached only via this.helper() from a framework
         # entry must resolve (class-qualified 1-hop), not read not_called.
         pytest.importorskip("tree_sitter_typescript")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "svc.ts").write_text(
             "@Injectable()\nexport class Svc {\n"
             "  handle() { return this.step(); }\n"        # public bean entry
@@ -1751,7 +1751,7 @@ class TestCSharpCoverage:
 
     def test_csharp_framework_entry_verdicts(self, tmp_path):
         pytest.importorskip("tree_sitter_c_sharp")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(name):
@@ -1774,7 +1774,7 @@ class TestCSharpCoverage:
         # Base CLASSES (no attribute) the runtime dispatches into — captured
         # from the C# base_list into class_attributes.
         pytest.importorskip("tree_sitter_c_sharp")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "f.cs").write_text(
             "public class BlogController : ControllerBase {\n"
             "  public IActionResult Index() { return Ok(); }\n}\n"
@@ -1832,7 +1832,7 @@ class TestRubyCoverage:
 
     def test_ruby_rails_framework_entry_verdicts(self, tmp_path):
         pytest.importorskip("tree_sitter_ruby")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(name):
@@ -1896,7 +1896,7 @@ class TestPythonFrameworkConvention:
         assert meta["dead"].class_attributes == []
 
     def test_python_cbv_methods_are_entries(self, tmp_path):
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "views.py").write_text(self._FILES["views.py"])
         inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
 
@@ -1916,7 +1916,7 @@ class TestPythonFrameworkConvention:
     def test_python_convention_breadth(self, tmp_path):
         # Beyond web CBVs: Django management commands, DRF serializers, forms,
         # admin — methods dispatched by the framework with no in-project caller.
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         (tmp_path / "fw.py").write_text(
             "from django.core.management.base import BaseCommand\n"
             "class Command(BaseCommand):\n"
@@ -1960,7 +1960,7 @@ class TestLibraryEntryMode:
             (tmp_path / fn).write_text(src)
         inv = build_inventory(str(tmp_path), str(tmp_path / "out"),
                               treat_exports_as_entries=library)
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         out = {}
         for f in inv["files"]:
             mod = ".".join(f["path"].rsplit(".", 1)[0].split("/"))
@@ -2054,7 +2054,7 @@ class TestPhpCoverage:
 
     def test_php_framework_entry_verdicts(self, tmp_path):
         pytest.importorskip("tree_sitter_php")
-        from core.inventory.reach_audit import classify_reachability
+        from core.analysis.reach_audit import classify_reachability
         inv = self._build(tmp_path)
 
         def verdict(name):

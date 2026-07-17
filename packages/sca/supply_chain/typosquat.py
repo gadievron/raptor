@@ -14,10 +14,11 @@ Limits & honesty:
 - We use a string-only check; ``lodash`` vs ``lodaash`` flags, but
   ``lodash`` (correct) vs ``loadsh`` (transposed) needs the Damerau
   variant — included.
-- Scope-name typosquats are normalised: ``@types/node`` is compared
-  against the popular list both as itself and as ``types/node`` (some
-  attackers omit the ``@``). The package name kept on the finding is
-  the original.
+- Scoped npm packages (``@scope/name``) are compared against the
+  popular list as the bare name after the ``/`` (e.g.
+  ``@evil/lodash`` → ``lodash``). This catches namespace-squat
+  attacks where a malicious scope wraps a popular package name.
+  The package name kept on the finding is the original.
 """
 
 from __future__ import annotations

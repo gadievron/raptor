@@ -274,3 +274,65 @@ def test_pinned_yaml_stays_parseable_round_trip(
     assert steps[0]["name"] == "Checkout"
     assert steps[1]["with"]["python-version"] == "3.12"
     assert steps[2]["run"] == "pytest"
+
+
+# ---------------------------------------------------------------------------
+# Regression: tags preferred over branches when both exist
+# ---------------------------------------------------------------------------
+
+
+def test_tag_preferred_over_branch_with_same_ref_name(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """When ``git ls-remote`` returns both ``refs/tags/v1.0`` and
+    ``refs/heads/v1.0`` pointing to different SHAs, the tag SHA must
+    be returned.
+
+    Pre-fix: tags and branches had equal precedence (head_lines could
+    win depending on output order). After fix: tag_lines are checked
+    before head_lines in ``_pick_sha``."""
+    from packages.sca.hash_pin import _pick_sha
+
+    tag_sha = "a" * 40
+    branch_sha = "b" * 40
+    # Simulate git ls-remote output with branch listed FIRST
+    # (adversarial ordering — if branch wins, the bug is alive).
+    stdout = (
+        f"{branch_sha}\trefs/heads/v1.0\n"
+        f"{tag_sha}\trefs/tags/v1.0\n"
+    )
+    assert _pick_sha(stdout) == tag_sha
+
+
+def test_tag_preferred_even_when_branch_listed_first(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Same as above but verifies end-to-end through the workflow
+    rewriter."""
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(
+        "jobs:\n  t:\n    steps:\n"
+        "      - uses: actions/checkout@v1.0\n",
+        encoding="utf-8",
+    )
+    tag_sha = "a" * 40
+    branch_sha = "b" * 40
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] != ["git", "ls-remote"]:
+            return _FakeProc(returncode=1)
+        return _FakeProc(
+            returncode=0,
+            stdout=(
+                f"{branch_sha}\trefs/heads/v1.0\n"
+                f"{tag_sha}\trefs/tags/v1.0\n"
+            ),
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = hash_pin_workflows(tmp_path, write=True)
+    assert len(result.changes) == 1
+    text = (workflows / "ci.yml").read_text()
+    assert f"@{tag_sha}" in text
+    assert f"@{branch_sha}" not in text

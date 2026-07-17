@@ -6,7 +6,13 @@ Pure data, no logic. Updated during development from provider
 documentation. Changes at a different rate than code — when
 providers update pricing or release new models, edit this file.
 
-Last verified: 2026-05-29.
+Last verified: 2026-07-13.
+
+2026-07-13 — added RPM (requests per minute) to MODEL_LIMITS. Added new
+models: claude-fable-5, claude-sonnet-5, gpt-5.6-{sol,terra,luna},
+gpt-5.3-codex, gemini-3.5-flash, gemini-3.1-flash-lite,
+gemini-3-flash-preview. Updated Mistral pricing and RPM.
+Added MODEL_DATA_SOURCES provenance dict for auto-refresh.
 
 2026-05-29 — added ``claude-opus-4-8`` (Anthropic pricing page: $5 / $25 per
 MTok base input/output, same Opus tier as 4.5/4.6/4.7; full 1M-token context
@@ -32,6 +38,8 @@ Verification provenance for the 2026-05-03 refresh:
     ``ministral-{3b,8b,14b}-latest`` (the Ministral 3 family, all
     256K ctx per their model cards). All Mistral entries verified.
 """
+
+import re as _re
 
 from .bedrock_prefixes import (
     BEDROCK_GLOBAL_PREFIX as _BEDROCK_GLOBAL_COST_PREFIX,
@@ -72,7 +80,7 @@ PROVIDER_DEFAULT_MODELS = {
 #   Anthropic:  Opus  $0.005/$0.025  →  Haiku   $0.001/$0.005   (~5×)
 #   OpenAI:     5.4   $0.0025/$0.015 →  4o-mini $0.00015/$0.0006 (~25×)
 #   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
-#   Mistral:    Large $0.0005/$0.0015→  Small   $0.00015/$0.0006 (~3×)
+#   Mistral:    Large $0.002/$0.006  →  Small   $0.00015/$0.0006 (~13×)
 #
 # OpenAI mapping prefers ``gpt-4o-mini`` over the cheaper
 # ``gpt-5-nano`` because the 4o-mini has a longer track record for
@@ -95,8 +103,10 @@ PROVIDER_FAST_MODELS = {
 # Thinking/reasoning tokens are billed at the output rate on all providers.
 MODEL_COSTS = {
     # Anthropic — current
+    "claude-fable-5":          {"input": 0.010,   "output": 0.050},
     "claude-opus-4-8":         {"input": 0.005,   "output": 0.025},
     "claude-opus-4-7":         {"input": 0.005,   "output": 0.025},
+    "claude-sonnet-5":         {"input": 0.003,   "output": 0.015},
     "claude-sonnet-4-6":       {"input": 0.003,   "output": 0.015},
     "claude-haiku-4-5":        {"input": 0.001,   "output": 0.005},
     # Anthropic — legacy (still served via API)
@@ -104,16 +114,20 @@ MODEL_COSTS = {
     "claude-sonnet-4-5":       {"input": 0.003,   "output": 0.015},
     "claude-opus-4-5":         {"input": 0.005,   "output": 0.025},
     "claude-opus-4-1":         {"input": 0.015,   "output": 0.075},
-    # Anthropic — deprecated, retires 2026-06-15
+    # Anthropic — deprecated (retired 2026-06-15, may still serve via API)
     "claude-sonnet-4-0":       {"input": 0.003,   "output": 0.015},
     "claude-opus-4-0":         {"input": 0.015,   "output": 0.075},
-    # OpenAI — flagship (5.5/5.4 families)
+    # OpenAI — flagship (5.6/5.5/5.4 families)
+    "gpt-5.6-sol":             {"input": 0.005,   "output": 0.030},
+    "gpt-5.6-terra":           {"input": 0.0025,  "output": 0.015},
+    "gpt-5.6-luna":            {"input": 0.001,   "output": 0.006},
     "gpt-5.5":                 {"input": 0.005,   "output": 0.030},
     "gpt-5.5-pro":             {"input": 0.030,   "output": 0.180},
     "gpt-5.4":                 {"input": 0.0025,  "output": 0.015},
     "gpt-5.4-mini":            {"input": 0.00075, "output": 0.0045},
     "gpt-5.4-nano":            {"input": 0.0002,  "output": 0.00125},
     "gpt-5.4-pro":             {"input": 0.030,   "output": 0.180},
+    "gpt-5.3-codex":           {"input": 0.00175, "output": 0.014},
     "gpt-5.2":                 {"input": 0.00175, "output": 0.014},
     "gpt-5.2-pro":             {"input": 0.021,   "output": 0.168},
     "gpt-5.1":                 {"input": 0.00125, "output": 0.010},
@@ -135,14 +149,17 @@ MODEL_COSTS = {
     "o3-mini":                 {"input": 0.0011,  "output": 0.0044},
     "o3-pro":                  {"input": 0.020,   "output": 0.080},
     "o4-mini":                 {"input": 0.0011,  "output": 0.0044},
-    # Google Gemini (<=200K prompt tier for pro)
+    # Google Gemini (<=200K prompt tier for pro models)
+    "gemini-3.5-flash":        {"input": 0.0015,  "output": 0.009},
+    "gemini-3.1-flash-lite":   {"input": 0.00025, "output": 0.0015},
+    "gemini-3-flash-preview":  {"input": 0.0005,  "output": 0.003},
     "gemini-2.5-pro":          {"input": 0.00125, "output": 0.010},
     "gemini-2.5-flash":        {"input": 0.0003,  "output": 0.0025},
     "gemini-2.5-flash-lite":   {"input": 0.0001,  "output": 0.0004},
     # Google Gemma (free tier only via Gemini API as of 2026-04, also runs locally via Ollama)
     "gemma-4-31b-it":          {"input": 0,       "output": 0},
     # Mistral
-    "mistral-large-latest":    {"input": 0.0005,  "output": 0.0015},
+    "mistral-large-latest":    {"input": 0.002,   "output": 0.006},
     "mistral-medium-latest":   {"input": 0.0015,  "output": 0.0075},
     "mistral-small-latest":    {"input": 0.00015, "output": 0.0006},
     "ministral-14b-latest":    {"input": 0.0002,  "output": 0.0002},
@@ -150,64 +167,91 @@ MODEL_COSTS = {
     "ministral-3b-latest":     {"input": 0.0001,  "output": 0.0001},
 }
 
-# Per-model context window and max output token limits.
-# All entries verified directly against provider model cards as of
-# the verification date in the module docstring above.
+# Per-model context window, max output token, and rate limits.
+# All context/output entries verified directly against provider model cards
+# as of the verification date in the module docstring above.
+#
+# ``rpm`` — requests per minute. Conservative defaults from the lowest
+# paid tier published by each provider (Anthropic Start, OpenAI Tier 1,
+# Gemini Tier 1, Mistral Scale). Operators on higher tiers should
+# override via config. A value of 0 means "no provider-enforced limit"
+# (local / self-hosted models).
+#
+# RPM provenance (verified 2026-07-13):
+#   Anthropic: platform.claude.com/docs/en/api/rate-limits — published
+#              per-tier tables; Start tier (1,000 RPM all families).
+#   OpenAI:    developers.openai.com/api/docs/models/<model-id> —
+#              published per-tier tables; Tier 1 (most 500, mini 1K,
+#              gpt-5.5-pro 50).
+#   Gemini:    operator-observed defaults. Pro=1K, Flash=2K,
+#              Flash-Lite=10K, Gemma=30.
+#   Mistral:   operator-observed defaults (RPS × 60 → RPM).
+#              Large=4, Medium=50, Small=50.
 MODEL_LIMITS = {
     # Anthropic — current
-    "claude-opus-4-8":         {"max_context": 1000000, "max_output": 128000},
-    "claude-opus-4-7":         {"max_context": 1000000, "max_output": 128000},
-    "claude-sonnet-4-6":       {"max_context": 1000000, "max_output": 64000},
-    "claude-haiku-4-5":        {"max_context": 200000,  "max_output": 64000},
+    "claude-fable-5":          {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-4-8":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-4-7":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-sonnet-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-sonnet-4-6":       {"max_context": 1000000, "max_output": 64000,  "rpm": 1000},
+    "claude-haiku-4-5":        {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
     # Anthropic — legacy (still served via API)
-    "claude-opus-4-6":         {"max_context": 1000000, "max_output": 128000},
-    "claude-sonnet-4-5":       {"max_context": 200000,  "max_output": 64000},
-    "claude-opus-4-5":         {"max_context": 200000,  "max_output": 64000},
-    "claude-opus-4-1":         {"max_context": 200000,  "max_output": 32000},
-    # Anthropic — deprecated, retires 2026-06-15
-    "claude-sonnet-4-0":       {"max_context": 200000,  "max_output": 64000},
-    "claude-opus-4-0":         {"max_context": 200000,  "max_output": 32000},
+    "claude-opus-4-6":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-sonnet-4-5":       {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
+    "claude-opus-4-5":         {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
+    "claude-opus-4-1":         {"max_context": 200000,  "max_output": 32000,  "rpm": 1000},
+    # Anthropic — deprecated (retired 2026-06-15, may still serve via API)
+    "claude-sonnet-4-0":       {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
+    "claude-opus-4-0":         {"max_context": 200000,  "max_output": 32000,  "rpm": 1000},
     # OpenAI — flagship
-    "gpt-5.5":                 {"max_context": 1050000, "max_output": 128000},
-    "gpt-5.5-pro":             {"max_context": 1050000, "max_output": 128000},
-    "gpt-5.4":                 {"max_context": 1050000, "max_output": 128000},
-    "gpt-5.4-mini":            {"max_context": 400000,  "max_output": 128000},
-    "gpt-5.4-nano":            {"max_context": 400000,  "max_output": 128000},
-    "gpt-5.4-pro":             {"max_context": 1050000, "max_output": 128000},
-    "gpt-5.2":                 {"max_context": 400000,  "max_output": 128000},
-    "gpt-5.2-pro":             {"max_context": 400000,  "max_output": 128000},
-    "gpt-5.1":                 {"max_context": 400000,  "max_output": 128000},
-    "gpt-5":                   {"max_context": 400000,  "max_output": 128000},
-    "gpt-5-mini":              {"max_context": 400000,  "max_output": 128000},
-    "gpt-5-nano":              {"max_context": 400000,  "max_output": 128000},
-    "gpt-5-pro":               {"max_context": 400000,  "max_output": 272000},
+    "gpt-5.6-sol":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-5.6-terra":           {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-5.6-luna":            {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-5.5":                 {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-5.5-pro":             {"max_context": 1050000, "max_output": 128000, "rpm": 50},
+    "gpt-5.4":                 {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-5.4-mini":            {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5.4-nano":            {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5.4-pro":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-5.3-codex":           {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5.2":                 {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5.2-pro":             {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5.1":                 {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5":                   {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5-mini":              {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5-nano":              {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5-pro":               {"max_context": 400000,  "max_output": 272000, "rpm": 500},
     # OpenAI — gpt-4 family
-    "gpt-4.1":                 {"max_context": 1047576, "max_output": 32768},
-    "gpt-4.1-mini":            {"max_context": 1047576, "max_output": 32768},
-    "gpt-4.1-nano":            {"max_context": 1047576, "max_output": 32768},
-    "gpt-4o":                  {"max_context": 128000,  "max_output": 16384},
-    "gpt-4o-mini":             {"max_context": 128000,  "max_output": 16384},
+    "gpt-4.1":                 {"max_context": 1047576, "max_output": 32768,  "rpm": 500},
+    "gpt-4.1-mini":            {"max_context": 1047576, "max_output": 32768,  "rpm": 500},
+    "gpt-4.1-nano":            {"max_context": 1047576, "max_output": 32768,  "rpm": 500},
+    "gpt-4o":                  {"max_context": 128000,  "max_output": 16384,  "rpm": 500},
+    "gpt-4o-mini":             {"max_context": 128000,  "max_output": 16384,  "rpm": 500},
     # OpenAI — reasoning
-    "o1":                      {"max_context": 200000,  "max_output": 100000},
-    "o1-pro":                  {"max_context": 200000,  "max_output": 100000},
-    "o1-mini":                 {"max_context": 128000,  "max_output": 65536},
-    "o3":                      {"max_context": 200000,  "max_output": 100000},
-    "o3-mini":                 {"max_context": 200000,  "max_output": 100000},
-    "o3-pro":                  {"max_context": 200000,  "max_output": 100000},
-    "o4-mini":                 {"max_context": 200000,  "max_output": 100000},
+    "o1":                      {"max_context": 200000,  "max_output": 100000, "rpm": 500},
+    "o1-pro":                  {"max_context": 200000,  "max_output": 100000, "rpm": 500},
+    "o1-mini":                 {"max_context": 128000,  "max_output": 65536,  "rpm": 500},
+    "o3":                      {"max_context": 200000,  "max_output": 100000, "rpm": 500},
+    "o3-mini":                 {"max_context": 200000,  "max_output": 100000, "rpm": 1000},
+    "o3-pro":                  {"max_context": 200000,  "max_output": 100000, "rpm": 500},
+    "o4-mini":                 {"max_context": 200000,  "max_output": 100000, "rpm": 1000},
     # Google Gemini
-    "gemini-2.5-pro":          {"max_context": 1048576, "max_output": 65536},
-    "gemini-2.5-flash":        {"max_context": 1048576, "max_output": 65536},
-    "gemini-2.5-flash-lite":   {"max_context": 1048576, "max_output": 65536},
+    "gemini-3.5-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
+    "gemini-3.1-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
+    "gemini-3-flash-preview":  {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
+    "gemini-2.5-pro":          {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
+    "gemini-2.5-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
+    "gemini-2.5-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
     # Google Gemma (free tier only via Gemini API as of 2026-04, also runs locally via Ollama)
-    "gemma-4-31b-it":          {"max_context": 262144,  "max_output": 32768},
+    "gemma-4-31b-it":          {"max_context": 262144,  "max_output": 32768,  "rpm": 30},
     # Mistral — max_output = max_context per Mistral convention
-    "mistral-large-latest":    {"max_context": 262100,  "max_output": 262100},
-    "mistral-medium-latest":   {"max_context": 256000,  "max_output": 256000},
-    "mistral-small-latest":    {"max_context": 256000,  "max_output": 256000},
-    "ministral-14b-latest":    {"max_context": 256000,  "max_output": 256000},
-    "ministral-8b-latest":     {"max_context": 256000,  "max_output": 256000},
-    "ministral-3b-latest":     {"max_context": 256000,  "max_output": 256000},
+    # RPM derived from observed RPS (RPS × 60, floored).
+    "mistral-large-latest":    {"max_context": 262100,  "max_output": 262100, "rpm": 4},
+    "mistral-medium-latest":   {"max_context": 256000,  "max_output": 256000, "rpm": 50},
+    "mistral-small-latest":    {"max_context": 256000,  "max_output": 256000, "rpm": 50},
+    "ministral-14b-latest":    {"max_context": 256000,  "max_output": 256000, "rpm": 30},
+    "ministral-8b-latest":     {"max_context": 256000,  "max_output": 256000, "rpm": 188},
+    "ministral-3b-latest":     {"max_context": 256000,  "max_output": 256000, "rpm": 750},
 }
 
 # Provider -> env var mapping for API key lookup
@@ -255,8 +299,10 @@ PROVIDER_ENV_KEYS = {
 # one of these, apply the 1.10× regional surcharge.  Extend as AWS
 # adds global-CRIS coverage; non-listed models stay at 1.0×.
 _BEDROCK_GLOBAL_CRIS_MODELS: frozenset[str] = frozenset({
+    "claude-fable-5",
     "claude-opus-4-7",
     "claude-opus-4-8",
+    "claude-sonnet-5",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
 })
@@ -283,6 +329,15 @@ def _strip_bedrock_provider(model: str) -> str:
         if model.lower().startswith(prefix):
             return model[len(prefix):]
     return model
+
+
+_DATED_ALIAS_RE = _re.compile(r"-\d{8}$")
+
+
+def _strip_dated_alias(model: str) -> str:
+    """Strip Anthropic dated-alias suffix (``-YYYYMMDD``) so
+    ``claude-haiku-4-5-20251001`` resolves to ``claude-haiku-4-5``."""
+    return _DATED_ALIAS_RE.sub("", model)
 
 
 def _bedrock_cost_multiplier(model: str) -> float:
@@ -316,7 +371,11 @@ def context_window_for(model: str) -> int:
     """
     limits = MODEL_LIMITS.get(model)
     if limits is None:
+        limits = MODEL_LIMITS.get(_strip_dated_alias(model))
+    if limits is None:
         limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
     if limits is None:
         raise KeyError(f"context_window_for: unknown model {model!r}")
     return limits["max_context"]
@@ -331,10 +390,36 @@ def max_output_for(model: str) -> int:
     are identical to the direct-API form."""
     limits = MODEL_LIMITS.get(model)
     if limits is None:
+        limits = MODEL_LIMITS.get(_strip_dated_alias(model))
+    if limits is None:
         limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
     if limits is None:
         raise KeyError(f"max_output_for: unknown model {model!r}")
     return limits["max_output"]
+
+
+def rpm_for(model: str, *, default: int = 0) -> int:
+    """Requests-per-minute limit for *model*.
+
+    Returns the conservative (lowest paid tier) RPM from ``MODEL_LIMITS``.
+    ``0`` means no provider-enforced limit (local / self-hosted models,
+    or unknown models when the caller passes ``default=0``).
+
+    Bedrock-prefixed identifiers and dated aliases are normalised the
+    same way as :func:`context_window_for`.
+    """
+    limits = MODEL_LIMITS.get(model)
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_dated_alias(model))
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_dated_alias(_strip_bedrock_prefixes(model)))
+    if limits is None:
+        return default
+    return limits.get("rpm", default)
 
 
 def price_for(
@@ -362,9 +447,14 @@ def price_for(
     cost = MODEL_COSTS.get(model)
     multiplier = 1.0
     if cost is None:
+        undated = _strip_dated_alias(model)
+        cost = MODEL_COSTS.get(undated)
+    if cost is None:
         bare = _strip_bedrock_prefixes(model)
         if bare != model:
             cost = MODEL_COSTS.get(bare)
+            if cost is None:
+                cost = MODEL_COSTS.get(_strip_dated_alias(bare))
             multiplier = _bedrock_cost_multiplier(model)
     if cost is None:
         return default
@@ -380,3 +470,30 @@ def price_for(
 # ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
 ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25
 ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1
+
+# ---------------------------------------------------------------------------
+# Data provenance — where MODEL_COSTS / MODEL_LIMITS values come from.
+# Used by auto-refresh tooling to know which pages to scrape.
+# ---------------------------------------------------------------------------
+MODEL_DATA_SOURCES = {
+    "anthropic": {
+        "pricing": "https://platform.claude.com/docs/en/docs/about-claude/models/overview",
+        "rate_limits": "https://platform.claude.com/docs/en/api/rate-limits",
+        "rate_limit_tier": "Start",
+    },
+    "openai": {
+        "pricing": "https://developers.openai.com/api/docs/models/all",
+        "rate_limits": "https://developers.openai.com/api/docs/models/{model_id}",
+        "rate_limit_tier": "Tier 1",
+    },
+    "gemini": {
+        "pricing": "https://ai.google.dev/gemini-api/docs/pricing",
+        "rate_limits": None,
+        "rate_limit_tier": "operator-observed defaults",
+    },
+    "mistral": {
+        "pricing": "https://mistral.ai/pricing/",
+        "rate_limits": None,
+        "rate_limit_tier": "operator-observed defaults",
+    },
+}

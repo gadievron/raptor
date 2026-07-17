@@ -157,15 +157,23 @@ def fetch_image_binary(
 
     # Layers in order — earliest first. Later layers can replace
     # the same file (overlay-fs semantics); take whichever the
-    # final-state path resolves to.
+    # final-state path resolves to. Overlay-fs whiteout markers
+    # (.wh.<basename>) delete the file from the final image.
     wanted_path = binary_path.lstrip("/")
+    wanted_dir = os.path.dirname(wanted_path)
+    wanted_base = os.path.basename(wanted_path)
+    whiteout_path = (os.path.join(wanted_dir, f".wh.{wanted_base}")
+                     if wanted_base else None)
+    extract_set = {wanted_path}
+    if whiteout_path:
+        extract_set.add(whiteout_path)
     final_bytes: Optional[bytes] = None
     for layer in image_manifest.layers:
         if layer.size and layer.size > max_layer_bytes:
             continue
         try:
             chunks = client.stream_blob(ref, layer.digest)
-            files = extract_files_from_layer(chunks, {wanted_path})
+            files = extract_files_from_layer(chunks, extract_set)
         except Exception as e:                        # noqa: BLE001
             logger.debug(
                 "sca.bump.image_binary_extract: layer %s extract "
@@ -173,7 +181,9 @@ def fetch_image_binary(
                 layer.digest, image_ref_str, e,
             )
             continue
-        if wanted_path in files:
+        if whiteout_path and whiteout_path in files:
+            final_bytes = None
+        elif wanted_path in files:
             final_bytes = files[wanted_path]
         elif binary_path in files:
             # Tolerate both leading-/ and stripped forms — the tar
@@ -189,17 +199,28 @@ def fetch_image_binary(
         )
         return None
 
-    if out_dir is None:
-        out_dir = Path(tempfile.gettempdir())
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # Name the file by the image's digest + the basename so two
-    # different versions of the same image can coexist on disk
-    # without collision when the same out_dir is reused.
-    safe_digest = (manifest_resp.digest or "nodigest").replace(":", "_")
-    basename = os.path.basename(binary_path) or "binary"
-    out_path = out_dir / f"{safe_digest}-{basename}"
-    out_path.write_bytes(final_bytes)
-    return out_path
+    try:
+        if out_dir is None:
+            out_dir = Path(tempfile.gettempdir())
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Name the file by the image's digest + the basename so two
+        # different versions of the same image can coexist on disk
+        # without collision when the same out_dir is reused.
+        if manifest_resp.digest:
+            safe_digest = manifest_resp.digest.replace(":", "_")
+        else:
+            import hashlib
+            safe_digest = hashlib.sha256(final_bytes).hexdigest()[:32]
+        basename = os.path.basename(binary_path) or "binary"
+        out_path = out_dir / f"{safe_digest}-{basename}"
+        out_path.write_bytes(final_bytes)
+        return out_path
+    except OSError as e:
+        logger.debug(
+            "sca.bump.image_binary_extract: write failed for %s: %s",
+            image_ref_str, e,
+        )
+        return None
 
 
 def _select_platform(

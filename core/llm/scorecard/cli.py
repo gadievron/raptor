@@ -704,6 +704,130 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_chain_closure(args: argparse.Namespace) -> int:
+    """Rank models by chain-closure success rate for a given
+    exploit_chain_closure decision_class.
+
+    Distinct from ``recommend``: that command optimises the
+    cheap-vs-expensive short-circuit trust question (CHEAP_SHORT_CIRCUIT
+    events), which isn't the right question for /exploit fires. Here we
+    look at EXPLOIT_CHAIN_CLOSURE events directly — how often did the
+    model actually weaponise the bug — and rank highest success rate
+    first, with cost per fire as a tiebreak.
+
+    Usage:
+      scorecard chain-closure                 # aggregate across CWEs
+      scorecard chain-closure --cwe cwe-121   # per-CWE ranking
+    """
+    sc = ModelScorecard(args.path)
+    stats = sc.get_stats(
+        freshness_half_life_days=getattr(
+            args, "freshness_half_life_days", None,
+        ),
+    )
+    # Target decision_class: aggregate or per-CWE.
+    target_dc = "exploit_chain_closure"
+    if getattr(args, "cwe", None):
+        target_dc = f"exploit_chain_closure:{args.cwe.lower()}"
+
+    candidates = []
+    usage_by_model = {}
+    for s in stats:
+        if s.decision_class == "_usage":
+            usage_by_model[s.model] = s
+        elif s.decision_class == target_dc:
+            candidates.append(s)
+
+    if not candidates:
+        msg = (
+            f"no chain-closure data for {target_dc!r} — nothing to rank. "
+            f"Fire /exploit with --scorecard <path> to populate."
+        )
+        if getattr(args, "json", False):
+            import json as _json
+            print(_json.dumps({
+                "decision_class": target_dc,
+                "candidates": [],
+                "message": msg,
+            }, indent=2))
+        else:
+            print(msg, file=sys.stderr)
+        return 0
+
+    # For each candidate: n = successes + failures on this cell;
+    # success_rate = success / n; cost_per_fire from _usage.
+    rows = []
+    for c in candidates:
+        ev = c.events[EventType.EXPLOIT_CHAIN_CLOSURE]
+        n = ev.correct + ev.incorrect
+        rate = (ev.correct / n) if n else None
+        u = usage_by_model.get(c.model)
+        cpc = (u.cost_usd / u.calls) if u and u.calls else None
+        rows.append({
+            "model": c.model,
+            "n": n,
+            "successes": ev.correct,
+            "success_rate": rate,
+            "cost_per_call": cpc,
+        })
+    # Sort: highest success_rate first; ties broken by cheaper
+    # cost_per_call, then by larger n (more evidence).
+    #
+    # F5 fix: pre-fix used ``-(r["success_rate"] or -1.0)`` which
+    # collapsed rate=0.0 to -(-1.0)=1.0 — identical to rate=None
+    # (also 1.0) — so a 0/10 all-failures model with a low cost
+    # could sort ABOVE a rate=None cell (n=0, cost=inf), and the
+    # top row would then be handed to the "recommendation" field.
+    # Post-fix: rate=None sorts to the tail explicitly via a
+    # sentinel; rate=0.0 keeps its ordinal (worst rate wins the
+    # top of "least bad" tail).
+    def _sort_key(r):
+        rate = r["success_rate"]
+        rate_key = -rate if rate is not None else float("inf")
+        cost_key = (
+            r["cost_per_call"] if r["cost_per_call"] is not None
+            else float("inf")
+        )
+        return (rate_key, cost_key, -r["n"])
+
+    rows.sort(key=_sort_key)
+
+    # A recommendation is only meaningful when the top row has real
+    # positive success rate. Recommending a rate=0.0 model would be
+    # misleading — no wins observed. Return None in that case
+    # rather than pointing operators at a proven-failing model.
+    def _recommendation() -> Optional[str]:
+        if not rows:
+            return None
+        top = rows[0]
+        if top["n"] and (top["success_rate"] or 0.0) > 0.0:
+            return top["model"]
+        return None
+
+    if getattr(args, "json", False):
+        import json as _json
+        print(_json.dumps({
+            "decision_class": target_dc,
+            "candidates": rows,
+            "recommendation": _recommendation(),
+        }, indent=2))
+        return 0
+
+    print(f"chain-closure ranking for {target_dc}:")
+    print(
+        f"  {'model':<28} {'n':>4} {'succ':>4} "
+        f"{'rate':>7} {'cost/fire':>10}",
+    )
+    for r in rows:
+        rate_s = f"{r['success_rate']*100:5.1f}%" if r['success_rate'] is not None else "  n/a"
+        cpc_s = f"${r['cost_per_call']:.3f}" if r['cost_per_call'] is not None else "  n/a"
+        print(
+            f"  {r['model']:<28} {r['n']:>4} {r['successes']:>4} "
+            f"{rate_s:>7} {cpc_s:>10}",
+        )
+    return 0
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     sc = ModelScorecard(args.path)
     all_stats = sc.get_stats()
@@ -1069,6 +1193,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="weight recent behaviour (half-life in days); same as `list --freshness`",
     )
     p_rec.set_defaults(handler=cmd_recommend)
+
+    # chain-closure — rank models by /exploit chain-closure success
+    p_cc = sub.add_parser(
+        "chain-closure",
+        help=(
+            "rank models by /exploit chain-closure success rate. "
+            "Aggregate across CWEs by default; scope to one with "
+            "--cwe. Reads EXPLOIT_CHAIN_CLOSURE events populated by "
+            "/exploit --scorecard."
+        ),
+    )
+    p_cc.add_argument(
+        "--cwe", type=str, default=None,
+        help="scope to a specific CWE, e.g. --cwe cwe-121",
+    )
+    p_cc.add_argument(
+        "--freshness", dest="freshness_half_life_days",
+        type=float, default=None, metavar="DAYS",
+        help="weight recent behaviour (half-life in days)",
+    )
+    p_cc.set_defaults(handler=cmd_chain_closure)
 
     # compare
     p_cmp = sub.add_parser(

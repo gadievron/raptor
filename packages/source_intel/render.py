@@ -1543,7 +1543,8 @@ def derive_mitigations_found(
 
     # axis_3 paired-free — informational for cpp/memory-leak FPs
     for pf in result.paired_frees:
-        if finding_function and pf.enclosing_function != finding_function:
+        if (finding_function and pf.enclosing_function
+                and pf.enclosing_function != finding_function):
             continue
         mitigations.append(Mitigation(
             name="paired_free",

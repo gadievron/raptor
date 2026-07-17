@@ -53,6 +53,8 @@ class HttpError(Exception):
         message: str,
         status: Optional[int] = None,
         retry_after: Optional[int] = None,
+        *,
+        circuit_break: bool = False,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -60,6 +62,7 @@ class HttpError(Exception):
         # backend's retry loop reads this when honouring 429/503; None
         # means "no Retry-After advertised, use our backoff schedule".
         self.retry_after = retry_after
+        self.circuit_break = circuit_break
 
 
 class SizeLimitExceeded(HttpError):

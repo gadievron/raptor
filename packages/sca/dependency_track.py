@@ -113,7 +113,14 @@ def push_bom(
         return bom_bytes              # pre-flight error
 
     if http is None:
-        http = _build_egress_client(url)
+        try:
+            http = _build_egress_client(url)
+        except ValueError as e:
+            return {
+                "status": "error",
+                "token": None,
+                "error": f"invalid DT URL: {e}",
+            }
 
     body = {
         "projectName": project_name,
@@ -231,7 +238,10 @@ def _redact_url(url: str) -> str:
     Operators sometimes pass auth via query (legacy DT setups);
     avoid leaking it into logs."""
     parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.hostname}{parsed.path}".rstrip("/")
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return f"{parsed.scheme}://{host}{parsed.path}".rstrip("/")
 
 
 # ---------------------------------------------------------------------------

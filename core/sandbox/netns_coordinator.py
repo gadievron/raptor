@@ -154,7 +154,36 @@ def _setup_via_launcher_reexec() -> None:
             ),
         )
         sys.exit(2)
-    env = dict(os.environ)
+    # Sanitise the env we hand off to the launcher trampoline BEFORE
+    # execve. Raw ``os.environ`` carries every ambient var — including
+    # ANTHROPIC_API_KEY / LLM_MODEL / operator secrets that the
+    # coordinator does not need and MUST NOT persist into the
+    # long-lived post-launcher process. Every child spawn from that
+    # process inherits the coordinator's env by default, so a leaked
+    # API key here reaches every target invocation.
+    #
+    # Strategy: start from ``RaptorConfig.get_safe_env()`` (the
+    # allowlist strips ANTHROPIC_API_KEY et al — see
+    # ``core/config``'s SAFE_ENV_ALLOWLIST) then ADD BACK just the
+    # RAPTOR_COORD_* sentinels the launcher looks for.
+    try:
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+    except Exception:  # noqa: BLE001
+        # If the config import fails (dev tree without the package)
+        # fall back to a hand-picked minimal env. Missing PATH would
+        # break execve on many systems, so preserve it plus the
+        # coord-critical sentinels.
+        env = {
+            k: v for k, v in os.environ.items()
+            if k in ("PATH", "LANG", "LC_ALL", "HOME", "TERM")
+        }
+    # Preserve every RAPTOR_COORD_* sentinel the launcher shim reads.
+    # This includes RAPTOR_COORD_FROM_LAUNCHER (set by the launcher on
+    # re-entry) and any future coordination flags.
+    for k, v in os.environ.items():
+        if k.startswith("RAPTOR_COORD_"):
+            env[k] = v
     env["RAPTOR_COORD_REEXEC_GUARD"] = "1"
     os.execve(
         str(HELPER_PATH),
@@ -273,6 +302,38 @@ def _run_child(role: str, spec: Dict[str, Any], result: _ChildResult) -> None:
     stdin_b64 = spec.get("stdin_b64")
     stdin_bytes = base64.b64decode(stdin_b64) if stdin_b64 else None
 
+    # Additional sandbox hardening params forwarded from the RPC so
+    # the coordinator path applies the same substrate posture as the
+    # stdin/argv adapters. Silently absent on legacy specs — kwargs
+    # only get set when the RPC populates them.
+    #
+    # Narrow types at the RPC boundary: ``list(writable_paths)`` on a
+    # bare string yields per-char paths (12-char path → 12 tiny
+    # Landlock entries); ``dict(etc_overlay)`` on a list-of-pairs
+    # silently succeeds with wrong keys. A caller typo should fail
+    # loudly here rather than at Landlock-rule installation.
+    target_path = spec.get("target")
+    output_path = spec.get("output")
+    writable_paths = spec.get("writable_paths")
+    if writable_paths is not None and not isinstance(writable_paths, list):
+        raise TypeError(
+            f"spec['writable_paths'] must be list, got {type(writable_paths).__name__}",
+        )
+    readable_paths = spec.get("readable_paths")
+    if readable_paths is not None and not isinstance(readable_paths, list):
+        raise TypeError(
+            f"spec['readable_paths'] must be list, got {type(readable_paths).__name__}",
+        )
+    exclude_tmp_baseline = spec.get("exclude_tmp_baseline")
+    etc_overlay = spec.get("etc_overlay")
+    if etc_overlay is not None and not isinstance(etc_overlay, dict):
+        raise TypeError(
+            f"spec['etc_overlay'] must be dict, got {type(etc_overlay).__name__}",
+        )
+    strict_env = spec.get("strict_env")
+    env_caller_filtered = spec.get("env_caller_filtered")
+    observe = spec.get("observe")
+
     t0 = time.monotonic()
     try:
         kwargs = dict(
@@ -288,6 +349,30 @@ def _run_child(role: str, spec: Dict[str, Any], result: _ChildResult) -> None:
             kwargs["allowed_tcp_ports"] = list(allowed_tcp_ports)
         if stdin_bytes is not None:
             kwargs["input"] = stdin_bytes
+        # Regression pin: the coordinator RPC previously dropped these
+        # hardening kwargs silently, so callers that opted a target
+        # into a locked-down sandbox posture (path restrictions, etc.
+        # overlay, strict env) got a baseline sandbox instead — with
+        # /tmp writable and every mount default. Forward them all so
+        # the coordinator path matches the direct sandbox_run posture.
+        if target_path is not None:
+            kwargs["target"] = target_path
+        if output_path is not None:
+            kwargs["output"] = output_path
+        if writable_paths is not None:
+            kwargs["writable_paths"] = list(writable_paths)
+        if readable_paths is not None:
+            kwargs["readable_paths"] = list(readable_paths)
+        if exclude_tmp_baseline is not None:
+            kwargs["exclude_tmp_baseline"] = bool(exclude_tmp_baseline)
+        if etc_overlay is not None:
+            kwargs["etc_overlay"] = dict(etc_overlay)
+        if strict_env is not None:
+            kwargs["strict_env"] = bool(strict_env)
+        if env_caller_filtered is not None:
+            kwargs["env_caller_filtered"] = bool(env_caller_filtered)
+        if observe is not None:
+            kwargs["observe"] = bool(observe)
         r = sandbox_run(cmd, **kwargs)
         result.returncode = r.returncode
         result.stdout = r.stdout or b""

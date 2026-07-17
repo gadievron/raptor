@@ -106,6 +106,13 @@ def parse(path: Path) -> List[Dependency]:
     for ref in _extract_services(data, label="top-level services"):
         refs.append(ref)
 
+    default_block = data.get("default")
+    if isinstance(default_block, dict):
+        for ref in _extract_image(default_block, label="default"):
+            refs.append(ref)
+        for ref in _extract_services(default_block, label="default services"):
+            refs.append(ref)
+
     # Per-job sweep: skip reserved keys. A "job" is any other
     # top-level mapping whose value is itself a dict.
     for job_name, job in data.items():
@@ -201,7 +208,7 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=_classify_pin_style(version),
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
@@ -213,6 +220,19 @@ def _build_dep(
     )
 
 
+_FLOATING_TAGS = frozenset({"latest", "stable", "edge", "nightly", "dev", "beta", "alpha", "rc", "canary", "main", "master"})
+
+
+def _classify_pin_style(version: Optional[str]) -> PinStyle:
+    if not version:
+        return PinStyle.WILDCARD
+    if version.startswith("sha256:"):
+        return PinStyle.EXACT
+    if version.lower() in _FLOATING_TAGS:
+        return PinStyle.WILDCARD
+    return PinStyle.EXACT
+
+
 def _split_image_ref(ref: str) -> tuple:
     """Same logic as ``compose._split_image_ref``. Duplicated rather
     than imported to keep parsers loosely coupled — a future
@@ -220,6 +240,8 @@ def _split_image_ref(ref: str) -> tuple:
     if value materialises."""
     if "@" in ref:
         name, _, digest = ref.rpartition("@")
+        if ":" in name.rsplit("/", 1)[-1]:
+            name = name.rsplit(":", 1)[0]
         return name, digest if digest else None
     last_slash = ref.rfind("/")
     rest = ref[last_slash + 1:] if last_slash >= 0 else ref

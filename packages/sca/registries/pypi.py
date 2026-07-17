@@ -287,6 +287,8 @@ def _extract_versions(data: dict) -> List[str]:
           }
         }
     """
+    if not isinstance(data, dict):
+        return []
     releases = data.get("releases") or {}
     if not isinstance(releases, dict):
         return []

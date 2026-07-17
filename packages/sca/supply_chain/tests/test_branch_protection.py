@@ -241,9 +241,10 @@ def test_branch_protection_query_fails_silently(
     assert findings == []
 
 
-def test_default_branch_falls_back_to_main(tmp_path: Path) -> None:
-    """When the repo-info API also fails, we still try ``main`` as
-    the default — covers the most common case."""
+def test_default_branch_returns_none_on_api_failure(tmp_path: Path) -> None:
+    """When the repo-info API fails, we can't determine the default
+    branch — no-op rather than guessing 'main' and potentially
+    emitting false findings against the wrong branch."""
     _write_git_config(tmp_path, "https://github.com/me/repo.git")
     client = _StubClient(
         repo_info=None,                # repo-info fail
@@ -252,8 +253,7 @@ def test_default_branch_falls_back_to_main(tmp_path: Path) -> None:
         },
     )
     findings = scan_target(tmp_path, manifests=[], client=client)
-    assert len(findings) == 1
-    assert findings[0].branch == "main"
+    assert findings == []
 
 
 def test_default_branch_honoured_when_not_main(tmp_path: Path) -> None:

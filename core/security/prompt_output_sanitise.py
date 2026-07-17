@@ -54,8 +54,8 @@ def sanitise_string(s: str, *, max_chars: int = 500) -> str:
     redirect link), exfiltrating context to the attacker-controlled
     URL.
     """
-    s = _LINE_LEAD_MD_RE.sub(lambda m: m.group(1), s)
     s = _strip_autofetch_markup(s)
+    s = _LINE_LEAD_MD_RE.sub(lambda m: m.group(1), s)
     s = escape_nonprintable(s, preserve_newlines=True)
     if len(s) > max_chars:
         s = s[: max_chars - 1] + _ELLIPSIS

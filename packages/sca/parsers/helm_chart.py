@@ -148,6 +148,8 @@ def _classify_version(version: str) -> PinStyle:
     if any(ch in version for ch in "<>=") or " - " in version:
         return PinStyle.RANGE
     if version[:1].isdigit():
+        if any(c in version.lower() for c in ("x", "*")):
+            return PinStyle.WILDCARD
         return PinStyle.EXACT
     return PinStyle.UNKNOWN
 

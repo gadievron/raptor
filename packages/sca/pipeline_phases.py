@@ -31,6 +31,9 @@ _PHASE_DESCRIPTIONS: dict[str, str] = {
     "triage": "running LLM triage ranking",
     "impact-analysis": "running LLM upgrade-impact analysis",
     "emit": "writing findings.json / report.md / SBOM / SARIF artefacts",
+    "yanked-versions": "flagging exact-pinned deps the registry marks yanked",
+    "platform-compat": "checking wheel platform compatibility against target",
+    "transitive-drop": "identifying transitive deps droppable by parent bump",
 }
 
 

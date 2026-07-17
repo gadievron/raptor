@@ -46,7 +46,7 @@ from typing import Any, Dict, Literal, Set, Tuple
 # ``_METHOD_TRAILING_QUALS`` live in ``binary_oracle`` so the classifier
 # can demangle DWARF linkage names with the same logic. Re-exported here
 # for any external importer.
-from ..binary_oracle import (  # noqa: F401  (re-export)
+from core.analysis.binary_oracle import (  # noqa: F401  (re-export)
     _demangle_linkage_names,
     _find_arglist_open,
     _METHOD_TRAILING_QUALS,
@@ -136,16 +136,20 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     if src.exists():
         shutil.rmtree(src)
     logger.info("snappy: cloning %s → %s", SNAPPY_URL, src)
-    if not clone_repository(SNAPPY_URL, src, depth=None):
+    if not clone_repository(SNAPPY_URL, src, depth=1):
         raise RuntimeError(f"snappy: clone failed for {SNAPPY_URL}")
     subprocess.run(
-        safe_git_command("-C", str(src), "checkout", SNAPPY_SHA),
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", SNAPPY_SHA),
         env=get_safe_git_env(), check=True, timeout=60,
     )
-    # snappy vendors googletest + benchmark as submodules.
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
+        env=get_safe_git_env(), check=True, timeout=60,
+    )
     subprocess.run(
         safe_git_command("-C", str(src), "submodule", "update",
-                         "--init", "--recursive"),
+                         "--init", "--recursive", "--depth", "1"),
         env=get_safe_git_env(), check=True, timeout=300,
     )
 

@@ -60,8 +60,10 @@ def _seed_from_vuln(vuln) -> Optional[Any]:
 
     file_path = getattr(vuln, "file_path", "") or ""
     start_line = getattr(vuln, "start_line", None)
-    end_line = getattr(vuln, "end_line", None) or start_line
-    if not file_path or not start_line or not end_line:
+    end_line = getattr(vuln, "end_line", None)
+    if end_line is None:
+        end_line = start_line
+    if not file_path or start_line is None or end_line is None:
         return None
 
     # Function name: prefer inventory-resolved metadata, fall back

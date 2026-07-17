@@ -747,9 +747,8 @@ class AFLRunner:
     def _afl_paths_found(cls, stats: dict) -> int:
         """Map current AFL++ stats to a useful path/corpus discovery count."""
         for key in ("paths_found", "corpus_found", "queued_paths", "cur_path"):
-            value = cls._parse_afl_int(stats.get(key))
-            if value:
-                return value
+            if key in stats:
+                return cls._parse_afl_int(stats[key])
         return cls._parse_afl_int(stats.get("corpus_count"))
 
     @staticmethod

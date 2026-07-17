@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from packages.fuzzing.capability import CapabilityReport
 from packages.fuzzing.orchestrator import FuzzingOrchestrator
 
@@ -67,7 +69,9 @@ class TestOrchestratorPlanning(unittest.TestCase):
         try:
             tmp.chmod(0o755)
             with patch("packages.fuzzing.orchestrator.probe_capabilities",
-                       return_value=_full_caps_linux()):
+                       return_value=_full_caps_linux()), \
+                 patch.object(FuzzingOrchestrator, "_is_libfuzzer_instrumented",
+                              return_value=False):
                 orch = FuzzingOrchestrator()
                 plan = orch.plan(tmp)
             self.assertEqual(plan.fuzzer, "afl")
@@ -105,6 +109,11 @@ class TestOrchestratorPlanning(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
+    # ``plan()`` on this macho path invokes the target detector's
+    # nm/otool inspection which shells out on non-Darwin hosts and can
+    # cross the default-tier budget on cold CI runners. Runtime is
+    # genuine tool invocation, not a mock gap.
+    @pytest.mark.slow
     def test_macos_with_broken_afl_does_not_run_plain_macho_as_libfuzzer(self):
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as f:
             f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 1024)

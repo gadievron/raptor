@@ -23,12 +23,13 @@ LABEL org.opencontainers.image.source="https://github.com/gadievron/raptor" \
 
 # git is required by actions/checkout when this image is used as a
 # container-job base — the slim base ships none, and checkout fails
-# without it. ca-certificates is already present in the slim image.
-# Kept to the single tool checkout needs; tiers that require heavier
-# system tooling (sandbox namespaces, radare2/gcc) stay on the runner
-# rather than bloating this image.
+# without it. coccinelle provides /usr/bin/spatch for the source_intel
+# tier's real-spatch E2E tests. ca-certificates is already present in
+# the slim image. Tiers that require heavier system tooling (sandbox
+# namespaces, radare2/gcc) stay on the runner rather than bloating
+# this image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git coccinelle \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/raptor-ci
@@ -37,7 +38,8 @@ WORKDIR /opt/raptor-ci
 # source-only changes to the repo.
 COPY requirements.txt requirements-dev.txt ./
 
-RUN pip install --no-cache-dir -r requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements-dev.txt \
+    && sha256sum requirements.txt requirements-dev.txt > /etc/raptor-ci-deps.hash
 
 # Build-time smoke import: fail the IMAGE build (not downstream CI) if a
 # pinned dependency can't import on this base.

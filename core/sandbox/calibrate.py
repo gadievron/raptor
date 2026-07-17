@@ -55,6 +55,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
+from core.atomic_fs import write_text_atomically
+
 
 logger = logging.getLogger(__name__)
 
@@ -446,34 +448,24 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
     """Persist a profile. mode 0600, dir mode 0700."""
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # 0o700 = owner-only — most restrictive POSIX mode.
-        os.chmod(_CACHE_DIR, 0o700)
+        os.chmod(_CACHE_DIR, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
     except OSError as exc:
         logger.warning("calibrate: cache dir setup failed: %s", exc)
         return
     path = _cache_path_for(fingerprint)
-    # Atomic write: tempfile in the cache dir + rename. Avoids
-    # partial-content cache hits when the parent's process crashes
-    # mid-write.
+    # Atomic write: sandbox calibration cache. mode=0o600 to preserve
+    # the owner-only posture the previous mkstemp+chmod pattern installed
+    # (the shared primitive's default 0o644 would widen; the cache is
+    # owner-scoped, not shared). Primitive adds fsync-file + fsync-
+    # parent-dir durability the old direct-write lacked.
+    # 0o600 = owner-only file mode.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions
     try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".calibrate-tmp-", suffix=".json",
-            dir=str(_CACHE_DIR),
+        write_text_atomically(
+            path, profile.to_json(),
+            mode=0o600, tmp_prefix=".calibrate-tmp-",
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(profile.to_json())
-            # nosemgrep: python.lang.security.audit.insecure-file-permissions
-            # 0o600 = owner-only file mode.
-            os.chmod(tmp_path, 0o600)
-            os.rename(tmp_path, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
     except OSError as exc:
         logger.warning("calibrate: cache write failed for %s: %s",
                        path, exc)

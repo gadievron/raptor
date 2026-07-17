@@ -72,7 +72,7 @@ logger = get_logger()
 # (``events[type] = {"2026-05": {"correct", "incorrect"}, ...}``) instead of a
 # flat ``{"correct", "incorrect"}``, so reads can freshness-weight by bucket age.
 # Migration from v1 folds the flat counts into a single bucket keyed by the
-# cell's last-seen month. See ``freshness.py`` + ``~/design/scorecard-model-versioning.md``.
+# cell's last-seen month. See ``freshness.py`` + the design memo.
 SCHEMA_VERSION = 2
 
 # Wilson 95% upper bound is the gate; this many failures (or failure
@@ -142,6 +142,16 @@ class EventType:
     # heuristic-first with a 2-step LLM tiebreak, no ground-truth
     # calibration.
     EXPLOIT_INTENT_MATCH = "exploit_intent_match"
+    # Terminal-fire chain-closure outcome from /exploit's engine.
+    # ``correct`` = engine verdict achieved (post-confirm-k, post-
+    # harness-side-channel demotion). ``incorrect`` = attempted +
+    # returned candidate code but couldn't achieve the goal on this
+    # target. Producer: ``packages.llm_analysis.exploit_engine.
+    # labeled_attempt_bridge.persist_engine_labeled_attempt``.
+    # Uncertain outcomes (budget cap, interrupt, no candidate) and
+    # HARNESS_SIDE_CHANNEL demotions are intentionally NOT recorded
+    # — they measure substrate limits, not model reliability.
+    EXPLOIT_CHAIN_CLOSURE = "exploit_chain_closure"
     # Per-call structured-output validity: did the response parse + match the
     # schema. ``correct`` = passed first time, ``incorrect`` = failed (the
     # provider may retry internally; this records the externally-observable
@@ -160,6 +170,7 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.OPERATOR_FEEDBACK,
     EventType.REASONING_DIVERGENCE,
     EventType.EXPLOIT_INTENT_MATCH,
+    EventType.EXPLOIT_CHAIN_CLOSURE,
     EventType.SCHEMA_VALID,
 )
 
@@ -270,21 +281,22 @@ def _now_iso() -> str:
 
 def _safe_int(v, default: int = 0) -> int:
     """Coerce to ``int`` defensively — wrong-type/malformed cell fields
-    (a hand-edited ``"calls": "abc"``, a JSON list slipped in, ``None``) coerce
-    to the default rather than raising out of the locked context and aborting
-    the whole write."""
-    try:
-        return int(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
+    (a hand-edited ``"calls": "abc"``, a JSON list slipped in,
+    ``None``) coerce to the default rather than raising out of the
+    locked context and aborting the whole write.
+
+    Delegates to :func:`core.llm.coerce.to_int_safe`; kept as a local
+    named export because the cell-coercion sites throughout this
+    module call it positionally.
+    """
+    from core.llm.coerce import to_int_safe
+    return to_int_safe(v, default=default)
 
 
 def _safe_float(v, default: float = 0.0) -> float:
     """Float counterpart to :func:`_safe_int`. Wrong-type values → default."""
-    try:
-        return float(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
+    from core.llm.coerce import to_float_safe
+    return to_float_safe(v, default=default)
 
 
 def _empty_events() -> Dict[str, Dict[str, Dict[str, int]]]:

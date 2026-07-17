@@ -90,13 +90,15 @@ class LanguageDetector:
         },
         "csharp": {
             "extensions": {".cs"},
-            "build_files": {".csproj", ".sln", "packages.config", "nuget.config"},
+            "build_files": {"packages.config", "nuget.config"},
+            "build_file_suffixes": (".csproj", ".sln"),
             "indicators": {"Properties/", "bin/", "obj/"},
             "min_confidence": 0.6,
         },
         "ruby": {
             "extensions": {".rb"},
-            "build_files": {"Gemfile", "Gemfile.lock", "Rakefile", ".gemspec"},
+            "build_files": {"Gemfile", "Gemfile.lock", "Rakefile"},
+            "build_file_suffixes": (".gemspec",),
             "indicators": {"lib/", "spec/", "test/"},
             "min_confidence": 0.6,
         },
@@ -141,11 +143,12 @@ class LanguageDetector:
         # exclude vendored content.
     }
 
-    # Files to ignore
+    # Files to ignore (exact name match)
     IGNORE_FILES = {
         ".DS_Store", "Thumbs.db", ".gitignore", ".dockerignore",
-        ".lock", ".min.js", ".bundle.js",
     }
+    # File suffixes to ignore (endswith match)
+    IGNORE_SUFFIXES = (".lock", ".min.js", ".bundle.js")
 
     def __init__(self, repo_path: Path, max_files: int = 10000):
         """
@@ -299,9 +302,10 @@ class LanguageDetector:
             for file_path in self._walk_repository():
                 stats["scanned_files"] += 1
 
-                # Check for build files
-                if file_path.name in self._get_all_build_files():
-                    stats["build_files"].add(file_path.name)
+                # Check for build files (exact name or suffix)
+                fname = file_path.name
+                if fname in self._get_all_build_files() or fname.endswith(self._get_all_build_suffixes()):
+                    stats["build_files"].add(fname)
 
                 # Check for structural indicators
                 relative = str(file_path.relative_to(self.repo_path))
@@ -349,7 +353,7 @@ class LanguageDetector:
                 # In-place prune ignored dirs from descent.
                 dirnames[:] = [d for d in dirnames if d not in self.IGNORE_DIRS]
                 for name in filenames:
-                    if name in self.IGNORE_FILES:
+                    if name in self.IGNORE_FILES or name.endswith(self.IGNORE_SUFFIXES):
                         continue
                     p = Path(dirpath) / name
                     if p.is_file():
@@ -381,10 +385,11 @@ class LanguageDetector:
             if ext in patterns["extensions"]
         )
 
-        # Find matching build files
+        # Find matching build files (exact name or suffix)
+        suffixes = patterns.get("build_file_suffixes", ())
         build_files_found = [
             bf for bf in stats["build_files"]
-            if bf in patterns["build_files"]
+            if bf in patterns["build_files"] or (suffixes and bf.endswith(suffixes))
         ]
 
         # Find matching indicators
@@ -430,11 +435,18 @@ class LanguageDetector:
         )
 
     def _get_all_build_files(self) -> Set[str]:
-        """Get set of all build files across all languages."""
+        """Get set of all exact-match build files across all languages."""
         build_files = set()
         for patterns in self.LANGUAGE_PATTERNS.values():
             build_files.update(patterns["build_files"])
         return build_files
+
+    def _get_all_build_suffixes(self) -> tuple[str, ...]:
+        """Get tuple of all suffix-match build file patterns."""
+        suffixes: list[str] = []
+        for patterns in self.LANGUAGE_PATTERNS.values():
+            suffixes.extend(patterns.get("build_file_suffixes", ()))
+        return tuple(suffixes)
 
     def _get_all_indicators(self) -> Set[str]:
         """Get set of all structural indicators across all languages."""

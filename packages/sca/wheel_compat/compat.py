@@ -122,7 +122,7 @@ def _best_match(
         if w.arch == "any" and w.os == "any":
             candidates.append(w)
             continue
-        if w.arch != pair.arch:
+        if w.arch != pair.arch and w.arch != "any":
             continue
         # OS-family check. macOS / Windows tags don't satisfy a
         # Linux project pair and vice-versa. The platform_matrix
@@ -308,10 +308,10 @@ def _verdict_for_pair(
             reason=reason,
         )
     return CompatVerdict(
-        pair=pair, verdict="arch_gap",
+        pair=pair, verdict="variant_mismatch",
         reason=(
-            f"{wm.name}=={wm.version} has no wheel compatible "
-            f"with {pair.as_str()}"
+            f"{wm.name}=={wm.version} has {pair.arch} wheels "
+            f"but none compatible with {pair.as_str()}"
         ),
     )
 

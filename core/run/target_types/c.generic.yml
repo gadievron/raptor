@@ -1,0 +1,53 @@
+name: c.generic
+description: |
+  General C / C++ projects that don't match a more specific shape
+  (c.userspace-daemon, etc.). CLI tools, libraries, embedded code
+  without an RTOS marker. Catches any repo whose primary language
+  is C or C++ via file-extension scoring.
+
+detection:
+  file_globs: []
+  file_extensions:
+    - .c
+    - .h
+    - .cpp
+    - .cc
+    - .cxx
+    - .hpp
+  negative_globs:
+    - "kernel/**"
+    - "drivers/**"
+    - "Kconfig"
+    - "Kbuild"
+    - "include/linux/**"
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+    - "0xdea"
+  optional:
+    - secrets
+    - command-injection
+
+attack_surface:
+  high_priority_dirs: []
+  low_priority_dirs:
+    - tests
+    - test
+    - docs
+    - examples
+    - benchmarks
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+  estimated_cost_usd: [10, 30]
+  estimated_time_min: [15, 45]
+
+budget_defaults:
+  typical_findings_count: 20
+  typical_cost_per_run_usd: 20
+
+version: 1

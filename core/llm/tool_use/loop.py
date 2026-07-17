@@ -46,6 +46,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -76,6 +77,89 @@ from .types import (
     TurnCompleted,
     TurnStarted,
 )
+
+
+@dataclass(frozen=True)
+class SubmissionState:
+    """Context passed to ``submission_warning`` callables each iter.
+
+    The loop has TWO independent gates that can each end the run —
+    iteration cap and cost cap. The warning callable looks at the
+    state of BOTH and decides which (if any) to surface to the
+    model. The right warning depends on the operator's tuning AND
+    the model's actual budget profile (a thoughtful model burns
+    cost-cap before iter-cap; a terse one is the reverse). A
+    one-axis warning ("3 iters left!") would miss the cost case
+    entirely.
+    """
+
+    iters_remaining: int
+    """``max_iterations - iteration - 1``. The number of additional
+    LLM turns the loop is willing to take. Always finite (the loop
+    has a positive ``max_iterations`` by construction)."""
+
+    iters_max: int
+    """``max_iterations``. Useful for computing fraction-remaining
+    without re-deriving it from the loop state."""
+
+    cost_so_far: float
+    """Cumulative cost in USD across all turns this run, post-
+    compute_cost. The same value the loop checks against
+    ``max_cost_usd`` in its pre-flight."""
+
+    cost_cap: float | None
+    """``max_cost_usd`` from construction, or None if no cost cap
+    was set. The callable should NOT warn on cost when this is
+    None (no cap → no exhaustion gate)."""
+
+
+@dataclass(frozen=True)
+class InFireMutatorContext:
+    """Context passed to ``in_fire_mutator`` callables each iter.
+
+    Fired after the assistant's turn has produced its tool results
+    but BEFORE the next user message is finalised — the mutator's
+    returned text (if non-empty) is appended as a ``TextBlock`` to
+    the same user message carrying that turn's tool results, so the
+    model sees the injected note interleaved with its own tool
+    output.
+
+    Distinct from ``submission_warning``:
+      * ``submission_warning`` handles budget-terminal nudges
+        ("time's running out — submit").
+      * ``in_fire_mutator`` handles technique-steering nudges
+        ("researcher note: try shape X to close the chain").
+
+    Both hooks fire on the same iteration boundary; both returns are
+    appended to the same ``user_content`` list; both are optional
+    and skipped when the terminal tool has just fired.
+    """
+
+    iteration: int
+    """0-indexed loop iteration this call fires for."""
+
+    iters_remaining: int
+    """``max_iterations - iteration - 1``. Same semantics as
+    ``SubmissionState.iters_remaining``."""
+
+    iters_max: int
+    """``max_iterations``."""
+
+    cost_so_far: float
+    """Cumulative cost in USD across all turns this run."""
+
+    cost_cap: float | None
+    """``max_cost_usd`` from construction, or None."""
+
+    messages: "Sequence[Message]"
+    """Immutable snapshot of the conversation history up to and
+    including this turn's assistant response but BEFORE the
+    tool-result user message is appended. Mutator may inspect but
+    must not modify."""
+
+    tool_results: "Sequence[Any]"
+    """The tool result blocks this turn produced. Mutator inspects
+    these to decide whether to inject steering."""
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +204,9 @@ class ToolUseLoop:
         terminate_on_handler_error: bool = False,
         refuse_on_indicators: Sequence[str] = (),
         should_continue: Callable[[], bool] | None = None,
+        submission_warning: Callable[["SubmissionState"], str | None] | None = None,
+        in_fire_mutator: Callable[["InFireMutatorContext"], str | None] | None = None,
+        nudge_on_no_tool_call: str | None = None,
         **provider_specific: Any,
     ) -> None:
         """``refuse_on_indicators``: prompt-injection corpus names
@@ -199,6 +286,39 @@ class ToolUseLoop:
         # submitted three byte-identical verify_run candidates, there's
         # no point letting the budget keep ticking).
         self._should_continue = should_continue
+        # Submission discipline: when an agentic consumer needs the
+        # model to FINALISE its work via a specific terminal tool
+        # (e.g. /exploit's ``verify_run`` + ``submit_exploit``), a
+        # thoughtful model can burn the iteration budget exploring
+        # without ever submitting — Gadi Evron diagnosed this as the
+        # ``agent_no_submit`` failure mode (~25% of runs in his
+        # corpus). Two opt-in hooks:
+        #
+        #   ``submission_warning``: callable evaluated each iteration
+        #     with ``iterations_remaining``. Return a non-empty string
+        #     to inject as a ``TextBlock`` into the user message
+        #     carrying that turn's tool results, or None to suppress
+        #     this iteration. Typical pattern: warn only when remaining
+        #     drops below K so the message isn't repeated every turn.
+        #
+        #   ``nudge_on_no_tool_call``: static text injected as a new
+        #     user message when the assistant turn returns no tool
+        #     calls AND no terminal stop reason (today: would
+        #     terminate with ``max_tokens``/``refused``/``provider_error``;
+        #     under the nudge, the loop continues instead). Use this
+        #     to steer a model that emits prose-only mid-task back to
+        #     the tools.
+        #
+        # Both default to None — existing consumers are unaffected.
+        self._submission_warning = submission_warning
+        # In-fire steering hook: called after each turn's tool
+        # results are gathered; returned text is appended to the
+        # user message alongside the tool results. Complements
+        # ``submission_warning`` — that surfaces budget-terminal
+        # nudges; this surfaces technique-steering nudges. Default
+        # None → no injection, byte-identical to pre-hook behaviour.
+        self._in_fire_mutator = in_fire_mutator
+        self._nudge_on_no_tool_call = nudge_on_no_tool_call
         self._provider_specific = provider_specific
 
     # ------------------------------------------------------------------
@@ -427,6 +547,25 @@ class ToolUseLoop:
 
             # ---- termination by stop_reason -----------------------------
             if response.stop_reason is StopReason.COMPLETE:
+                # ``nudge_on_no_tool_call``: when the consumer set the
+                # opt-in nudge AND the assistant turn returned no tool
+                # calls (true for every COMPLETE — COMPLETE means the
+                # model finalised via text), inject the nudge as a
+                # user message and continue iterating instead of
+                # terminating. The consumer's contract: the model's
+                # "I'm done" is premature; prod it back to the tools.
+                has_tool_calls = any(
+                    isinstance(b, ToolCall) for b in response.content
+                )
+                if (
+                    self._nudge_on_no_tool_call is not None
+                    and not has_tool_calls
+                ):
+                    messages.append(Message(
+                        role="user",
+                        content=[TextBlock(text=self._nudge_on_no_tool_call)],
+                    ))
+                    continue
                 final_text = _join_text(response.content)
                 self._emit(LoopTerminated(
                     reason="complete",
@@ -458,9 +597,13 @@ class ToolUseLoop:
             tool_calls = [b for b in response.content if isinstance(b, ToolCall)]
             if not tool_calls:
                 # No tool calls AND not COMPLETE/PAUSE_TURN — model gave
-                # up mid-turn. Map to the matching termination reason
-                # (max_tokens / refused / provider_error) so callers can
-                # tell the difference.
+                # up mid-turn under a hard stop (max_tokens / refused /
+                # provider_error). The ``nudge_on_no_tool_call`` hook
+                # deliberately does NOT fire here: the model literally
+                # can't continue (token budget hit, content filter
+                # tripped, provider returned error), and a nudge would
+                # be wasted budget. Soft-stop nudging is handled in the
+                # COMPLETE branch above.
                 term_reason = _stop_reason_to_term(response.stop_reason)
                 # Forward error_message from the provider's TurnResponse
                 # so callers can present the actual error rather than
@@ -657,7 +800,78 @@ class ToolUseLoop:
 
             # Append tool results as user message — this keeps multi-call
             # batches in one message, matching Anthropic's wire shape.
-            messages.append(Message(role="user", content=list(tool_results)))
+            user_content: list[Any] = list(tool_results)
+            # Submission-discipline nudge: when the consumer set
+            # ``submission_warning``, evaluate it with the number of
+            # iterations remaining AFTER this turn completes (i.e., what
+            # the model has left to finalise its answer). A non-empty
+            # return is appended as a TextBlock to the same user message
+            # carrying the tool results — so the model sees the warning
+            # immediately after the tool output it just consumed,
+            # exactly the moment it would otherwise decide "let me run
+            # one more probe before submitting." The text comes AFTER
+            # the tool results so the model reads its data first, then
+            # the prod to submit.
+            # Both hooks below skip when this turn fired the terminal
+            # tool — the model just submitted, the loop is about to
+            # exit, and a "submit now!" nudge or steering push after
+            # the model already submitted is noise the consumer
+            # doesn't want surfaced. Computed once so a future off-by-
+            # one debate on either callsite can't silently drift the
+            # other.
+            iters_remaining = self._max_iterations - (iteration + 1)
+            if (
+                self._submission_warning is not None
+                and terminal_tool_input is None
+            ):
+                state = SubmissionState(
+                    iters_remaining=iters_remaining,
+                    iters_max=self._max_iterations,
+                    cost_so_far=total_cost_usd,
+                    cost_cap=self._max_cost_usd,
+                )
+                try:
+                    warning = self._submission_warning(state)
+                except Exception:        # noqa: BLE001
+                    logger.warning(
+                        "submission_warning callable raised; suppressing "
+                        "this iteration (iteration=%d)",
+                        iteration,
+                        exc_info=True,
+                    )
+                    warning = None
+                if warning:
+                    user_content.append(TextBlock(text=warning))
+            # In-fire mutator hook: same injection pattern as
+            # submission_warning but purpose is technique-steering,
+            # not budget nudging. Skipped when the terminal tool
+            # fired (no next turn to steer).
+            if (
+                self._in_fire_mutator is not None
+                and terminal_tool_input is None
+            ):
+                mutator_ctx = InFireMutatorContext(
+                    iteration=iteration,
+                    iters_remaining=iters_remaining,
+                    iters_max=self._max_iterations,
+                    cost_so_far=total_cost_usd,
+                    cost_cap=self._max_cost_usd,
+                    messages=tuple(messages),
+                    tool_results=tuple(tool_results),
+                )
+                try:
+                    steering = self._in_fire_mutator(mutator_ctx)
+                except Exception:        # noqa: BLE001
+                    logger.warning(
+                        "in_fire_mutator callable raised; suppressing "
+                        "this iteration (iteration=%d)",
+                        iteration,
+                        exc_info=True,
+                    )
+                    steering = None
+                if steering:
+                    user_content.append(TextBlock(text=steering))
+            messages.append(Message(role="user", content=user_content))
 
             # ---- post-dispatch termination checks -----------------------
             if terminal_tool_input is not None:

@@ -58,6 +58,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core.atomic_fs import write_text_atomically
 from core.security.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
@@ -302,30 +303,23 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         "instructions": instructions,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-    tmp = out.with_name(f".~{out.name}.tmp")
+    # Atomic write: audit-degraded marker is emitted once per run when
+    # sandbox observability degrades; a torn write would leave the
+    # marker in an unparseable state, and operator tooling treats
+    # "corrupt marker" as "audit engaged" (safest default) — silently
+    # hiding the degradation signal we needed to surface.
     try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
+        write_text_atomically(
+            out,
             json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
+            tmp_prefix=".~audit-degraded-",
         )
-        os.replace(tmp, out)
     except (OSError, ValueError, TypeError):
         # Marker is best-effort. The log warning is the primary signal.
         # Catch programming-error-shaped failures too (a future payload
         # change with non-serialisable types would otherwise propagate
-        # and abort the caller's cleanup path while still leaking the
-        # `.~sandbox-audit-degraded.json.tmp` file).
+        # and abort the caller's cleanup path).
         pass
-    finally:
-        # Ensure the tmp file doesn't leak when write_text succeeded but
-        # os.replace failed (e.g. EBUSY, EXDEV, target dir vanished).
-        # Unlink missing_ok handles both "tmp never existed" and "replace
-        # already moved it" cases as no-ops.
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -453,11 +447,15 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     }
 
     summary_path = run_dir / SUMMARY_FILE
-    tmp = summary_path.with_name(f".~{summary_path.name}.tmp")
+    # Atomic write: sandbox denial summary is the run's final audit
+    # artefact — a torn write would corrupt the canonical JSON and
+    # surface as a silent audit-integrity gap on the next read.
     try:
-        tmp.write_text(json.dumps(summary, indent=2, ensure_ascii=True) + "\n",
-                       encoding="utf-8")
-        os.replace(tmp, summary_path)
+        write_text_atomically(
+            summary_path,
+            json.dumps(summary, indent=2, ensure_ascii=True) + "\n",
+            tmp_prefix=".~summary-",
+        )
     except OSError:
         # WARNING (F071 W21 promote): the summary write is the run's
         # final-output artifact. Silent loss = silent audit integrity
@@ -468,12 +466,6 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
             "summarize_and_write: failed to write/replace summary.json",
             exc_info=True,
         )
-        try:
-            tmp.unlink()
-        except OSError:
-            # KEEP-SILENT (F071 per-site triage W21): cleanup of the
-            # tmp we may not have created. Logging here would be noise.
-            pass
         return None
 
     # The intermediate JSONL was already renamed-and-unlinked above

@@ -6,6 +6,7 @@ Validates CodeQL dataflow findings using LLM analysis to determine
 if dataflow paths are truly exploitable beyond theoretical detection.
 """
 
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -531,7 +532,7 @@ class DataflowValidator:
             # Look for sanitizers mentioned in the flow
             sanitizers = []
             for step in intermediate:
-                if "sanitiz" in step.label.lower() or "validat" in step.label.lower():
+                if re.search(r'\bsanitiz|\bvalidat', step.label, re.IGNORECASE):
                     sanitizers.append(step.label)
 
             return DataflowPath(

@@ -86,7 +86,7 @@ def resolve_catalog_spec(
     if not spec.startswith("catalog:"):
         return None
     name = spec[len("catalog:"):].strip()
-    cat_key = name or ""              # default catalog uses empty key
+    cat_key = "" if (not name or name == "default") else name
     return (catalogs.get(cat_key) or {}).get(package_name)
 
 
@@ -116,7 +116,7 @@ def _parse_catalogs(path: Path) -> Dict[str, Dict[str, str]]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {}
 
     try:

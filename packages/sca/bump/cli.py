@@ -210,6 +210,8 @@ def _report_to_dict(report) -> dict:
         ],
         "results": [
             {
+                "kind": r.candidate.kind,
+                "locator": r.candidate.locator,
                 "arg_name": r.candidate.arg_name,
                 "file": str(r.candidate.file),
                 "current_version": r.candidate.current_version,

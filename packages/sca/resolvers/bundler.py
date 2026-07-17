@@ -85,10 +85,10 @@ class BundlerResolver:
                 src = project_dir / fname
                 if src.exists():
                     shutil.copy2(src, tmp_path / fname)
-            # ``Gemfile`` may ``eval_gemfile`` siblings via relative
-            # paths; copy any *.gemspec files too so these references
-            # resolve. Top-level only — deep gemspec layouts are
-            # uncommon and would need bespoke handling.
+            # Copy top-level *.gemspec files so the ``gemspec`` DSL
+            # directive in Gemfile resolves. Note: ``eval_gemfile``
+            # siblings are NOT covered — those require bespoke
+            # handling per project layout.
             for spec in project_dir.glob("*.gemspec"):
                 shutil.copy2(spec, tmp_path / spec.name)
 

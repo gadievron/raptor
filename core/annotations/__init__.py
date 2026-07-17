@@ -33,7 +33,7 @@ Design constraints:
   * Path-traversal defended: any ``..`` segment in a source path
     raises before touching the filesystem.
 
-Companion design doc: ~/design/audit.md (sections "Annotations
+Companion design doc: the design memo (sections "Annotations
 (markdown)", "Annotation location").
 """
 

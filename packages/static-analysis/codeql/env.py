@@ -45,9 +45,17 @@ def _run_codeql_version(cli_path: str, timeout_seconds: int = 10) -> Optional[st
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
     except ImportError:
-        # Fall back to default env rather than crashing the probe
-        # if core.config isn't importable (unusual install layout).
-        env = None
+        _DANGEROUS = {
+            "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+            "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+            "NODE_OPTIONS",
+            "OPENSSL_CONF",
+            "GIT_CONFIG_GLOBAL", "GIT_SSH_COMMAND",
+            "BASH_ENV", "ENV", "CDPATH",
+        }
+        env = {k: v for k, v in os.environ.items() if k not in _DANGEROUS}
     try:
         completed = subprocess.run(
             [cli_path, "version"],

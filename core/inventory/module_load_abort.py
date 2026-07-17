@@ -190,6 +190,8 @@ _JS_THROW_NEW = re.compile(
     r"\bthrow\s+new\s+([A-Z][A-Za-z0-9_]*)\b"
 )
 
+_JS_STMT_BOUNDARY = frozenset({";", "{", "}"})
+
 
 def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
     # Strip comments first so commented-out throw text doesn't trip
@@ -209,6 +211,7 @@ def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
     # that would silence every finding below it.
     depth = 0
     paren = 0
+    last_significant = None
     i = 0
     n = len(stripped)
     while i < n:
@@ -217,6 +220,7 @@ def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
             j = _js_skip_string(stripped, i)
             if j is None:
                 break
+            last_significant = stripped[j - 1] if j > 0 else c
             i = j
             continue
         if c == "{":
@@ -227,7 +231,9 @@ def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
             paren += 1
         elif c == ")":
             paren = max(0, paren - 1)
-        elif c == "t" and depth == 0 and paren == 0:
+        elif c == "t" and depth == 0 and paren == 0 and (
+                last_significant is None
+                or last_significant in _JS_STMT_BOUNDARY):
             m = _JS_THROW_NEW.match(stripped, i)
             if m:
                 line_no = stripped.count("\n", 0, i) + 1
@@ -236,6 +242,8 @@ def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
                     line=line_no,
                     summary=f"throw new {err_name}",
                 )
+        if not c.isspace():
+            last_significant = c
         i += 1
     return None
 

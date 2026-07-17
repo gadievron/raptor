@@ -31,7 +31,7 @@ from core.dataflow.sanitizer_catalog import (
     sanitizer_callables_for_cwe,
     sink_classes_for_cwe,
 )
-from core.inventory.cfg_builder import (
+from core.analysis.cfg_builder import (
     build_cpp_callgraph,
     build_python_cfg,
 )
@@ -265,7 +265,7 @@ def test_unknown_cwe_returns_empty_match_set():
 
 
 def _stub_edge_index(binary_path, edges):
-    from core.inventory.binary_oracle_edges import (
+    from core.analysis.binary_oracle_edges import (
         BinaryCallEdge, BinaryEdgeIndex,
     )
     return BinaryEdgeIndex(
@@ -286,7 +286,7 @@ def test_recognizer_works_on_callgraph(tmp_path):
         ("process", "render"),
     ]
     with mock.patch(
-        "core.inventory.binary_oracle_edges.extract_direct_call_edges",
+        "core.analysis.binary_oracle_edges.extract_direct_call_edges",
         return_value=_stub_edge_index(binary, edges),
     ):
         graph = build_cpp_callgraph([binary], entry="main")
@@ -310,7 +310,7 @@ def test_recognizer_ignores_wrong_language_on_callgraph(tmp_path):
     binary.write_bytes(b"")
     edges = [("main", "html.escape")]  # python name in a "C" graph
     with mock.patch(
-        "core.inventory.binary_oracle_edges.extract_direct_call_edges",
+        "core.analysis.binary_oracle_edges.extract_direct_call_edges",
         return_value=_stub_edge_index(binary, edges),
     ):
         graph = build_cpp_callgraph([binary], entry="main")

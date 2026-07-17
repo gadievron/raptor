@@ -166,7 +166,7 @@ def _imports_in(text: str) -> Iterable[Tuple[str, int]]:
         yield m.group(1), text.count("\n", 0, m.start()) + 1
     # Block form.
     for block in _IMPORT_BLOCK_RE.finditer(text):
-        block_start = block.start()
+        block_start = block.start(1)
         body = block.group(1)
         for line_m in _BLOCK_LINE_RE.finditer(body):
             line_no = (text.count("\n", 0, block_start)

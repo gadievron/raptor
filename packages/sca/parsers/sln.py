@@ -156,7 +156,21 @@ def find_sln_referenced_csprojs(
                 escape_nonprintable(str(sln_path)),
             )
             continue
-        candidate = (parent / rel).resolve()
+        unresolved = parent / rel
+        # Reject symlinked final candidates BEFORE resolving — a
+        # target with ``X.csproj -> /etc/passwd`` would leak the
+        # target's contents into the XML parser's error logs.
+        try:
+            if unresolved.is_symlink():
+                logger.debug(
+                    "sca.parsers.sln: %s is a symlink; skipping "
+                    "(hostile-symlink defence)",
+                    escape_nonprintable(str(unresolved)),
+                )
+                continue
+        except OSError:
+            continue
+        candidate = unresolved.resolve()
         # Path-traversal defence: ``repo_root`` is preferred when
         # the caller supplies it (discovery does). Fall back to
         # the .sln's grandparent for legacy callers — strictly
@@ -173,19 +187,6 @@ def find_sln_referenced_csprojs(
             )
             continue
         if candidate.suffix.lower() not in _PROJECT_SUFFIXES:
-            continue
-        # Reject symlinked final candidates — a target with
-        # ``X.csproj -> /etc/passwd`` would leak the target's
-        # contents into the XML parser's error logs.
-        try:
-            if candidate.is_symlink():
-                logger.debug(
-                    "sca.parsers.sln: %s is a symlink; skipping "
-                    "(hostile-symlink defence)",
-                    escape_nonprintable(str(candidate)),
-                )
-                continue
-        except OSError:
             continue
         if not candidate.is_file():
             continue

@@ -328,4 +328,14 @@ class ConsistencyVerifier:
         if not self._has_gharchive_credentials():
             return VerificationResult(is_valid=True, errors=["GH Archive verification skipped - no credentials"])
 
-        return VerificationResult(is_valid=True, errors=[])
+        try:
+            rows = self.gharchive_client.query_events(
+                repo=obs.repository.full_name if obs.repository else None,
+                actor=obs.original_who.login if obs.original_who else None,
+                from_date=obs.observed_when.strftime("%Y%m%d%H%M") if obs.observed_when else None,
+            )
+            if not rows:
+                return VerificationResult(is_valid=False, errors=["No matching observation found in GH Archive"])
+            return VerificationResult(is_valid=True, errors=[])
+        except Exception as e:
+            return VerificationResult(is_valid=False, errors=[f"GH Archive observation verification error: {e}"])

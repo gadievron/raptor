@@ -22,6 +22,10 @@ from core.labeled_attempts import (  # noqa: E402
     read_all,
     write,
 )
+from core.labeled_attempts.store import (  # noqa: E402
+    find_by_failure_mode,
+)
+from core.labeled_attempts.types import FailureMode  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -35,6 +39,7 @@ def _make_attempt(
     cwe: str = "CWE-787",
     outcome: str = "success",
     timestamp: str = "2026-06-03T14:05:32+00:00",
+    failure_mode: "FailureMode | None" = None,
 ) -> LabeledAttempt:
     return LabeledAttempt(
         finding_id=finding_id,
@@ -52,6 +57,7 @@ def _make_attempt(
         iterations=8,
         cost_usd=0.12,
         timestamp=timestamp,
+        failure_mode=failure_mode,
     )
 
 
@@ -250,6 +256,103 @@ def test_find_by_cwe_case_insensitive(project_dir):
     write(_make_attempt(cwe="CWE-787"), project_dir=project_dir)
     assert list(find_by_cwe("cwe-787", project_dir=project_dir,
                             include_bundled=False))
+
+
+def test_find_by_failure_mode_returns_matching_records(project_dir):
+    """Basic pin: records with the requested failure_mode surface;
+    records with a different failure_mode drop."""
+    fm_a = FailureMode.MODEL_REASONING_CEILING
+    fm_b = FailureMode.SIZE_MISMATCH
+    write(
+        _make_attempt(
+            finding_id="A", finding_signature="a" * 32,
+            outcome="reasoned_failure", failure_mode=fm_a,
+        ),
+        project_dir=project_dir,
+    )
+    write(
+        _make_attempt(
+            finding_id="B", finding_signature="b" * 32,
+            outcome="reasoned_failure", failure_mode=fm_b,
+        ),
+        project_dir=project_dir,
+    )
+    got = list(find_by_failure_mode(
+        fm_a.value, project_dir=project_dir, include_bundled=False,
+    ))
+    assert {r.finding_id for r in got} == {"A"}
+
+
+def test_find_by_failure_mode_skips_none(project_dir):
+    """A record with failure_mode=None is skipped even when its
+    outcome would match a downstream consumer's expectation."""
+    write(
+        _make_attempt(
+            finding_id="A", finding_signature="a" * 32,
+            outcome="success", failure_mode=None,
+        ),
+        project_dir=project_dir,
+    )
+    got = list(find_by_failure_mode(
+        FailureMode.MODEL_REASONING_CEILING.value,
+        project_dir=project_dir, include_bundled=False,
+    ))
+    assert got == []
+
+
+def test_find_by_failure_mode_exclude_cwe(project_dir):
+    """``exclude_cwe`` drops records tagged with that CWE — the
+    cross-CWE fallback in extract_lesson relies on this filter."""
+    fm = FailureMode.MODEL_REASONING_CEILING
+    write(
+        _make_attempt(
+            finding_id="A", finding_signature="a" * 32,
+            cwe="CWE-121", outcome="reasoned_failure",
+            failure_mode=fm,
+        ),
+        project_dir=project_dir,
+    )
+    write(
+        _make_attempt(
+            finding_id="B", finding_signature="b" * 32,
+            cwe="CWE-122", outcome="reasoned_failure",
+            failure_mode=fm,
+        ),
+        project_dir=project_dir,
+    )
+    got = list(find_by_failure_mode(
+        fm.value,
+        project_dir=project_dir,
+        include_bundled=False,
+        exclude_cwe="CWE-121",
+    ))
+    assert {r.finding_id for r in got} == {"B"}
+
+
+def test_find_by_failure_mode_exclude_cwe_canonicalises(project_dir):
+    """Regression pin: exclude_cwe should filter via the canonical
+    CWE form, so ``"cwe121"`` and ``"CWE-121"`` produce the same
+    exclusion."""
+    fm = FailureMode.MODEL_REASONING_CEILING
+    write(
+        _make_attempt(
+            finding_id="A", finding_signature="a" * 32,
+            cwe="CWE-121", outcome="reasoned_failure",
+            failure_mode=fm,
+        ),
+        project_dir=project_dir,
+    )
+    got_canonical = set(find_by_failure_mode(
+        fm.value, project_dir=project_dir,
+        include_bundled=False, exclude_cwe="CWE-121",
+    ))
+    got_loose = set(find_by_failure_mode(
+        fm.value, project_dir=project_dir,
+        include_bundled=False, exclude_cwe="cwe121",
+    ))
+    # Both spellings resolve to the same canonical form via
+    # core.cwe.canonicalize_cwe, so both drop the CWE-121 record.
+    assert got_canonical == got_loose
 
 
 def test_find_by_finding_signature(project_dir):

@@ -444,3 +444,98 @@ def test_request_top_level_not_object_returns_structured_error():
     resp = _drive_coordinator(b"[]\n")
     assert resp.get("error", {}).get("reason") == "bad_request", resp
     assert "object" in resp["error"]["message"]
+
+
+# --------------------------------------------------------------------------
+# BLOCKER regression: the coordinator RPC honours the hardening params
+# (writable_paths, readable_paths, exclude_tmp_baseline, etc_overlay,
+# strict_env, env_caller_filtered, observe, target, output). Before the
+# fix, ``_deliver_via_coordinator`` sent none of these and ``_run_child``
+# ignored them — Linux+TCP scenarios ran the LLM exploit under a baseline
+# sandbox with /tmp writable, reopening the wrapper-rewrite cheat lane.
+# These tests exercise ``_run_child`` in isolation with a stub sandbox_run.
+# --------------------------------------------------------------------------
+
+
+def _stub_run_child(spec):
+    """Invoke ``_run_child`` with a mocked ``core.sandbox.run`` and
+    return the kwargs the coordinator would have passed. Bypasses the
+    real namespace plumbing — we're checking the RPC → sandbox_run
+    plumbing here, not the sandbox semantics."""
+    import types
+    from unittest.mock import MagicMock, patch
+
+    from core.sandbox import netns_coordinator as _nc
+
+    captured: dict = {}
+
+    def _fake_sandbox_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(
+            returncode=0, stdout=b"", stderr=b"",
+        )
+
+    result = _nc._ChildResult()
+    with patch("core.sandbox.run", MagicMock(side_effect=_fake_sandbox_run)):
+        _nc._run_child("target", spec, result)
+    return captured, result
+
+
+def test_run_child_forwards_hardening_kwargs_when_spec_carries_them():
+    spec = {
+        "cmd": ["/bin/true"],
+        "env": {"K": "V"},
+        "timeout_s": 1.0,
+        "profile": "target_run",
+        "block_network": True,
+        "target": "/tmp/harness/work",
+        "output": "/tmp/harness/out",
+        "writable_paths": ["/tmp/harness/scratch"],
+        "readable_paths": ["/vendor/libz"],
+        "exclude_tmp_baseline": True,
+        "etc_overlay": {"/etc/nsswitch.conf": "/tmp/nsswitch"},
+        "strict_env": False,
+        "env_caller_filtered": True,
+        "observe": True,
+        "restrict_reads": True,
+    }
+    captured, _ = _stub_run_child(spec)
+    kwargs = captured["kwargs"]
+    assert kwargs["target"] == "/tmp/harness/work"
+    assert kwargs["output"] == "/tmp/harness/out"
+    assert kwargs["writable_paths"] == ["/tmp/harness/scratch"]
+    assert kwargs["readable_paths"] == ["/vendor/libz"]
+    assert kwargs["exclude_tmp_baseline"] is True
+    assert kwargs["etc_overlay"] == {
+        "/etc/nsswitch.conf": "/tmp/nsswitch",
+    }
+    assert kwargs["strict_env"] is False
+    assert kwargs["env_caller_filtered"] is True
+    assert kwargs["observe"] is True
+    assert kwargs["restrict_reads"] is True
+
+
+def test_run_child_omits_hardening_kwargs_when_spec_leaves_them_out():
+    # Legacy RPC shape (before the BLOCKER fix) — spec has none of
+    # the hardening fields. sandbox_run must still be called cleanly
+    # (backwards compat) without any of the new kwargs.
+    spec = {
+        "cmd": ["/bin/true"],
+        "env": {},
+        "timeout_s": 1.0,
+        "profile": "target_run",
+        "block_network": True,
+    }
+    captured, _ = _stub_run_child(spec)
+    kwargs = captured["kwargs"]
+    for key in (
+        "target", "output", "writable_paths", "readable_paths",
+        "exclude_tmp_baseline", "etc_overlay", "strict_env",
+        "env_caller_filtered", "observe",
+    ):
+        assert key not in kwargs, (
+            f"legacy spec should not surface {key!r} to sandbox_run"
+        )
+
+

@@ -205,5 +205,6 @@ def _extract_cves_from_sarif_result(
     ids.update(m.group(1).upper() for m in _CVE_RE.finditer(help_uri))
     for tag in rule.get("properties", {}).get("tags", []):
         ids.update(m.group(1).upper() for m in _CVE_RE.finditer(tag))
+        ids.update(m.group(1).upper() for m in _GHSA_RE.finditer(tag))
 
     return ids

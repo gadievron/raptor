@@ -38,6 +38,7 @@ semgrep_packs:
     - security-audit
     - command-injection
     - owasp-top-ten
+    - "0xdea"
   optional:
     - secrets
     - jwt

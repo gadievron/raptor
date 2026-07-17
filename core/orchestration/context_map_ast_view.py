@@ -113,7 +113,7 @@ def enrich_with_ast_view(
 
     try:
         from core.ast import view
-        from core.inventory.reachability import enclosing_function
+        from core.analysis.reachability import enclosing_function
     except ImportError:
         return 0
 

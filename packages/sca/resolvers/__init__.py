@@ -112,7 +112,7 @@ class Resolver(Protocol):
         when ``yarn.lock`` is present, ``PoetryResolver`` when
         ``[tool.poetry]`` is in ``pyproject.toml``. When multiple
         candidates match, the registered order wins; when none match,
-        the first registered resolver for the ecosystem is the
+        the last registered resolver for the ecosystem is the
         fallback so single-tool ecosystems Just Work.
         """
         ...

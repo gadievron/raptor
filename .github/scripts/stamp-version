@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Stamp release version into tracked files.
+
+Called by the release workflow to bake the version tag into
+core/config/__init__.py, CITATION.cff, and README.md.
+
+Usage:
+  stamp-version <tag>
+
+The tag must match v<major>.<minor>.<patch>[-prerelease].
+"""
+from __future__ import annotations
+
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(-[a-zA-Z0-9.]+)?$")
+
+
+def atomic_write(path: Path, content: str) -> None:
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", dir=path.parent, suffix=".tmp", delete=False,
+    )
+    try:
+        tmp.write(content)
+        tmp.flush()
+        tmp.close()
+        Path(tmp.name).replace(path)
+    except BaseException:
+        tmp.close()
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
+def stamp_config(ver: str) -> str:
+    path = Path("core/config/__init__.py")
+    text = path.read_text()
+    text, n = re.subn(
+        r'^(\s+VERSION = ")[^"]+(")',
+        lambda m: m.group(1) + ver + m.group(2),
+        text, count=1, flags=re.MULTILINE,
+    )
+    if n == 0:
+        print("warning: VERSION pattern not found in core/config/__init__.py", file=sys.stderr)
+        return ""
+    atomic_write(path, text)
+    match = re.search(r'VERSION = ".*"', text)
+    return match.group(0) if match else ""
+
+
+def stamp_citation(ver: str) -> str:
+    path = Path("CITATION.cff")
+    text = path.read_text()
+    text, n = re.subn(
+        r'^(version: ")[^"]+(")',
+        lambda m: m.group(1) + ver + m.group(2),
+        text, count=1, flags=re.MULTILINE,
+    )
+    if n == 0:
+        print("warning: version pattern not found in CITATION.cff", file=sys.stderr)
+        return ""
+    atomic_write(path, text)
+    match = re.search(r"^version: .*", text, re.MULTILINE)
+    return match.group(0) if match else ""
+
+
+def stamp_readme(tag: str) -> str:
+    path = Path("README.md")
+    text = path.read_text()
+
+    def replace_banner(m: re.Match) -> str:
+        prefix = m.group(1)
+        content = prefix + tag + ")"
+        pad = max(0, 76 - len(content))
+        return content + " " * pad + "║"
+
+    text, n = re.subn(
+        r"(║\s+Based on Claude Code \()[^)]+\)[^║]*║",
+        replace_banner,
+        text,
+    )
+    if n == 0:
+        print("warning: banner pattern not found in README.md", file=sys.stderr)
+        return ""
+    atomic_write(path, text)
+    match = re.search(r".*Based on Claude Code.*", text)
+    return match.group(0).strip() if match else ""
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        print(f"usage: {sys.argv[0]} <tag>", file=sys.stderr)
+        sys.exit(1)
+
+    tag = sys.argv[1]
+    if not TAG_RE.match(tag):
+        print(
+            f"error: tag must match v<major>.<minor>.<patch>[-prerelease], got '{tag}'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    ver = tag.lstrip("v")
+
+    stamped = 0
+    print("Stamped:")
+    result = stamp_config(ver)
+    if result:
+        print(f"  {result}")
+        stamped += 1
+    result = stamp_citation(ver)
+    if result:
+        print(f"  {result}")
+        stamped += 1
+    result = stamp_readme(tag)
+    if result:
+        print(f"  {result}")
+        stamped += 1
+
+    if stamped == 0:
+        print("error: no files were stamped", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

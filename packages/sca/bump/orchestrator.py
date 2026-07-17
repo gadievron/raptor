@@ -1533,14 +1533,17 @@ def _same_major_pin(current: str, target: str) -> bool:
 
 
 def _find_gha_workflows(target: Path) -> List[Path]:
-    """Walk ``target/.github/workflows/`` for YAML files."""
-    workflows_dir = target / ".github" / "workflows"
-    if not workflows_dir.is_dir():
-        return []
+    """Walk ``target`` for GitHub Actions workflow YAML files."""
     out: List[Path] = []
-    for path in workflows_dir.iterdir():
-        if path.is_file() and path.suffix in (".yml", ".yaml"):
-            out.append(path)
+    for gh_dir in target.rglob(".github"):
+        if not gh_dir.is_dir():
+            continue
+        wf_dir = gh_dir / "workflows"
+        if not wf_dir.is_dir():
+            continue
+        for path in wf_dir.iterdir():
+            if path.is_file() and path.suffix in (".yml", ".yaml"):
+                out.append(path)
     return sorted(out)
 
 

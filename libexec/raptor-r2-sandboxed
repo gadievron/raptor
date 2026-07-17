@@ -78,7 +78,7 @@ _RC_WRAPPER_BINARY_MISSING = 104
 
 # ─── trust-marker check (libexec convention) ───────────────
 # Inline before any RAPTOR import (matches raptor-run-sandboxed,
-# raptor-binary-understand) so a malicious PYTHONPATH can't hijack
+# raptor-binary) so a malicious PYTHONPATH can't hijack
 # core.* imports before the check fires. This script is invoked
 # indirectly by r2pipe (via R2PIPE_R2 env), not by humans directly;
 # unguarded invocation typically means a caller misconfiguration.
@@ -97,6 +97,7 @@ if not (os.environ.get("CLAUDECODE")
 # parents[1] is the RAPTOR install dir. core/sandbox lives there.
 _RAPTOR_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_RAPTOR_DIR))
+import core.startup.process_init  # noqa: E402,F401
 
 
 def _die(msg: str, code: int = _RC_WRAPPER_SANDBOX_FAILED) -> None:

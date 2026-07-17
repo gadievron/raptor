@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Set, Tuple
 
-from ..binary_oracle import (
+from core.analysis.binary_oracle import (
     _demangle_linkage_names,
     _qualified_from_demangled,
 )
@@ -95,36 +95,24 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     if src.exists():
         shutil.rmtree(src)
     logger.info("leveldb: cloning %s → %s", LEVELDB_URL, src)
-    if not clone_repository(LEVELDB_URL, src, depth=None):
+    if not clone_repository(LEVELDB_URL, src, depth=1):
         raise RuntimeError(f"leveldb: clone failed for {LEVELDB_URL}")
-    # Hard-pin: check out the pinned SHA. The clone fetches branch heads
-    # + their history, but the pinned commit may not be reachable from
-    # the default branch (shallow clone, or the commit sits behind a
-    # later force-push / on a now-deleted branch). In that case fetch the
-    # exact object explicitly, then check it out — GitHub honours fetching
-    # an arbitrary reachable SHA. We still check out ``LEVELDB_SHA`` and
-    # never fall back to ``main`` HEAD, so reproducibility of the precision
-    # claim is preserved (Adversarial review E P2-1): an unfetchable object
-    # is a hard error, never a silent revision swap. Operators wanting a
-    # different revision bump ``LEVELDB_SHA`` explicitly.
-    checkout = subprocess.run(
-        safe_git_command("-C", str(src), "checkout", LEVELDB_SHA),
-        env=get_safe_git_env(), check=False, timeout=60,
+    # Shallow fetch the exact pinned SHA. GitHub honours fetching an
+    # arbitrary reachable SHA. We never fall back to HEAD, so
+    # reproducibility is preserved (Adversarial review E P2-1).
+    subprocess.run(
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", LEVELDB_SHA),
+        env=get_safe_git_env(), check=True, timeout=120,
     )
-    if checkout.returncode != 0:
-        subprocess.run(
-            safe_git_command("-C", str(src), "fetch", "--depth", "1",
-                             "origin", LEVELDB_SHA),
-            env=get_safe_git_env(), check=True, timeout=120,
-        )
-        subprocess.run(
-            safe_git_command("-C", str(src), "checkout", LEVELDB_SHA),
-            env=get_safe_git_env(), check=True, timeout=60,
-        )
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
+        env=get_safe_git_env(), check=True, timeout=60,
+    )
 
     subprocess.run(
         safe_git_command("-C", str(src), "submodule", "update",
-                         "--init", "--recursive"),
+                         "--init", "--recursive", "--depth", "1"),
         env=get_safe_git_env(), check=True, timeout=300,
     )
 

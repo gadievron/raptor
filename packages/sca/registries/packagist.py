@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 _CACHE_KEY_PREFIX = "packagist-versions"
 _DEFAULT_TTL = 24 * 3600
 
-# Composer pre-release tags.
+# Composer pre-release tags (hyphen-prefixed or dev- prefix forms).
 _PRERELEASE_RE = re.compile(
-    r"-(?:dev|alpha|beta|rc|patch)\b", re.IGNORECASE,
+    r"(?:^dev-|-(?:dev|alpha|beta|rc|patch)(?:[._-]?\d+)?(?:$|[^a-z]))",
+    re.IGNORECASE,
 )
 
 

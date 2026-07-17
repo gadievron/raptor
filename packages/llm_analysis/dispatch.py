@@ -480,8 +480,10 @@ def dispatch_task(
             except Exception as e:
                 err_str = str(e)
                 error_type = _classify_error(err_str)
+                model_name = model.model_name if model is not None else "?"
                 results.append({"finding_id": item_id, "error": err_str,
-                                "error_type": error_type})
+                                "error_type": error_type,
+                                "analysed_by": model_name})
                 display = task.get_item_display(item)
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} FAILED — {err_str}")

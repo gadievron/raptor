@@ -152,6 +152,11 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
         help="skip mechanical supply-chain heuristics",
     )
     parser.add_argument(
+        "--no-license", "--no-license-policy", action="store_true",
+        dest="no_license_policy",
+        help="skip license enrichment and policy evaluation",
+    )
+    parser.add_argument(
         "--no-progress", action="store_true",
         help="suppress the multi-stage TTY progress display. The "
              "display is on by default for interactive runs and "
@@ -273,8 +278,7 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--impact-analysis", action="store_true",
         help="run LLM upgrade-impact analysis for proposed version "
-             "bumps (default: auto-on when ``--allow-major`` is "
-             "set, off otherwise)",
+             "bumps (default: off)",
     )
     parser.add_argument(
         "--cache-root",
@@ -318,6 +322,7 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         enable_epss=not args.no_epss,
         enable_reachability=not args.no_reachability,
         enable_supply_chain=not args.no_supply_chain,
+        enable_license_policy=not args.no_license_policy,
         emit_html_report=args.html,
         emit_spdx_sbom=args.spdx,
         include_commented=args.include_commented,

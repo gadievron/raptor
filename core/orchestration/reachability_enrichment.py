@@ -4,7 +4,7 @@ Sibling of :func:`core.orchestration.understand_bridge.enrich_checklist`,
 which marks entry-points and sinks as ``priority=high`` based on
 the /understand context-map. This module marks dead-code
 functions (NOT_CALLED verdict from
-``core.inventory.reachability``) as ``priority=low`` so the
+``core.analysis.reachability``) as ``priority=low`` so the
 /agentic LLM analysis spends its budget on functions that
 actually run.
 
@@ -103,8 +103,8 @@ def mark_unreachable_low_priority(
             return 0
 
     try:
-        from core.inventory.reach_audit import classify_reachability
-        from core.inventory.reach_witness import (
+        from core.analysis.reach_audit import classify_reachability
+        from core.analysis.reach_witness import (
             Reachability,
             verdict_from_classification,
         )
@@ -254,7 +254,7 @@ def enrich_with_caller_context(
             return 0
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             InternalFunction,
             callers_of,
             reverse_closure,

@@ -217,8 +217,14 @@ def test_compute_finding_signature_stable():
     assert a == b
 
 
-def test_compute_finding_signature_normalises_cwe():
-    """Case-insensitive CWE comparison."""
+def test_compute_finding_signature_trusts_caller_cwe_spelling():
+    """Signature hashes the caller-supplied CWE spelling verbatim
+    (whitespace stripped). Callers who want dedup across spellings
+    (``"cwe-787"`` vs ``"CWE-787"``) must canonicalise upstream
+    before calling. Signature-level canonicalisation would silently
+    invalidate every existing on-disk
+    ``<project>/labeled_attempts/<signature>/`` directory written
+    under a different spelling."""
     a = compute_finding_signature(
         cwe="cwe-787", file_path="src/foo.c",
         function="parse", line=42,
@@ -227,7 +233,7 @@ def test_compute_finding_signature_normalises_cwe():
         cwe="CWE-787", file_path="src/foo.c",
         function="parse", line=42,
     )
-    assert a == b
+    assert a != b
 
 
 def test_compute_finding_signature_distinct_for_distinct_inputs():

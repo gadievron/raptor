@@ -38,7 +38,7 @@ def test_github_git_repository_with_tag(tmp_path: Path) -> None:
     assert d.name == "google/googletest"
     assert d.version == "release-1.12.1"
     assert d.purl == "pkg:github/google/googletest@release-1.12.1"
-    assert d.pin_style == PinStyle.EXACT
+    assert d.pin_style == PinStyle.GIT
 
 
 def test_github_git_repository_without_tag_marks_wildcard(tmp_path: Path) -> None:

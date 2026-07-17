@@ -384,10 +384,10 @@ class FuzzingMemory:
         if knowledge is None:
             # No past data - use signal-based heuristic
             signal_probs = {
-                "SIGSEGV": 0.7,  # Memory corruption - often exploitable
-                "SIGABRT": 0.5,  # Heap issues - sometimes exploitable
-                "SIGILL": 0.4,   # Illegal instruction - less often exploitable
-                "SIGFPE": 0.2,   # Arithmetic - rarely exploitable
+                "SIGSEGV": 0.7, 11: 0.7,
+                "SIGABRT": 0.5, 6: 0.5,
+                "SIGILL": 0.4, 4: 0.4,
+                "SIGFPE": 0.2, 8: 0.2,
             }
             return signal_probs.get(signal, 0.3)
 

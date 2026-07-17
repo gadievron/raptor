@@ -39,6 +39,7 @@ import json
 import logging
 import multiprocessing as mp
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -785,17 +786,44 @@ def _collect_one(
     with tempfile.TemporaryDirectory(prefix="raptor-sca-sample-") as tmp:
         clone_root = Path(tmp) / sample.name
         # Shallow clone, single ref. ``--depth 1`` keeps it fast;
-        # ``--branch`` accepts both branches and tags.
+        # ``--branch`` accepts branches and tags; commit SHAs need
+        # a fetch-by-SHA approach since ``--branch`` rejects them.
+        _is_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", sample.git_ref))
         try:
-            subprocess.run(
-                [
-                    "git", "clone", "--depth", "1",
-                    "--branch", sample.git_ref,
-                    sample.repo_url, str(clone_root),
-                ],
-                check=True, capture_output=True, text=True,
-                timeout=git_clone_timeout,
-            )
+            if _is_sha:
+                subprocess.run(
+                    ["git", "init", str(clone_root)],
+                    check=True, capture_output=True, text=True,
+                    timeout=git_clone_timeout,
+                )
+                subprocess.run(
+                    ["git", "-C", str(clone_root), "remote", "add",
+                     "origin", sample.repo_url],
+                    check=True, capture_output=True, text=True,
+                    timeout=git_clone_timeout,
+                )
+                subprocess.run(
+                    ["git", "-C", str(clone_root), "fetch",
+                     "--depth", "1", "origin", sample.git_ref],
+                    check=True, capture_output=True, text=True,
+                    timeout=git_clone_timeout,
+                )
+                subprocess.run(
+                    ["git", "-C", str(clone_root), "checkout",
+                     "FETCH_HEAD"],
+                    check=True, capture_output=True, text=True,
+                    timeout=git_clone_timeout,
+                )
+            else:
+                subprocess.run(
+                    [
+                        "git", "clone", "--depth", "1",
+                        "--branch", sample.git_ref,
+                        sample.repo_url, str(clone_root),
+                    ],
+                    check=True, capture_output=True, text=True,
+                    timeout=git_clone_timeout,
+                )
         except (subprocess.TimeoutExpired,
                 subprocess.CalledProcessError) as e:
             err = (

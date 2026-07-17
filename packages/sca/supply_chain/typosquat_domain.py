@@ -349,7 +349,7 @@ def _stub_dep(manifest: Optional[Manifest], src: Path) -> Dependency:
             "high",
             reason="domain typosquat — project-level finding",
         ),
-        source_kind="manifest",
+        source_kind="manifest" if manifest else "inline",
     )
 
 

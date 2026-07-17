@@ -134,7 +134,9 @@ def _compile_error_anchor(
     if finding_file_path in joined:
         return True
     basename = Path(finding_file_path).name
-    return bool(basename and basename in joined)
+    if not basename:
+        return False
+    return bool(re.search(r"\b" + re.escape(basename) + r"\b", joined))
 
 
 # ---------------------------------------------------------------------------

@@ -103,13 +103,13 @@ _GIT_URL_RE = re.compile(
 # misread regular package names like ``@scope/name`` (which has a
 # leading ``@``) or version specs.
 _BARE_SHORTHAND_RE = re.compile(
-    r"^(?P<owner>[\w][\w\-]+)/(?P<repo>[\w.\-]+)"
+    r"^(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+)"
     r"(?:#(?P<ref>[\w./\-]+))?$"
 )
 # 40-char hex SHA — the most-suspicious ref shape (Shai-Hulud
 # pinned to specific orphan SHAs). Tag/branch refs get a lower
 # severity bump in `_classify_ref`.
-_SHA40_RE = re.compile(r"^[a-f0-9]{40}$")
+_SHA40_RE = re.compile(r"^[a-f0-9]{40}$", re.IGNORECASE)
 
 # Dep-field keys to scan, in priority order. The first three are
 # install-time evaluated by npm; ``peerDependencies`` is hints-only

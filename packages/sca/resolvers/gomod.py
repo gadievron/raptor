@@ -79,10 +79,11 @@ class GoResolver:
                 src = project_dir / fname
                 if src.exists():
                     shutil.copy2(src, tmp_path / fname)
-            # ``go mod tidy`` walks .go files for imports too — copy
-            # them at the top level if present (rough but functional).
-            for go_file in project_dir.glob("*.go"):
-                shutil.copy2(go_file, tmp_path / go_file.name)
+            for go_file in project_dir.rglob("*.go"):
+                rel = go_file.relative_to(project_dir)
+                dest = tmp_path / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(go_file, dest)
 
             try:
                 proc = _run(

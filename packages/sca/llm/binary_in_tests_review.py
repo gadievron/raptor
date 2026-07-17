@@ -50,7 +50,7 @@ def review_binary_in_tests(
         return findings
 
     for finding in bin_findings:
-        binary_path = finding.evidence.get("file_path", "")
+        binary_path = finding.evidence.get("path", "")
         file_size = finding.evidence.get("file_size", 0)
 
         context = _gather_test_context(target, binary_path)
@@ -72,7 +72,8 @@ def review_binary_in_tests(
             if finding.severity in ("info", "low"):
                 finding.severity = "medium"
         elif verdict.verdict == "malicious":
-            finding.severity = "high"
+            if finding.severity not in ("critical",):
+                finding.severity = "high"
 
     return findings
 
@@ -148,7 +149,12 @@ def _gather_test_context(target: Path, binary_path: str) -> str:
         if binary_name not in text:
             continue
         header = f"--- {test_file.relative_to(target)} ---\n"
-        chunk = header + text[:10_000]
+        idx = text.find(binary_name)
+        if idx <= 10_000:
+            chunk = header + text[:10_000]
+        else:
+            start = max(0, idx - 5_000)
+            chunk = header + text[start:start + 10_000]
         if total + len(chunk) > _MAX_CONTEXT_CHARS:
             break
         chunks.append(chunk)

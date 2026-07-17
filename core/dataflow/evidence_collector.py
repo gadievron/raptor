@@ -16,7 +16,7 @@ This module deliberately does NOT decide a verdict. The
 ``SanitizerEvidence`` is fed *into* the existing dataflow validator's
 LLM prompt by :mod:`packages.codeql.dataflow_validator` (PR1c
 integration) — never around it. The rejected verdict-with-short-circuit
-design is documented at ``~/design/dataflow-sanitizer-bypass.md``.
+design is documented at the design memo.
 """
 
 from __future__ import annotations

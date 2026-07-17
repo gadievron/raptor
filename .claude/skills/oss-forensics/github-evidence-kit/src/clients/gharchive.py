@@ -91,8 +91,10 @@ class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gc
         # from_date is YYYYMMDDHHMM format (12 digits), extract day part
         day = from_date[:8]
         # Table names can't be parameterized, but day is validated format
-        if not day.isdigit() or len(day) != 8:
-            raise ValueError(f"Invalid date format: {from_date}")
+        if len(from_date) < 12 or not from_date[:12].isdigit():
+            raise ValueError(
+                f"Invalid date format: {from_date!r} — expected 12-digit YYYYMMDDHHMM"
+            )
         table = f"`githubarchive.day.{day}`"
 
         # Build WHERE clauses with parameterized values

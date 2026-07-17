@@ -467,10 +467,12 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                         os.makedirs(inside, exist_ok=True)
                     else:
                         os.makedirs(os.path.dirname(inside), exist_ok=True)
-                        # Empty placeholder so the bind has a file
-                        # target (Linux requires source/target kinds
-                        # to match for a non-recursive bind).
-                        open(inside, "w").close()
+                        fd = os.open(
+                            inside,
+                            os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
+                            0o600,
+                        )
+                        os.close(fd)
                 except OSError:
                     warn_post_fork(
                         b"RAPTOR: mount_ns: etc_overlay could not "
@@ -494,8 +496,10 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
             except OSError:
                 warn_post_fork(
                     b"RAPTOR: mount_ns: failed to restore /etc RO "
-                    b"after overlay; relying on Landlock\n"
+                    b"after overlay; aborting (Landlock alone is "
+                    b"insufficient for /etc write protection)\n"
                 )
+                raise OSError("mount_ns: /etc RO restore failed after overlay")
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)

@@ -405,3 +405,78 @@ class TestCombined:
         assert "..." in out
         # Doesn't dump the full 400+ chars
         assert long_extractor not in out
+
+
+# ---------------------------------------------------------------------------
+# Pack-file cap warning
+# ---------------------------------------------------------------------------
+
+
+class TestPackFileCapWarning:
+    """The pack-file walker caps at _MAX_PACK_FILES. Verify a warning is
+    emitted so operators know additional files were NOT inspected."""
+
+    @pytest.mark.slow
+    def test_warning_emitted_when_cap_reached(self, tmp_path, caplog):
+        import logging
+
+        from core.security.codeql_trust import _scan_cached, _MAX_PACK_FILES
+
+        _scan_cached.cache_clear()
+
+        for i in range(_MAX_PACK_FILES + 5):
+            d = tmp_path / f"pkg{i:04d}"
+            d.mkdir()
+            (d / "qlpack.yml").write_text(f"name: test/pkg{i}\nversion: 1.0.0\n")
+
+        with caplog.at_level(logging.WARNING, logger="core.security.codeql_trust"):
+            _scan_cached(str(tmp_path.resolve()))
+
+        assert any("capped at" in rec.message for rec in caplog.records), (
+            "Expected a warning about the pack-file cap being reached"
+        )
+        assert str(_MAX_PACK_FILES) in caplog.text
+
+    def test_no_warning_below_cap(self, tmp_path, caplog):
+        import logging
+
+        from core.security.codeql_trust import _scan_cached
+
+        _scan_cached.cache_clear()
+
+        for i in range(2):
+            d = tmp_path / f"pkg{i}"
+            d.mkdir()
+            (d / "qlpack.yml").write_text(f"name: test/pkg{i}\nversion: 1.0.0\n")
+
+        with caplog.at_level(logging.WARNING, logger="core.security.codeql_trust"):
+            _scan_cached(str(tmp_path.resolve()))
+
+        assert not any("capped at" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Regression: scalar string values in packs dict silently dropped
+# ---------------------------------------------------------------------------
+
+
+class TestScalarPackValue:
+    def test_scalar_string_pack_ref_detected(self, tmp_path, capsys):
+        """A codeql-config.yml where one language key has a scalar string
+        pack reference (not wrapped in a list). Pre-fix: the ``isinstance
+        (refs, list)`` guard silently dropped scalar strings; the
+        non-canonical pack slipped through undetected.
+
+        After fix: ``elif isinstance(refs, str)`` catches the scalar and
+        appends it to the flat list for inspection."""
+        gh = tmp_path / ".github" / "codeql"
+        gh.mkdir(parents=True)
+        (gh / "codeql-config.yml").write_text(
+            "name: x\n"
+            "packs:\n"
+            "  python: evilcorp/backdoor\n"  # scalar string, not a list
+        )
+        assert _check(str(tmp_path)) is True
+        out = capsys.readouterr().out
+        assert "non-canonical pack" in out
+        assert "evilcorp/backdoor" in out

@@ -69,7 +69,6 @@ _SKIP_DIR_NAMES: Set[str] = {
     ".pytest_cache", ".mypy_cache", ".ruff_cache",
     ".gradle", ".idea", ".vscode",
     ".angular", ".next", ".nuxt", ".cache", ".turbo",
-    "site-packages",
 }
 
 
@@ -150,9 +149,13 @@ def main(
             return 3
         before_findings = before.findings_path
 
-    rows_before = json.loads(before_findings.read_text(encoding="utf-8"))
-    rows_after = json.loads(after.findings_path.read_text(encoding="utf-8"))
-    delta = compute_delta(rows_before, rows_after)
+    try:
+        rows_before = json.loads(before_findings.read_text(encoding="utf-8"))
+        rows_after = json.loads(after.findings_path.read_text(encoding="utf-8"))
+        delta = compute_delta(rows_before, rows_after)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"raptor-sca verify: cannot parse findings: {e}", file=sys.stderr)
+        return 3
 
     summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity)
     delta_md = _render_markdown(target, proposed, applied, delta, summary)
@@ -271,15 +274,20 @@ def _verdict(
         r for r in delta.new
         if severity_rank(r.get("severity", "info")) >= floor
     ]
+    not_cleared = [
+        r for r in delta.persistent
+        if severity_rank(r.get("severity", "info")) >= floor
+    ]
     summary = {
         "resolved": len(delta.resolved),
         "new": len(delta.new),
         "regressing_above_threshold": len(triggering),
+        "persistent_above_threshold": len(not_cleared),
         "suppression_added": len(delta.suppression_added),
         "suppression_lifted": len(delta.suppression_lifted),
         "severity_threshold": severity_floor,
     }
-    exit_code = 1 if triggering else 0
+    exit_code = 1 if triggering or not_cleared else 0
     return summary, exit_code
 
 

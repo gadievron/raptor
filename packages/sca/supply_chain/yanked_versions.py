@@ -15,7 +15,8 @@ Coverage today (per ecosystem):
   * RubyGems   — per-version yanked flag
   * Maven      — no native yanked concept; skipped
   * Composer   — no native yanked concept; skipped
-  * NuGet      — ``listed: false`` via registration index
+  * NuGet      — ``listed: false`` via registration index; stubbed
+                 (not yet implemented)
 
 Emits ``sca:hygiene:yanked_version`` HygieneFinding rows.
 Severity is medium — yanked means the maintainer pulled the

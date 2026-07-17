@@ -832,6 +832,16 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge", "aggregate"}
 
 
+def get_configured_models() -> List[Dict]:
+    """Return all model entries from the operator's config file."""
+    return _get_configured_models()
+
+
+def model_config_from_entry(entry: Dict) -> 'ModelConfig':
+    """Build a ModelConfig from a config-file entry dict."""
+    return _model_config_from_entry(entry)
+
+
 def resolve_model_roles(
     primary_model: Optional['ModelConfig'] = None,
     fallback_models: Optional[List['ModelConfig']] = None,
@@ -1092,7 +1102,7 @@ class LLMConfig:
     # ``None`` (default) DISABLES weighting — counts are summed unweighted,
     # identical to the pre-freshness behaviour. Enabling lowers the effective
     # sample size, so confirm the cold-start impact with the offline measurement
-    # before turning it on by default. See ~/design/scorecard-model-versioning.md.
+    # before turning it on by default. See the design memo.
     scorecard_freshness_half_life_days: Optional[float] = None
 
     def __post_init__(self) -> None:
@@ -1135,17 +1145,24 @@ class LLMConfig:
         Resolution, most specific first:
           1. an exact configured entry for ``model_id`` — returned as-is, so
              its per-model settings (temperature, base, role) are preserved;
-          2. otherwise, among configured models of the same provider that
+          2. shorthand expansion — a bare token like ``"haiku"`` / ``"opus"``
+             is looked up as a hyphen-separated segment of some configured
+             model's bare name. When exactly one configured model matches,
+             its full entry is returned as if that name had been passed.
+             Ambiguous (>1 match) raises with the candidate list; missing
+             (0 matches) falls through to (3);
+          3. otherwise, among configured models of the same provider that
              carry a credential, the one whose name shares the longest prefix
              with ``model_id`` — a configured ``claude-opus-4-6`` lends its
              key to ``claude-opus-4-8`` ahead of a ``claude-haiku-*`` entry;
              its api_key / api_base are borrowed onto a config for ``model_id``;
-          3. otherwise a bare config (api_key=None) so the SDK / dispatcher /
+          4. otherwise a bare config (api_key=None) so the SDK / dispatcher /
              provider env var supplies the credential at call time.
         """
         from core.security.llm_family import (
             bare_model_id,
             provider_of,
+            resolve_model_shorthand,
             unknown_model_message,
         )
 
@@ -1153,6 +1170,27 @@ class LLMConfig:
         for mc in candidates:
             if mc.model_name == model_id:
                 return mc
+
+        # Shorthand expansion: when the operator passes a bare tier token
+        # like ``"haiku"`` / ``"opus"`` / ``"sonnet"``, match it against the
+        # hyphen-separated segments of each configured model's bare name.
+        # Only when exactly one configured model matches — ambiguous or
+        # missing input falls through to provider_of and the loud-failure
+        # path below. Zero-match shorthand is left for provider_of to
+        # surface the standard error; multi-match raises inside
+        # resolve_model_shorthand with the candidate list so the operator
+        # can pick.
+        resolved = resolve_model_shorthand(
+            model_id, [mc.model_name for mc in candidates],
+        )
+        if resolved is not None:
+            for mc in candidates:
+                if mc.model_name == resolved:
+                    logger.info(
+                        f"Resolved shorthand '{model_id}' -> "
+                        f"'{mc.model_name}' from configured models"
+                    )
+                    return mc
 
         provider = provider_of(model_id)
         if not provider:

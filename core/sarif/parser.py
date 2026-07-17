@@ -312,6 +312,7 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
     findings still surface only one CWE — promoting to a list would
     break downstream consumers expecting a single string.
     """
+    from core.cve.cwe import format_cwe
     props = rule.get("properties") or {}
 
     # `properties.cwe` — string OR list.
@@ -319,20 +320,20 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
     if isinstance(raw_cwe, str):
         m = _CWE_TAG_RE.search(raw_cwe)
         if m:
-            return f"CWE-{m.group(1)}"
+            return format_cwe(m.group(1))
     elif isinstance(raw_cwe, list):
         for entry in raw_cwe:
             if isinstance(entry, str):
                 m = _CWE_TAG_RE.search(entry)
                 if m:
-                    return f"CWE-{m.group(1)}"
+                    return format_cwe(m.group(1))
 
     # `properties.tags` — list of strings, may contain external/cwe/cwe-N.
     for tag in props.get("tags", []) or []:
         if isinstance(tag, str):
             m = _CWE_TAG_RE.search(tag)
             if m:
-                return f"CWE-{m.group(1)}"
+                return format_cwe(m.group(1))
 
     # `relationships[]` — SARIF spec's canonical mechanism. Each
     # relationship has a `target` reference (`{"id": "CWE-89", ...}`
@@ -347,7 +348,7 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
         if isinstance(target_id, str):
             m = _CWE_TAG_RE.search(target_id)
             if m:
-                return f"CWE-{m.group(1)}"
+                return format_cwe(m.group(1))
         # CodeQL emits the bare numeric id with the toolComponent
         # naming the CWE catalog separately.
         tc = target.get("toolComponent") or {}
@@ -357,10 +358,9 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
             and tc["name"].upper() == "CWE"
             and isinstance(target_id, (str, int))
         ):
-            try:
-                return f"CWE-{int(str(target_id))}"
-            except ValueError:
-                pass
+            canon = format_cwe(target_id)
+            if canon is not None:
+                return canon
 
     return None
 

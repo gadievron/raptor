@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-01T11:44:51Z",
+    "fetched_at": "2026-07-01T09:54:23Z",
     "git_ref": "0.85.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nushell-0.85",
@@ -590,7 +590,7 @@
       "dep_name": "bytes",
       "dep_version": "1.4.0",
       "ecosystem": "Cargo",
-      "epss": 0.00019,
+      "epss": 0.00559,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -601,7 +601,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.4.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.4.0",
-      "raptor_risk_estimate": 14.507134721023911,
+      "raptor_risk_estimate": 14.60722599583036,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -618,10 +618,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399396957,
+        "epss_multiplier": 0.402152577,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.507134721023911,
+        "final": 14.60722599583036,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1077,6 +1077,134 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.21.0"
+        ],
+        "id": "RUSTSEC-2026-0183",
+        "informational": "unsound",
+        "modified": "2026-06-17T13:00:04.696626+00:00",
+        "published": "2026-05-12T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/git2",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0183.html",
+          "https://github.com/rust-lang/git2-rs/pull/1250"
+        ],
+        "severity": null,
+        "summary": "Potential undefined behavior when calling Remote::list()"
+      },
+      "cvss_score": null,
+      "dep_name": "git2",
+      "dep_version": "0.18.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:git2:0.18.0:RUSTSEC-2026-0183",
+      "in_kev": false,
+      "purl": "pkg:cargo/git2@0.18.0",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "crates/nu_plugin_gstat/src/gstat.rs:1"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.21.0"
+        ],
+        "id": "RUSTSEC-2026-0184",
+        "informational": "unsound",
+        "modified": "2026-06-17T14:00:05.672935+00:00",
+        "published": "2026-05-13T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/git2",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0184.html",
+          "https://github.com/rust-lang/git2-rs/pull/1254"
+        ],
+        "severity": null,
+        "summary": "Potential undefined behavior with Signature from a buffer-created BlameHunk"
+      },
+      "cvss_score": null,
+      "dep_name": "git2",
+      "dep_version": "0.18.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:git2:0.18.0:RUSTSEC-2026-0184",
+      "in_kev": false,
+      "purl": "pkg:cargo/git2@0.18.0",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "crates/nu_plugin_gstat/src/gstat.rs:1"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "RUSTSEC-2024-0003"
         ],
@@ -1363,7 +1491,7 @@
       "dep_name": "idna",
       "dep_version": "0.4.0",
       "ecosystem": "Cargo",
-      "epss": 0.00151,
+      "epss": 0.00194,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1374,7 +1502,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.4.0:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.4.0",
-      "raptor_risk_estimate": 9.85954628618924,
+      "raptor_risk_estimate": 9.864954008316772,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1389,10 +1517,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400070553,
+        "epss_multiplier": 0.400289982,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.85954628618924,
+        "final": 9.864954008316772,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1993,6 +2121,69 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.9.11"
+        ],
+        "id": "RUSTSEC-2026-0186",
+        "informational": "unsound",
+        "modified": "2026-06-22T18:15:03.600280+00:00",
+        "published": "2026-06-20T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/memmap2",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0186.html",
+          "https://github.com/RazrFalcon/memmap2-rs/issues/169",
+          "https://github.com/RazrFalcon/memmap2-rs/pull/170"
+        ],
+        "severity": null,
+        "summary": "Unchecked pointer offset in crate `memmap2`"
+      },
+      "cvss_score": null,
+      "dep_name": "memmap2",
+      "dep_version": "0.7.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:memmap2:0.7.1:RUSTSEC-2026-0186",
+      "in_kev": false,
+      "purl": "pkg:cargo/memmap2@0.7.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use memmap2` / `extern crate memmap2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "RUSTSEC-2022-0094"
         ],
@@ -2148,7 +2339,7 @@
       "dep_name": "mio",
       "dep_version": "0.8.8",
       "ecosystem": "Cargo",
-      "epss": 0.00963,
+      "epss": 0.00889,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2159,7 +2350,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.8:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.8",
-      "raptor_risk_estimate": 13.258975052481073,
+      "raptor_risk_estimate": 13.246588350545512,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2174,10 +2365,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404214189,
+        "epss_multiplier": 0.403836567,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.258975052481073,
+        "final": 13.246588350545512,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2338,7 +2529,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00065,
+      "epss": 0.00294,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2349,7 +2540,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-8c75-8mhr-p7r9",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.894187262766927,
+      "raptor_risk_estimate": 4.908498649181949,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2364,10 +2555,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399631695,
+        "epss_multiplier": 0.400800282,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.894187262766927,
+        "final": 4.908498649181949,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2403,7 +2594,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00062,
+      "epss": 0.00373,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2414,7 +2605,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-ghm9-cr32-g9qj",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.8939997773553765,
+      "raptor_risk_estimate": 4.913435765019445,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2429,10 +2620,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399616386,
+        "epss_multiplier": 0.401203419,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.8939997773553765,
+        "final": 4.913435765019445,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2468,7 +2659,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00063,
+      "epss": 0.00412,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2479,7 +2670,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-hppc-g8h3-xhp3",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.89406227249256,
+      "raptor_risk_estimate": 4.915873075369602,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2494,10 +2685,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399621489,
+        "epss_multiplier": 0.401402436,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.89406227249256,
+        "final": 4.915873075369602,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2595,7 +2786,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00066,
+      "epss": 0.00298,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2606,7 +2797,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-pqf5-4pqq-29f5",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.89424975790411,
+      "raptor_risk_estimate": 4.908748629730684,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2621,10 +2812,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399636798,
+        "epss_multiplier": 0.400820694,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.89424975790411,
+        "final": 4.908748629730684,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2730,7 +2921,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00116,
+      "epss": 0.00623,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2741,7 +2932,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-rpmj-rpgj-qmpm",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.897374514763286,
+      "raptor_risk_estimate": 4.929059549315321,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2756,10 +2947,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399891948,
+        "epss_multiplier": 0.40247916899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.897374514763286,
+        "final": 4.929059549315321,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2795,7 +2986,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00158,
+      "epss": 0.00294,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2806,7 +2997,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-xmgf-hq76-4vx2",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.899999310524993,
+      "raptor_risk_estimate": 4.908498649181949,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2821,10 +3012,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400106274,
+        "epss_multiplier": 0.400800282,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.899999310524993,
+        "final": 4.908498649181949,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2858,7 +3049,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00021,
+      "epss": 0.00211,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2869,7 +3060,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-xp3w-r5p5-63rr",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.891437476730854,
+      "raptor_risk_estimate": 4.903311552795718,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2884,10 +3075,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399407163,
+        "epss_multiplier": 0.400376733,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.891437476730854,
+        "final": 4.903311552795718,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2985,7 +3176,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 6e-05,
+      "epss": 0.00172,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2996,7 +3187,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-xv59-967r-8726",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.890500049673101,
+      "raptor_risk_estimate": 4.900874242445561,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3011,10 +3202,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39933061799999997,
+        "epss_multiplier": 0.40017771599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.890500049673101,
+        "final": 4.900874242445561,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3319,10 +3510,10 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/random/chars.rs:7",
+          "crates/nu-command/src/filters/shuffle.rs:6",
+          "crates/nu-command/src/filters/shuffle.rs:7",
+          "crates/nu-command/src/random/decimal.rs:7",
           "crates/nu-command/src/random/float.rs:7",
-          "crates/nu-command/src/random/bool.rs:7",
-          "crates/nu-command/src/random/integer.rs:7",
           "crates/nu-command/src/random/dice.rs:7",
           "... (+3 more)"
         ],
@@ -3392,10 +3583,10 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/random/chars.rs:7",
+          "crates/nu-command/src/filters/shuffle.rs:6",
+          "crates/nu-command/src/filters/shuffle.rs:7",
+          "crates/nu-command/src/random/decimal.rs:7",
           "crates/nu-command/src/random/float.rs:7",
-          "crates/nu-command/src/random/bool.rs:7",
-          "crates/nu-command/src/random/integer.rs:7",
           "crates/nu-command/src/random/dice.rs:7",
           "... (+3 more)"
         ],
@@ -3452,7 +3643,7 @@
       "dep_name": "rustix",
       "dep_version": "0.36.15",
       "ecosystem": "Cargo",
-      "epss": 0.00083,
+      "epss": 0.0048,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3463,7 +3654,7 @@
       "finding_id": "sca:vuln:Cargo:rustix:0.36.15:GHSA-c827-hfw6-qwvm",
       "in_kev": false,
       "purl": "pkg:cargo/rustix@0.36.15",
-      "raptor_risk_estimate": 9.850994539568957,
+      "raptor_risk_estimate": 9.900921648513851,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3478,10 +3669,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399723549,
+        "epss_multiplier": 0.40174944,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.850994539568957,
+        "final": 9.900921648513851,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3525,7 +3716,7 @@
       "dep_name": "rustix",
       "dep_version": "0.37.23",
       "ecosystem": "Cargo",
-      "epss": 0.00083,
+      "epss": 0.0048,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3536,7 +3727,7 @@
       "finding_id": "sca:vuln:Cargo:rustix:0.37.23:GHSA-c827-hfw6-qwvm",
       "in_kev": false,
       "purl": "pkg:cargo/rustix@0.37.23",
-      "raptor_risk_estimate": 9.850994539568957,
+      "raptor_risk_estimate": 9.900921648513851,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3551,10 +3742,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399723549,
+        "epss_multiplier": 0.40174944,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.850994539568957,
+        "final": 9.900921648513851,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3598,7 +3789,7 @@
       "dep_name": "rustix",
       "dep_version": "0.38.3",
       "ecosystem": "Cargo",
-      "epss": 0.00083,
+      "epss": 0.0048,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3609,7 +3800,7 @@
       "finding_id": "sca:vuln:Cargo:rustix:0.38.3:GHSA-c827-hfw6-qwvm",
       "in_kev": false,
       "purl": "pkg:cargo/rustix@0.38.3",
-      "raptor_risk_estimate": 9.850994539568957,
+      "raptor_risk_estimate": 9.900921648513851,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3624,10 +3815,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399723549,
+        "epss_multiplier": 0.40174944,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.850994539568957,
+        "final": 9.900921648513851,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3668,7 +3859,7 @@
       "dep_name": "shlex",
       "dep_version": "1.1.0",
       "ecosystem": "Cargo",
-      "epss": 0.00359,
+      "epss": 0.0078,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3679,7 +3870,7 @@
       "finding_id": "sca:vuln:Cargo:shlex:1.1.0:GHSA-r7qv-8r2h-pg27",
       "in_kev": false,
       "purl": "pkg:cargo/shlex@1.1.0",
-      "raptor_risk_estimate": 2.75103406653537,
+      "raptor_risk_estimate": 2.7657679200777525,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3694,10 +3885,10 @@
         "cvss_base": 32.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401131977,
+        "epss_multiplier": 0.40328034,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.75103406653537,
+        "final": 2.7657679200777525,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3734,7 +3925,7 @@
       "dep_name": "time",
       "dep_version": "0.3.22",
       "ecosystem": "Cargo",
-      "epss": 0.00016,
+      "epss": 0.00291,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3745,7 +3936,7 @@
       "finding_id": "sca:vuln:Cargo:time:0.3.22:GHSA-r6v5-fh4h-64xc",
       "in_kev": false,
       "purl": "pkg:cargo/time@0.3.22",
-      "raptor_risk_estimate": 4.891125001044935,
+      "raptor_risk_estimate": 4.9083111637703984,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3760,10 +3951,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399381648,
+        "epss_multiplier": 0.400784973,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.891125001044935,
+        "final": 4.9083111637703984,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
