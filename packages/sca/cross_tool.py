@@ -60,7 +60,7 @@ def link_related_findings(
         _write_findings(sca_findings_path, findings)
         logger.info(
             "sca.cross_tool: added %d cross-tool link(s) across %d finding(s)",
-            added, len({f["finding_id"] for f in findings
+            added, len({f.get("finding_id", "") for f in findings
                         if any(r.startswith("sarif:") for r in f.get("related_findings", []))}),
         )
 

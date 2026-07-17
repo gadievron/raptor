@@ -130,7 +130,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
         )
         return []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.nuget: cannot read %s: %s", path, e)
         return []
@@ -471,7 +471,7 @@ def parse_packages_config(path: Path) -> List[Dependency]:
         )
         return []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.nuget: cannot read %s: %s", path, e)
         return []
@@ -540,7 +540,7 @@ def parse_lockfile(path: Path) -> List[Dependency]:
         }
     """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("sca.parsers.nuget: cannot read %s: %s", path, e)
         return []

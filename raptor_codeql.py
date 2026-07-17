@@ -249,7 +249,7 @@ def run_autonomous_workflow(args):
     print("AUTONOMOUS ANALYSIS SUMMARY")
     print(f"{'=' * 70}")
     print(f"Total findings: {scan_result.total_findings}")
-    print(f"Analyzed: {total_analyzed}")
+    print(f"Analysed: {total_analyzed}")
     print(f"Exploitable: {total_exploitable}")
     print(f"Exploits generated: {total_exploits_generated}")
     print(f"Exploits compiled: {total_exploits_compiled}")

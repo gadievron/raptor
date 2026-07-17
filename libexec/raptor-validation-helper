@@ -183,7 +183,7 @@ def _apply_stage_file(workdir, stage_letter):
 
     staged = load_json(stage_path)
     if not staged:
-        print(f"  WARNING: stage-{stage_letter.lower()}.json exists but is empty/invalid")
+        print(f"  ⚠️  stage-{stage_letter.lower()}.json exists but is empty/invalid", file=sys.stderr)
         return False
 
     findings_path = Path(workdir) / "findings.json"
@@ -200,7 +200,7 @@ def _apply_stage_file(workdir, stage_letter):
         # Update: merge per-finding updates into existing findings.json
         container = load_json(findings_path)
         if not container:
-            print(f"  ERROR: findings.json not found — cannot apply stage-{stage_letter.lower()}.json")
+            print(f"  ✗ findings.json not found — cannot apply stage-{stage_letter.lower()}.json", file=sys.stderr)
             return False
 
         by_id = {f["id"]: f for f in container.get("findings", [])}
@@ -416,7 +416,7 @@ def prepare_A(workdir, target=None):
     checklist = load_json(Path(workdir) / "checklist.json")
     existing = load_json(Path(workdir) / "findings.json")
     if not checklist:
-        print("ERROR: checklist.json not found")
+        print("✗ checklist.json not found", file=sys.stderr)
         sys.exit(1)
     total_files = checklist['total_files']
     total_sloc = checklist.get('total_sloc', 0)
@@ -985,8 +985,9 @@ def _discover_executables(target):
                 # `bin/foo` < `tools/_aux/foo`).
                 paths.sort(key=lambda s: (len(s), s))
                 print(
-                    f"WARNING: multiple executables named {stem!r}: "
+                    f"⚠️  multiple executables named {stem!r}: "
                     f"{paths!r} — picking {paths[0]!r}",
+                    file=sys.stderr,
                 )
             result[stem] = paths[0]
     except Exception:
@@ -1165,7 +1166,7 @@ def prepare_F(workdir, target=None):
                 print(f"  {finding['id']}: {vector} -> {score}")
         _save_findings(workdir, data)
     except Exception as e:
-        print(f"  CVSS scoring error: {e}")
+        print(f"  ⚠️  CVSS scoring error: {e}", file=sys.stderr)
 
     # --- Verdict mapping consistency ---
     # This guards against future code paths between the verdict-mapping
@@ -1400,7 +1401,7 @@ def prepare_1(workdir, target=None, model=None):
         write_validation_report(workdir)
         print("Report generated")
     except Exception as e:
-        print(f"Report error: {e}")
+        print(f"⚠️  Report error: {e}", file=sys.stderr)
 
     print(generate_summary(workdir))
 
@@ -1426,7 +1427,7 @@ def prepare_1(workdir, target=None, model=None):
         render_and_write(Path(workdir))
         print("Diagrams generated")
     except Exception as e:
-        print(f"Diagram error: {e}")
+        print(f"⚠️  Diagram error: {e}", file=sys.stderr)
 
     # Coverage summary (unified store-backed report; file-level tier when
     # there's no function inventory).
@@ -1449,7 +1450,7 @@ def prepare_1(workdir, target=None, model=None):
         manifest = {"models": [entry]} if entry else None
         complete_run(Path(workdir), manifest=manifest)
     except Exception as e:
-        print(f"Lifecycle error: {e}")
+        print(f"⚠️  Lifecycle error: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1471,7 +1472,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]")
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]

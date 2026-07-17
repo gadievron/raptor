@@ -375,7 +375,7 @@ class CrashAnalyser:
         try:
             memory_info = self._get_memory_layout_info()
             context.binary_info.update(memory_info)
-            logger.info("✓ Memory layout and protections analyzed")
+            logger.info("✓ Memory layout and protections analysed")
         except Exception as e:
             logger.error(f"✗ Memory layout analysis failed: {e}")
 

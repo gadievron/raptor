@@ -158,8 +158,8 @@ def is_already_validated(filepath):
 
 def main():
     if len(sys.argv) < 3 or sys.argv[1] not in VALIDATORS:
-        print(f"Usage: {sys.argv[0]} <type> <file>")
-        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}")
+        print(f"Usage: {sys.argv[0]} <type> <file>", file=sys.stderr)
+        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}", file=sys.stderr)
         sys.exit(2)
 
     schema_type = sys.argv[1]
@@ -187,9 +187,9 @@ def main():
             _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
             print(f"OK: {filepath.name}")
         else:
-            print(f"ERRORS in {filepath.name}:")
+            print(f"✗ Errors in {filepath.name}:", file=sys.stderr)
             for e in errors:
-                print(f"  {e}")
+                print(f"  {e}", file=sys.stderr)
             sys.exit(1)
         return
 

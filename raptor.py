@@ -749,7 +749,7 @@ def _run_script(script_path: Path, args: list) -> int:
         )
         return result.returncode
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         # Mark any active run as cancelled. Pre-fix Ctrl-C
         # left runs in `status="in_progress"` forever — the
         # next /scan or /agentic invocation saw a stale
@@ -865,7 +865,7 @@ def mode_sca(args: list) -> int:
         result = subprocess.run(cmd, env=env)
         return result.returncode
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         return 130
     except Exception as e:
         print(f"\n✗ Error running raptor-sca: {e}", file=sys.stderr)
@@ -902,7 +902,7 @@ def mode_binary(args: list) -> int:
     try:
         return subprocess.call([str(wrapper), *args], env=env)
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         return 130
     except Exception as exc:
         print(f"\n✗ Error running raptor-binary: {exc}", file=sys.stderr)
@@ -1379,7 +1379,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         sys.exit(130)
     except Exception as e:
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)

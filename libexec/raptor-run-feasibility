@@ -31,7 +31,8 @@ def main():
     if len(sys.argv) < 4:
         print(
             f"Usage: {sys.argv[0]} <binary_path> <findings.json> "
-            f"<output_dir> [--vuln-type <type>] [--target <path>]"
+            f"<output_dir> [--vuln-type <type>] [--target <path>]",
+            file=sys.stderr,
         )
         sys.exit(1)
 
@@ -94,11 +95,11 @@ def main():
         try:
             fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
         except OSError as e:
-            print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock")
+            print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock", file=sys.stderr)
 
         findings_data = load_json(findings_path)
         if not findings_data:
-            print("ERROR: cannot load findings")
+            print("✗ Cannot load findings", file=sys.stderr)
             sys.exit(1)
 
         # Find findings that reference this binary

@@ -48,7 +48,11 @@ def main() -> int:
     except ImportError:
         return 0
 
-    ctx = json.loads(ctx_path.read_text())
+    try:
+        ctx = json.loads(ctx_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"✗ Cannot read context-map: {e}", file=sys.stderr)
+        return 1
     search_dirs = [workdir, workdir.parent]
 
     target_path = None
