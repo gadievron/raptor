@@ -1577,8 +1577,8 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
 
     Cleanup rules (per pack):
       - Always remove: .exit, .json, empty .stderr.log
-      - On exit==0: also remove .sarif
-      - On exit!=0: keep .exit, keep non-empty .stderr.log, keep .sarif if
+      - On exit in (0, 1): also remove .sarif (semgrep returns 1 on findings)
+      - On exit>=2: keep .exit, keep non-empty .stderr.log, keep .sarif if
         it has findings; delete the .sarif if it is empty/zero-results
         (still redundant — combined.sarif holds those results too)
 

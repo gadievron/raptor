@@ -166,12 +166,10 @@ def refine_npm_verdicts(
         for fn in funcs:
             qualified = _qualified_name(d.name, fn)
             if qualified is None:
-                skipped += 1
                 continue
             try:
                 paired.append((fn, function_called(inventory, qualified)))
             except ValueError:
-                skipped += 1
                 continue
 
         if not paired:
@@ -200,17 +198,14 @@ def refine_npm_verdicts(
         elif Verdict.UNCERTAIN in verdicts:
             continue
         else:
-            analyzed = len(results)
-            conf = "medium" if skipped > 0 else "high"
             out[d.key()] = Reachability(
                 verdict="not_function_reachable",
                 confidence=Confidence(
-                    conf,
+                    "high",
                     reason=(
-                        f"npm dep imported but {analyzed} of "
-                        f"{len(funcs)} OSV-listed affected "
-                        f"function(s) checked are not called "
-                        f"from non-test JS / TS source"
+                        f"npm dep imported but the {len(paired)} "
+                        f"OSV-listed affected function(s) are not "
+                        f"called from non-test JS / TS source"
                     ),
                 ),
                 evidence=[],

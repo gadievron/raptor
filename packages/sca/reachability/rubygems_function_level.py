@@ -154,7 +154,7 @@ def refine_rubygems_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"gem imported but the {len(results)} "
+                        f"gem imported but the {len(paired)} "
                         f"OSV-listed affected symbol(s) are not called "
                         f"from non-test Ruby source"
                     ),

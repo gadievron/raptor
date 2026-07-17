@@ -228,7 +228,7 @@ def refine_pypi_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"dep imported but the {len(results)} OSV-listed "
+                        f"dep imported but the {len(paired)} OSV-listed "
                         f"affected function(s) are not called from "
                         f"non-test project source"
                     ),

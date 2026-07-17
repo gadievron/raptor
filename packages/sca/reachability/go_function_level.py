@@ -241,7 +241,7 @@ def refine_go_verdicts(
                     "high",
                     reason=(
                         f"Go module imported but the "
-                        f"{len(results)} OSV-listed "
+                        f"{len(paired)} OSV-listed "
                         f"affected symbol(s) are not called from "
                         f"non-test Go source"
                     ),
