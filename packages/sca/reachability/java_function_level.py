@@ -170,7 +170,7 @@ def refine_maven_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )

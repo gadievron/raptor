@@ -302,7 +302,7 @@ class AutonomousCodeQLAnalyzer:
 
         try:
             from core.inventory.lookup import lookup_function
-            from core.inventory.reach_audit import classify_reachability
+            from core.analysis.reach_audit import classify_reachability
         except ImportError:
             return None
 
@@ -1088,7 +1088,7 @@ class AutonomousCodeQLAnalyzer:
         self.logger.info(f"🤖 AUTONOMOUS ANALYSIS: {finding.rule_id}")
 
         # Stage 1a: Reachability prefilter. The
-        # ``core.inventory.reachability`` resolver answers "is the
+        # ``core.analysis.reachability`` resolver answers "is the
         # function CONTAINING this sink reached from anywhere in
         # the project?" When the answer is ``"not_called"`` the
         # sink is in dead code — the multi-second LLM analyses
@@ -1110,7 +1110,7 @@ class AutonomousCodeQLAnalyzer:
         # empties the earned set so nothing is hard-suppressed in the
         # in-isolation review mode.
         if reachability_verdict:
-            from core.inventory.reach_witness import (
+            from core.analysis.reach_witness import (
                 STRUCTURALLY_SUPPRESSIBLE_KINDS,
                 verdict_from_classification,
             )
@@ -1131,7 +1131,7 @@ class AutonomousCodeQLAnalyzer:
             # can correlate suppressions across both consumers from
             # a single per-run JSONL. Best-effort; never blocks.
             try:
-                from core.inventory.reach_chokepoint import (
+                from core.analysis.reach_chokepoint import (
                     record_suppression,
                 )
                 # The codeql analyzer's out_dir lives on the broader

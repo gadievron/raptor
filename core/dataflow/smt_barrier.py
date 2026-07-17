@@ -883,11 +883,11 @@ def _value_bound_dominates(
     if not (file_path and cwe and language):
         return None
 
-    from core.inventory.finding_resolver import (
+    from core.analysis.finding_resolver import (
         ResolvedFinding,
         resolve_finding,
     )
-    from core.inventory.sanitizer_cut import (
+    from core.analysis.sanitizer_cut import (
         VERDICT_NO_SUPPRESS,
         VERDICT_SUPPRESS,
         evaluate_finding,

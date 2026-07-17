@@ -1,7 +1,7 @@
 """Host-function reachability check used by every per-ecosystem
 function-level reachability module.
 
-When ``core.inventory.reachability.function_called`` says the
+When ``core.analysis.reachability.function_called`` says the
 project demonstrably calls an OSV-affected dep function, that
 verdict says nothing about whether the call site itself is
 reachable from any externally-callable project entry. If every
@@ -68,7 +68,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
-from core.inventory.reachability import (
+from core.analysis.reachability import (
     InternalFunction,
     callers_of,
     enclosing_function,
@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 
 # ``enclosing_function`` and ``parse_evidence_entry`` were
 # originally defined here. They've moved to the substrate
-# (core.inventory.reachability) so /validate, /agentic, and
+# (core.analysis.reachability) so /validate, /agentic, and
 # /understand can share one implementation. Re-exported above so
 # any downstream consumer that imports them from here keeps
 # working without churn.

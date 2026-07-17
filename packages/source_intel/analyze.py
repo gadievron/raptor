@@ -1853,7 +1853,7 @@ def _enclosing_function_via_inventory(
     if inv is None:
         return None
     try:
-        from core.inventory.reachability import enclosing_function as _inv_enc
+        from core.analysis.reachability import enclosing_function as _inv_enc
     except ImportError:
         return None
     # Inventory keys files by the relative path from the target dir.

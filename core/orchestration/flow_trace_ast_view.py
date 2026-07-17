@@ -125,7 +125,7 @@ def enrich_with_ast_view(
 
     try:
         from core.ast import view
-        from core.inventory.reachability import enclosing_function
+        from core.analysis.reachability import enclosing_function
     except ImportError:
         return 0
 
@@ -191,7 +191,7 @@ def _parse_definition(definition: str) -> Optional[Tuple[str, int]]:
     Returns None for unparseable input — module-level entries (no
     line), external references (no file:line), or malformed strings.
     The line must be a positive integer; zero is rejected because
-    ``core.inventory.reachability.enclosing_function`` requires
+    ``core.analysis.reachability.enclosing_function`` requires
     ``line >= 1``.
     """
     m = _DEFINITION_RE.match(definition.strip())

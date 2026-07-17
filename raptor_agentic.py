@@ -1665,7 +1665,7 @@ Examples:
     # layering, RaptorConfig mutation, and the no-leak-across-runs
     # guarantee — lives in the shared CLI helper. raptor_codeql.py
     # uses the same call site to keep behaviour aligned.
-    from core.inventory.binary_oracle_cli import apply_to_config
+    from core.analysis.binary_oracle_cli import apply_to_config
     apply_to_config(args, Path(args.repo))
 
     workflow_start = time.time()
@@ -1866,7 +1866,7 @@ Examples:
     # ========================================================================
     # PRE-PASS: reachability — always-on companion to /understand.
     # Marks dead-code functions priority=low in the agentic checklist using
-    # core.inventory.reachability. Runs regardless of --understand because
+    # core.analysis.reachability. Runs regardless of --understand because
     # the agentic LLM analysis prompt reads priority/priority_reason and
     # benefits from the dead-code signal even without context-map upgrades.
     # The returned inventory is threaded through to downstream consumers

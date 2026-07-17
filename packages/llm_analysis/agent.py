@@ -2125,7 +2125,7 @@ class AutonomousSecurityAgentV2:
                 reach_skipped_this = False
                 if checklist:
                     try:
-                        from core.inventory.reach_chokepoint import (
+                        from core.analysis.reach_chokepoint import (
                             check_suppress,
                         )
                         rel = (finding.get("file_path")
@@ -2159,7 +2159,7 @@ class AutonomousSecurityAgentV2:
                             # walking each per-finding annotation.
                             # Best-effort; never blocks.
                             try:
-                                from core.inventory.reach_chokepoint \
+                                from core.analysis.reach_chokepoint \
                                     import record_suppression
                                 record_suppression(
                                     self.out_dir,

@@ -291,7 +291,7 @@ def test_clean_python_no_dead_scope():
 def test_builder_tags_lexical_dead(tmp_path):
     import tempfile
     from core.inventory.builder import build_inventory
-    from core.inventory.reachability import is_lexically_dead
+    from core.analysis.reachability import is_lexically_dead
 
     (tmp_path / "mod.py").write_text(
         "if False:\n"

@@ -49,7 +49,7 @@ from typing import (
 LABEL_SHOULD_SUPPRESS = "should_suppress"
 LABEL_SHOULD_NOT_SUPPRESS = "should_not_suppress"
 
-# Value-bound verdict surface (mirrors core.inventory.sanitizer_cut),
+# Value-bound verdict surface (mirrors core.analysis.sanitizer_cut),
 # duplicated as string constants so this module doesn't import the
 # inventory package at import time.
 VERDICT_SUPPRESS = "suppress"
@@ -173,11 +173,11 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
     to import for callers that only aggregate existing records.
     """
     try:
-        from core.inventory.finding_resolver import (
+        from core.analysis.finding_resolver import (
             ResolvedFinding,
             resolve_finding,
         )
-        from core.inventory.sanitizer_cut import evaluate_finding
+        from core.analysis.sanitizer_cut import evaluate_finding
     except ImportError:                                     # pragma: no cover
         return VERDICT_UNRESOLVED
     resolved = resolve_finding(finding)

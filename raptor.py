@@ -13,7 +13,7 @@ Usage:
     raptor.py <mode> [options]
 
 Available Modes:
-    scan        - Static code analysis with Semgrep
+    scan        - Static code analysis (Semgrep + CodeQL)
     sca         - Software Composition Analysis (deps + advisories + SBOM)
     binary      - Black-box binary investigation and evidence collection
     fuzz        - Binary fuzzing with AFL++
@@ -21,6 +21,7 @@ Available Modes:
     agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
     codeql      - CodeQL-only analysis
     analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+    describe    - Describe target structure and entry points
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
     zkpox       - ZKPoX disclosure bundles + proofs (beta).

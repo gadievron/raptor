@@ -148,7 +148,7 @@ class TestResolverFailureFallsBackToLexical:
             raise RuntimeError("resolver blew up mid-run")
 
         monkeypatch.setattr(
-            "core.inventory.finding_resolver.resolve_finding", _boom,
+            "core.analysis.finding_resolver.resolve_finding", _boom,
         )
         # The value-bound side raises internally; the gate swallows it
         # (vb=None) and the lexical fallback decides — the guard-and-exit
@@ -182,7 +182,7 @@ class TestResolverFailureFallsBackToLexical:
             raise RuntimeError("evaluator blew up mid-run")
 
         monkeypatch.setattr(
-            "core.inventory.sanitizer_cut.evaluate_finding", _boom,
+            "core.analysis.sanitizer_cut.evaluate_finding", _boom,
         )
         # Must not propagate the RuntimeError; vb=None → lexical decides
         # (this non-guard shape isn't lexically dominated → False).

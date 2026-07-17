@@ -46,7 +46,7 @@ from typing import Any, Dict, Literal, Set, Tuple
 # ``_METHOD_TRAILING_QUALS`` live in ``binary_oracle`` so the classifier
 # can demangle DWARF linkage names with the same logic. Re-exported here
 # for any external importer.
-from ..binary_oracle import (  # noqa: F401  (re-export)
+from core.analysis.binary_oracle import (  # noqa: F401  (re-export)
     _demangle_linkage_names,
     _find_arglist_open,
     _METHOD_TRAILING_QUALS,

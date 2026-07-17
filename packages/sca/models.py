@@ -225,7 +225,7 @@ ReachabilityVerdict = Literal[
                        # in a project function that IS reachable — the call
                        # sits on a live execution path. (Go function-level
                        # when OSV ships symbols; PyPI function-level via
-                       # core.inventory.reachability)
+                       # core.analysis.reachability)
 ]
 
 

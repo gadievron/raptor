@@ -116,11 +116,11 @@ class TestDetectFixture:
     def test_fixture_path_with_called_verdict_yields_false(self):
         # Path matches BUT reachability says CALLED — production
         # caller exists, so D-5 must NOT fire.
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(
                 verdict=Verdict.CALLED,
                 evidence=(("src/api/main.py", 42),),
@@ -142,11 +142,11 @@ class TestDetectFixture:
         assert "src/api/main.py:42" in reach.checked_against
 
     def test_fixture_path_with_not_called_verdict_yields_true(self):
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(verdict=Verdict.NOT_CALLED),
         ):
             v = detect_fixture(
@@ -162,11 +162,11 @@ class TestDetectFixture:
         assert reach.result == "not_reachable_from_prod"
 
     def test_fixture_path_with_uncertain_yields_candidate(self):
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(
                 verdict=Verdict.UNCERTAIN,
                 uncertain_reasons=(("src/dynamic.py", "getattr"),),
@@ -192,7 +192,7 @@ class TestDetectFixture:
         # must NOT crash; verdict falls to candidate so LLM can
         # verify.
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             side_effect=ValueError("bad qname"),
         ):
             v = detect_fixture(
@@ -233,12 +233,12 @@ class TestDetectFixture:
         # Reachability returns 100 evidence sites — fixture
         # detection caps the surface so on-disk evidence stays
         # bounded.
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         many_sites = tuple(("src/f.py", i) for i in range(100))
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(
                 verdict=Verdict.CALLED, evidence=many_sites,
             ),
