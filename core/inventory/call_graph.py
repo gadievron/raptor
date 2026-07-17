@@ -43,7 +43,7 @@ at any filesystem outside the source tree. String-shape only.
 Languages today: Python (stdlib ``ast``) + JavaScript /
 TypeScript + Go + Java (all tree-sitter-driven for non-Python;
 gracefully empty when the grammar isn't installed). The resolver
-in :mod:`core.inventory.reachability` is language-agnostic.
+in :mod:`core.analysis.reachability` is language-agnostic.
 """
 
 from __future__ import annotations
@@ -252,7 +252,7 @@ class FileCallGraph:
     # resolved at extraction time — the package root depends on the
     # file's location in the inventory tree, which the per-file
     # extractor doesn't know. The resolver in
-    # :mod:`core.inventory.reachability` consumes these to model
+    # :mod:`core.analysis.reachability` consumes these to model
     # ``__init__.py`` re-exports.
     relative_imports: List[Tuple[int, str, str, Optional[str]]] = field(
         default_factory=list,

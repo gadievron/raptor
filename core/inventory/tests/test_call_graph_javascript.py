@@ -4,7 +4,7 @@ The Python extractor's tests in ``test_call_graph.py`` cover the
 language-agnostic shape of ``FileCallGraph``; here we pin the
 JS-specific data shapes (ESM imports, CommonJS require,
 destructured require, dynamic import, bracket dispatch, eval).
-The resolver in :mod:`core.inventory.reachability` is unchanged —
+The resolver in :mod:`core.analysis.reachability` is unchanged —
 it just consumes the per-file dicts emitted by either extractor.
 """
 
@@ -274,7 +274,7 @@ def test_resolver_called_against_js_data():
     just like Python's. Synthesise an inventory entry from the JS
     extractor and verify ``function_called`` returns CALLED for a
     matching qualified name."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_javascript(
         "import lodash from 'lodash';\n"
@@ -294,7 +294,7 @@ def test_resolver_called_against_js_data():
 def test_resolver_uncertain_on_eval():
     """File uses eval AND mentions the target tail name (via a
     bracket-string literal) → UNCERTAIN."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_javascript(
         "import lodash from 'lodash';\n"
@@ -314,7 +314,7 @@ def test_resolver_uncertain_on_eval():
 
 def test_resolver_not_called_when_function_unused():
     """JS file imports lodash but never calls .get."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_javascript(
         "import lodash from 'lodash';\n"

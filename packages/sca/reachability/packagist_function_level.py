@@ -113,7 +113,7 @@ def refine_packagist_verdicts(
             )
             return
 
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     for d in candidates:
         qualified_names = packagist_symbol_map[d.key()]

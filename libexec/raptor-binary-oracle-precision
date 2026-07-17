@@ -22,6 +22,6 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
-from core.inventory.binary_oracle_precision import main  # noqa: E402
+from core.analysis.binary_oracle_precision import main  # noqa: E402
 
 sys.exit(main())

@@ -367,7 +367,7 @@ def test_clean_python_file_returns_none():
 def test_builder_records_abort_field(tmp_path):
     import tempfile
     from core.inventory.builder import build_inventory
-    from core.inventory.reachability import module_aborts_on_load
+    from core.analysis.reachability import module_aborts_on_load
 
     (tmp_path / "disabled.py").write_text(
         "raise ImportError('disabled')\n"

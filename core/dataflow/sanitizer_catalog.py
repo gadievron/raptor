@@ -10,7 +10,7 @@ sanitizers; this module adds two things on top:
    identifier (the shape every static analyser emits) can be matched
    against the catalogue's sink-class keys.
 2. A recognizer :func:`match_sanitizers_in_cfg` that walks a CFG
-   produced by :mod:`core.inventory.cfg_builder` and returns the set
+   produced by :mod:`core.analysis.cfg_builder` and returns the set
    of nodes whose statement-level calls (or, for the C/C++ call
    graph, whose own function name) are catalogue sanitizers for the
    given CWE + language.
@@ -214,7 +214,7 @@ def _node_calls(node: N) -> Iterable[str]:
     legacy projection used when the node has no Phase-1 ``call_sites``.
 
     Duck-typed for both producers from
-    :mod:`core.inventory.cfg_builder`:
+    :mod:`core.analysis.cfg_builder`:
 
     * :class:`PyCFGNode` — ``calls`` field, frozen set of statement-
       level call names.
@@ -236,7 +236,7 @@ def match_sanitizers_in_cfg(
     correspond to catalog-matched sanitizer calls in ``graph`` for
     ``cwe`` + ``language``.
 
-    The graph must satisfy :class:`core.inventory.dominators.Graph`
+    The graph must satisfy :class:`core.analysis.dominators.Graph`
     (``nodes()`` available). Each binding carries the node, the
     matched callable, the call's input/output symbols (from Phase
     1's :class:`CallSite`), and the call's line number. Multiple
