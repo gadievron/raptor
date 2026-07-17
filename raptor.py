@@ -783,7 +783,7 @@ def _run_script(script_path: Path, args: list) -> int:
         # alongside the message so logs show the failure shape
         # without needing a traceback.
         print(f"\n✗ Error running {script_path.name}: "
-              f"{type(e).__name__}: {e}")
+              f"{type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
 

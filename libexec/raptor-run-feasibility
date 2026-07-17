@@ -91,102 +91,103 @@ def main():
     import fcntl
     findings_lock_fh = open(findings_path, "rb")
     try:
-        fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
-    except OSError as e:
-        print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock")
+        try:
+            fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
+        except OSError as e:
+            print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock")
 
-    findings_data = load_json(findings_path)
-    if not findings_data:
-        print("ERROR: cannot load findings")
-        sys.exit(1)
+        findings_data = load_json(findings_path)
+        if not findings_data:
+            print("ERROR: cannot load findings")
+            sys.exit(1)
 
-    # Find findings that reference this binary
-    group = [
-        f for f in findings_data.get("findings", [])
-        if f.get("feasibility", {}).get("binary_path") == binary_path
-        and f.get("status") != "disproven"
-        and f.get("ruling", {}).get("status") != "ruled_out"
-    ]
+        # Find findings that reference this binary
+        group = [
+            f for f in findings_data.get("findings", [])
+            if f.get("feasibility", {}).get("binary_path") == binary_path
+            and f.get("status") != "disproven"
+            and f.get("ruling", {}).get("status") != "ruled_out"
+        ]
 
-    if not group:
-        print(f"No findings reference binary: {binary_path}")
-        return
+        if not group:
+            print(f"No findings reference binary: {binary_path}")
+            return
 
-    # Determine vuln_type from first finding if not specified
-    if not vuln_type:
-        vuln_type = group[0].get("vuln_type", "")
+        # Determine vuln_type from first finding if not specified
+        if not vuln_type:
+            vuln_type = group[0].get("vuln_type", "")
 
-    print(f"Analyzing {binary_path} ({len(group)} finding(s), vuln_type={vuln_type})")
+        print(f"Analyzing {binary_path} ({len(group)} finding(s), vuln_type={vuln_type})")
 
-    from packages.exploit_feasibility import (
-        save_exploit_context,
-        load_exploit_context,
-        map_findings_to_constraints,
-    )
-
-    # Run analysis and save context in one call (avoids duplicate analysis)
-    context_file = save_exploit_context(binary_path, output_dir=output_dir, vuln_type=vuln_type)
-    print(f"  Context saved: {context_file}")
-
-    # Load context for mapping
-    constraints = load_exploit_context(context_file)
-    result = constraints
-    print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}")
-    print("  Mapping per-finding verdicts (vuln-type-aware)...")
-    mapped = map_findings_to_constraints(
-        [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
-        constraints,
-    )
-
-    # Update findings with feasibility data
-    by_id = {f["id"]: f for f in findings_data.get("findings", [])}
-    for assessment in mapped:
-        finding = by_id.get(assessment.finding_id)
-        if finding:
-            finding["feasibility"] = {
-                "status": "analyzed",
-                "binary_path": binary_path,
-                "context_file": str(context_file),
-                "verdict": assessment.verdict,
-                "impact": assessment.impact,
-                "blockers": assessment.blockers,
-                "chain_breaks": result.get("chain_breaks", []),
-                "what_would_help": result.get("what_would_help", []),
-                "notes": assessment.notes,
-                "exploitation_paths": [
-                    {"technique": p.technique, "target": p.target}
-                    for p in (assessment.exploitation_paths or [])
-                ],
-            }
-            finding["stage_e_summary"] = {
-                "verdict": assessment.verdict,
-                "binary_path": binary_path,
-                "impact": assessment.impact,
-            }
-            print(f"  {finding['id']}: {assessment.verdict}")
-
-    # --- Empirical mitigation map (PR #609 consumer) ---
-    # Only attempt when ``--target`` was supplied — without a
-    # source root we can't resolve ``finding.file`` to an on-disk
-    # file. Silent skip per-finding when source or witness is
-    # missing; the static feasibility verdict above is the
-    # baseline either way.
-    if target_path is not None:
-        _enrich_with_empirical_mitigation_map(
-            group=group,
-            findings_data=findings_data,
-            output_dir=Path(output_dir),
-            target_path=target_path,
+        from packages.exploit_feasibility import (
+            save_exploit_context,
+            load_exploit_context,
+            map_findings_to_constraints,
         )
 
-    save_json(findings_path, findings_data)
-    # Release the advisory flock by closing the lock handle.
-    try:
-        fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_UN)
-    except OSError:
-        pass
-    findings_lock_fh.close()
-    print(f"Updated {len(mapped)} finding(s)")
+        # Run analysis and save context in one call (avoids duplicate analysis)
+        context_file = save_exploit_context(binary_path, output_dir=output_dir, vuln_type=vuln_type)
+        print(f"  Context saved: {context_file}")
+
+        # Load context for mapping
+        constraints = load_exploit_context(context_file)
+        result = constraints
+        print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}")
+        print("  Mapping per-finding verdicts (vuln-type-aware)...")
+        mapped = map_findings_to_constraints(
+            [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
+            constraints,
+        )
+
+        # Update findings with feasibility data
+        by_id = {f["id"]: f for f in findings_data.get("findings", [])}
+        for assessment in mapped:
+            finding = by_id.get(assessment.finding_id)
+            if finding:
+                finding["feasibility"] = {
+                    "status": "analyzed",
+                    "binary_path": binary_path,
+                    "context_file": str(context_file),
+                    "verdict": assessment.verdict,
+                    "impact": assessment.impact,
+                    "blockers": assessment.blockers,
+                    "chain_breaks": result.get("chain_breaks", []),
+                    "what_would_help": result.get("what_would_help", []),
+                    "notes": assessment.notes,
+                    "exploitation_paths": [
+                        {"technique": p.technique, "target": p.target}
+                        for p in (assessment.exploitation_paths or [])
+                    ],
+                }
+                finding["stage_e_summary"] = {
+                    "verdict": assessment.verdict,
+                    "binary_path": binary_path,
+                    "impact": assessment.impact,
+                }
+                print(f"  {finding['id']}: {assessment.verdict}")
+
+        # --- Empirical mitigation map (PR #609 consumer) ---
+        # Only attempt when ``--target`` was supplied — without a
+        # source root we can't resolve ``finding.file`` to an on-disk
+        # file. Silent skip per-finding when source or witness is
+        # missing; the static feasibility verdict above is the
+        # baseline either way.
+        if target_path is not None:
+            _enrich_with_empirical_mitigation_map(
+                group=group,
+                findings_data=findings_data,
+                output_dir=Path(output_dir),
+                target_path=target_path,
+            )
+
+        save_json(findings_path, findings_data)
+        print(f"Updated {len(mapped)} finding(s)")
+    finally:
+        try:
+            fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        findings_lock_fh.close()
 
 
 def _enrich_with_empirical_mitigation_map(

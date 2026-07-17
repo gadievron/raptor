@@ -174,7 +174,8 @@ def _stamp_file(path: Path, ref: Dict[str, Any]) -> int:
     else:  # dict-wrapped
         out = json.dumps(data, indent=2, sort_keys=False, default=str) + "\n"
     try:
-        path.write_text(out, encoding="utf-8")
+        from core.atomic_fs import write_text_atomically
+        write_text_atomically(path, out)
     except OSError as e:
         logger.warning(f"stamp_findings: write failed {path}: {e}")
         return -1

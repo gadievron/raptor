@@ -248,7 +248,11 @@ class FuzzingTelemetry:
             if self._events_fp:
                 self._events_fp.close()
                 self._events_fp = None
-            self.summary_path.write_text(json.dumps(self.stats.to_dict(), indent=2, default=str))
+            from core.atomic_fs import write_text_atomically
+            write_text_atomically(
+                self.summary_path,
+                json.dumps(self.stats.to_dict(), indent=2, default=str),
+            )
             logger.info(
                 f"Fuzzing campaign complete: {self.stats.duration_s:.1f}s, "
                 f"{self.stats.total_executions} execs, "

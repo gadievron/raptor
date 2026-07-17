@@ -44,6 +44,20 @@ from typing import Any, Dict, FrozenSet, Mapping, Optional, Tuple
 SCHEMA_VERSION = 1
 
 
+def _coerce_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 SEMANTICS_SQL_ESCAPE = "sql_escape"
 SEMANTICS_HTML_ESCAPE = "html_escape"
 SEMANTICS_URL_ALLOWLIST = "url_allowlist"
@@ -181,9 +195,9 @@ class CandidateValidator:
             qualified_name=data["qualified_name"],
             semantics_tag=data["semantics_tag"],
             semantics_text=data["semantics_text"],
-            confidence=float(data["confidence"]),
+            confidence=_coerce_float(data.get("confidence", 0)),
             source_file=data["source_file"],
-            source_line=int(data["source_line"]),
+            source_line=_coerce_int(data.get("source_line", 0)),
             extraction_provenance=data["extraction_provenance"],
         )
 
@@ -236,7 +250,7 @@ class StepAnnotation:
     def from_dict(cls, data: Mapping[str, Any]) -> "StepAnnotation":
         _check_extra_fields("StepAnnotation", data, _STEP_ANNOTATION_KEYS)
         return cls(
-            step_index=int(data["step_index"]),
+            step_index=_coerce_int(data.get("step_index", 0)),
             on_path_validators=tuple(data.get("on_path_validators", [])),
             variables_referenced=tuple(data.get("variables_referenced", [])),
             inlined_helpers=tuple(data.get("inlined_helpers", [])),

@@ -969,6 +969,14 @@ class ModelScorecard:
             lock_path = path.with_suffix(path.suffix + ".lock")
             self.lock_fh = open(lock_path, "a+", encoding="utf-8")
             try:
+                return self._enter_under_lock(path, lock_path)
+            except BaseException:
+                self.lock_fh.close()
+                self.lock_fh = None
+                raise
+
+        def _enter_under_lock(self, path, lock_path):
+            try:
                 fcntl.flock(
                     self.lock_fh.fileno(),
                     fcntl.LOCK_EX if self.write else fcntl.LOCK_SH,

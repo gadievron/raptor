@@ -1612,11 +1612,11 @@ Examples:
             # top-level handler so the operator gets the actionable message.
             raise
         except subprocess.TimeoutExpired:
-            print("  Git initialization timed out")
+            print("  ✗ Git initialisation timed out", file=sys.stderr)
             logger.error("Git init timeout")
             sys.exit(1)
         except FileNotFoundError:
-            print("  Git is not installed. Please install git and try again.")
+            print("  ✗ Git is not installed. Please install git and try again.", file=sys.stderr)
             logger.error("Git not found in PATH")
             sys.exit(1)
         except Exception as e:
@@ -2310,7 +2310,7 @@ Examples:
             normalized_path.write_text(_json.dumps(normalized_sarif, indent=2))
             all_sarif_files.append(normalized_path)
         elif not all_sarif_files:
-            print("\n✗ No findings in imported SARIF and no scan results")
+            print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
             sys.exit(1)
 
     if not all_sarif_files:

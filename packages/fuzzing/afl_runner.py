@@ -451,38 +451,18 @@ class AFLRunner:
             stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
             (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n")
 
-            # Intentionally bare Popen — AFL fuzz daemon is long-running and
-            # needs streaming output. Cannot use sandbox_run (blocks until exit).
-            #
-            # `stdout=DEVNULL` instead of `PIPE`. Pre-fix both
-            # streams went to PIPE buffers without ANY drainer
-            # thread consuming them while AFL ran. AFL's
-            # status-screen writes to stdout periodically; after
-            # roughly the OS-default 64KB pipe buffer filled, the
-            # next write blocked AFL waiting for a reader — the
-            # whole fuzzing daemon stalled silently with no
-            # error visible to the operator (process showed as
-            # alive but execs/sec dropped to 0). The stall could
-            # last hours before the operator noticed in the
-            # status dashboard.
-            #
-            # stdout=DEVNULL discards the (verbose, redundant
-            # with our own status capture) AFL output without
-            # buffer-fill risk. stderr stays PIPE because:
-            #  (1) it's much lower volume — AFL only writes to
-            #      stderr on startup errors and shutdown,
-            #  (2) the post-exit `proc.communicate(timeout=1)`
-            #      below collects it for diagnostic logging
-            #      (the shmget / SHM-config error messages
-            #      operators rely on for setup troubleshooting).
-            # 64KB stderr pre-exit is plenty for either case.
-            proc = subprocess.Popen(
-                cmd,
-                stdout=stdout_fp,
-                stderr=stderr_fp,
-                text=True,
-                env=afl_env,
-            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=stdout_fp,
+                    stderr=stderr_fp,
+                    text=True,
+                    env=afl_env,
+                )
+            except Exception:
+                stdout_fp.close()
+                stderr_fp.close()
+                raise
             processes.append({
                 "name": instance_name,
                 "proc": proc,

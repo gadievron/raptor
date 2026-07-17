@@ -1319,9 +1319,9 @@ def main():
         if result.cached:
             print("(from cache)")
     else:
-        print("\n✗ Database creation failed")
+        print("\n✗ Database creation failed", file=sys.stderr)
         for error in result.errors:
-            print(f"  {error}")
+            print(f"  {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":
