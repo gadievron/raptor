@@ -195,7 +195,7 @@ def _download_and_extract(
 def _fetch(url: str, http: HttpClient) -> Optional[bytes]:
     """Download a URL, returning None on failure or oversize."""
     try:
-        data = http.get(url, timeout=30)
+        data = http.get_bytes(url, timeout=30)
     except Exception:  # noqa: BLE001
         logger.debug("sca.llm.version_diff: fetch failed for %s", url)
         return None
@@ -211,9 +211,7 @@ def _fetch_pypi_wheel(dep: Dependency, http: HttpClient) -> Optional[bytes]:
         return None
     json_url = f"https://pypi.org/pypi/{dep.name}/{dep.version}/json"
     try:
-        import json as _json
-        raw = http.get(json_url, timeout=15)
-        meta = _json.loads(raw)
+        meta = http.get_json(json_url, timeout=15)
         urls = meta.get("urls", [])
         wheels = [u for u in urls if u.get("packagetype") == "bdist_wheel"]
         if not wheels:
@@ -231,11 +229,9 @@ def _fetch_pypi_wheel(dep: Dependency, http: HttpClient) -> Optional[bytes]:
 
 def _download_composer(dep: Dependency, http: HttpClient) -> Optional[Dict[str, str]]:
     """Resolve Composer archive URL from packagist and extract."""
-    import json as _json
     meta_url = f"https://repo.packagist.org/p2/{dep.name.lower()}.json"
     try:
-        raw = http.get(meta_url, timeout=15)
-        meta = _json.loads(raw)
+        meta = http.get_json(meta_url, timeout=15)
         packages = meta.get("packages", {}).get(dep.name.lower(), [])
         match = next(
             (p for p in packages if p.get("version") == dep.version), None,

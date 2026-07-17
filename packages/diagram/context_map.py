@@ -19,6 +19,14 @@ from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 _C0_RE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]")
 
 
+def _addr(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, int):
+        return hex(v)
+    return str(v)
+
+
 def _node_id(prefix: str, index: int) -> str:
     return f"{prefix}{index:03d}"
 
@@ -56,7 +64,7 @@ def _sink_label(sink: dict[str, Any]) -> str:
 def _location_text(item: dict[str, Any], *, compact_binary: bool = False) -> str:
     file_ref = str(item.get("file") or "")
     line_ref = item.get("line")
-    address = str(item.get("address") or "")
+    address = _addr(item.get("address"))
     if compact_binary and file_ref:
         file_ref = Path(file_ref).name
     if file_ref and line_ref not in (None, ""):
@@ -174,7 +182,7 @@ def generate(data: dict[str, Any]) -> str:
             fn = functions_by_id.get(source_id)
             if not fn:
                 continue
-            if str(fn.get("address") or "") in entry_by_address:
+            if _addr(fn.get("address")) in entry_by_address:
                 continue
             candidate_function_nodes[source_id] = fn
 
@@ -272,7 +280,7 @@ def generate(data: dict[str, Any]) -> str:
         fn = functions_by_id.get(source_id)
         if not fn:
             continue
-        src_id = entry_by_address.get(str(fn.get("address") or ""), _sid(source_id))
+        src_id = entry_by_address.get(_addr(fn.get("address")), _sid(source_id))
         sink_id = _sid(flow.get("sink", "?"))
         relationship = _text(flow.get("relationship") or "candidate")
         add_edge(f'    {src_id} -. "{relationship} candidate" .-> {sink_id}')

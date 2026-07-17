@@ -463,6 +463,13 @@ def _scope_from_msbuild(el) -> str:
 
 @register(filenames=["packages.config"])
 def parse_packages_config(path: Path) -> List[Dependency]:
+    if not _AVAILABLE:
+        logger.warning(
+            "sca.parsers.nuget: skipping %s — 'defusedxml' not "
+            "installed; refusing to parse target-repo XML with the "
+            "stdlib parser (XXE / billion-laughs exposure)", path,
+        )
+        return []
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as e:

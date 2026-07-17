@@ -112,7 +112,7 @@ def _address(value: Any) -> str:
 
 def _fn_id(prefix: str, fn: Any) -> str:
     address = getattr(fn, "address", None)
-    if address:
+    if address is not None:
         return f"{prefix}-{int(address):x}"
     name = getattr(fn, "name", "unknown")
     digest = hashlib.sha256(str(name).encode("utf-8", "surrogateescape")).hexdigest()[:12]
@@ -312,7 +312,7 @@ def _runtime_input_flows(
         if kind is None or (not caller and not caller_offset):
             continue
         try:
-            if caller_offset and context.image_base:
+            if caller_offset:
                 caller_addr = int(context.image_base) + int(caller_offset, 16)
             else:
                 caller_addr = int(caller, 16)
@@ -402,10 +402,10 @@ def _runtime_parser_flows(
             if frame.get("module") and str(frame.get("module")) != target_module_name:
                 continue
             try:
-                if frame.get("module_offset") and context.image_base:
+                if frame.get("module_offset"):
                     address = int(context.image_base) + int(str(frame["module_offset"]), 16)
                 else:
-                    address = int(str(frame.get("address") or ""), 16)
+                    address = int(_address(frame.get("address")) or "0", 16)
             except ValueError:
                 continue
             function = _find_containing_function(address, sorted_addrs, sorted_fns)
@@ -428,7 +428,7 @@ def _runtime_parser_flows(
         if parser_surface is None or (not caller and not caller_offset):
             continue
         try:
-            if caller_offset and context.image_base:
+            if caller_offset:
                 caller_addr = int(context.image_base) + int(caller_offset, 16)
             else:
                 caller_addr = int(caller, 16)
@@ -541,7 +541,7 @@ def _call_graph_edges(
         bound_id = str(ingress.get("bound_function_id") or "")
         if bound_id in functions_by_id:
             return functions_by_id[bound_id]
-        address = str(ingress.get("address") or "")
+        address = _address(ingress.get("address"))
         name = str(ingress.get("bound_function_name") or ingress.get("name") or "")
         return next(
             (
@@ -1368,7 +1368,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "external_ingress",
             ingress["id"],
             name=ingress["name"],
-            address=ingress.get("address") or "",
+            address=_address(ingress.get("address")),
             props=ingress,
             evidence_ids=ingress.get("evidence_ids") or [],
         )
@@ -1441,7 +1441,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "function",
             fn["id"],
             name=fn["name"],
-            address=fn.get("address") or "",
+            address=_address(fn.get("address")),
             props=fn,
             evidence_ids=fn.get("evidence_ids") or [],
         )
@@ -1456,7 +1456,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "runtime_support_function",
             fn["id"],
             name=fn["name"],
-            address=fn.get("address") or "",
+            address=_address(fn.get("address")),
             props=fn,
         )
         store.add_edge(snapshot_id, manifest.binary_sha256, "CONTAINS", binary_node, node, confidence="high")
@@ -1489,7 +1489,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "class",
             class_info["id"],
             name=class_info["name"],
-            address=class_info.get("address") or "",
+            address=_address(class_info.get("address")),
             props={key: value for key, value in class_info.items() if key != "methods"},
             evidence_ids=class_info.get("evidence_ids") or [],
         )
@@ -1512,7 +1512,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 "method",
                 method["id"],
                 name=f"{class_info['name']}.{method['name']}",
-                address=method.get("address") or "",
+                address=_address(method.get("address")),
                 props=method,
                 evidence_ids=method.get("evidence_ids") or [],
             )
@@ -1556,7 +1556,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "decompilation",
             decomp["id"],
             name=decomp["name"],
-            address=decomp.get("address") or "",
+            address=_address(decomp.get("address")),
             props={key: value for key, value in decomp.items() if key != "body"},
             evidence_ids=[decomp["evidence_id"]],
         )
@@ -1595,7 +1595,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "surface",
             surface["id"],
             name=surface["name"],
-            address=surface.get("address") or "",
+            address=_address(surface.get("address")),
             props=surface,
             evidence_ids=surface.get("evidence_ids") or [],
         )
@@ -1609,7 +1609,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "sink",
             sink["id"],
             name=sink["name"],
-            address=sink.get("address") or "",
+            address=_address(sink.get("address")),
             props=sink,
             evidence_ids=sink.get("evidence_ids") or [],
         )
@@ -1675,7 +1675,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             "parser_boundary",
             boundary["id"],
             name=boundary["boundary_function_name"],
-            address=boundary.get("address") or "",
+            address=_address(boundary.get("address")),
             props=boundary,
             evidence_ids=boundary.get("evidence_ids") or [],
         )
@@ -2101,8 +2101,6 @@ def append_fuzz_evidence_to_run(
         target_path=str(resolved_binary),
     )
     context_map["fuzz_witnesses"] = [crash.to_dict() for crash in bundle.crashes]
-    save_json(out_dir / "binary-context-map.json", context_map)
-    save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-fuzz-evidence.json", bundle.to_dict())
     checklist = load_json(out_dir / "binary-checklist.json")
     if isinstance(checklist, dict):
@@ -2116,6 +2114,9 @@ def append_fuzz_evidence_to_run(
     for record in bundle.evidence:
         if record.id not in seen:
             existing.append(record.to_dict())
+    context_map["evidence"] = existing
+    save_json(out_dir / "binary-context-map.json", context_map)
+    save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})
     decompilations = load_json(out_dir / "binary-decompilations.json")
     if not isinstance(decompilations, dict):
@@ -2488,7 +2489,7 @@ def append_runtime_evidence_to_run(
                     "parser_boundary",
                     boundary["id"],
                     name=boundary["boundary_function_name"],
-                    address=boundary.get("address") or "",
+                    address=_address(boundary.get("address")),
                     props=boundary,
                     evidence_ids=boundary.get("evidence_ids") or [],
                 )

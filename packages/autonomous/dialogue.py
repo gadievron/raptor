@@ -6,6 +6,7 @@ This module enables RAPTOR to have multi-turn conversations with LLMs
 for deeper analysis and iterative refinement, rather than single-shot prompts.
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -448,16 +449,16 @@ class MultiTurnAnalyser:
             analysis["vulnerability_type"] = "null_deref"
 
         # Detect exploitability
-        if "high" in response_lower and "exploit" in response_lower:
+        if re.search(r'\bhigh\b', response_lower) and re.search(r'\bexploit', response_lower):
             analysis["exploitability"] = "high"
             analysis["confidence"] = 0.8
-        elif "medium" in response_lower and "exploit" in response_lower:
+        elif re.search(r'\bmedium\b', response_lower) and re.search(r'\bexploit', response_lower):
             analysis["exploitability"] = "medium"
             analysis["confidence"] = 0.7
-        elif "low" in response_lower and "exploit" in response_lower:
+        elif re.search(r'\blow\b', response_lower) and re.search(r'\bexploit', response_lower):
             analysis["exploitability"] = "low"
             analysis["confidence"] = 0.6
-        elif "not exploitable" in response_lower or "none" in response_lower:
+        elif "not exploitable" in response_lower or re.search(r'\bnone\b', response_lower):
             analysis["exploitability"] = "none"
             analysis["confidence"] = 0.7
 

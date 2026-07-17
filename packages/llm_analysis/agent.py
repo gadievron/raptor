@@ -403,14 +403,11 @@ class VulnerabilityContext:
         Returns:
             True if this looks like a sanitizer
         """
-        sanitizer_keywords = [
-            'sanitiz', 'validat', 'filter', 'escape', 'encode',
-            'clean', 'strip', 'remove', 'replace', 'whitelist',
-            'blacklist', 'check', 'verify', 'safe'
-        ]
-
-        label_lower = label.lower()
-        return any(keyword in label_lower for keyword in sanitizer_keywords)
+        return bool(re.search(
+            r'\b(?:sanitiz|validat|filter|escape|encode|clean|strip'
+            r'|remove|replace|whitelist|blacklist|check|verify|safe)\b',
+            label, re.IGNORECASE,
+        ))
 
     def extract_dataflow(self) -> bool:
         """
@@ -1007,7 +1004,7 @@ class AutonomousSecurityAgentV2:
             # Compute CVSS score from vector if provided
             from packages.cvss import score_finding
             score_finding(analysis)
-            if analysis.get("cvss_score_estimate"):
+            if analysis.get("cvss_score_estimate") is not None:
                 logger.info(f"  CVSS: {analysis['cvss_score_estimate']} ({analysis.get('severity_assessment', '?')}) from {analysis.get('cvss_vector')}")
             else:
                 logger.info(f"  CVSS Estimate: {analysis.get('cvss_score_estimate', 'N/A')}")
@@ -1565,11 +1562,9 @@ class AutonomousSecurityAgentV2:
             intent_verdict = None
             intent_confidence = None
             if vuln.intent_match is not None:
-                intent_verdict = getattr(
-                    vuln.intent_match, "verdict", None,
-                )
-                intent_confidence = getattr(
-                    vuln.intent_match, "confidence", None,
+                intent_verdict = vuln.intent_match.get("verdict")
+                intent_confidence = vuln.intent_match.get(
+                    "confidence",
                 )
             witness, data = witness_from_exploit(
                 exploit_code,

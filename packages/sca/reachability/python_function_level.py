@@ -186,27 +186,22 @@ def refine_pypi_verdicts(
 
     for d in candidates:
         funcs = pypi_symbol_map[d.key()]
-        results = []
-        evaluated_fns = []
+        paired = []
         for fn in funcs:
             qualified = f"{d.name}.{fn}"
             try:
-                results.append(function_called(inventory, qualified))
-                evaluated_fns.append(fn)
+                paired.append((fn, function_called(inventory, qualified)))
             except ValueError:
-                # Bare name (no dots) — shouldn't happen since we
-                # always prepend dep_name, but keep the resolver
-                # contract intact by ignoring unrunnable queries.
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_fn_names: List[str] = []
-            for fn, r in zip(evaluated_fns, results):
+            evidence_lines: list[str] = []
+            called_fn_names: list[str] = []
+            for fn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_fn_names.append(fn)
                     evidence_lines.extend(

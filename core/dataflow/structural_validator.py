@@ -51,11 +51,11 @@ _EXTRACTORS = {
     "cpp": extract_call_graph_cpp,
 }
 
-_SANITIZER_KEYWORDS = frozenset({
-    "sanitiz", "sanitise", "escape", "encode", "validat",
-    "filter", "clean", "purify", "strip", "bleach", "quote",
-    "parameteriz", "prepared", "bind",
-})
+_SANITIZER_RE = re.compile(
+    r'(?:^|_)(?:sanitiz|sanitise|escape|encode|validat'
+    r'|filter|clean|purify|strip|bleach|quote'
+    r'|parameteriz|prepared|bind)',
+)
 
 _CONDITION_NODE_TYPES = frozenset({
     "if_statement", "elif_clause", "else_clause",
@@ -237,12 +237,13 @@ def _check_call_link(
             continue
         if call.chain[-1] == to_name:
             return True, False
-        if to_func in ".".join(call.chain):
+        to_parts = to_func.split(".")
+        if call.chain[-len(to_parts):] == to_parts:
             return True, False
 
     if cross_file:
         for alias, target in graph.imports.items():
-            if to_name == alias or to_name in target:
+            if to_name == alias or to_name in target.split("."):
                 return True, False
 
     has_indirection = bool(graph.indirection)
@@ -265,17 +266,11 @@ def _identify_sanitizer_calls(
         if not call.chain:
             continue
         name = call.chain[-1].lower()
-        for kw in _SANITIZER_KEYWORDS:
-            if kw in name:
-                found.append(".".join(call.chain))
-                break
+        if _SANITIZER_RE.search(name):
+            found.append(".".join(call.chain))
 
-    if label:
-        label_lower = label.lower()
-        for kw in _SANITIZER_KEYWORDS:
-            if kw in label_lower:
-                found.append(f"label:{label}")
-                break
+    if label and _SANITIZER_RE.search(label.lower()):
+        found.append(f"label:{label}")
 
     return found
 

@@ -1613,7 +1613,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
         except Exception:
             exit_code = None
 
-        success = exit_code == 0
+        success = exit_code in (0, 1)
 
         # Always delete: .json (intermediate machine output)
         for victim in (json_file,):

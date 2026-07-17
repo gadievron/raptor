@@ -1583,6 +1583,7 @@ def _write_report(
         "review_required", "up_to_date",
         "skipped_loose_pin", "unsupported_manifest",
         "library_floor_raise_unsupported",
+        "pinning_deferred",
         "no_versions", "registry_unsupported",
         "needs_network", "error",
     ):

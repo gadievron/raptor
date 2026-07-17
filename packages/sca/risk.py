@@ -326,12 +326,14 @@ def compute_risk_estimate(
     components["depth_multiplier"] = depth_mult
 
     # 7. Parser confidence — heuristic parsers haircut.
-    parser_conf = dep.parser_confidence.numeric or 1.0
+    pc = dep.parser_confidence.numeric
+    parser_conf = pc if pc is not None else 1.0
     base *= parser_conf
     components["parser_confidence"] = parser_conf
 
     # 8. Version-match confidence — uncertain matches penalised.
-    vmc = finding.version_match_confidence.numeric or 1.0
+    vm = finding.version_match_confidence.numeric
+    vmc = vm if vm is not None else 1.0
     base *= vmc
     components["version_match_confidence"] = vmc
 
