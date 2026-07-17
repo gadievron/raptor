@@ -114,7 +114,7 @@ def refine_rubygems_verdicts(
             )
             return
 
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     for d in candidates:
         qualified_names = rubygems_symbol_map[d.key()]

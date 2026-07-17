@@ -188,7 +188,7 @@ def scan(
     eco_scans.clear()
 
     # Function-level reachability tier. Inventory-based resolver
-    # from ``core.inventory.reachability`` consumes per-language
+    # from ``core.analysis.reachability`` consumes per-language
     # call_graph data emitted by the inventory builder (Python AST
     # + JS / TS tree-sitter). Gated per-ecosystem on the presence
     # of advisory-shipped affected-function data — when no dep in

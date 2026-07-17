@@ -43,7 +43,7 @@ RAPTOR = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(RAPTOR))
 os.environ.setdefault("RAPTOR_DIR", str(RAPTOR))
 
-from core.inventory.reach_verdict_log import (  # noqa: E402
+from core.analysis.reach_verdict_log import (  # noqa: E402
     SCHEMA_VERSION,
     _sidecar_path,
     reset,

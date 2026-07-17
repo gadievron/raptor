@@ -105,7 +105,7 @@ def _make_finding(reachability: Reachability) -> VulnFinding:
 def test_refine_emits_called_in_dead_code_for_private_host():
     """A finding's call site lives in a private function with no
     callers — refinement emits the new verdict."""
-    from core.inventory.reachability import function_called
+    from core.analysis.reachability import function_called
     inv = _inv(_file("src/a.py",
         "import requests\n"
         "def _legacy_unzip():\n"
@@ -133,7 +133,7 @@ def test_refine_emits_likely_called_for_alive_host():
         "def main():\n"          # alive: entry-point name
         "    requests.get('/')\n"
     ))
-    from core.inventory.reachability import function_called
+    from core.analysis.reachability import function_called
     from packages.sca.reachability._host_reachability import (
         classify_called_or_dead,
     )

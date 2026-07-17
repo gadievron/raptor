@@ -97,7 +97,7 @@ def enrich_with_forward_reachable(
             return 0
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ExternalFunction,
             InternalFunction,
             enclosing_function,

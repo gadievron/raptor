@@ -124,7 +124,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 # 1. Direct classifier — verdicts on a real binary
 # ---------------------------------------------------------------------------
 print("\n=== 1. Direct classifier ===")
-from core.inventory.binary_oracle import classify_binary_evidence
+from core.analysis.binary_oracle import classify_binary_evidence
 
 names = ["api_open", "api_close", "api_read", "api_internal_helper",
          "api_inlined_target", "util_compute", "main",
@@ -157,7 +157,7 @@ check("all verdicts carry tier=full",
 # 2. Inventory enrichment + multi-binary combine (single binary case)
 # ---------------------------------------------------------------------------
 print("\n=== 2. Inventory enrichment ===")
-from core.inventory.binary_oracle import enrich_inventory_with_binary_oracle
+from core.analysis.binary_oracle import enrich_inventory_with_binary_oracle
 
 # Real source surface — names that actually match the binary so the
 # hostile-ELF coverage floor doesn't fire on a legitimate target.
@@ -215,7 +215,7 @@ check("top-level inventory.binary_oracle.earns_suppression == True",
 # 3. Chokepoint accessor — line disambiguation + tier guard
 # ---------------------------------------------------------------------------
 print("\n=== 3. Chokepoint accessor ===")
-from core.inventory.reachability import binary_oracle_absent
+from core.analysis.reachability import binary_oracle_absent
 
 check("absent verdict fires for dead function",
       binary_oracle_absent(inv, "src/api.c", "api_dead_function") is True)
@@ -232,7 +232,7 @@ _dead_api["metadata"]["binary_oracle"]["binaries"] = [
 ]
 # Index caches the lookup; invalidate so the modified inventory is
 # re-walked rather than served from cache (P1-C-2 perf fix side effect).
-from core.inventory import reachability as _R
+from core.analysis import reachability as _R
 _R._BO_ITEM_INDEX_CACHE.clear()
 check("mixed-tier (full + symbol_only) refuses to suppress",
       binary_oracle_absent(inv, "src/api.c",
@@ -247,7 +247,7 @@ _R._BO_ITEM_INDEX_CACHE.clear()
 # 4. reach_audit verdict chain
 # ---------------------------------------------------------------------------
 print("\n=== 4. reach_audit classify_reachability ===")
-from core.inventory.reach_audit import classify_reachability
+from core.analysis.reach_audit import classify_reachability
 
 v_dead = classify_reachability(
     inv, "src/api.c", "api_dead_function", 26, "src.api")
@@ -259,7 +259,7 @@ check("classify_reachability returns binary_oracle_absent for dead",
 # 5. Verdict → witness → suppression chain
 # ---------------------------------------------------------------------------
 print("\n=== 5. Verdict → witness → suppression ===")
-from core.inventory.reach_witness import (
+from core.analysis.reach_witness import (
     STRUCTURALLY_SUPPRESSIBLE_KINDS, VERDICTS,
     verdict_from_classification, WitnessKind,
 )
@@ -279,7 +279,7 @@ check("rv.may_suppress with empty earned set",
 # 6. Shared chokepoint helper (reach_chokepoint.check_suppress)
 # ---------------------------------------------------------------------------
 print("\n=== 6. Shared chokepoint helper ===")
-from core.inventory.reach_chokepoint import check_suppress, record_suppression
+from core.analysis.reach_chokepoint import check_suppress, record_suppression
 
 decision = check_suppress(
     checklist=inv,
@@ -339,7 +339,7 @@ with tempfile.TemporaryDirectory() as td:
 # 8. Auto-detect on real project tree
 # ---------------------------------------------------------------------------
 print("\n=== 8. Auto-detect ===")
-from core.inventory.binary_oracle_autodetect import detect_binaries
+from core.analysis.binary_oracle_autodetect import detect_binaries
 
 detected = detect_binaries(TARGET, "application")
 check("auto-detect finds build/app",

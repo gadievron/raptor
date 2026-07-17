@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Set, Tuple
 
-from ..binary_oracle import (
+from core.analysis.binary_oracle import (
     _qualified_from_demangled,
     _strip_impl_block_brackets,  # noqa: F401  (re-export for tests)
     _strip_rust_crate_hash,

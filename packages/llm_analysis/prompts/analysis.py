@@ -185,7 +185,7 @@ def _format_reachability_block(metadata: Dict[str, Any]) -> str:
     # new dead witness surfaces here automatically. not_called falls to the
     # low-priority catch-all; framework / registration render an affirmative
     # "REACHABLE via …" line (annotated without demotion).
-    from core.inventory.reach_witness import prompt_verdict_for
+    from core.analysis.reach_witness import prompt_verdict_for
     verdict = (priority_reason.split("reachability:", 1)[1]
                if priority_reason.startswith("reachability:") else "")
     pv = prompt_verdict_for(verdict)

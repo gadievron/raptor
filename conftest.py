@@ -32,7 +32,7 @@ os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 # sidecar (the cross-project verdict-frequency log is supposed to
 # reflect real operator runs, not the test corpus). Tests that
 # exercise the log directly opt back in via ``RAPTOR_REACH_VERDICT_LOG``
-# pointing at a tmp file (see core/inventory/tests/test_reach_verdict_log.py).
+# pointing at a tmp file (see core/analysis/tests/test_reach_verdict_log.py).
 os.environ.setdefault("RAPTOR_REACH_VERDICT_LOG_DISABLED", "1")
 
 # Force RAPTOR_DIR to point at THIS worktree, not whatever the

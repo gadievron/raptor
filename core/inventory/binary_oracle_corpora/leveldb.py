@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Set, Tuple
 
-from ..binary_oracle import (
+from core.analysis.binary_oracle import (
     _demangle_linkage_names,
     _qualified_from_demangled,
 )
