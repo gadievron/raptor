@@ -69,7 +69,9 @@ class TestOrchestratorPlanning(unittest.TestCase):
         try:
             tmp.chmod(0o755)
             with patch("packages.fuzzing.orchestrator.probe_capabilities",
-                       return_value=_full_caps_linux()):
+                       return_value=_full_caps_linux()), \
+                 patch.object(FuzzingOrchestrator, "_is_libfuzzer_instrumented",
+                              return_value=False):
                 orch = FuzzingOrchestrator()
                 plan = orch.plan(tmp)
             self.assertEqual(plan.fuzzer, "afl")
