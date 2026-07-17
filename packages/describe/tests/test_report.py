@@ -53,7 +53,7 @@ def _report(
 class TestShortInt:
     def test_thousands(self):
         assert _short_int(52_000) == "52k"
-        assert _short_int(1_500) == "1k"  # truncates
+        assert _short_int(1_500) == "2k"  # rounds (float division)
 
     def test_millions(self):
         assert _short_int(1_500_000) == "1.5M"

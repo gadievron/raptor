@@ -724,7 +724,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     for fn in funcs:
         if not isinstance(fn, dict):
             continue
-        line_start = fn.get("line_start") or fn.get("line")
+        ls = fn.get("line_start")
+        line_start = ls if ls is not None else fn.get("line")
         line_end = fn.get("line_end")
         # Require both bounds to be ints — string-typed line numbers
         # from a corrupt checklist would otherwise raise TypeError on
@@ -745,7 +746,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     for fn in funcs:
         if not isinstance(fn, dict):
             continue
-        line_start = fn.get("line_start") or fn.get("line")
+        ls = fn.get("line_start")
+        line_start = ls if ls is not None else fn.get("line")
         if not isinstance(line_start, int) or isinstance(line_start, bool):
             continue
         if line_start > line:

@@ -109,7 +109,7 @@ class TestCleanupPerPackArtifacts:
     def test_failed_pack_with_empty_sarif_keeps_exit_and_stderr(self, tmp_path):
         _make_pack(
             tmp_path, "category_crypto",
-            exit_code=1, stderr="ERROR: rule parse failed\n",
+            exit_code=2, stderr="ERROR: rule parse failed\n",
             sarif=EMPTY_SARIF,
         )
         cleanup_per_pack_artifacts(tmp_path)
@@ -125,7 +125,7 @@ class TestCleanupPerPackArtifacts:
     def test_failed_pack_with_findings_keeps_sarif(self, tmp_path):
         _make_pack(
             tmp_path, "category_injection",
-            exit_code=1, stderr="ERROR: partial completion\n",
+            exit_code=2, stderr="ERROR: partial completion\n",
             sarif=SARIF_WITH_FINDINGS,
         )
         cleanup_per_pack_artifacts(tmp_path)
@@ -204,7 +204,7 @@ class TestCleanupPerPackArtifacts:
         # Pack D: failed, sarif with findings → all diagnostics kept
         _make_pack(
             tmp_path, "p_default",
-            exit_code=1, stderr="partial\n", sarif=SARIF_WITH_FINDINGS,
+            exit_code=2, stderr="partial\n", sarif=SARIF_WITH_FINDINGS,
         )
 
         removed = cleanup_per_pack_artifacts(tmp_path)

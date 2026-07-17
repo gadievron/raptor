@@ -1051,8 +1051,12 @@ def _bump_npm_spec(current: str, installed: str, target: str,
             return None
         hi = re.search(r"(<=|<)\s*([0-9][^\s,|]*)", s)
         try:
-            if hi is not None and version_compare("npm", target, hi.group(2)) >= 0:
-                return None
+            if hi is not None:
+                cmp = version_compare("npm", target, hi.group(2))
+                if hi.group(1) == "<=" and cmp > 0:
+                    return None
+                if hi.group(1) == "<" and cmp >= 0:
+                    return None
             if version_compare("npm", target, lo.group(2)) < 0:
                 return None
         except VersionError:
@@ -1630,12 +1634,19 @@ def _rewrite_pyproject_toml(
     def _pep508_sub(m: re.Match) -> str:
         if _normalise_pypi_name(m.group(1)) != norm:
             return m.group(0)
+        spec_and_marker = m.group(2)
+        marker_sep = spec_and_marker.find(";")
+        if marker_sep >= 0:
+            spec_part = spec_and_marker[:marker_sep]
+            marker_part = spec_and_marker[marker_sep:]
+        else:
+            spec_part = spec_and_marker
+            marker_part = ""
         if plan.floor_raise:
-            # Library posture: raise the floor, keep bounds, no exact pin.
             new_spec = _pypi_pin_preserving_bounds(
-                m.group(2), plan.target, floor_raise=True)
-            return f'"{m.group(1)}{new_spec}"'
-        return f'"{m.group(1)}=={plan.target}"'
+                spec_part, plan.target, floor_raise=True)
+            return f'"{m.group(1)}{new_spec}{marker_part}"'
+        return f'"{m.group(1)}=={plan.target}{marker_part}"'
 
     new_text = pep508_re.sub(_pep508_sub, new_text)
 

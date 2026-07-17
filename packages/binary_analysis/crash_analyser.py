@@ -479,34 +479,35 @@ class CrashAnalyser:
             else:
                 return "memory_access_violation"
                 
-        elif signal in ["6", "sigabrt", "abort"]:
+        elif signal in ["6", "06", "sigabrt", "abort"]:
             # Abort signal - could be ASan, assert, or double-free
             if context.binary_info.get("asan_enabled") == "true":
                 return "asan_detected_bug"
-            elif "free" in context.function_name.lower() or "double free" in context.stack_trace.lower():
+            elif "free" in context.function_name.lower().split("_") or "double free" in context.stack_trace.lower():
                 return "double_free"
             else:
                 return "abort_signal"
-                
-        elif signal in ["8", "sigfpe", "floating point exception"]:
+
+        elif signal in ["8", "08", "sigfpe", "floating point exception"]:
             return "arithmetic_error"
-            
-        elif signal in ["4", "sigill", "illegal instruction"]:
+
+        elif signal in ["4", "04", "sigill", "illegal instruction"]:
             return "illegal_instruction"
-            
+
         elif signal in ["13", "sigpipe", "broken pipe"]:
             return "broken_pipe"
-            
+
         elif signal in ["7", "07", "sigbus", "bus error"]:
             return "bus_error"
             
         # Function name based classification
         func_name = context.function_name.lower()
-        if any(word in func_name for word in ["malloc", "free", "realloc", "calloc"]):
+        func_words = func_name.split("_")
+        if "free" in func_words or any(w in func_name for w in ["malloc", "realloc", "calloc"]):
             return "heap_corruption"
         elif any(word in func_name for word in ["strcpy", "strcat", "strncpy", "memcpy", "memmove"]):
             return "buffer_overflow"
-        elif "printf" in func_name or "format" in func_name:
+        elif "printf" in func_name:
             return "format_string_vulnerability"
             
         # Stack trace based classification
@@ -1617,7 +1618,7 @@ class CrashAnalyser:
             
         # Store ASan output in binary_info for LLM analysis
         context.binary_info["asan_output"] = asan_output[:2000]
-        if not context.crash_type:
+        if context.crash_type in ("unknown", ""):
             context.crash_type = self._classify_crash_type(context)
 
     @staticmethod
@@ -1671,10 +1672,10 @@ class CrashAnalyser:
                 return "call_to_null"
         if context.stack_trace:
             trace = context.stack_trace.lower()
-            if "sanitizer" in trace or "asan" in trace:
+            if "sanitizer" in trace or re.search(r'(?:^|[^a-z])asan(?:$|[^a-z])', trace):
                 return "sanitizer_violation"
             elif "assert" in trace:
                 return "assertion_failure"
-            elif "malloc" in trace or "free" in trace:
+            elif "malloc" in trace or re.search(r'(?:^|[^a-z])free(?:$|[^a-z])', trace):
                 return "heap_issue"
         return "unknown_crash_type"

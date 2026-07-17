@@ -283,7 +283,7 @@ def _classify_bot_claim(name: str, email: str) -> str:
                 continue
             if suffix == "@users.noreply.github.com":
                 local = lemail.split("@", 1)[0]
-                if "bot" in local or "actions" in local:
+                if re.search(r'\bbot\b', local) or re.search(r'\bactions\b', local):
                     claims_bot = True
                     break
                 continue

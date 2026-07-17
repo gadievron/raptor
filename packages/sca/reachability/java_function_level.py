@@ -177,23 +177,23 @@ def refine_maven_verdicts(
 
     for d in candidates:
         qualified_names = maven_symbol_map[d.key()]
-        results = []
+        paired = []
         for qualified in qualified_names:
             if not qualified or "." not in qualified:
                 continue
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((qualified, function_called(inventory, qualified)))
             except ValueError:
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_qns: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            evidence_lines: list[str] = []
+            called_qns: list[str] = []
+            for qn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_qns.append(qn)
                     evidence_lines.extend(

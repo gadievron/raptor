@@ -222,6 +222,7 @@ def _persist_proxy_events(
             "persistence: %s", _log_path, _log_err,
         )
         return
+    _fd_owned = True
     try:
         _log_st = os.fstat(_log_fd)
         if not stat.S_ISREG(_log_st.st_mode):
@@ -231,6 +232,7 @@ def _persist_proxy_events(
                 _log_path, _log_st.st_mode,
             )
             os.close(_log_fd)
+            _fd_owned = False
             return
         # Clear O_NONBLOCK for the actual append: only needed to
         # stop a FIFO-open hang at the os.open() above; on a
@@ -240,15 +242,21 @@ def _persist_proxy_events(
         _fcntl.fcntl(_log_fd, _fcntl.F_SETFL, _flags & ~os.O_NONBLOCK)
         import json as _json
         with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
+            _fd_owned = False  # fdopen took ownership
             for e in events:
                 _f.write(_json.dumps(e) + "\n")
-    except BaseException:
+    except BaseException as _persist_exc:
         # os.fdopen takes ownership on success; on any pre-fdopen
-        # failure we still own the fd and must close.
-        try:
-            os.close(_log_fd)
-        except OSError:
-            pass
+        # failure we still own the fd and must close.  Post-fdopen
+        # the `with` block already closed it — a second os.close
+        # would risk closing another thread's newly-opened fd.
+        if _fd_owned:
+            try:
+                os.close(_log_fd)
+            except OSError:
+                pass
+        if not isinstance(_persist_exc, Exception):
+            raise
         # Demoted from raise → debug-log: persistence failure
         # shouldn't poison the caller, same posture as the open
         # failure above.
@@ -491,12 +499,12 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
     # `sandbox(audit=True, disabled=True)` call would acquire the
     # ref-count without ever using audit, leaking the count if the
     # release path doesn't fire (which it does, but defensive).
-    _effectively_disabled = (
-        bool(disabled)
-        or bool(state._cli_sandbox_disabled)
-        or state._cli_sandbox_profile == "none"
-        or profile == "none"
-    )
+    if state._cli_sandbox_profile is not None:
+        _effectively_disabled = (state._cli_sandbox_profile == "none")
+    elif profile is not None:
+        _effectively_disabled = (profile == "none")
+    else:
+        _effectively_disabled = bool(disabled) or bool(state._cli_sandbox_disabled)
     # Observe mode is "audit + audit_verbose + write to a separate
     # JSONL file + extend the trace set with stat-family". Engaging
     # observe implies audit (TRACE action requires a tracer) and
@@ -1560,6 +1568,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # setup fails — adaptive so we still get Landlock-only when
         # mount-ns is unusable.
         used_spawn = False
+        _audit_landlock_engaged = False
         # _spawn doesn't replicate every subprocess.run kwarg through its
         # manual os.fork() path. The Landlock-only subprocess.run path
         # handles them natively via Python's posix_spawn logic. Route
@@ -2157,8 +2166,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                         "capture_output", False),
                                     text=kwargs.get("text", False),
                                     stdin=kwargs.get("stdin"),
-                                    start_new_session=kwargs.get(
-                                        "start_new_session", True),
+                                    start_new_session=_start_new_session,
                                 )
                                 _audit_landlock_engaged = True
                             except (RuntimeError, OSError) as _la_err:
@@ -2194,6 +2202,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                         _death_r, _death_w = os.pipe()
                         try:
                             _dk = dict(kwargs)
+                            _dk["start_new_session"] = _start_new_session
                             _dk["pass_fds"] = (
                                 tuple(_dk.get("pass_fds") or ()) + (_death_r,)
                             )
@@ -2208,7 +2217,11 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                 except OSError:
                                     pass
                     else:
-                        result = subprocess.run(full_cmd, **kwargs)
+                        result = subprocess.run(
+                            full_cmd,
+                            start_new_session=_start_new_session,
+                            **kwargs,
+                        )
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
@@ -2227,7 +2240,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # if the child had mount-ns isolation or fell back to
         # Landlock-only mode. See ``core/security/THREAT_MODEL.md``
         # I2-(a) for why this matters.
-        result.sandbox_info["mount_ns_active"] = bool(use_mount)
+        result.sandbox_info["mount_ns_active"] = bool(used_spawn and use_mount)
         _eff_restrict_reads = restrict_reads and not (_skip_mount_ns and use_mount)
         result.sandbox_info["restrict_reads"] = bool(_eff_restrict_reads)
         if _use_proxy_netns:

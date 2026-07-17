@@ -293,9 +293,10 @@ _SPDX_LIKE = (
 
 
 def _looks_like_spdx_id(text: str) -> bool:
+    if not text:
+        return False
     if text in _SPDX_LIKE:
         return True
-    # Heuristic: SPDX IDs are short, no spaces, only letters/digits/dot/-/+ .
     if " " in text:
         return False
     return all(c.isalnum() or c in ".-+" for c in text)

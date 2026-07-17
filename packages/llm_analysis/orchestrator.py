@@ -911,11 +911,13 @@ def orchestrate(
             # path was running with weaker defences than the
             # primary path even though the same Claude model was
             # behind it.
+            _external_failures = list(analysis_results)
             analysis_results = dispatch_task(
                 AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
         findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
+            analysis_results = _external_failures + analysis_results
 
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
@@ -1678,7 +1680,11 @@ def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
                 "Cross-family checker: %s (auto-detected from %s)",
                 model_name, env_key,
             )
-            return ModelConfig(provider=provider, model_name=model_name)
+            return ModelConfig(
+                provider=provider,
+                model_name=model_name,
+                api_key=os.environ.get(env_key),
+            )
     return None
 
 
@@ -1874,10 +1880,9 @@ def _merge_results(
     for finding in results:
         fid = finding.get("finding_id")
         cc = cc_by_id.get(fid)
-        if not cc or "error" in cc:
-            # No CC result or failed — keep prep data, mark as unanalysed
-            finding["cc_error"] = cc.get("error") if cc else "not dispatched"
-            if cc and cc.get("cc_debug_file"):
+        if cc is None or "error" in cc:
+            finding["cc_error"] = cc.get("error") if cc is not None else "not dispatched"
+            if cc is not None and cc.get("cc_debug_file"):
                 finding["cc_debug_file"] = cc["cc_debug_file"]
             continue
 
