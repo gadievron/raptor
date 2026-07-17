@@ -183,13 +183,35 @@ def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
     spec = spec.strip()
     if not spec or "||" in spec:
         return None, None
-    if " - " in spec:                  # hyphen range: capture floor, skip ceiling
-        c = _loose_components(spec.split(" - ", 1)[0])
-        return (_join(c) if c else None), None
+    if " - " in spec:
+        left, right = spec.split(" - ", 1)
+        c_lo = _loose_components(left)
+        c_hi = _loose_components(right)
+        floor = _join(c_lo) if c_lo else None
+        if c_hi is None:
+            ceiling = None
+        elif c_hi[3] >= 3:
+            ceiling = f"{c_hi[0]}.{c_hi[1]}.{c_hi[2] + 1}"
+        elif c_hi[3] == 2:
+            ceiling = f"{c_hi[0]}.{c_hi[1] + 1}.0"
+        else:
+            ceiling = f"{c_hi[0] + 1}.0.0"
+        return floor, ceiling
 
     lowers: List[str] = []
     uppers: List[str] = []
-    for tok in spec.split():
+    raw_toks = spec.split()
+    toks: List[str] = []
+    i = 0
+    while i < len(raw_toks):
+        t = raw_toks[i]
+        if t in (">=", "<=", ">", "<", "=", "^", "~") and i + 1 < len(raw_toks):
+            toks.append(t + raw_toks[i + 1])
+            i += 2
+        else:
+            toks.append(t)
+            i += 1
+    for tok in toks:
         m = re.match(r"^(>=|<=|>|<|=|\^|~)?\s*(.*)$", tok)
         if m is None:
             continue
@@ -206,14 +228,27 @@ def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
             if c:
                 lowers.append(_join(c))
                 uppers.append(_tilde_ceiling(c))
-        elif op in (">=", ">"):
+        elif op == ">=":
             c = _loose_components(operand)
             if c:
                 lowers.append(_join(c))
-        elif op in ("<", "<="):
+        elif op == ">":
+            c = _loose_components(operand)
+            if c:
+                lowers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
+        elif op == "<":
             c = _loose_components(operand)
             if c:
                 uppers.append(_join(c))
+        elif op == "<=":
+            c = _loose_components(operand)
+            if c:
+                if c[3] >= 3:
+                    uppers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
+                elif c[3] == 2:
+                    uppers.append(f"{c[0]}.{c[1] + 1}.0")
+                else:
+                    uppers.append(f"{c[0] + 1}.0.0")
         else:                          # ``=`` or bare: exact OR x-range
             c = _loose_components(operand)
             if c is None:

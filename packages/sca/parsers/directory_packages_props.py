@@ -340,7 +340,17 @@ def _extract_package_versions(
                 logger.debug(
                     "sca.parsers.directory_packages_props: %s in "
                     "%s has no Version; skipping",
-                    escape_nonprintable(name), declared_in,
+                    escape_nonprintable(name),
+                    escape_nonprintable(str(declared_in)),
+                )
+                continue
+            if "*" in version:
+                logger.debug(
+                    "sca.parsers.directory_packages_props: %s in "
+                    "%s has floating wildcard version %r; skipping",
+                    escape_nonprintable(name),
+                    escape_nonprintable(str(declared_in)),
+                    escape_nonprintable(version),
                 )
                 continue
             if _MSBUILD_PROPERTY_RE.search(version):
@@ -350,7 +360,8 @@ def _extract_package_versions(
                         "sca.parsers.directory_packages_props: %s in "
                         "%s uses unresolvable MSBuild expression %r "
                         "(cross-file / item / floating); skipping",
-                        escape_nonprintable(name), declared_in,
+                        escape_nonprintable(name),
+                        escape_nonprintable(str(declared_in)),
                         escape_nonprintable(version),
                     )
                     continue

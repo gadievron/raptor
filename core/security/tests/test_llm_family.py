@@ -416,3 +416,110 @@ def test_aggregator_chain_plus_bedrock():
     assert family_of(
         "openrouter/together/us.anthropic.claude-opus-4-7",
     ) == "anthropic"
+
+
+# ---------------------------------------------------------------------------
+# Regression: exact stem match without trailing hyphen
+# ---------------------------------------------------------------------------
+
+def test_exact_stem_match_resolves_without_trailing_hyphen():
+    """Bare model IDs like 'o1' returned 'unknown' because the old code
+    only checked ``startswith(stem + "-")``, which fails for exact matches
+    (no trailing hyphen).  After the fix, ``needle == stem`` is checked
+    first, so 'o1' correctly resolves to 'openai'."""
+    assert family_of("o1") == "openai"
+    # Also verify the prefixed form still works (regression gate).
+    assert family_of("o1-preview") == "openai"
+    assert family_of("o1-mini") == "openai"
+    # Same pattern for o3/o4 stems.
+    assert family_of("o3") == "openai"
+    assert family_of("o4") == "openai"
+
+
+# ---------------------------------------------------------------------------
+# resolve_model_shorthand — task #402 QoL fix
+# ---------------------------------------------------------------------------
+
+def test_shorthand_resolves_unique_token_match():
+    from core.security.llm_family import resolve_model_shorthand
+    names = [
+        "claude-opus-4-6",
+        "claude-haiku-4-5-20251001",
+        "gemini-2.5-pro",
+    ]
+    assert resolve_model_shorthand("haiku", names) == "claude-haiku-4-5-20251001"
+    assert resolve_model_shorthand("opus", names) == "claude-opus-4-6"
+    assert resolve_model_shorthand("gemini", names) == "gemini-2.5-pro"
+
+
+def test_shorthand_case_insensitive():
+    from core.security.llm_family import resolve_model_shorthand
+    assert resolve_model_shorthand(
+        "HAIKU", ["claude-haiku-4-5"],
+    ) == "claude-haiku-4-5"
+
+
+def test_shorthand_ambiguous_raises_with_candidates():
+    import pytest
+    from core.security.llm_family import resolve_model_shorthand
+    names = ["claude-haiku-4-5-20251001", "claude-haiku-4-6"]
+    with pytest.raises(ValueError) as ei:
+        resolve_model_shorthand("haiku", names)
+    assert "ambiguous" in str(ei.value)
+    assert "claude-haiku-4-5-20251001" in str(ei.value)
+    assert "claude-haiku-4-6" in str(ei.value)
+
+
+def test_shorthand_dedupes_same_name_in_candidates():
+    # Same name repeated (primary + fallback) is ONE model, not two — the
+    # helper dedupes so it doesn't raise a false ambiguity error.
+    from core.security.llm_family import resolve_model_shorthand
+    names = ["claude-haiku-4-5", "claude-haiku-4-5", "claude-opus-4-7"]
+    assert resolve_model_shorthand("haiku", names) == "claude-haiku-4-5"
+
+
+def test_shorthand_returns_none_on_zero_match():
+    from core.security.llm_family import resolve_model_shorthand
+    assert resolve_model_shorthand("bogus", ["claude-opus-4-7"]) is None
+
+
+def test_shorthand_rejects_qualified_names():
+    # Provider-qualified (contains '/') and Bedrock-shaped (contains '.')
+    # ids never take the shorthand path — they're already-qualified.
+    from core.security.llm_family import resolve_model_shorthand
+    names = ["claude-haiku-4-5"]
+    assert resolve_model_shorthand("anthropic/haiku", names) is None
+    assert resolve_model_shorthand("us.anthropic.haiku", names) is None
+
+
+def test_shorthand_rejects_too_short():
+    # Two-char shortcuts risk false matches on version tokens (e.g.
+    # "5" would match every model with a "5" version segment).
+    from core.security.llm_family import resolve_model_shorthand
+    assert resolve_model_shorthand("op", ["claude-opus-4-7"]) is None
+    assert resolve_model_shorthand("a", ["claude-opus-4-7"]) is None
+
+
+def test_shorthand_rejects_purely_numeric():
+    # Reject numeric-only shortcuts as a class — "45" wouldn't match
+    # ["claude-haiku-4-5"] tokens ["claude","haiku","4","5"] anyway, but
+    # future models with a "45" token shouldn't accidentally resolve.
+    from core.security.llm_family import resolve_model_shorthand
+    assert resolve_model_shorthand(
+        "45", ["claude-haiku-4-5", "claude-opus-4-6"],
+    ) is None
+    assert resolve_model_shorthand("4", ["claude-haiku-4-5"]) is None
+
+
+def test_shorthand_token_match_not_substring():
+    # "pus" is a substring of "opus" but not a token — must not match.
+    from core.security.llm_family import resolve_model_shorthand
+    assert resolve_model_shorthand("pus", ["claude-opus-4-7"]) is None
+
+
+def test_shorthand_ignores_empty_candidates():
+    # Empty entries in the candidate list are skipped without raising.
+    from core.security.llm_family import resolve_model_shorthand
+    assert resolve_model_shorthand(
+        "haiku", ["", "claude-haiku-4-5"],
+    ) == "claude-haiku-4-5"

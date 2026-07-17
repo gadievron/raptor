@@ -96,13 +96,16 @@ def find_understand_output(
     validate_dir = Path(validate_dir)
     empty: Set[str] = set()
 
-    # Tier 1: context-map.json co-located (shared --out directory).
+    # Tier 1: context-map.json (or binary-context-map.json) co-located.
     # Staleness can't be checked here — the validate rebuild overwrites
     # the understand checklist before the bridge runs.  The caller
     # (validation helper) snapshots the pre-rebuild checklist and handles
     # tier 1 staleness separately.
     if (validate_dir / "context-map.json").exists():
         logger.debug("understand output: tier 1 (local) — %s", validate_dir)
+        return validate_dir, empty
+    if (validate_dir / "binary-context-map.json").exists():
+        logger.debug("understand output: tier 1 (local, binary) — %s", validate_dir)
         return validate_dir, empty
 
     # Collect candidates from tiers 2 and 3
@@ -338,7 +341,7 @@ def _search_understand_dirs(
                     and d != exclude
                     and not d.name.startswith((".", "_"))
                     and infer_command_type(d) == "understand"
-                    and (d / "context-map.json").exists()):
+                    and ((d / "context-map.json").exists() or (d / "binary-context-map.json").exists())):
                 continue
         except PermissionError as exc:
             # Pre-fix `except OSError: continue` swallowed
@@ -414,7 +417,7 @@ def load_understand_context(
     # --- Load context-map.json ---
     context_map = _load_context_map(understand_dir)
     if context_map is None:
-        logger.warning("understand_bridge: no context-map.json found in %s", understand_dir)
+        logger.warning("understand_bridge: no context-map.json or binary-context-map.json found in %s", understand_dir)
         return summary
 
     # --- Normalise the context-map (path conventions, name backfill,
@@ -721,7 +724,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     for fn in funcs:
         if not isinstance(fn, dict):
             continue
-        line_start = fn.get("line_start") or fn.get("line")
+        ls = fn.get("line_start")
+        line_start = ls if ls is not None else fn.get("line")
         line_end = fn.get("line_end")
         # Require both bounds to be ints — string-typed line numbers
         # from a corrupt checklist would otherwise raise TypeError on
@@ -742,7 +746,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     for fn in funcs:
         if not isinstance(fn, dict):
             continue
-        line_start = fn.get("line_start") or fn.get("line")
+        ls = fn.get("line_start")
+        line_start = ls if ls is not None else fn.get("line")
         if not isinstance(line_start, int) or isinstance(line_start, bool):
             continue
         if line_start > line:
@@ -1271,8 +1276,10 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
 
 
 def _load_context_map(understand_dir: Path) -> Optional[Dict[str, Any]]:
-    #Load context-map.json from an understand output directory.
+    #Load context-map.json (or binary-context-map.json) from an understand output directory.
     context_map_path = understand_dir / "context-map.json"
+    if not context_map_path.exists():
+        context_map_path = understand_dir / "binary-context-map.json"
     if not context_map_path.exists():
         return None
 

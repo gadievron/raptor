@@ -299,3 +299,48 @@ def test_sound_via_charset_with_llm_pointing_at_line(tmp_path: Path):
     # The extras flag records that the LLM was involved in extraction,
     # for audit / scorecard purposes (proof itself is mechanical).
     assert r.extras.get("llm_extracted") is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: dominance check between chain_ok and SOUND return
+# ---------------------------------------------------------------------------
+
+def test_not_applicable_when_validator_does_not_dominate_sink(tmp_path: Path):
+    """When the validator is inside an if-branch that doesn't always
+    execute (e.g., guarded by an unrelated condition), it does NOT
+    dominate the sink. The result must be NOT_APPLICABLE, not SOUND.
+
+    Pre-fix: no dominance check was performed between the chain_ok
+    confirmation and the SOUND return — any validator that textually
+    appeared before the sink and whose variable reached the sink was
+    declared SOUND, even when the validator only ran conditionally."""
+    # The validator (safe_join) is inside an if-branch that doesn't
+    # always execute; the sink at line 6 is reachable without passing
+    # through the validator.
+    (tmp_path / "app.py").write_text(
+        "from werkzeug.security import safe_join\n"       # line 1
+        "def f(path, flag):\n"                             # line 2
+        "    if flag:\n"                                   # line 3
+        "        abs_path = safe_join(BASE, path)\n"       # line 4 — conditional
+        "    else:\n"                                       # line 5
+        "        abs_path = path\n"                        # line 6 — unsanitized
+        "    return open(abs_path)\n"                       # line 7 = sink
+    )
+    diff = "+        abs_path = safe_join(BASE, path)\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "abs_path = safe_join(BASE, path)",
+        "variable_name": "abs_path",
+        "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+        language="python", complete=_fake_complete(reply),
+    )
+    # The validator at line 4 is inside a branch — it doesn't dominate
+    # line 7. Must NOT be SOUND.
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE, (
+        f"expected NOT_APPLICABLE but got {r.status}: {r.reasoning}"
+    )

@@ -14,6 +14,7 @@ Usage:
 
 Available Modes:
     scan        - Static code analysis (Semgrep + CodeQL)
+    binary      - Black-box binary investigation and evidence collection
     fuzz        - Binary fuzzing with AFL++
     web         - Web application security testing
     agentic     - Full autonomous workflow
@@ -31,6 +32,9 @@ Examples:
 
     # Binary fuzzing
     python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+    # Black-box binary investigation
+    python3 raptor.py binary investigate /path/to/binary
 
     # Web scanning
     python3 raptor.py web --url https://example.com
@@ -51,7 +55,7 @@ from pathlib import Path
 # happens to land on the repo root because we live here, but explicit
 # is safer than implicit.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
+import core.startup.process_init  # noqa: E402,F401
 from core.run.output import get_output_dir, resolve_default_target, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
 from core.run.safe_io import safe_run_mkdir
@@ -135,6 +139,28 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
         )
         return (None, args)
     return (cap, out)
+
+
+def _extract_agentic_log_level(args: list) -> str | None:
+    """Return a valid agentic --log-level value without consuming argv.
+
+    The child parser remains the source of truth for invalid values. This
+    early extraction is only so parent lifecycle/dispatcher console logs obey
+    the operator's requested verbosity before raptor_agentic.py starts.
+    """
+    from core.logging import CONSOLE_LOG_LEVELS
+
+    for i, arg in enumerate(args):
+        if arg == "--log-level" and i + 1 < len(args):
+            candidate = args[i + 1].upper()
+        elif arg.startswith("--log-level="):
+            candidate = arg.split("=", 1)[1].upper()
+        else:
+            continue
+        if candidate in CONSOLE_LOG_LEVELS:
+            return candidate
+        return None
+    return None
 
 
 def _rewrite_target_arg(args: list, old: str, new: str) -> list:
@@ -859,6 +885,30 @@ def mode_fuzz(args: list) -> int:
                               "Starting binary fuzzing workflow...")
 
 
+def mode_binary(args: list) -> int:
+    """Run the black-box binary operator surface.
+
+    The binary CLI owns its own lifecycle for ``map`` and routes explicit
+    runtime / fuzz follow-on work to the existing Frida and fuzz entry points.
+    """
+    from core.config import RaptorConfig
+
+    wrapper = Path(__file__).parent / "libexec" / "raptor-binary"
+    if not wrapper.exists():
+        print(f"✗ Binary wrapper not found: {wrapper}", file=sys.stderr)
+        return 1
+    env = RaptorConfig.get_safe_env()
+    env["_RAPTOR_TRUSTED"] = "1"
+    try:
+        return subprocess.call([str(wrapper), *args], env=env)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user")
+        return 130
+    except Exception as exc:
+        print(f"\n✗ Error running raptor-binary: {exc}", file=sys.stderr)
+        return 1
+
+
 def mode_web(args: list) -> int:
     """Run web application security testing."""
     script_root = Path(__file__).parent
@@ -910,6 +960,11 @@ def mode_agentic(args: list) -> int:
     # to set the cc_trust + codeql_trust overrides in its own process.
     if _TRUST_REPO_SEEN and '--trust-repo' not in args:
         args = ['--trust-repo'] + args
+
+    log_level = _extract_agentic_log_level(args)
+    if log_level:
+        from core.logging import configure_run_logging
+        configure_run_logging(log_level=log_level, verbose=False)
 
     return _run_with_lifecycle("agentic", agentic_script, args,
                               "Starting full autonomous workflow (Semgrep + CodeQL)...")
@@ -1047,6 +1102,7 @@ def _mode_help_scripts() -> dict:
     script_root = Path(__file__).parent
     return {
         'scan': script_root / "packages/static-analysis/scanner.py",
+        'binary': script_root / "packages/binary_analysis/cli.py",
         'fuzz': script_root / "raptor_fuzzing.py",
         'web': script_root / "packages/web/scanner.py",
         'agentic': script_root / "raptor_agentic.py",
@@ -1117,6 +1173,7 @@ _HELP_EPILOG = """
 Available Modes:
   scan        - Static code analysis with Semgrep
   sca         - Software Composition Analysis (deps + advisories + SBOM)
+  binary      - Black-box binary investigation and evidence collection
   fuzz        - Binary fuzzing with AFL++
   web         - Web application security testing
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
@@ -1134,6 +1191,9 @@ Examples:
 
   # Binary fuzzing
   python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+  # Black-box binary investigation
+  python3 raptor.py binary investigate /path/to/binary
 
   # Web scanning
   python3 raptor.py web --url https://example.com
@@ -1251,6 +1311,7 @@ def main():
     mode_handlers = {
         'scan': mode_scan,
         'sca': mode_sca,
+        'binary': mode_binary,
         'fuzz': mode_fuzz,
         'web': mode_web,
         'agentic': mode_agentic,

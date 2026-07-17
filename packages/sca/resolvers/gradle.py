@@ -111,6 +111,12 @@ class GradleResolver:
                 success=False, available=True,
                 error=f"gradle dependencies timed out after {timeout}s",
             )
+        except PermissionError:
+            return ResolverResult(
+                ecosystem=self.ecosystem,
+                success=False, available=True,
+                error="gradle/gradlew not executable",
+            )
 
         raw = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode != 0:
@@ -125,7 +131,7 @@ class GradleResolver:
         # into dependency locking; otherwise the dep-tree output is
         # the closest lockfile-equivalent artefact we have.
         lockfile = _read_if_exists(project_dir / "gradle.lockfile")
-        if lockfile is None:
+        if not lockfile:
             lockfile = proc.stdout.encode("utf-8") if proc.stdout else None
         return ResolverResult(
             ecosystem=self.ecosystem,

@@ -65,7 +65,10 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
         if not ok:
             self.skipTest(reason)
 
+    @pytest.mark.slow
     def test_two_runs_same_dir_distinct_nonces(self):
+        from concurrent.futures import ThreadPoolExecutor
+
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (
             OBSERVE_FILENAME, parse_observe_log,
@@ -83,25 +86,32 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
             scratch_b = Path(d) / "b"
             scratch_b.mkdir()
 
-            # Run A: reads /etc/hostname (a path that "true" doesn't
-            # touch — gives us a distinguishable signal).
-            r_a = sandbox_run(
-                ["/bin/sh", "-c",
-                 "cat /etc/hostname > /dev/null"],
-                target=str(scratch_a), output=str(shared),
-                observe=True, capture_output=True, text=True, timeout=10,
-            )
+            def _run_a():
+                return sandbox_run(
+                    ["/bin/sh", "-c",
+                     "cat /etc/hostname > /dev/null"],
+                    target=str(scratch_a), output=str(shared),
+                    observe=True, capture_output=True, text=True, timeout=20,
+                )
+
+            def _run_b():
+                return sandbox_run(
+                    ["/bin/sh", "-c",
+                     "cat /etc/os-release > /dev/null"],
+                    target=str(scratch_b), output=str(shared),
+                    observe=True, capture_output=True, text=True, timeout=20,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_a = pool.submit(_run_a)
+                fut_b = pool.submit(_run_b)
+                r_a = fut_a.result(timeout=30)
+                r_b = fut_b.result(timeout=30)
+
             nonce_a = r_a.sandbox_info.get("observe_nonce")
             if nonce_a is None:
                 self.skipTest("audit didn't engage on run A")
 
-            # Run B: reads /etc/os-release.
-            r_b = sandbox_run(
-                ["/bin/sh", "-c",
-                 "cat /etc/os-release > /dev/null"],
-                target=str(scratch_b), output=str(shared),
-                observe=True, capture_output=True, text=True, timeout=10,
-            )
             nonce_b = r_b.sandbox_info.get("observe_nonce")
             if nonce_b is None:
                 self.skipTest("audit didn't engage on run B")

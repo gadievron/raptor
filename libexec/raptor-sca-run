@@ -45,12 +45,12 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import core.startup.process_init  # noqa: E402,F401
 
 from core.run.metadata import complete_run, fail_run, start_run     # noqa: E402
 from core.run.output import get_output_dir                           # noqa: E402
 from packages.sca import cli as sca_cli                              # noqa: E402
 from packages.sca.cli import _configure_logging, _print_summary      # noqa: E402
-from packages.sca.pipeline import RunOptions, run_sca                # noqa: E402
 from packages.sca.cli import SUBCOMMANDS as _SUBCOMMANDS              # noqa: E402
 
 _HELP = """\
@@ -146,6 +146,8 @@ def _resolve_target(explicit):
 
 
 def _run_analyse(argv):
+    from packages.sca.pipeline import run_sca
+
     args = _parse_analyse(argv)
     _configure_logging(args.verbose)
 

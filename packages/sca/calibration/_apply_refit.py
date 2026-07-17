@@ -91,7 +91,7 @@ def apply_refit_to_risk_py(
         m = _CONSTANT_LINE_RE.match(lines[line_idx])
         assert m is not None
         old_value = float(m.group("value"))
-        if old_value == new_value:
+        if old_value == round(new_value, 4):
             continue
         formatted = _format_value(new_value)
         new_line = (

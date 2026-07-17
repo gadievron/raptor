@@ -212,6 +212,19 @@ def run_sandboxed(cmd: List[str], *,
                   # always visible inside the SBPL sandbox), so this
                   # kwarg is accepted + ignored for signature parity.
                   skip_pid_ns=False,  # noqa: ARG001
+                  # skip_mount_ns: Linux-only — skips mount-ns pivot_root
+                  # so the host filesystem stays visible (used by frida
+                  # profile). macOS sandbox-exec doesn't use mount-ns;
+                  # accepted + ignored for signature parity.
+                  skip_mount_ns=False,  # noqa: ARG001
+                  # proxy_unix_socket / proxy_forwarder_port: Linux-only
+                  # — used by _spawn to fork a TCP-to-Unix relay inside
+                  # the child's empty netns for proxy enforcement on
+                  # kernels with Landlock ABI < 4. macOS uses sandbox-
+                  # exec network rules instead; accepted + ignored for
+                  # signature parity.
+                  proxy_unix_socket=None,  # noqa: ARG001
+                  proxy_forwarder_port=None,  # noqa: ARG001
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.

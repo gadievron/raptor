@@ -116,9 +116,9 @@ def test_regression_verdict_when_proposed_does_not_clear(tmp_path: Path) -> None
         [str(target), "--proposed", str(proposed), "--out", str(out)],
         http=StubHttp(), cache=cache,
     )
-    # Same advisory hits both versions → no resolution, no regression
-    # (canonical-id dedup). Verdict is clean (no NEW findings).
-    assert rc == 0
+    # Same advisory hits both versions → persistent above threshold →
+    # verify gate fails (advisory not cleared by the proposed change).
+    assert rc == 1
     delta_md = (out / "delta.md").read_text()
     assert "Resolved: **0**" in delta_md
     assert "New: **0**" in delta_md

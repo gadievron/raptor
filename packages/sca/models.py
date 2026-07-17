@@ -2,7 +2,7 @@
 
 Every signal in the pipeline carries a Confidence; every finding has a single
 canonical schema; risk is surfaced as components only (no composite score
-yet — see ~/design/sca.md § Risk components).
+yet
 
 All dataclasses are JSON-serialisable via dataclasses.asdict; the report and
 findings.json layers handle that wrapping.

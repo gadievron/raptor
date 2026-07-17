@@ -7,6 +7,8 @@ fire — false positives silence real findings on loadable files).
 
 from __future__ import annotations
 
+import textwrap
+
 from core.inventory.module_load_abort import (
     ModuleLoadAbort,
     detect_module_load_abort,
@@ -391,3 +393,75 @@ def test_builder_records_abort_field(tmp_path):
     assert abort["summary"] == "raise ImportError"
     assert module_aborts_on_load(inv, "ok.py") is None
     assert module_aborts_on_load(inv, "nonexistent.py") is None
+
+
+# ---------------------------------------------------------------------------
+# JS statement-boundary guard (throw after non-boundary chars)
+# ---------------------------------------------------------------------------
+
+def test_js_conditional_throw_not_detected():
+    code = "if (typeof window === 'undefined') throw new Error('no window')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is None, (
+        f"Conditional throw falsely detected as module abort: {result}"
+    )
+
+
+def test_js_conditional_throw_multiline_not_detected():
+    code = textwrap.dedent("""\
+        const x = require('x');
+        if (!x.supported)
+            throw new Error('unsupported');
+        module.exports = x;
+    """)
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+def test_js_bare_throw_still_detected():
+    code = "throw new Error('module not supported')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert "Error" in result.summary
+
+
+def test_js_throw_after_semicolon_detected():
+    code = "const ver = process.version;\nthrow new RangeError('bad version')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert "RangeError" in result.summary
+
+
+def test_js_throw_after_block_detected():
+    code = textwrap.dedent("""\
+        if (false) {
+            console.log('skip');
+        }
+        throw new TypeError('always abort')
+    """)
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert "TypeError" in result.summary
+
+
+def test_js_throw_inside_function_not_detected():
+    code = textwrap.dedent("""\
+        function validate(x) {
+            if (!x) throw new Error('invalid');
+        }
+        module.exports = validate;
+    """)
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+def test_js_while_throw_not_detected():
+    code = "while (check()) throw new Error('loop abort')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+def test_js_for_throw_not_detected():
+    code = "for (let i = 0; i < 1; i++) throw new Error('for abort')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is None

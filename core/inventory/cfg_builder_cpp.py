@@ -579,8 +579,10 @@ def _payload_from_declaration(decl) -> Tuple[FrozenSet[str], FrozenSet[str],
                 )
                 calls_acc |= _walk_subtree_for_calls(val)
                 uses_acc |= _walk_subtree_for_uses(val)
-        elif child.type == _IDENT or child.type == _POINTER_DECLARATOR:
-            # ``int x;`` — declarator with no initialiser
+        elif child.type in (
+            _IDENT, _POINTER_DECLARATOR,
+            "array_declarator", "function_declarator",
+        ):
             name = _innermost_ident(child)
             if name is not None:
                 defs.add(name)

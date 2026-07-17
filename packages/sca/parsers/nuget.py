@@ -159,28 +159,10 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
     # Build common source_extra carrying TFM information.
     source_extra = {"tfms": tfms} if tfms else None
 
-    # GlobalPackageReference entries from the chain are auto-applied
-    # to EVERY csproj in the solution. Emit them BEFORE the inline
-    # PackageReference walk so deduplication via seen_keys handles
-    # the case where a csproj ALSO explicitly references a global
-    # package (uncommon but legal — csproj's reference wins).
-    for global_pkg in global_packages:
-        dep = _build_msbuild_dep(
-            name=global_pkg.name,
-            version=global_pkg.version,
-            scope="main",
-            declared_in=path,
-            source_extra=source_extra,
-            source_origin="cpm_global",
-            resolved_in=global_pkg.declared_in,
-        )
-        if dep.key() in seen_keys:
-            continue
-        seen_keys.add(dep.key())
-        out.append(dep)
-
     # MSBuild XML is namespaced (xmlns="http://schemas...") in some files
     # but namespace-less in modern SDK-style projects; iter both.
+    # Process inline PackageReference entries BEFORE globals so that
+    # csproj's explicit reference wins (first-write-wins dedup).
     skipped_no_version = []
     for el in _findall_pkgref(root):
         name = el.get("Include") or el.get("Update")
@@ -235,6 +217,23 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             source_origin=source_origin,
             pin_style=pin_style,
             resolved_in=cpm_resolved_in,
+        )
+        if dep.key() in seen_keys:
+            continue
+        seen_keys.add(dep.key())
+        out.append(dep)
+    # GlobalPackageReference entries from the chain are auto-applied
+    # to EVERY csproj in the solution. Emit AFTER the inline walk so
+    # csproj's explicit reference wins via first-write-wins dedup.
+    for global_pkg in global_packages:
+        dep = _build_msbuild_dep(
+            name=global_pkg.name,
+            version=global_pkg.version,
+            scope="main",
+            declared_in=path,
+            source_extra=source_extra,
+            source_origin="cpm_global",
+            resolved_in=global_pkg.declared_in,
         )
         if dep.key() in seen_keys:
             continue
@@ -464,6 +463,13 @@ def _scope_from_msbuild(el) -> str:
 
 @register(filenames=["packages.config"])
 def parse_packages_config(path: Path) -> List[Dependency]:
+    if not _AVAILABLE:
+        logger.warning(
+            "sca.parsers.nuget: skipping %s — 'defusedxml' not "
+            "installed; refusing to parse target-repo XML with the "
+            "stdlib parser (XXE / billion-laughs exposure)", path,
+        )
+        return []
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -621,8 +627,14 @@ def _classify_version_spec(spec: Optional[str]) -> Tuple[PinStyle, Optional[str]
                 return PinStyle.EXACT, lv
             return PinStyle.UNKNOWN, None
         # Range form. Pick the lower bound's bare version when present;
-        # else the upper.
-        bare = lv if lv else uv if uv else None
+        # else the upper (only when inclusive — an exclusive upper
+        # bound is outside the range).
+        if lv:
+            bare = lv
+        elif uv and ub == "]":
+            bare = uv
+        else:
+            bare = None
         return PinStyle.RANGE, bare
     # Plain ``"1.2.3"`` — NuGet's "minimum" semantic. We report it as
     # RANGE (operator >= is implied) but keep the bare version.

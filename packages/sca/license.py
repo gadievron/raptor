@@ -349,6 +349,9 @@ def _classify(
     spdx: str,
     policy: LicensePolicy,
 ) -> Optional[LicenseFinding]:
+    if " WITH " in spdx:
+        base = spdx.split(" WITH ", 1)[0].strip()
+        return _classify(dep, base, policy)
     if spdx in policy.deny:
         return _deny_finding(dep, spdx)
     if spdx in policy.warn:
@@ -524,7 +527,7 @@ def enrich_licenses(
             else:
                 return False
         except Exception as e:                          # noqa: BLE001
-            logger.debug(
+            logger.warning(
                 "sca.license: enrichment failed for %s:%s (%s)",
                 d.ecosystem, d.name, e,
             )
@@ -707,9 +710,11 @@ def _spdx_from_pom(pom_bytes: bytes) -> Optional[str]:
                 if spdx:
                     return spdx
                 # Fallback: if the free-text already looks SPDX-like
-                # (single token, no spaces), accept it.
+                # (short identifier or compound expression), accept it.
                 text = child.text.strip()
                 if " " not in text and len(text) < 40:
+                    return text
+                if _looks_like_spdx_expression(text):
                     return text
                 return None
         break

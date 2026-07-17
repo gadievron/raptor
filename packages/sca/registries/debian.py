@@ -91,8 +91,9 @@ class DebianClient:
         return self._query(name, suite=suite)
 
     def _query(self, name: str, *, suite: Optional[str]) -> List[str]:
-        cache_key = (f"{_CACHE_KEY_PREFIX}:{name}" if suite is None
-                     else f"{_CACHE_KEY_PREFIX}:{name}:{suite}")
+        encoded_name = urllib.parse.quote(name, safe='')
+        cache_key = (f"{_CACHE_KEY_PREFIX}:{encoded_name}" if suite is None
+                     else f"{_CACHE_KEY_PREFIX}:{encoded_name}:{suite}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:

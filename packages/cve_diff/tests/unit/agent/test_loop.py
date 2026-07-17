@@ -179,6 +179,85 @@ def test_immediate_submit_rescued(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fake.calls
 
 
+def test_trajectory_persisted_when_env_var_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """When RAPTOR_TRAJECTORY_DIR is set, the cve-diff agent writes a
+    trajectory file keyed off the CVE ID. The libexec shim sets this
+    automatically from --output-dir for operator runs."""
+    import json
+    from core.trajectories.auto import TRAJECTORY_DIR_ENV
+
+    monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
+    _patch_provider(monkeypatch, [_tc_response(_submit_call())])
+    result = AgentLoop().run(_cfg(), AgentContext(cve_id="CVE-2024-12345"))
+    assert isinstance(result, AgentOutput)
+
+    traj = (
+        tmp_path / "trajectories" / "cve-diff-CVE-2024-12345"
+        / "trajectory.json"
+    )
+    assert traj.exists(), (
+        f"trajectory not at {traj}; tree was: {list(tmp_path.rglob('*'))}"
+    )
+    payload = json.loads(traj.read_text())
+    assert payload["run_id"] == "cve-diff-CVE-2024-12345"
+    assert payload["finding_id"] == "CVE-2024-12345"
+    # cve_id flows into finding_id; cwe stays empty for this consumer
+    assert payload["cwe"] == ""
+    assert payload["terminated_by"] == "terminal_tool"
+
+
+def test_partial_trajectory_persisted_on_cost_cap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """On the CostBudgetExceeded path the agent loop must persist
+    whatever messages survived to the point of termination — this is
+    the case where the trajectory is MOST useful for operator
+    debugging. Earlier wiring used a finally-block that only fired on
+    the success path; this test pins the symmetric exception-path
+    contract."""
+    import json
+    from core.llm.tool_use.types import (
+        CostBudgetExceeded, Message, TextBlock,
+    )
+    from core.trajectories.auto import TRAJECTORY_DIR_ENV
+
+    monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
+
+    partial_msgs = [
+        Message(role="user", content=[TextBlock(text="diff this")]),
+        Message(role="assistant", content=[TextBlock(text="thinking…")]),
+    ]
+    exc = CostBudgetExceeded(
+        "budget", messages=partial_msgs, tool_calls_made=0,
+    )
+    from unittest.mock import patch
+    _patch_provider(monkeypatch, [_tc_response(_submit_call())])
+    with patch(
+        "core.llm.tool_use.loop.ToolUseLoop.run",
+        side_effect=exc,
+    ):
+        result = AgentLoop().run(_cfg(), AgentContext(cve_id="CVE-2024-99999"))
+    # Surrender output expected — that's the cost-cap exit code path.
+    assert isinstance(result, AgentSurrender)
+    assert result.reason == "budget_cost_usd"
+
+    traj = (
+        tmp_path / "trajectories" / "cve-diff-CVE-2024-99999"
+        / "trajectory.json"
+    )
+    assert traj.exists(), (
+        f"partial trajectory not at {traj}; "
+        f"tree: {list(tmp_path.rglob('*'))}"
+    )
+    payload = json.loads(traj.read_text())
+    assert payload["terminated_by"] == "max_cost_usd"
+    assert payload["finding_id"] == "CVE-2024-99999"
+    # Two partial messages survived to disk.
+    assert len(payload["steps"]) == 2
+
+
 def test_tool_dispatched_then_submit(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict] = []
 

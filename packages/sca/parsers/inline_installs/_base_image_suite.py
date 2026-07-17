@@ -111,15 +111,17 @@ def stage_image_map(instructions: List[Instruction]) -> Dict[Optional[str], str]
         raw[inst.stage_name] = img
         order.append(inst.stage_name)
 
-    stage_names = set(raw)
     resolved: Dict[Optional[str], str] = {}
+    defined_so_far: set = set()
     for stage in order:
         img = raw[stage]
         seen: set = set()
-        while img in stage_names and img not in seen:
+        while img in defined_so_far and img not in seen:
             seen.add(img)
             img = raw[img]
         resolved[stage] = img
+        if stage is not None:
+            defined_so_far.add(stage)
     return resolved
 
 

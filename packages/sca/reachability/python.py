@@ -190,8 +190,8 @@ def resolve_dep(
             logger.debug("python_modules.resolve_modules raised: %s", e)
             wheel_modules = None
         if wheel_modules:
-            candidates = list(wheel_modules)
-            hits = _hits_for_modules(candidates, scan)
+            candidates = candidates + list(wheel_modules)
+            hits = _hits_for_modules(wheel_modules, scan)
 
     if not hits:
         return Reachability(
@@ -248,10 +248,14 @@ def _hits_for_modules(
     the ``startswith(candidate + ".")`` check.
     """
     hits: List[Tuple[Path, int, bool]] = []
+    seen: set = set()
     for mod in candidates:
         for known in scan.keys():
             if known == mod or known.startswith(mod + "."):
-                hits.extend(scan[known])
+                for h in scan[known]:
+                    if h not in seen:
+                        seen.add(h)
+                        hits.append(h)
     return hits
 
 

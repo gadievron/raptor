@@ -141,7 +141,7 @@ def _extract_additional_deps(
     repo = entry.get("repo")
     if not isinstance(repo, str):
         return []
-    if repo in ("local", "meta"):
+    if repo == "meta":
         return []
     hooks = entry.get("hooks")
     if not isinstance(hooks, list):
@@ -269,6 +269,8 @@ def _wrap_version(
         return name, ver_part[1:].strip(), PinStyle.CARET
     if ver_part.startswith("~"):
         return name, ver_part[1:].strip(), PinStyle.TILDE
+    if ver_part.startswith("!="):
+        return name, ver_part, PinStyle.RANGE
     if any(ch in ver_part for ch in "<>") or "," in ver_part:
         return name, ver_part, PinStyle.RANGE
     if ver_part.startswith("="):
@@ -356,8 +358,12 @@ def _build_dep(
         # rather than substring-matching the prefix.
         eco = _GITHUB_FALLBACK_ECOSYSTEM
         host, _, path = canonical.partition("/")
-        name = path if host == "github.com" and path else canonical
-        purl = f"pkg:github/{name}@{rev}"
+        if host == "github.com" and path:
+            name = path
+            purl = f"pkg:github/{name}@{rev}"
+        else:
+            name = canonical
+            purl = f"pkg:generic/{name}@{rev}"
 
     return Dependency(
         ecosystem=eco,

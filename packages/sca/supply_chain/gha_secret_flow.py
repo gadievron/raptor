@@ -173,7 +173,7 @@ _ENV_SHELL_RE = re.compile(
 )
 # Mask-line shape that legitimately consumes a secret in a run block.
 _MASK_RE = re.compile(
-    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_]*'
+    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)'
 )
 # ``${{ steps.<id>.outputs.<name> }}`` — a downstream reference to
 # a previous step's output.  Used in both ``with:`` inputs and
@@ -611,6 +611,10 @@ def _value_is_tainted(value: str, job_ctx: "_JobContext") -> Optional[str]:
         var = env_m.group(1)
         if var in job_ctx.secret_bound_env:
             return job_ctx.secret_bound_env[var]
+    for env_m in _ENV_TEMPLATE_RE.finditer(value):
+        var = env_m.group(1)
+        if var in job_ctx.secret_bound_env:
+            return job_ctx.secret_bound_env[var]
     for out_m in _STEPS_OUTPUT_RE.finditer(value):
         step_id = out_m.group(1)
         out_name = out_m.group(2)
@@ -1006,7 +1010,6 @@ def _scan_one_step(
         # SAME body (a body that masks ONE secret can still leak
         # another via redirect) — but skip emitting a ``run_block``
         # finding so the mask line itself isn't a FP.
-        is_masked = bool(_MASK_RE.search(run_body))
         # Strip bash full-line comments before scanning for
         # ``$VAR`` references — a comment explaining what the body
         # does or why the secret-handling pattern is safe must not
@@ -1017,6 +1020,9 @@ def _scan_one_step(
         # avoid; the FP-shape we close here is the common "docstring-
         # like full-line comment block at top of run body".
         scan_body = _strip_bash_full_line_comments(run_body)
+        masked_secrets = {
+            m.group(1) for m in _MASK_RE.finditer(scan_body)
+        }
         # Check whether the body references a secret literal,
         # a secret-tainted env var, or a tainted prior-step output.
         secret_refs_in_body: List[str] = []
@@ -1032,13 +1038,22 @@ def _scan_one_step(
                 secret_refs_in_body.append(
                     job_ctx.secret_bound_env[var],
                 )
+        for m in _ENV_TEMPLATE_RE.finditer(scan_body):
+            var = m.group(1)
+            if var in job_ctx.secret_bound_env:
+                secret_refs_in_body.append(
+                    job_ctx.secret_bound_env[var],
+                )
         for sm in _STEPS_OUTPUT_RE.finditer(scan_body):
             step_id = sm.group(1)
             out_name = sm.group(2)
             bound = job_ctx.secret_bound_outputs.get(step_id, {})
             if out_name in bound:
                 secret_refs_in_body.append(bound[out_name])
-        if secret_refs_in_body and not is_masked:
+        unmasked_refs = [
+            s for s in secret_refs_in_body if s not in masked_secrets
+        ]
+        if unmasked_refs:
             severity = (
                 "high"
                 if _is_truthy_run_body_egress(scan_body)
@@ -1048,10 +1063,10 @@ def _scan_one_step(
                 dependency=dep, workflow_path=workflow_path,
                 job_id=job_id, step_index=step_index,
                 sink_kind="run_block",
-                secret_names=tuple(sorted(set(secret_refs_in_body))),
+                secret_names=tuple(sorted(set(unmasked_refs))),
                 detail=(
                     f"``run:`` block references secret(s) "
-                    f"{sorted(set(secret_refs_in_body))!r} outside "
+                    f"{sorted(set(unmasked_refs))!r} outside "
                     f"the standard echo-with-mask form"
                 ),
                 severity=severity,
@@ -1062,14 +1077,14 @@ def _scan_one_step(
         # propagated taint at their sinks.  No finding here — the
         # laundering step itself isn't the sink.
         for key, value in _extract_redirected_writes(
-            run_body, "GITHUB_ENV",
+            scan_body, "GITHUB_ENV",
         ):
             source = _value_is_tainted(value, job_ctx)
             if source is not None:
                 job_ctx.secret_bound_env[key] = source
         if step_id_str:
             for key, value in _extract_redirected_writes(
-                run_body, "GITHUB_OUTPUT",
+                scan_body, "GITHUB_OUTPUT",
             ):
                 source = _value_is_tainted(value, job_ctx)
                 if source is not None:

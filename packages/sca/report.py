@@ -572,7 +572,7 @@ def _render_one_vuln(
         )
         if primary.summary:
             bullets.append(
-                f"- Summary: {escape_nonprintable(primary.summary)}"
+                f"- Summary: {sanitise_string(primary.summary)}"
             )
 
     badges = _badges(f)
@@ -607,9 +607,9 @@ def _render_one_vuln(
 
     if not omit_source:
         if dep.is_lockfile:
-            bullets.append(f"- Source: lockfile (`{dep.declared_in}`)")
+            bullets.append(f"- Source: lockfile (`{escape_nonprintable(str(dep.declared_in))}`)")
         else:
-            bullets.append(f"- Source: manifest (`{dep.declared_in}`)")
+            bullets.append(f"- Source: manifest (`{escape_nonprintable(str(dep.declared_in))}`)")
         # Source-specific context — Dockerfile FROM rows surface
         # the base image + stage so operators can group findings
         # by build stage in their review.
@@ -704,13 +704,13 @@ def _render_one_vuln(
 
     detail = (primary.details if primary else "") or ""
     if detail:
+        from core.security.prompt_envelope import _strip_autofetch_markup
         clipped = detail.strip()
         if len(clipped) > _DETAIL_TRUNCATE:
             clipped = clipped[:_DETAIL_TRUNCATE].rstrip() + (
                 f"… (truncated; see findings.json `{f.finding_id}`)"
             )
-        # Advisory detail is the largest attacker-influenced text in the
-        # report; sanitise it before rendering.
+        clipped = _strip_autofetch_markup(clipped)
         clipped = escape_nonprintable(clipped)
         bullets.append("\n<details><summary>Advisory detail</summary>\n\n"
                        f"{clipped}\n\n</details>")

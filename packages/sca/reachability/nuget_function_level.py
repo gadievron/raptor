@@ -77,7 +77,7 @@ def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
             v = source.get(key)
             if isinstance(v, list) and dep_name:
                 for s in v:
-                    if isinstance(s, str):
+                    if isinstance(s, str) and s:
                         out.append(f"{dep_name}.{s}")
     return out
 
@@ -118,21 +118,21 @@ def refine_nuget_verdicts(
 
     for d in candidates:
         qualified_names = nuget_symbol_map[d.key()]
-        results = []
+        paired = []
         for qn in qualified_names:
             if "." not in qn:
                 continue
             try:
-                results.append(function_called(inventory, qn))
+                paired.append((qn, function_called(inventory, qn)))
             except ValueError:
                 continue
-        if not results:
+        if not paired:
             continue
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence: List[str] = []
-            called: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            evidence: list[str] = []
+            called: list[str] = []
+            for qn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called.append(qn)
                     evidence.extend(f"{p}:{ln}" for p, ln in r.evidence)

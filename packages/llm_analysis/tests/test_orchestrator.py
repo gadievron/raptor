@@ -115,7 +115,7 @@ def _make_cc_result(finding_id, exploitable=True, score=0.85):
 
 
 def _mock_subprocess_ok(results_by_call):
-    """Create a subprocess.run mock that returns the right result
+    """Create a run_untrusted_networked mock that returns the right result
     for each finding.
 
     ``results_by_call`` may be either:
@@ -198,7 +198,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok([cc_result])):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -270,7 +270,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -313,7 +313,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -376,7 +376,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run", side_effect=mock_run):
+             patch("core.sandbox.run_untrusted_networked", side_effect=mock_run):
             result = orchestrate(
                 prep_report_path=report_path,
                 repo_path=tmp_path,
@@ -999,7 +999,7 @@ class TestWeakenedDefenses:
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which",
                    return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok([cc_result])):
             result = orchestrate(
                 prep_report_path=report_path,

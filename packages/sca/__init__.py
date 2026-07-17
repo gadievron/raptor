@@ -121,8 +121,7 @@ def default_client(
     """
     if offline:
         return _NoopHttpClient()
-    hosts = compose_proxy_hosts(target) if target is not None \
-        else list(SCA_ALLOWED_HOSTS)
+    hosts = compose_proxy_hosts(target)
     return EgressClient(tuple(hosts), user_agent=SCA_USER_AGENT)
 
 
@@ -199,7 +198,7 @@ def compose_proxy_hosts(target: "Optional[Path]" = None) -> list:
                 seen.add(h)
     except Exception:                               # noqa: BLE001
         import logging
-        logging.getLogger(__name__).debug(
+        logging.getLogger(__name__).warning(
             "sca: private-registry override discovery failed",
             exc_info=True,
         )

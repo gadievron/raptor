@@ -225,7 +225,7 @@ def _collect_functions(tree: ast.AST) -> List[_FunctionRecord]:
                 )
                 # Class body is walked with class_name set; nested
                 # functions become methods named "ClassName.method".
-                stack.append((child, inner_prefix, child.name))
+                stack.append((child, inner_prefix, inner_prefix))
                 continue
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 qualified = (

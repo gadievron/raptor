@@ -26,6 +26,7 @@ from pathlib import Path
 
 import typer
 
+from core.atomic_fs import write_text_atomically
 from cve_diff.core.exceptions import CveDiffError
 from cve_diff.infra import api_status
 from cve_diff.infra.github_client import warn_if_token_missing
@@ -697,29 +698,17 @@ def bench(
     summary_path = output_dir / "summary.json"
 
     def _flush() -> None:
-        # Atomic write. Pre-fix `summary_path.write_text(...)` was
-        # non-atomic — `_flush` is called after every CVE in a long
-        # bench run (a 100-CVE bench takes 30+ minutes), and the
-        # operator routinely reads `summary.json` mid-run to track
-        # progress. A reader catching the file mid-write got partial
-        # JSON and JSONDecode-crashed. Worse, a process kill
-        # mid-write left summary.json corrupted at end-of-run, with
-        # no easy recovery (the per-CVE results are scattered across
-        # `_run_one` outputs). Temp+rename keeps every observable
-        # state of summary.json complete.
-        import os as _os
-        tmp = summary_path.with_name(
-            f"{summary_path.name}.tmp.{_os.getpid()}"
+        # Atomic write: ``_flush`` is called after every CVE in a
+        # long bench run (a 100-CVE bench takes 30+ minutes); the
+        # operator routinely reads ``summary.json`` mid-run to track
+        # progress. Torn reads got partial JSON and JSONDecode-
+        # crashed. Primitive keeps every observable state of
+        # summary.json complete.
+        write_text_atomically(
+            summary_path,
+            json.dumps(asdict(summary), indent=2) + "\n",
+            tmp_prefix=".bench-summary-",
         )
-        try:
-            tmp.write_text(json.dumps(asdict(summary), indent=2) + "\n")
-            _os.replace(str(tmp), str(summary_path))
-        except BaseException:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
 
     if workers <= 1:
         for i, cve_id in enumerate(cves, 1):
@@ -778,28 +767,20 @@ def bench(
     non_source = summary.passed - source_hits
     pass_n, refusal_n, issue_n = _outcome_buckets(summary)
     _flush()
-    # Atomic write via tmp+rename. Pre-fix `write_text` on the
-    # final filenames left a half-written summary visible to
-    # concurrent readers (the CI harness that polls
-    # `summary.json` to grab pass-rates the moment a bench
-    # finishes had a window where `json.load` failed mid-write
-    # with "Expecting value"). For .html and .md the consequence
-    # is an operator opening the file mid-bench and seeing
-    # truncated content.
-    #
-    # Same-directory tmp+rename so the rename is atomic on the
-    # same filesystem (cross-fs would fall back to copy+unlink).
-    def _atomic_write(path: Path, content: str) -> None:
-        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
-        try:
-            tmp.write_text(content)
-            tmp.replace(path)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-    import os
-    _atomic_write(output_dir / "summary.html", _render_html(summary))
-    _atomic_write(output_dir / "bench_report.md", _render_bench_markdown(summary))
+    # Atomic write: CI harness polls summary.html / bench_report.md
+    # for pass-rates the moment a bench finishes; torn reads leave
+    # operators seeing truncated JSON / markdown. Primitive keeps
+    # every observable state complete.
+    write_text_atomically(
+        output_dir / "summary.html",
+        _render_html(summary),
+        tmp_prefix=".bench-html-",
+    )
+    write_text_atomically(
+        output_dir / "bench_report.md",
+        _render_bench_markdown(summary),
+        tmp_prefix=".bench-md-",
+    )
     _persist_summary(output_dir / "summary.json", sample)
     typer.echo("")
     typer.echo(f"=== {summary.passed}/{summary.total} passed ({pct:.1f}%) ===")

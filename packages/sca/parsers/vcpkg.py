@@ -49,7 +49,7 @@ _PURL_TYPE = "vcpkg"
 # vcpkg port names are lowercase letters / digits / dashes per
 # the vcpkg port-naming guidelines. Anything else suggests a
 # malformed entry and we skip silently.
-_PORT_NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9\-]*$")
+_PORT_NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9\-]*\Z")
 
 
 @register(filenames=["vcpkg.json"])

@@ -91,6 +91,12 @@ class SuppressionEntry:
         if self.advisory_id:
             advisory = sca.get("advisory") or {}
             ids = {advisory.get("id"), *(advisory.get("aliases") or [])}
+            for adv in sca.get("all_advisories") or []:
+                if isinstance(adv, dict):
+                    if adv.get("id"):
+                        ids.add(adv["id"])
+                    for alias in adv.get("aliases") or []:
+                        ids.add(alias)
             if self.advisory_id not in ids:
                 return False
         if self.ecosystem and sca.get("ecosystem") != self.ecosystem:
@@ -233,6 +239,7 @@ def apply(
     left alone — first-match-wins, idempotent on repeated calls.
     """
     today = today or datetime.now(timezone.utc).date()
+    entries = list(entries)
     n = 0
     for row in rows:
         if row.get("suppressed"):

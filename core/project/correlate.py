@@ -226,7 +226,8 @@ def _find_disagreements(
                 "verdict": verdict,
                 "model": model,
                 "score": f.get("exploitability_score")
-                         or f.get("cvss_score_estimate"),
+                         if f.get("exploitability_score") is not None
+                         else f.get("cvss_score_estimate"),
             })
 
     disagreements = []
@@ -240,7 +241,7 @@ def _find_disagreements(
             continue
 
         f = key_to_finding[k]
-        scores = [v["score"] for v in verdicts if v["score"]]
+        scores = [v["score"] for v in verdicts if v["score"] is not None]
         disagreements.append({
             "file": f.get("file", ""),
             "function": f.get("function", ""),
@@ -539,10 +540,11 @@ def _build_trends(
         for f in findings:
             k = dedup_key(f)
             model = f.get("analysed_by") or run_models.get(run_name, "")
+            es = f.get("exploitability_score")
             key_to_history[k].append({
                 "run": run_name,
                 "status": f.get("final_status") or f.get("status", ""),
-                "score": f.get("exploitability_score") or f.get("cvss_score_estimate"),
+                "score": es if es is not None else f.get("cvss_score_estimate"),
                 "model": model,
             })
 

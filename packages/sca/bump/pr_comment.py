@@ -99,7 +99,7 @@ def render_pr_comment(
 
         buf.write("<details open>\n")
         buf.write(
-            f"<summary><b>Bump proposals ({total})</b></summary>\n\n"
+            f"<summary><b>Bump proposals ({len(order)})</b></summary>\n\n"
         )
         buf.write(
             "| Kind | Locator | Current | Target | Verdict | Notes |\n"
@@ -109,7 +109,7 @@ def render_pr_comment(
             group = groups[key]
             head = group[0]
             n_files = len(group)
-            notes = _notes_for_group(head, n_files)
+            notes = _notes_for_group(group, n_files)
             buf.write(
                 f"| {head.candidate.kind} "
                 f"| `{head.candidate.locator}` "
@@ -199,7 +199,7 @@ def _truncate_one_line(text: str, max_len: int) -> str:
     return flat[: max_len - 1].rstrip() + "…"
 
 
-def _notes_for_group(head: BumpResult, n_files: int) -> str:
+def _notes_for_group(group: List[BumpResult], n_files: int) -> str:
     """Pack the per-group notes into one comment cell.
 
     Surfaces:
@@ -210,17 +210,25 @@ def _notes_for_group(head: BumpResult, n_files: int) -> str:
     * File count when >1 (deduped across files).
     """
     bits: List[str] = []
-    for sf in head.bump_supply_chain_findings:
-        bits.append(sf.kind)
-    for vf in head.bump_vuln_findings:
-        adv = vf.advisories[0] if vf.advisories else None
-        cve_id = (adv.osv_id if adv else "?")
-        kev = " (KEV)" if vf.in_kev else ""
-        bits.append(f"new-CVE `{cve_id}`{kev}")
+    seen_kinds: set = set()
+    seen_cves: set = set()
+    for member in group:
+        for sf in member.bump_supply_chain_findings:
+            if sf.kind not in seen_kinds:
+                bits.append(sf.kind)
+                seen_kinds.add(sf.kind)
+        for vf in member.bump_vuln_findings:
+            adv = vf.advisories[0] if vf.advisories else None
+            cve_id = (adv.osv_id if adv else "?")
+            if cve_id not in seen_cves:
+                kev = " (KEV)" if vf.in_kev else ""
+                bits.append(f"new-CVE `{cve_id}`{kev}")
+                seen_cves.add(cve_id)
     if n_files > 1:
         bits.append(f"{n_files} files")
-    if head.rewrite_result is not None and head.rewrite_result.applied:
+    if any(m.rewrite_result is not None and m.rewrite_result.applied for m in group):
         bits.append("applied")
-    if head.error:
-        bits.append(f"error: {head.error}")
+    errors = [m.error for m in group if m.error]
+    if errors:
+        bits.append(f"error: {errors[0]}")
     return " · ".join(bits) if bits else "—"

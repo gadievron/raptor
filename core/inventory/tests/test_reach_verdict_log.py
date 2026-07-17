@@ -286,7 +286,8 @@ def test_cli_script_table_output(_isolated_sidecar):
 
 
 def test_cli_script_json_output(_isolated_sidecar):
-    import os, sys  # noqa: F401
+    import os  # noqa: F401
+    import sys  # noqa: F401
     reach_verdict_log.record_verdict("python", "reachable")
     reach_verdict_log.flush()
 
@@ -297,7 +298,8 @@ def test_cli_script_json_output(_isolated_sidecar):
 
 
 def test_cli_script_reset(_isolated_sidecar):
-    import os, sys  # noqa: F401
+    import os  # noqa: F401
+    import sys  # noqa: F401
     reach_verdict_log.record_verdict("python", "reachable")
     reach_verdict_log.flush()
     assert _isolated_sidecar.exists()

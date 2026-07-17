@@ -144,6 +144,64 @@ class TestHappyPath:
             )
         assert result == verdicts
 
+
+class TestTrajectoryWiring:
+    """Trace dispatch persists a trajectory under
+    ``$RAPTOR_TRAJECTORY_DIR/trajectories/trace-<model>/`` when the
+    env var is set — same opt-in shape as hunt_dispatch."""
+
+    def test_trajectory_written_when_env_var_set(
+        self, repo, fake_model_config, tmp_path, monkeypatch,
+    ):
+        from packages.code_understanding.dispatch.trace_dispatch import (
+            default_trace_dispatch,
+        )
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
+
+        monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
+        turns = [
+            FakeTurn(tool_calls=[("submit_verdicts", {"verdicts": []})]),
+        ]
+        with _patch_provider(turns):
+            default_trace_dispatch(
+                fake_model_config, _sample_traces(), str(repo),
+            )
+
+        traj_path = (
+            tmp_path / "trajectories"
+            / f"trace-{fake_model_config.model_name}"
+            / "trajectory.json"
+        )
+        assert traj_path.exists(), (
+            f"trajectory not at {traj_path}; "
+            f"tree was: {list(tmp_path.rglob('*'))}"
+        )
+        payload = json.loads(traj_path.read_text())
+        assert payload["run_id"] == f"trace-{fake_model_config.model_name}"
+        assert payload["model_name"] == fake_model_config.model_name
+        # finding_id / cwe are empty — trace isn't finding-driven.
+        assert payload["finding_id"] == ""
+        assert payload["cwe"] == ""
+
+    def test_unset_env_var_is_noop(
+        self, repo, fake_model_config, tmp_path, monkeypatch,
+    ):
+        from packages.code_understanding.dispatch.trace_dispatch import (
+            default_trace_dispatch,
+        )
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
+
+        monkeypatch.delenv(TRAJECTORY_DIR_ENV, raising=False)
+        monkeypatch.chdir(tmp_path)
+        turns = [
+            FakeTurn(tool_calls=[("submit_verdicts", {"verdicts": []})]),
+        ]
+        with _patch_provider(turns):
+            default_trace_dispatch(
+                fake_model_config, _sample_traces(), str(repo),
+            )
+        assert not (tmp_path / "trajectories").exists()
+
     def test_multi_turn_dispatch(self, repo, fake_model_config):
         """Model reads files first, then submits."""
         from packages.code_understanding.dispatch.trace_dispatch import (

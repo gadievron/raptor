@@ -331,21 +331,25 @@ def _lower_bound(spec: str) -> Optional[str]:
     s = spec.strip()
     if s in ("*", "any", "latest", ""):
         return None
-    # Strip leading operators we don't want in the version literal.
-    # Order matters: longer ops first so we don't strip `=` from `==`.
-    for prefix in ("===", "==", ">=", "<=", "~=", "^", "~", ">", "<", "="):
-        if s.startswith(prefix):
-            s = s[len(prefix):].strip()
-            break
-    if not s or s.startswith("!"):     # pure exclusion
-        return None
-    # Multi-spec like ">=1.2,<2.0" — take the lower bound (first comma-
-    # separated part with a lower-bound operator).
+    # Multi-spec like ">=1.2,<2.0" or "!=1.5.0,>=1.2.0" — split first
+    # so each part is evaluated independently.
     if "," in s:
         for part in spec.split(","):
             v = _lower_bound(part)
             if v is not None:
                 return v
+        return None
+    # Strip leading operators we don't want in the version literal.
+    # Order matters: longer ops first so we don't strip `=` from `==`.
+    stripped_prefix = ""
+    for prefix in ("===", "==", ">=", "<=", "~=", "^", "~", ">", "<", "="):
+        if s.startswith(prefix):
+            stripped_prefix = prefix
+            s = s[len(prefix):].strip()
+            break
+    if not s or s.startswith("!"):     # pure exclusion
+        return None
+    if stripped_prefix in ("<", "<="):
         return None
     # Strip everything that isn't part of a version literal — e.g.
     # PEP 440 environment markers (``foo>=1.0; python_version>="3.10"``)

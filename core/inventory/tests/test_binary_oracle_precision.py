@@ -276,6 +276,7 @@ def test_toolchain_block_records_in_report(tmp_path: Path) -> None:
 # End-to-end on the synthetic driver
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_synthetic_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Run the synthetic corpus through the full harness. The classifier
     is correct on the fixture (proven by ``test_binary_oracle.py``); the

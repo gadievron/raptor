@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.json import load_json, save_json
 from core.config import RaptorConfig
-from core.logging import get_logger
+from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.run.safe_io import safe_run_mkdir
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
@@ -183,7 +183,7 @@ def _materialise_threat_model_phase(
 
     linked_outcomes = 0
     try:
-        from core.verified_outcome import collect_outcomes
+        from core.labeled_attempts.view import collect_outcomes
         project_root = Path(project.output_dir) if project_backed else None
         outcomes = collect_outcomes(out_dir, project_root=project_root)
         linked_outcomes = len(outcomes)
@@ -1294,6 +1294,15 @@ Examples:
                             "Surfaces per-LLM-call detail (cache hits, retries, "
                             "per-call cost/duration). Useful for debugging "
                             "multi-model dispatches or schema validation failures.")
+    parser.add_argument(
+        "--log-level",
+        choices=CONSOLE_LOG_LEVELS,
+        type=str.upper,
+        help=(
+            "Set console log level for this run. Use WARNING to hide INFO "
+            "sandbox/proxy chatter; overrides --verbose."
+        ),
+    )
 
     # Fuzzing integration (Phase 5: dynamic confirmation)
     parser.add_argument("--fuzz", action="store_true",
@@ -1437,15 +1446,12 @@ Examples:
     if args.phase_timeout != RaptorConfig.DEFAULT_TIMEOUT:
         RaptorConfig.DEFAULT_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
 
-    # --verbose: drop the existing console StreamHandler from INFO to
-    # DEBUG so per-LLM-call detail (cache hits, retries, per-call
-    # cost/duration) becomes visible. Doesn't change the file handler
-    # (already DEBUG) — only what the operator sees on stderr.
-    if getattr(args, "verbose", False):
-        import logging
-        for h in logger.logger.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-                h.setLevel(logging.DEBUG)
+    # Run-level console verbosity. File audit logging remains DEBUG;
+    # this only controls what the operator sees on stderr.
+    configure_run_logging(
+        getattr(args, "log_level", None),
+        getattr(args, "verbose", False),
+    )
 
     # Propagate --trust-repo to every target-repo trust check so each
     # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
@@ -1696,12 +1702,29 @@ Examples:
         try:
             from packages.exploit_feasibility import analyze_binary, format_analysis_summary
 
+            # Optional source_intel wire: hand the reconciler the
+            # target's compile-time _FORTIFY_SOURCE level (extracted
+            # from compile_commands.json / Makefile / kconfig by
+            # ``core.build.build_flags.extract_flags``) so the %n
+            # verdict can override the ELF-derived ``__printf_chk``
+            # heuristic when they disagree. Defensive — returns an
+            # empty BuildFlagsContext on missing build metadata, which
+            # leaves the reconciler's pre-wire behaviour intact.
+            from core.build.build_flags import extract_flags
+            _agentic_build_flags = extract_flags(
+                Path(args.repo) if args.repo else Path.cwd()
+            )
+
             # --binary is action='append' (list) for binary-oracle's
             # hybrid multi-binary case; mitigation analysis is per-binary,
             # so analyse the FIRST declared binary.
             binary_path = (
                 str(Path(args.binary[0])) if args.binary else None)
-            mitigation_result = analyze_binary(binary_path, output_dir=str(out_dir))
+            mitigation_result = analyze_binary(
+                binary_path,
+                output_dir=str(out_dir),
+                build_flags=_agentic_build_flags,
+            )
 
             # Display formatted summary
             print(format_analysis_summary(mitigation_result, verbose=True))

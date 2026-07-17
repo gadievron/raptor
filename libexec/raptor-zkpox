@@ -36,6 +36,7 @@ import argparse
 import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 
 def _cmd_bundle(args) -> int:

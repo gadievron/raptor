@@ -17,7 +17,7 @@ include them with ``--include-suppressed``.
 
 Exit codes:
     0  — B introduces no new findings (resolutions are fine)
-    1  — B introduces new findings above ``--severity`` threshold
+    1  — B introduces new findings above ``--fail-on-severity`` threshold
     2  — invalid arguments
 """
 
@@ -77,6 +77,7 @@ def main(argv: Sequence[str]) -> int:
     triggering = [
         r for r in delta.new
         if severity_rank(r.get("severity", "info")) >= threshold
+        or (r.get("sca") or {}).get("in_kev")
     ]
     return 1 if triggering else 0
 
@@ -293,7 +294,11 @@ def _index_by_canonical_key(
         key = _canonical_key(row)
         if key is None:
             continue
-        out.setdefault(key, row)
+        existing = out.get(key)
+        if existing is None:
+            out[key] = row
+        elif existing.get("suppressed") and not row.get("suppressed"):
+            out[key] = row
     return out
 
 

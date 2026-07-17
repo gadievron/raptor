@@ -161,8 +161,19 @@ def _scan_one(
 def _host_dep(
     deps: List[Dependency], manifest: Manifest,
 ) -> Optional[Dependency]:
+    try:
+        data = _json.loads(manifest.path.read_text(
+            encoding="utf-8", errors="replace",
+        ))
+    except (OSError, _json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    project_name = data.get("name")
+    if not isinstance(project_name, str) or not project_name:
+        return None
     for d in deps:
-        if d.declared_in == manifest.path:
+        if d.ecosystem == "Composer" and d.name == project_name:
             return d
     return None
 

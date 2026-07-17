@@ -144,7 +144,7 @@ def _host_dep_for_target(
     ``target``.  Used to attribute extconf findings to the host
     gemspec/Gemfile."""
     for m in manifests:
-        if m.ecosystem != "RubyGems":
+        if m.ecosystem != "RubyGems" or m.is_lockfile:
             continue
         try:
             m.path.relative_to(target)

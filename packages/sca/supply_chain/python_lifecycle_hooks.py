@@ -16,10 +16,11 @@ What this adapter must defend against:
 
   * **AST-defeating obfuscation** — ``setup.py`` is Python source.
     An attacker who base64-encodes the dangerous payload at module
-    level evades regex matching.  Defence: the
-    ``_DANGEROUS_PATTERNS`` substrate already includes
-    ``base64.*decode`` shapes; we apply them to the source text.
-    Same regime as npm — we don't claim AST-precise detection.
+    level evades regex matching.  The ``_DANGEROUS_PATTERNS``
+    substrate includes shell-shaped ``base64`` patterns (pipe-to-
+    decoder); Python-native ``base64.b64decode(...)`` calls are NOT
+    currently detected.  Same regime as npm — we don't claim
+    AST-precise detection.
   * **Reading other manifest files** — ``setup.py`` commonly reads
     ``README.md`` / ``VERSION`` / ``CHANGELOG.md``.  False positives
     on those are not credential reads (the C-set is keyed on

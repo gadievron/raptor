@@ -22,7 +22,9 @@ pytestmark = _pytest.mark.skipif(
     reason="Linux-only sandbox internals — the probe is gated on Linux paths",
 )
 
-from core.sandbox import probes
+# pytestmark must be declared before Linux-only imports so pytest
+# can collect + skip cleanly on non-Linux hosts.
+from core.sandbox import probes  # noqa: E402
 
 
 def _no_apparmor_sysctl(*a, **kw):

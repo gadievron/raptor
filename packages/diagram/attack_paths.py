@@ -49,14 +49,18 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     status = path_data.get("status", "uncertain")
 
     prox_desc = _proximity_desc(int(proximity))
+    has_runtime = path_data.get("runtime_evidence_available", False)
 
     lines = ["flowchart TD"]
-    title_label = f"{name}\\nProximity: {proximity}/10,{prox_desc}\\nStatus: {status}"
+    rt_tag = " [RUNTIME CONFIRMED]" if has_runtime else ""
+    title_label = f"{name}{rt_tag}\\nProximity: {proximity}/10,{prox_desc}\\nStatus: {status}"
     lines.append(f'    TITLE_{path_index}["{_sanitize(title_label)}"]')
     lines.append(f"    style TITLE_{path_index} fill:#f0f0f0,stroke:#999,font-weight:bold")
     lines.append("")
 
     node_ids = [f"TITLE_{path_index}"]
+
+    runtime_nodes = []
 
     for i, step in enumerate(steps):
         nid = f"P{path_index}S{i+1}"
@@ -66,6 +70,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
             desc = _sanitize(step.get("description", step.get("action", str(step))))
             loc = _sanitize(step.get("call_site") or step.get("definition") or "")
             tainted = _sanitize(step.get("tainted_var", ""))
+            rt_ev = step.get("runtime_evidence", {})
             parts = [f"[{i+1}] {step_type}"]
             if loc:
                 parts.append(loc)
@@ -74,12 +79,23 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
             if desc:
                 short = desc if len(desc) <= 80 else desc[:77] + "..."
                 parts.append(short)
+            if rt_ev.get("function_observed"):
+                count = rt_ev.get("call_count", 0)
+                parts.append(f"OBSERVED x{count}")
+                runtime_nodes.append(nid)
             label = "\\n".join(parts)
         else:
             label = _sanitize(f"[{i+1}] {str(step)}")
 
         lines.append(f'    {nid}["{label}"]')
         node_ids.append(nid)
+
+    # Style runtime-confirmed steps
+    if runtime_nodes:
+        lines.append("")
+        lines.append("    %% Runtime-confirmed (frida)")
+        for nid in runtime_nodes:
+            lines.append(f"    style {nid} fill:#dbeafe,stroke:#2563eb,stroke-width:2px")
 
     # Chain edges
     lines.append("")

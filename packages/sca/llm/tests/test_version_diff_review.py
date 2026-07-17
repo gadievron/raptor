@@ -78,9 +78,9 @@ class TestArchiveUrl:
         assert "repo.maven.apache.org" in url
         assert "guava-33.0.0-jre-sources.jar" in url
 
-    def test_composer(self):
+    def test_packagist(self):
         dep = _make_dep(
-            name="monolog/monolog", ecosystem="Composer", version="3.5.0",
+            name="monolog/monolog", ecosystem="Packagist", version="3.5.0",
         )
         url = _archive_url(dep)
         assert "repo.packagist.org" in url

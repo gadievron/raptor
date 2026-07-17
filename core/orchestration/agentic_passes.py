@@ -1034,6 +1034,7 @@ def run_reachability_prepass(
     try:
         from core.orchestration.reachability_enrichment import (
             enrich_with_caller_context,
+            enrich_with_frida_traces,
             mark_unreachable_low_priority,
         )
         checklist = load_json(checklist_path)
@@ -1048,13 +1049,11 @@ def run_reachability_prepass(
             checklist, target, inventory=inventory,
             allow_unreachable=allow_unreachable,
         )
-        # Caller-context enrichment runs AFTER the dead-code
-        # marking so already-marked functions can be skipped
-        # cheaply (the LLM is going to deprioritise them
-        # regardless). Each surviving function gains
-        # caller_count_direct / _transitive / _uncertain plus
-        # direct_caller_names — the triage prompt reads these to
-        # judge blast radius alongside priority.
+        enrich_with_frida_traces(
+            checklist, target,
+            search_dirs=[agentic_out_dir, agentic_out_dir.parent],
+            inventory=inventory,
+        )
         enriched_caller_ctx = enrich_with_caller_context(
             checklist, target, inventory=inventory,
         )

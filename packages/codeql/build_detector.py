@@ -42,7 +42,7 @@ class BuildSystem:
     # Env var NAMES to auto-detect at build time. Each name must have
     # a corresponding detector in core.build.toolchain.DETECTORS. The
     # detected value (if non-None) is merged into the build
-    # subprocess's env alongside env_vars. See ~/design/env-handling.md.
+    # subprocess's env alongside env_vars.
     env_detect: List[str] = field(default_factory=list)
 
 
@@ -972,7 +972,7 @@ class BuildDetector:
          - lib/ exists but has no .jar files
          - repo_path doesn't resolve (shouldn't happen)
 
-        Rationale & edge cases in ~/design/env-handling.md (Q6).
+        Rationale & edge cases in the design memo (Q6).
         Repo-scoped construction — does NOT inherit any host CLASSPATH.
         """
         lib_dir = self.repo_path / "lib"
@@ -1212,7 +1212,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         inject it into the script's env. Without this, javac is found
         via PATH but the JDK layout (tools.jar, rt.jar on older JDKs)
         may not resolve. Scoped to this one subprocess — see
-        ~/design/env-handling.md.
+        the design memo
         """
         # Build env: sanitised base + toolchain auto-detection for the
         # language. For Java synthesised-build path, this is JAVA_HOME.
@@ -1225,22 +1225,8 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 
         try:
             repo_path = str(self.repo_path)
-            # tool_paths: best-guess bind set for the Python interpreter
-            # — its bin dir AND its stdlib dir at sys.prefix/lib/
-            # pythonX.Y/. Without the stdlib dir, Python would die at
-            # `import encodings` (exit 126, no stderr) — caught and
-            # retried as Landlock-only by context.py's speculative-C
-            # retry. Worst case = same isolation as not passing
-            # tool_paths at all.
-            import sysconfig
-            from pathlib import Path as _P
-            _tps = []
-            _interp_dir = str(_P(sys.executable).resolve().parent)
-            _platstdlib = sysconfig.get_paths().get("platstdlib")
-            for _p in (_interp_dir, _platstdlib):
-                if _p and _P(_p).is_absolute() \
-                        and not _p.startswith(("/usr/", "/lib/", "/lib64/")):
-                    _tps.append(_p)
+            from core.sandbox.python_paths import python_runtime_tool_paths
+            _tps = python_runtime_tool_paths()
             result = _sandbox_run(
                 [sys.executable, str(script_path)],
                 block_network=True,

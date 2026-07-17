@@ -141,13 +141,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
     && rm /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs=24.15.0-1nodesource1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code@2.1.119
+    && npm install -g @anthropic-ai/claude-code@2.1.163
 
 # ============================================================================
 # JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
 # ============================================================================
 
-RUN npm install -g yarn@1.22.22 pnpm@11.3.0
+RUN npm install -g yarn@1.22.22 pnpm@11.8.0
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

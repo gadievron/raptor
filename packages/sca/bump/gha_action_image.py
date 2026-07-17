@@ -196,6 +196,8 @@ def _parse_docker_action_image(text: str) -> Optional[str]:
     # ``docker://`` URI form — strip the prefix.
     if image.lower().startswith("docker://"):
         image = image[len("docker://"):]
+        if not image:
+            return None
 
     return image
 

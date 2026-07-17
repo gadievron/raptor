@@ -30,7 +30,8 @@ on:
     - cron: '0 4 * * 1'
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 # A new push or cron firing while a previous run is in-flight
 # supersedes it — the most-recent state is the one that matters.
@@ -40,11 +41,12 @@ concurrency:
 
 jobs:
   sweep:
+    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -61,32 +63,45 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run stress sweep
-        # The trust-marker is required by libexec/* scripts; we set
-        # it for the runner since CI is the trusted-caller analogue
-        # of the operator's CLI.
+        id: sweep
         env:
           _RAPTOR_TRUSTED: '1'
-        # Drives the full sweep and prints per-project
-        # results + the diff vs the committed baseline. Exit 0 = ok,
-        # 1 = warn (small drift), 2 = fail (large drift or scan
-        # error). The non-zero exit fails the workflow check, which
-        # is what we want for a regression gate.
+        # Drives the full sweep and diffs against the committed
+        # baseline. Exit codes from diffs_to_exit_code:
+        #   0 = ok, 1 = warn (small drift), 2 = fail (large drift
+        #   or scan error).
+        # When only warns are present (rc=1), the baseline-refresh
+        # step below writes the updated baseline and opens a PR —
+        # upstream CVE churn shouldn't block the workflow.
+        # Only rc=2 (fail) is a real regression and fails the job.
         run: |
           set -euo pipefail
           python - <<'PY'
-          import sys
+          import json, os, sys
           sys.path.insert(0, '.')
           from pathlib import Path
           from packages.sca.calibration.project_samples import PROJECT_SAMPLES
           from packages.sca.calibration.stress import (
               compare_to_baseline, diffs_to_exit_code, render_diffs,
-              run_stress_sweep,
+              run_stress_sweep, write_baseline,
           )
 
           import logging
+          debug_log = Path.home() / ".raptor/cache/sca/stress/debug.log"
+          debug_log.parent.mkdir(parents=True, exist_ok=True)
           logging.basicConfig(
-              level=logging.INFO, format="%(message)s",
+              level=logging.DEBUG, format="%(message)s",
           )
+          root = logging.getLogger()
+          fh = logging.FileHandler(debug_log, encoding="utf-8")
+          fh.setLevel(logging.DEBUG)
+          fh.setFormatter(logging.Formatter(
+              "%(asctime)s %(levelname)s %(name)s: %(message)s",
+          ))
+          root.addHandler(fh)
+          for h in root.handlers:
+              if isinstance(h, logging.StreamHandler) and h is not fh:
+                  h.setLevel(logging.INFO)
           print(f"running {len(PROJECT_SAMPLES)} samples...", flush=True)
           results = run_stress_sweep(
               samples=PROJECT_SAMPLES,
@@ -98,17 +113,105 @@ jobs:
               "packages/sca/data/calibration/stress_baseline.json"
           )
           diffs = compare_to_baseline(results, baseline)
-          print(render_diffs(diffs))
+          rendered = render_diffs(diffs)
+          print(rendered)
           rc = diffs_to_exit_code(diffs)
-          import os
+
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary_path:
               with open(summary_path, "a") as f:
                   f.write("## SCA Stress Sweep\n\n```\n")
-                  f.write(render_diffs(diffs))
+                  f.write(rendered)
                   f.write("\n```\n")
-          sys.exit(rc)
+
+          out = os.environ.get("GITHUB_OUTPUT", "")
+          if out:
+              with open(out, "a") as f:
+                  f.write(f"rc={rc}\n")
+
+          # When only warns (rc=1): write the refreshed baseline so
+          # the next step can commit it. When rc=2 the baseline is
+          # NOT updated — the operator must investigate.
+          if rc == 1:
+              commit_sha = os.environ.get("GITHUB_SHA", "unknown")
+              write_baseline(results, baseline, captured_with_commit=commit_sha)
+              print(f"\nBaseline refreshed at {baseline} (warn-only drift)")
+
+          # rc=2 → fail the step (real regression)
+          # rc=1 → exit 0 (warn-only drift handled by baseline PR)
+          # rc=0 → exit 0 (no drift)
+          sys.exit(2 if rc == 2 else 0)
           PY
+
+      - name: Open baseline-refresh PR
+        # Only when the sweep had warn-only drift (rc=1) and the
+        # baseline file was updated by the sweep step above.
+        if: steps.sweep.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BASELINE="packages/sca/data/calibration/stress_baseline.json"
+          if git diff --quiet -- "$BASELINE"; then
+            echo "Baseline unchanged — nothing to commit."
+            exit 0
+          fi
+
+          BRANCH="auto/sca-stress-baseline-refresh"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+          git checkout -B "$BRANCH"
+          git add "$BASELINE"
+          git commit -m "chore(sca): refresh stress-sweep baseline
+
+          Upstream data drift (new CVEs, registry changes) shifted
+          per-project vuln_findings counts past the warn threshold.
+          Auto-generated by .github/workflows/sca-stress-sweep.yml."
+
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH" || true
+          fi
+          git push --force-with-lease origin "$BRANCH"
+
+          BODY=$(cat <<'EOF'
+          ## Stress-sweep baseline refresh
+
+          Upstream data drift (new CVEs published, registry metadata changes)
+          shifted per-project diagnostics past the ±25% warn threshold. This
+          PR updates `packages/sca/data/calibration/stress_baseline.json` to
+          accept the new counts as the expected baseline.
+
+          **Review checklist:**
+          - [ ] Diff shows only `vuln_findings` / `deps_analysed` / `eco_breakdown` changes — no structural edits
+          - [ ] Changes are plausibly upstream drift (new CVEs, not zeroed-out counts)
+          - [ ] No `fail`-level drifts were present (those block the workflow and don't trigger this PR)
+
+          Auto-generated by `.github/workflows/sca-stress-sweep.yml`.
+          EOF
+          )
+
+          pr_num=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+          if [[ -n "$pr_num" ]]; then
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$pr_num" --body "$BODY"
+            echo "Updated existing PR #$pr_num"
+          else
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(sca): refresh stress-sweep baseline" \
+              --body "$BODY"
+          fi
+          for lbl in automated sca; do
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping"
+          done
 
       - name: Upload sweep artefacts
         # Always run — failed sweeps + drift reports are exactly

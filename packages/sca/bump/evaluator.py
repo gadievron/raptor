@@ -191,10 +191,11 @@ def _platform_compat_findings(
     target_verdicts = {
         v.pair: v for v in check_compat(platform_matrix, wm_target)
     }
-    current_verdicts = (
-        {v.pair: v for v in check_compat(platform_matrix, wm_current)}
-        if wm_current is not None else {}
-    )
+    if wm_current is None:
+        return []
+    current_verdicts = {
+        v.pair: v for v in check_compat(platform_matrix, wm_current)
+    }
 
     findings: List[SupplyChainFinding] = []
     for pair, tv in target_verdicts.items():

@@ -169,6 +169,7 @@ def test_e2e_explicit_binary_flag_path(_synthetic_target_built) -> None:
     assert spec.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS) is True
 
 
+@pytest.mark.slow
 def test_e2e_autodetect_finds_binary(_synthetic_target_built) -> None:
     """The ``--binary-auto`` path: operator passes no explicit path;
     auto-detect walks the project tree and finds the binary under
@@ -183,6 +184,7 @@ def test_e2e_autodetect_finds_binary(_synthetic_target_built) -> None:
     assert counts["classified"] == 12
 
 
+@pytest.mark.slow
 def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     """The shared ``reach_chokepoint`` helper that both /agentic and
     /codeql use: from a finding-shaped input through to the suppression
@@ -222,6 +224,7 @@ def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     assert decision is None
 
 
+@pytest.mark.slow 
 def test_e2e_hostile_planted_binary_is_dropped(tmp_path: Path) -> None:
     """The hostile-ELF attack shape: a binary with completely
     unrelated symbols (planted in the target tree by an attacker)

@@ -124,6 +124,21 @@ VULN_TYPE_ALIASES = {
     "uaf": "use_after_free",
     "use_after_free_read": "use_after_free",
     "use_after_free_write": "use_after_free",
+    # Modern kernel UAF sub-classes — route into memory-corruption feasibility
+    # rather than falling through to "other" (which skips Stage E).
+    "kernel_stack_uaf": "use_after_free",
+    "cross_cache_uaf": "use_after_free",
+    "cross_cache": "use_after_free",
+    "timer_uaf": "use_after_free",
+    "uaf_via_pending_timer": "use_after_free",
+    # JIT/engine type-confusion sub-classes (V8 Maglev missing write barrier,
+    # SpiderMonkey inline-cache confusion) -> canonical type_confusion.
+    "jit_write_barrier": "type_confusion",
+    "missing_write_barrier": "type_confusion",
+    "write_barrier_missing": "type_confusion",
+    "ic_type_confusion": "type_confusion",
+    "inline_cache_type_confusion": "type_confusion",
+    "inline_cache_confusion": "type_confusion",
     # Double free
     "double-free": "double_free",
     # Format string

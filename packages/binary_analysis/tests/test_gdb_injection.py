@@ -17,7 +17,14 @@ class TestDebuggerNoPathInjection:
         return GDBDebugger(binary)
 
     def _capture_gdb_script(self, debugger, method_name, input_file, **kwargs):
-        """Call a debugger method and capture the GDB script it writes."""
+        """Call a debugger method and capture the GDB script it writes.
+
+        Patches ``_sandbox_run`` (the function the debugger actually
+        calls), not subprocess.run. See test_valid_address_accepted
+        for why this boundary is the right one — patching
+        subprocess.run can land in the sandbox engagement probe and
+        cause the real spawn to fork on hosts that block userns.
+        """
         captured = {}
 
         def fake_run(cmd, **kw):
@@ -36,7 +43,10 @@ class TestDebuggerNoPathInjection:
         input_path.parent.mkdir(parents=True, exist_ok=True)
         input_path.write_text("crash data")
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=fake_run,
+        ):
             method = getattr(debugger, method_name)
             if kwargs:
                 method(input_path, **kwargs)
@@ -96,9 +106,19 @@ class TestExamineMemoryAddressValidation:
         """Well-formed hex addresses must work."""
         input_file = tmp_path / "crash.bin"
         input_file.write_text("data")
-        # Should not raise; patch subprocess to avoid actually running GDB
+        # Patch the sandbox-run boundary, not subprocess.run. The
+        # debugger goes through ``core.sandbox.run`` which forks a
+        # spawn child directly (the sandbox engagement probe is the
+        # only thing that touches ``subprocess.run``). Patching
+        # ``subprocess.run`` with returncode=0 makes the probe report
+        # success → spawn proceeds → fork fails on hosts that block
+        # unprivileged userns; the right boundary for "skip the
+        # actual GDB run" is the sandbox call itself.
         from unittest.mock import patch, MagicMock
-        with patch("subprocess.run", return_value=MagicMock(stdout="", returncode=0)):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            return_value=MagicMock(stdout="", returncode=0),
+        ):
             debugger.examine_memory(input_file, "0xdeadbeef")
             debugger.examine_memory(input_file, "0x0")
             debugger.examine_memory(input_file, "0xDEADBEEF")
@@ -212,7 +232,10 @@ class TestDebuggerTempFile:
             r.stdout = "fake"
             return r
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=fake_run,
+        ):
             debugger.run_commands(["run", "quit"])
 
         assert script_paths
@@ -232,68 +255,40 @@ class TestDebuggerTempFile:
             r.stdout = "fake"
             return r
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=fake_run,
+        ):
             debugger.run_commands(["run", "quit"])
 
         assert script_paths
         assert not Path(script_paths[0]).exists(), "Script should be cleaned up after"
 
     def test_temp_file_cleaned_up_on_error(self, debugger, tmp_path):
-        """Script file should be deleted even if GDB fails.
-
-        Pre-fix this test had NO assertion — it called
-        run_commands inside a try/except, swallowed the
-        exception, and returned. The test "passed" trivially
-        whether or not cleanup actually fired. Per cluster
-        720, the test now captures the script path BEFORE
-        the simulated failure (via the fake_run side_effect)
-        and asserts the file is gone afterwards.
-        """
+        """Script file should be deleted even if GDB fails."""
         import subprocess as sp
 
-        # Verify cleanup behavior directly via filesystem
-        # inspection — pre-fix this test had no assertions.
-        # The script lands under `binary_dir` (per batch 836)
-        # with prefix `.raptor_gdb_` (per debugger.py
-        # tempfile.mkstemp call). After a failed run, the dir
-        # should contain ZERO `.raptor_gdb_*.txt` leftovers.
-        #
-        # Filesystem-level check is robust to test isolation
-        # issues that arise when we try to intercept the
-        # subprocess call to capture the script path —
-        # `_sandbox_run` makes multiple probe calls whose
-        # patched-MagicMock return values don't always lead
-        # to the actual gdb invocation depending on whether
-        # core/sandbox/probes.py's per-process cache was
-        # populated by a prior test.
+        # Patch at the sandbox-run boundary, not subprocess.run.
+        # debugger.run_commands calls ``_sandbox_run(cmd, ...)``; the
+        # ONLY caller of ``subprocess.run`` in this code path is the
+        # sandbox engagement probe, and patching it (with
+        # returncode=0) makes the probe report success → the spawn
+        # then forks for real → fails on hosts that block
+        # unprivileged userns. Patching ``_sandbox_run`` directly
+        # bypasses both probe and spawn cleanly.
         binary_dir = debugger.binary.parent
 
-        def fake_run_then_fail(cmd, **kw):
-            # Track gdb invocations by `-x` presence; raise
-            # only on those, return MagicMock success for
-            # sandbox probes so probe-caching state doesn't
-            # determine whether we reach the gdb call.
-            for i, arg in enumerate(cmd):
-                if arg == "-x" and i + 1 < len(cmd):
-                    raise sp.TimeoutExpired("gdb", 30)
-            # Probe call — return success.
-            r = MagicMock()
-            r.stdout = ""
-            r.stderr = ""
-            r.returncode = 0
-            return r
-
-        with patch("subprocess.run", side_effect=fake_run_then_fail):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=sp.TimeoutExpired("gdb", 30),
+        ):
             try:
                 debugger.run_commands(["run", "quit"])
             except sp.TimeoutExpired:
                 pass
 
-        # Filesystem assertion: regardless of whether the gdb
-        # invocation actually ran, NO leftover script files
-        # should exist in binary_dir. If the cleanup code
-        # was broken, mkstemp would have created the script
-        # and a missing unlink would leave it behind.
+        # Cleanup must fire even when the underlying call timed
+        # out — debugger.run_commands uses try/finally for unlink.
         leftover_scripts = list(binary_dir.glob(".raptor_gdb_*.txt"))
         assert leftover_scripts == [], (
             f"GDB scripts not cleaned up after error: {leftover_scripts}"

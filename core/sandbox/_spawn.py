@@ -270,18 +270,44 @@ def _set_rlimits(limits: dict) -> None:
 
 
 def _kill_and_reap(pid: int) -> None:
-    """SIGKILL `pid` and reap it. Both ops are best-effort — if the
-    child already exited (ProcessLookupError) or was reaped elsewhere
-    (ChildProcessError), we just return. Used on every error path
-    where the parent has to abandon the child mid-setup.
+    """SIGKILL `pid` AND its descendants, then reap. Best-effort — if
+    the child already exited (ProcessLookupError) or was reaped
+    elsewhere (ChildProcessError), we just return.
 
-    On Linux 5.3+ uses pidfd_open + pidfd_send_signal so the SIGKILL
-    cannot land on a reused PID if the original child is gone. Falls
-    back to os.kill() on older kernels or when pidfd_open() is missing
-    from this Python build (3.9+ has it stdlib).
+    Crucially this also kills the child's PROCESS GROUP, not just the
+    direct child PID. Children spawned via ``start_new_session=True``
+    become session leaders, and their descendants (think: codeql Java
+    spawning python_tracer.py + multiprocessing forkserver workers)
+    live in the same session group as the leader. ``os.kill(pid, …)``
+    and ``pidfd_send_signal(pidfd, …)`` only target the leader; the
+    descendants get reparented to init and run forever as orphans.
+    Pre-fix this produced wedged codeql trees that accumulated CPU
+    time for weeks. ``os.killpg(pgid, …)`` sends the signal to every
+    process whose PGID matches the leader's — which is what we want.
+
+    The pidfd path is kept as a defence-in-depth FIRST send (kills the
+    leader's thread group reliably even if the leader has changed its
+    PGID via setpgid). The killpg send follows to cover any descendants
+    that stayed in the original group. Both raise ProcessLookupError
+    silently — by the time the second call fires the first may have
+    swept the leader; that's fine.
     """
     pidfd_open = getattr(os, "pidfd_open", None)
     pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    # Capture the PGID FIRST — before any signal fires. If the leader
+    # has been reaped elsewhere already, ``getpgid`` raises
+    # ProcessLookupError and we skip the killpg cleanly; if the
+    # leader called ``setpgid()`` to migrate to a different group, we
+    # get the actual current PGID rather than assuming it equals
+    # ``pid``. Both cases are why we CAN'T fall back to
+    # ``os.killpg(pid, ...)`` after the pidfd/kill send lands: by
+    # then the PID may have been reused by an unrelated process, and
+    # ``killpg`` would signal whichever group that new process
+    # happens to lead.
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        pgid = None
     if pidfd_open is not None and pidfd_send_signal is not None:
         pidfd = -1
         try:
@@ -304,6 +330,15 @@ def _kill_and_reap(pid: int) -> None:
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
+            pass
+    # Belt-and-braces: kill the whole process group so descendants
+    # (codeql java → index.py → python_tracer.py → forkserver workers)
+    # don't get orphaned to init. Uses the PGID captured pre-signal
+    # above so we never target a group led by a PID-reuse victim.
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
     try:
         os.waitpid(pid, 0)
@@ -451,6 +486,9 @@ def run_sandboxed(
     inherit_netns: bool = False,
     etc_overlay: Optional[dict] = None,
     skip_pid_ns: bool = False,
+    skip_mount_ns: bool = False,
+    proxy_unix_socket: Optional[str] = None,
+    proxy_forwarder_port: Optional[int] = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -862,6 +900,20 @@ def run_sandboxed(
             os.set_inheritable(t_ready_w, True)
             _parent_fds.update({t_ready_r, t_ready_w})
 
+        # Capture proxy bridge functions as local references BEFORE the
+        # fork. After pivot_root the RAPTOR source tree is invisible in
+        # the mount-ns, so `from core.sandbox._proxy_bridge import ...`
+        # inside the child would fail with ModuleNotFoundError. Binding
+        # the function objects here means the child only needs the
+        # in-memory references, no filesystem import.
+        _proxy_loopback_fn = None
+        _proxy_forwarder_fn = None
+        if proxy_unix_socket and proxy_forwarder_port:
+            from core.sandbox._proxy_bridge import (
+                _bring_up_loopback as _proxy_loopback_fn,
+                _run_forwarder as _proxy_forwarder_fn,
+            )
+
         # Suppress Python 3.12+ DeprecationWarning about multi-threaded
         # fork(). Our post-fork code does namespace setup via ctypes
         # syscalls + Landlock + seccomp + execvp — no Python objects,
@@ -988,7 +1040,7 @@ def run_sandboxed(
             # Step 3: create namespaces. Leaves us as "nobody" in the
             # new user-ns until the parent runs newuidmap on us.
             ns_flags = CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWIPC
-            if block_network:
+            if block_network and not inherit_netns:
                 ns_flags |= CLONE_NEWNET
             if persona is not None:
                 # Fresh UTS namespace so sethostname/setdomainname only
@@ -998,18 +1050,22 @@ def run_sandboxed(
                 ns_flags |= CLONE_NEWUTS
             os.unshare(ns_flags)
 
-            # Step 4.5 (audit mode): declare PR_SET_PTRACER_ANY so the
-            # tracer subprocess (our sibling, not descendant) can SEIZE
-            # us under Yama scope 1. Must run BEFORE we signal "R" to
-            # the parent — the parent will fork the tracer right after
-            # newuidmap, and the tracer attempts SEIZE while we're
-            # blocked on the go-pipe. Without prctl in place by then,
-            # the SEIZE returns EPERM under default Yama policy.
+            # Step 4.5: declare PR_SET_PTRACER_ANY under Yama scope 1.
+            #
+            # Two cases need this:
+            # - audit mode: the tracer (our sibling) must SEIZE us.
+            # - debug profile: tools like frida/gdb use helper
+            #   processes that ptrace across the ancestry boundary.
+            #   The debug seccomp filter already allows the ptrace
+            #   syscall; this makes Yama consistent with that.
+            #
+            # Must run BEFORE "R" — the parent may fork the tracer
+            # right after newuidmap.
             #
             # The child here is uid 65534 ("nobody") after unshare but
             # before newuidmap — PR_SET_PTRACER doesn't require any
             # capability; it just declares permission to be traced.
-            if _audit_engaged:
+            if _audit_engaged or seccomp_profile == "debug":
                 try:
                     import ctypes as _c
                     import ctypes.util as _cu
@@ -1085,7 +1141,7 @@ def run_sandboxed(
             # their original paths so they exist inside the pivoted
             # root — otherwise Landlock's allowlist would cover a path
             # the child can't reach (ENOENT before EACCES).
-            if target or output:
+            if (target or output) and not skip_mount_ns:
                 _status_step = b"M"
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
@@ -1138,6 +1194,50 @@ def run_sandboxed(
                     except OSError:
                         pass
                     os._exit(127)
+
+            # Step 9.7: proxy netns bridge. When the child is in an
+            # empty netns with an egress proxy, bring up loopback and
+            # fork a TCP-to-Unix relay so the target can reach the proxy
+            # at 127.0.0.1:<port> via HTTPS_PROXY. The forwarder forks
+            # BEFORE Landlock/seccomp so it runs unrestricted — it needs
+            # AF_UNIX socket() which seccomp blocks for the target.
+            _forwarder_pid = 0
+            _forwarder_death_w = -1
+            if _proxy_loopback_fn is not None and _proxy_forwarder_fn is not None:
+                try:
+                    _proxy_loopback_fn()
+                except OSError as e:
+                    warn_post_fork(
+                        b"_spawn: loopback bringup failed (errno=%d)"
+                        b"; proxy bridge will not work\n"
+                        % (e.errno or 0)
+                    )
+                else:
+                    _fwd_death_r, _fwd_death_w = os.pipe()
+                    _forwarder_death_w = _fwd_death_w
+                    import warnings as _w2
+                    with _w2.catch_warnings():
+                        _w2.filterwarnings(
+                            "ignore", category=DeprecationWarning,
+                            message=r".*fork.*may lead to deadlocks.*",
+                        )
+                        _forwarder_pid = os.fork()
+                    if _forwarder_pid == 0:
+                        os.close(_fwd_death_w)
+                        os.close(status_w)
+                        # p_ready_w was closed at step 5 — do NOT close
+                        # here; the fd number may have been reused by
+                        # the death pipe allocated above.
+                        try:
+                            _proxy_forwarder_fn(
+                                proxy_forwarder_port,
+                                proxy_unix_socket,
+                                _fwd_death_r,
+                            )
+                        except BaseException:
+                            pass
+                        os._exit(0)
+                    os.close(_fwd_death_r)
 
             # Step 10: Landlock. Must run BEFORE seccomp so seccomp
             # inherits PR_SET_NO_NEW_PRIVS.
@@ -1218,6 +1318,13 @@ def run_sandboxed(
                         }
                 else:
                     exec_env = os.environ.copy()
+                    if strict_env:
+                        from core.config import RaptorConfig
+                        _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+                        exec_env = {
+                            k: v for k, v in exec_env.items()
+                            if k not in _dangerous
+                        }
                 # bounded fork count via RLIMIT_NPROC (prlimit).
                 if nproc_limit and nproc_limit > 0:
                     import resource
@@ -1226,14 +1333,20 @@ def run_sandboxed(
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
                         warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
+                import resource as _resource
+                try:
+                    _soft_nofile = _resource.getrlimit(_resource.RLIMIT_NOFILE)[0]
+                except (ValueError, OSError):
+                    _soft_nofile = 1024
+                _keep_fds = {status_w}
+                for _fd in range(3, min(_soft_nofile, 65536)):
+                    if _fd not in _keep_fds:
+                        try:
+                            os.close(_fd)
+                        except OSError:
+                            pass
                 try:
                     # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
-                    # exec_env is from a RAPTOR caller — either an
-                    # explicit env arg with DANGEROUS_ENV_VARS
-                    # strip applied (lines 1015-1019), or an inherit
-                    # of the caller's env on the no-env-supplied
-                    # path. Either way the caller is trusted (RAPTOR
-                    # owns the sandbox spawn surface).
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:
                     # Target (or a dep) not reachable in the sandboxed view
@@ -1260,19 +1373,30 @@ def run_sandboxed(
                 #     exit to the parent and silently defeat the
                 #     crash/sanitizer diagnostics.
                 _, status = os.waitpid(grand, 0)
+                # Clean up the proxy bridge forwarder before
+                # mirroring exit status.
+                if _forwarder_pid > 0:
+                    try:
+                        os.kill(_forwarder_pid, 9)  # SIGKILL
+                        os.waitpid(_forwarder_pid, 0)
+                    except (ProcessLookupError, ChildProcessError,
+                            OSError):
+                        pass
+                if _forwarder_death_w >= 0:
+                    try:
+                        os.close(_forwarder_death_w)
+                    except OSError:
+                        pass
                 if os.WIFEXITED(status):
                     os._exit(os.WEXITSTATUS(status))
                 if os.WIFSIGNALED(status):
                     sig = os.WTERMSIG(status)
                     import signal as _signal
-                    # Clear any inherited handler/mask; re-raise by
-                    # SIGDFL + kill(self).
                     try:
                         _signal.signal(sig, _signal.SIG_DFL)
                     except (OSError, ValueError):
                         pass
                     os.kill(os.getpid(), sig)
-                    # Fallback if the signal was blocked/ignored.
                     os._exit(128 + sig)
                 os._exit(255)
         except BaseException:

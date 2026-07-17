@@ -38,6 +38,7 @@ if not (os.environ.get("CLAUDECODE")
 
 RAPTOR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAPTOR))
+import core.startup.process_init  # noqa: E402,F401
 os.environ.setdefault("RAPTOR_DIR", str(RAPTOR))
 
 TARGET = Path(tempfile.gettempdir()) / "raptor-bo-e2e"

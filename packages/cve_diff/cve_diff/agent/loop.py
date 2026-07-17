@@ -377,8 +377,39 @@ class AgentLoop:
             **provider_kw,
         )
 
+        # Trajectory persistence on every exit path — success, cost
+        # cap, and arbitrary exception — so a budget-exceeded run
+        # (where the partial trajectory is MOST useful for operator
+        # debugging) still gets persisted with whatever survived to
+        # the point of termination. No-op unless RAPTOR_TRAJECTORY_DIR
+        # is set.
+        from core.trajectories.auto import (
+            persist_from_loop_result, persist_partial_from_exception,
+        )
+        _traj_run_id = f"cve-diff-{ctx.cve_id}"
         try:
-            loop_result = loop.run(config.user_message)
+            try:
+                loop_result = loop.run(config.user_message)
+            except CostBudgetExceeded as _e:
+                persist_partial_from_exception(
+                    _e, run_id=_traj_run_id, model_name=config.model_id,
+                    finding_id=ctx.cve_id,
+                    terminated_by="max_cost_usd",
+                )
+                raise
+            except Exception as _e:
+                persist_partial_from_exception(
+                    _e, run_id=_traj_run_id, model_name=config.model_id,
+                    finding_id=ctx.cve_id,
+                    terminated_by=f"exception:{type(_e).__name__}",
+                )
+                raise
+            else:
+                persist_from_loop_result(
+                    loop_result,
+                    run_id=_traj_run_id, model_name=config.model_id,
+                    finding_id=ctx.cve_id,
+                )
         except CostBudgetExceeded:
             return self._finalize(
                 AgentSurrender(

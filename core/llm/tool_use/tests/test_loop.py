@@ -8,6 +8,7 @@ those concerns are tested in the provider-specific test files.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -299,6 +300,116 @@ def test_max_cost_usd_terminates_pre_flight() -> None:
     assert len(fp.calls) == 2
 
 
+def test_cost_budget_exception_carries_partial_messages() -> None:
+    """When the cost cap fires mid-run, the exception exposes the
+    partial conversation so callers can persist the trajectory up to
+    termination. Without this, a budget-capped run is invisible —
+    we never see what the model was thrashing on.
+    """
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {}), in_t=1000, out_t=1000),
+        _tool_call_response(("c2", "echo", {}), in_t=1000, out_t=1000),
+        _text_response("never reached", in_t=1000, out_t=1000),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], max_cost_usd=0.020)
+    try:
+        loop.run("expensive")
+        raise AssertionError("expected CostBudgetExceeded")
+    except CostBudgetExceeded as exc:
+        # initial user prompt + 2 assistant turns + 2 user tool-result
+        # turns = 5 messages survived.
+        assert len(exc.messages) == 5
+        assert exc.tool_calls_made == 2
+
+
+# ---------------------------------------------------------------------------
+# Caller-supplied give-up predicate
+# ---------------------------------------------------------------------------
+
+
+def test_should_continue_false_terminates_with_give_up() -> None:
+    """A ``should_continue`` predicate returning False halts the loop
+    cleanly with ``terminated_by='give_up'``. Pre-flight check at the
+    top of each iteration, so the False decision blocks the next
+    provider call rather than mid-turn cleanup."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _tool_call_response(("c2", "echo", {})),  # never reached
+    ])
+    call_count = {"n": 0}
+
+    def predicate() -> bool:
+        call_count["n"] += 1
+        # Continue for one iteration, then give up.
+        return call_count["n"] <= 1
+
+    out = ToolUseLoop(
+        fp, [_echo_tool()], should_continue=predicate,
+    ).run("loop")
+    assert out.terminated_by == "give_up"
+    assert out.iterations == 1
+    assert out.tool_calls_made == 1
+    assert len(fp.calls) == 1  # second response was never consumed
+    assert call_count["n"] == 2  # called pre-iter 0 (True) + pre-iter 1 (False)
+
+
+def test_should_continue_raising_is_non_fatal(caplog) -> None:
+    """A predicate that raises must not crash the loop — the
+    exception is swallowed and the iteration proceeds as if the
+    predicate returned True. Catches programming errors in the
+    caller's predicate without aborting a long-running run. The
+    exception is logged at WARNING so the bug is visible to
+    operators (silent swallow would be a diagnosis hazard)."""
+    fp = _FakeProvider([_text_response("done")])
+
+    def boom() -> bool:
+        raise RuntimeError("predicate crashed")
+
+    with caplog.at_level(logging.WARNING, logger="core.llm.tool_use.loop"):
+        out = ToolUseLoop(
+            fp, [_echo_tool()], should_continue=boom,
+        ).run("safe")
+    assert out.terminated_by == "complete"
+    # The predicate-crash exception must be logged so a buggy
+    # predicate is diagnosable.
+    assert any(
+        "should_continue predicate raised" in r.message
+        for r in caplog.records
+    ), f"expected WARNING about predicate crash, got: {caplog.records}"
+
+
+def test_should_continue_emits_give_up_event() -> None:
+    """The structured event stream surfaces ``LoopTerminated(reason=
+    "give_up")`` so subscribers can distinguish caller-driven
+    termination from cost / time / iteration caps."""
+    events: list[LoopEvent] = []
+    fp = _FakeProvider([_tool_call_response(("c1", "echo", {}))])
+    ToolUseLoop(
+        fp, [_echo_tool()],
+        should_continue=lambda: False,
+        events=events.append,
+    ).run("loop")
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].reason == "give_up"
+
+
+def test_should_continue_true_is_no_op() -> None:
+    """A predicate that always returns True leaves loop behaviour
+    unchanged — terminates on the model's COMPLETE response, not
+    on the predicate. Regression guard against accidentally
+    short-circuiting valid loops."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _text_response("done"),
+    ])
+    out = ToolUseLoop(
+        fp, [_echo_tool()], should_continue=lambda: True,
+    ).run("loop")
+    assert out.terminated_by == "complete"
+    assert out.tool_calls_made == 1
+
+
 def test_max_seconds_terminates_pre_flight(monkeypatch) -> None:
     """Wall-clock budget caps the whole run. Pre-flight check before
     each iteration; once elapsed >= max_seconds, the loop returns a
@@ -313,7 +424,14 @@ def test_max_seconds_terminates_pre_flight(monkeypatch) -> None:
         v = clock["t"]
         clock["t"] += 4.0
         return v
-    monkeypatch.setattr("core.llm.tool_use.loop.time.monotonic", _tick)
+    # Patch via the imported-module handle rather than the dotted
+    # string. pytest 8+ resolves "core.llm.tool_use.loop.time.monotonic"
+    # by walking the package namespace; ``core.llm.tool_use.__init__``
+    # does not re-export ``loop`` as an attribute, so the walk fails
+    # at the ``.loop`` step. Using the module object directly skips
+    # the resolver and works on every pytest version.
+    from core.llm.tool_use import loop as _loop_mod
+    monkeypatch.setattr(_loop_mod.time, "monotonic", _tick)
 
     fp = _FakeProvider([
         _tool_call_response(("c1", "echo", {})),
@@ -532,6 +650,41 @@ def test_context_overflow_truncate_raises_when_exhausted() -> None:
     with pytest.raises(ContextOverflow, match="still exceeds"):
         loop.run("y" * 1000)
     assert len(fp.calls) == 0
+
+
+def test_context_overflow_carries_partial_state_after_tool_call() -> None:
+    """When the overflow fires AFTER a tool call has completed, the
+    exception's ``messages`` and ``tool_calls_made`` reflect the
+    partial work — caller can persist the trajectory up to the
+    point of termination, not just the empty-prompt state.
+
+    Covers both pre-flight RAISE paths: the initial estimate gate
+    AND the post-truncation 'still too large' gate share the same
+    partial-state contract.
+    """
+    # Window 50 tokens: the initial prompt + first tool round-trip
+    # fits, but the second iteration's pre-flight estimate (which
+    # includes the echo'd back tool result) tips over.
+    fp = _FakeProvider(
+        [
+            _tool_call_response(("c1", "echo", {"big": "x" * 400})),
+            _text_response("never reached"),
+        ],
+        ctx_window=50,
+    )
+    loop = ToolUseLoop(
+        fp, [_echo_tool()],
+        context_policy=ContextPolicy.RAISE,
+    )
+    try:
+        loop.run("go")
+        raise AssertionError("expected ContextOverflow")
+    except ContextOverflow as exc:
+        # One tool call completed before the overflow.
+        assert exc.tool_calls_made == 1
+        # Messages list includes the partial trajectory up to overflow.
+        # At minimum: initial user + assistant turn 0 + user tool_result.
+        assert len(exc.messages) >= 3
 
 
 def test_context_overflow_truncate_policy_drops_oldest() -> None:
@@ -1088,3 +1241,369 @@ def test_xsource_slash_split_matches_components() -> None:
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0
+
+
+# ---------------------------------------------------------------------------
+# Submission-discipline hooks: turn-budget-note + no-tool-call nudge
+# ---------------------------------------------------------------------------
+
+
+def test_submission_warning_appended_to_user_message_when_callable_returns_text() -> None:
+    """When ``submission_warning`` is set and returns a non-empty
+    string, that string is appended as a TextBlock to the same user
+    message that carries the tool_results — so the model reads the
+    tool output and the prod-to-submit warning together on the next
+    turn. The text comes AFTER the tool results so the model parses
+    data first, advice second."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+    warning_arg_log: list = []
+
+    def _warn(state) -> str | None:
+        warning_arg_log.append(state)
+        return "SUBMIT SOON"
+
+    loop = ToolUseLoop(
+        fp,
+        [_echo_tool()],
+        max_iterations=5,
+        submission_warning=_warn,
+    )
+    out = loop.run("start")
+    # Callable saw "iters remaining after this turn" — 5 max, iter 0
+    # just finished, so 4 remain. SubmissionState carries the full
+    # context (iters + cost) so consumers can warn on either gate.
+    assert len(warning_arg_log) == 1
+    state = warning_arg_log[0]
+    assert state.iters_remaining == 4
+    assert state.iters_max == 5
+    assert state.cost_so_far > 0  # tool turn already accrued cost
+    assert state.cost_cap is None  # not set on this loop
+    # The user message carrying the tool result also carries the warning.
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    # 1st user is the initial prompt; 2nd is tool_result + warning.
+    tool_user = user_msgs[1]
+    text_blocks = [b for b in tool_user.content if isinstance(b, TextBlock)]
+    assert any(b.text == "SUBMIT SOON" for b in text_blocks)
+
+
+def test_submission_warning_suppressed_when_callable_returns_none() -> None:
+    """A consumer that only wants to warn near the budget cap returns
+    None on early iterations; the user message has no warning TextBlock."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+
+    def _warn_only_near_end(state) -> str | None:
+        return "SUBMIT" if state.iters_remaining <= 2 else None
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=10,
+        submission_warning=_warn_only_near_end,
+    )
+    out = loop.run("start")
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    tool_user = user_msgs[1]
+    text_blocks = [b for b in tool_user.content if isinstance(b, TextBlock)]
+    # 9 iterations remain; warning suppressed.
+    assert text_blocks == []
+
+
+def test_submission_warning_callable_exception_logged_but_does_not_crash_loop(
+    caplog,
+) -> None:
+    """If the submission_warning callable raises, the loop must NOT
+    crash — log a warning and treat this iteration as "no warning."
+    A bug in the consumer's nudge logic can't take down a $15 fire."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+
+    def _broken(state) -> str | None:
+        raise RuntimeError("nudge bug")
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=5,
+        submission_warning=_broken,
+    )
+    with caplog.at_level(logging.WARNING, logger="core.llm.tool_use.loop"):
+        out = loop.run("start")
+    # Loop completed normally.
+    assert out.terminated_by == "complete"
+    # Warning was logged.
+    assert any("submission_warning callable raised" in r.message for r in caplog.records)
+
+
+def test_in_fire_mutator_appended_to_user_message_when_callable_returns_text() -> None:
+    """When ``in_fire_mutator`` is set and returns non-empty text, that
+    text is appended as a TextBlock to the same user message carrying
+    the tool_results — steering hints reach the model interleaved with
+    its own tool output on the next turn."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+    calls: list = []
+
+    def _mutator(ctx) -> str | None:
+        calls.append(ctx)
+        return "researcher note: try shape X"
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=5,
+        in_fire_mutator=_mutator,
+    )
+    out = loop.run("start")
+    assert len(calls) == 1
+    ctx = calls[0]
+    assert ctx.iteration == 0
+    assert ctx.iters_remaining == 4
+    assert ctx.iters_max == 5
+    assert ctx.cost_so_far > 0
+    # tool_results carried through immutably.
+    assert len(ctx.tool_results) == 1
+    # Messages snapshot includes assistant response.
+    assert len(ctx.messages) >= 2
+    # Steering appears in the tool-result user message.
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    tool_user = user_msgs[1]
+    text_blocks = [b for b in tool_user.content if isinstance(b, TextBlock)]
+    assert any(
+        b.text == "researcher note: try shape X" for b in text_blocks
+    )
+
+
+def test_in_fire_mutator_suppressed_when_callable_returns_none() -> None:
+    """A mutator that has nothing to add returns None; the user message
+    reads exactly as it would without the hook (byte-identical semantics
+    for that path)."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=5,
+        in_fire_mutator=lambda ctx: None,
+    )
+    out = loop.run("start")
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    tool_user = user_msgs[1]
+    text_blocks = [b for b in tool_user.content if isinstance(b, TextBlock)]
+    assert text_blocks == []
+
+
+def test_in_fire_mutator_callable_exception_logged_but_does_not_crash_loop(
+    caplog,
+) -> None:
+    """If the mutator raises, log it and continue — a bug in the
+    steering logic must not take down a $15 fire."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+
+    def _broken(ctx) -> str | None:
+        raise RuntimeError("mutator bug")
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=5,
+        in_fire_mutator=_broken,
+    )
+    with caplog.at_level(logging.WARNING, logger="core.llm.tool_use.loop"):
+        out = loop.run("start")
+    assert out.terminated_by == "complete"
+    assert any(
+        "in_fire_mutator callable raised" in r.message
+        for r in caplog.records
+    )
+
+
+def test_in_fire_mutator_skipped_on_terminal_tool_turn() -> None:
+    """When the terminal tool fires, the model has just submitted and
+    the loop is about to exit — a steering nudge after that is noise.
+    Skip the hook on the terminal-tool turn."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "submit_answer", {"answer": "final"})),
+        _text_response("ok"),
+    ])
+    calls: list = []
+
+    def _mutator(ctx) -> str | None:
+        calls.append(ctx)
+        return "steering"
+
+    loop = ToolUseLoop(
+        fp,
+        [_echo_tool(), _echo_tool("submit_answer")],
+        max_iterations=5,
+        terminal_tool="submit_answer",
+        in_fire_mutator=_mutator,
+    )
+    loop.run("start")
+    # No calls — the only iteration fired the terminal tool.
+    assert calls == []
+
+
+def test_submission_warning_state_carries_cost_when_cost_cap_set() -> None:
+    """When ``max_cost_usd`` is set on the loop, the SubmissionState
+    passed to the callable reports both cost_so_far AND cost_cap.
+    Lets consumers warn on cost-near-exhaustion when the model burns
+    cost faster than iterations (opus's profile, vs haiku which
+    typically burns iters faster). One-axis warnings miss this."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        _text_response("ok"),
+    ])
+    seen: list = []
+
+    def _warn(state) -> str | None:
+        seen.append(state)
+        return None
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=10,
+        max_cost_usd=0.50,
+        submission_warning=_warn,
+    )
+    loop.run("start")
+    assert len(seen) == 1
+    state = seen[0]
+    assert state.cost_cap == 0.50
+    # Sample provider charges per-token; just verify the field is
+    # populated and within the cap (not asserting an exact value
+    # since the FakeProvider's pricing is fixture-defined).
+    assert 0 < state.cost_so_far <= 0.50
+    assert state.iters_max == 10
+
+
+def test_nudge_on_no_tool_call_continues_loop_instead_of_terminating() -> None:
+    """When ``nudge_on_no_tool_call`` is set and the assistant turn
+    returns no tool_use blocks AND a soft stop (StopReason.COMPLETE),
+    the loop injects the nudge as a user message and continues —
+    rather than terminating with ``terminated_by="complete"`` which
+    is the default. Gives the model a chance to re-engage the tools
+    before iteration cap.
+
+    Practical wiring uses ``terminal_tool`` alongside the nudge so the
+    loop exits cleanly once the model finalises (e.g. /exploit's
+    ``verify_run`` / ``submit_exploit``). Without a terminal tool the
+    nudge would keep firing every COMPLETE turn until iteration cap,
+    which is the intended behaviour — operators set the nudge
+    explicitly when they want that loop pressure."""
+    submit = ToolDef(
+        name="submit",
+        description="finalise the work",
+        input_schema={"type": "object"},
+        handler=lambda inp: "submitted",
+    )
+    fp = _FakeProvider([
+        # First turn: model emits text only, no tool calls — nudge fires.
+        _text_response("hmm let me think"),
+        # Second turn (post-nudge): model uses the submit terminal tool.
+        _tool_call_response(("c1", "submit", {"answer": "x"})),
+    ])
+    loop = ToolUseLoop(
+        fp, [submit], max_iterations=5,
+        terminal_tool="submit",
+        nudge_on_no_tool_call="Use the tools; do not just emit prose.",
+    )
+    out = loop.run("start")
+    # Terminal tool fires → loop exits cleanly.
+    assert out.terminated_by == "terminal_tool"
+    # Confirm the nudge landed in the conversation exactly once.
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    nudge_text_blocks = [
+        b for m in user_msgs for b in m.content
+        if isinstance(b, TextBlock)
+        and "Use the tools" in b.text
+    ]
+    assert len(nudge_text_blocks) == 1
+
+
+def test_nudge_on_no_tool_call_does_not_fire_on_hard_errors() -> None:
+    """On a HARD stop (max_tokens / refused / provider_error), the
+    nudge does NOT fire — the model literally can't continue, and
+    injecting a nudge would burn budget without recovery. Terminates
+    with the matching reason as it did before the hook landed."""
+    fp = _FakeProvider([TurnResponse(
+        content=[TextBlock(text="partial...")],
+        stop_reason=StopReason.MAX_TOKENS,
+        input_tokens=100, output_tokens=4096,
+    )])
+    loop = ToolUseLoop(
+        fp, [_echo_tool()], max_iterations=5,
+        nudge_on_no_tool_call="SUBMIT",
+    )
+    out = loop.run("start")
+    assert out.terminated_by == "max_tokens"
+    # No nudge injected — the conversation ends at the assistant
+    # max_tokens turn (only initial user + assistant message).
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    assert len(user_msgs) == 1
+
+
+def test_nudge_default_none_preserves_legacy_terminate_on_text_only() -> None:
+    """When ``nudge_on_no_tool_call`` is None (default), text-only +
+    COMPLETE terminates the loop — the existing semantics every
+    other ToolUseLoop consumer depends on. Belt-and-braces vs.
+    accidentally changing the default."""
+    fp = _FakeProvider([_text_response("done")])
+    out = ToolUseLoop(fp, [_echo_tool()]).run("start")
+    assert out.terminated_by == "complete"
+    assert out.iterations == 1
+
+
+def test_both_hooks_compose() -> None:
+    """submission_warning + nudge_on_no_tool_call can be set together
+    on the same loop. The warning runs after every tool-result turn;
+    the nudge runs whenever the model emits text-only mid-task. Real
+    /exploit wiring pairs them with terminal_tool so the loop exits
+    cleanly once submit fires."""
+    submit = ToolDef(
+        name="submit",
+        description="finalise",
+        input_schema={"type": "object"},
+        handler=lambda inp: "submitted",
+    )
+    fp = _FakeProvider([
+        # Turn 1: text only — triggers nudge.
+        _text_response("thinking"),
+        # Turn 2: a regular tool call — triggers submission_warning.
+        _tool_call_response(("c1", "echo", {"a": 1})),
+        # Turn 3: terminal tool — exits.
+        _tool_call_response(("c2", "submit", {"answer": "x"})),
+    ])
+    warning_calls: list = []
+
+    def _warn(state) -> str | None:
+        warning_calls.append(state.iters_remaining)
+        return f"submit ({state.iters_remaining} left)"
+
+    loop = ToolUseLoop(
+        fp, [_echo_tool(), submit], max_iterations=5,
+        terminal_tool="submit",
+        submission_warning=_warn,
+        nudge_on_no_tool_call="use tools",
+    )
+    out = loop.run("start")
+    assert out.terminated_by == "terminal_tool"
+    # Warning was evaluated once — after the echo tool-call turn.
+    # (The submit-terminal turn exits before submission_warning fires.)
+    assert warning_calls == [3]
+    # Nudge text appears in conversation.
+    user_msgs = [m for m in out.messages if m.role == "user"]
+    nudge_count = sum(
+        1 for m in user_msgs for b in m.content
+        if isinstance(b, TextBlock) and "use tools" in b.text
+    )
+    warn_count = sum(
+        1 for m in user_msgs for b in m.content
+        if isinstance(b, TextBlock) and "submit (" in b.text
+    )
+    assert nudge_count == 1
+    assert warn_count == 1

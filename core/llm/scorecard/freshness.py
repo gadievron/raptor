@@ -16,7 +16,7 @@ of ``None``/``<=0`` means decay is DISABLED — every bucket counts fully, which
 is exactly the pre-freshness behaviour (back-compat by construction).
 
 Bucket key format: ``"YYYY-MM"``. Age is measured from the bucket's first day.
-See ``~/design/scorecard-model-versioning.md``.
+See the design memo.
 """
 from __future__ import annotations
 

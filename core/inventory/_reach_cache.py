@@ -43,9 +43,10 @@ import logging
 import os
 import pickle
 import re
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from core.atomic_fs import write_bytes_atomically
 
 if TYPE_CHECKING:
     from .reachability import _AdjacencyIndex
@@ -326,28 +327,16 @@ def save_index(
     except OSError as exc:
         logger.debug("reach_cache: dir setup failed: %s", exc)
         return
+    # Atomic write: reachability cache, mode=0o600 to preserve the
+    # owner-only posture the previous mkstemp+chmod pattern installed.
+    # ``protocol=4`` (not latest) so a cache built on a newer Python
+    # is still readable on older runtimes in the same dev environment.
+    payload = _HEADER_MAGIC + pickle.dumps(index, protocol=4)
     try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".reach-tmp-", suffix=".pickle",
-            dir=str(_CACHE_DIR),
+        write_bytes_atomically(
+            path, payload,
+            mode=0o600, tmp_prefix=".reach-tmp-",
         )
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(_HEADER_MAGIC)
-                # ``protocol=4`` is supported on all Python versions
-                # raptor targets and gives reasonable size/speed.
-                # Avoid the latest protocol so a cache built on a
-                # newer Python is still readable on older runtimes
-                # in the same dev environment.
-                pickle.dump(index, f, protocol=4)
-            os.chmod(tmp_path, 0o600)
-            os.rename(tmp_path, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
     except OSError as exc:
         logger.debug("reach_cache: write failed for %s: %s", path, exc)
 

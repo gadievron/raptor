@@ -142,10 +142,11 @@ def _apply_one_uses(
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    new_text = pattern.sub(
-        rf"\g<1>{edit.new_value}\g<3>",
-        text, count=1,
-    )
+    def _repl(m):
+        if m.group(2) == edit.old_value:
+            return f"{m.group(1)}{edit.new_value}{m.group(3)}"
+        return m.group(0)
+    new_text = pattern.sub(_repl, text)
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )
@@ -217,37 +218,21 @@ def _apply_sha_pinned(
                 f"differs from plan's old tag {edit.old_value!r}"
             ),
         )
-    # Rewrite both the SHA and the # was vX comment.
-    new_text = pattern.sub(
-        rf"\g<1>{new_sha}\g<3>{edit.new_value}\g<5>",
-        text, count=1,
-    )
+    # Rewrite both the SHA and the ``# was vX`` tag comment.
+    def _repl(m):
+        if m.group(2) == old_sha and m.group(4) == edit.old_value:
+            return f"{m.group(1)}{new_sha}{m.group(3)}{edit.new_value}{m.group(5)}"
+        return m.group(0)
+    new_text = pattern.sub(_repl, text)
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Atomic tempfile + rename (same pattern as the other
-    Dockerfile rewriters)."""
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Atomic tempfile + rename via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees
+    (concurrent-reader safety, mode preservation, PID-suffix
+    isolation, BaseException catch)."""
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, content)

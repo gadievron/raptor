@@ -87,6 +87,8 @@ def validate_corpus(
     by_eco: Dict[str, List[Tuple[float, bool]]] = {}
     for sample in samples:
         for f in sample["findings"]:
+            if not isinstance(f, dict):
+                continue
             score = f.get("raptor_risk_estimate")
             if score is None or not isinstance(score, (int, float)):
                 continue
@@ -288,8 +290,14 @@ def _spearman_rho(
         return None
     rx = _ranks(x)
     ry = _ranks(y)
-    d2 = sum((rx[i] - ry[i]) ** 2 for i in range(n))
-    return 1.0 - (6.0 * d2) / (n * (n * n - 1))
+    mean_rx = sum(rx) / n
+    mean_ry = sum(ry) / n
+    num = sum((rx[i] - mean_rx) * (ry[i] - mean_ry) for i in range(n))
+    den_x = sum((rx[i] - mean_rx) ** 2 for i in range(n)) ** 0.5
+    den_y = sum((ry[i] - mean_ry) ** 2 for i in range(n)) ** 0.5
+    if den_x == 0 or den_y == 0:
+        return None
+    return num / (den_x * den_y)
 
 
 def _ranks(values: List[float]) -> List[float]:

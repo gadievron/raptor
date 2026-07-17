@@ -52,7 +52,7 @@ _TAG_LIKE_RE = re.compile(
 # untagged-commit shape.
 _GO_PSEUDO_RE = re.compile(
     r"^v\d+\.\d+\.\d+"
-    r"(?:-(?:pre\.)?0\.|-)"
+    r"(?:-(?:[\w]+\.)?0\.|-)"
     r"\d{14}-[0-9a-f]{12}$"
 )
 

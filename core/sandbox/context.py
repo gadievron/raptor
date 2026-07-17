@@ -222,6 +222,7 @@ def _persist_proxy_events(
             "persistence: %s", _log_path, _log_err,
         )
         return
+    _fd_owned = True
     try:
         _log_st = os.fstat(_log_fd)
         if not stat.S_ISREG(_log_st.st_mode):
@@ -231,6 +232,7 @@ def _persist_proxy_events(
                 _log_path, _log_st.st_mode,
             )
             os.close(_log_fd)
+            _fd_owned = False
             return
         # Clear O_NONBLOCK for the actual append: only needed to
         # stop a FIFO-open hang at the os.open() above; on a
@@ -240,15 +242,21 @@ def _persist_proxy_events(
         _fcntl.fcntl(_log_fd, _fcntl.F_SETFL, _flags & ~os.O_NONBLOCK)
         import json as _json
         with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
+            _fd_owned = False  # fdopen took ownership
             for e in events:
                 _f.write(_json.dumps(e) + "\n")
-    except BaseException:
+    except BaseException as _persist_exc:
         # os.fdopen takes ownership on success; on any pre-fdopen
-        # failure we still own the fd and must close.
-        try:
-            os.close(_log_fd)
-        except OSError:
-            pass
+        # failure we still own the fd and must close.  Post-fdopen
+        # the `with` block already closed it — a second os.close
+        # would risk closing another thread's newly-opened fd.
+        if _fd_owned:
+            try:
+                os.close(_log_fd)
+            except OSError:
+                pass
+        if not isinstance(_persist_exc, Exception):
+            raise
         # Demoted from raise → debug-log: persistence failure
         # shouldn't poison the caller, same posture as the open
         # failure above.
@@ -315,8 +323,11 @@ def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
     return False
 
 
+_UNSET = object()
+
+
 @contextmanager
-def sandbox(block_network: bool = False, target: str = None, output: str = None,
+def sandbox(block_network=_UNSET, target: str = None, output: str = None,
             map_root: bool = False, limits: dict = None,
             allowed_tcp_ports: list = None, profile: str = None,
             disabled: bool = False,
@@ -488,12 +499,12 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     # `sandbox(audit=True, disabled=True)` call would acquire the
     # ref-count without ever using audit, leaking the count if the
     # release path doesn't fire (which it does, but defensive).
-    _effectively_disabled = (
-        bool(disabled)
-        or bool(state._cli_sandbox_disabled)
-        or state._cli_sandbox_profile == "none"
-        or profile == "none"
-    )
+    if state._cli_sandbox_profile is not None:
+        _effectively_disabled = (state._cli_sandbox_profile == "none")
+    elif profile is not None:
+        _effectively_disabled = (profile == "none")
+    else:
+        _effectively_disabled = bool(disabled) or bool(state._cli_sandbox_disabled)
     # Observe mode is "audit + audit_verbose + write to a separate
     # JSONL file + extend the trace set with stat-family". Engaging
     # observe implies audit (TRACE action requires a tracer) and
@@ -609,69 +620,100 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 os.makedirs(fake_home_env[xdg_dir], mode=0o700, exist_ok=True)
             except OSError:
                 pass
+    _use_proxy_netns = False
+    _proxy_unix_path: Optional[str] = None
+    _proxy_forwarder_port: Optional[int] = None
     if use_egress_proxy:
         if not proxy_hosts:
             raise ValueError(
                 "use_egress_proxy=True requires proxy_hosts=[...] "
                 "— an empty allowlist would block every connection."
             )
-        if block_network:
-            # Silently override — net-ns block and proxy are mutually
-            # exclusive (proxy listens on loopback, which the net-ns
-            # wouldn't include). Log so operators can see the config
-            # change.
-            logger.info(
-                "Sandbox: use_egress_proxy=True overrides block_network=True "
-                "(net-ns would hide the loopback proxy from the child)"
-            )
-            block_network = False
 
         from . import proxy as _proxy_mod
         proxy_instance = _proxy_mod.get_proxy(proxy_hosts)
-        # Audit profile: ref-count engage allow-and-log on the
-        # hostname gate. Look ahead at state._cli_sandbox_profile
-        # because the per-call profile arg may not be set when the
-        # caller passed only --sandbox at the CLI. Acquire here;
-        # the matching release runs in the finally below so an
-        # exception during sandbox setup doesn't leave the count
-        # stuck above zero.
-        #
-        # Set _engaging_audit ONLY after a successful acquire — if
-        # acquire raises, the finally would otherwise call release
-        # without a matching acquire (idempotent, but produces a
-        # spurious operator log).
-        # Audit-mode acquire is DEFERRED to just before yield (see
-        # below). If we acquired here, an exception in the ~700 LOC
-        # of sandbox setup between this point and the yield would
-        # leave the ref-count permanently incremented (the
-        # contextmanager's try/finally only fires after a yield).
-        # Decision recorded as `_will_engage_audit`; the actual
-        # acquire happens right before the yield.
-        _will_engage_audit = bool(audit_mode)
-        # Landlock TCP allowlist pins the child to the proxy port only.
-        # Caller-supplied allowed_tcp_ports is overridden (with a log if
-        # non-empty) — mixing with the proxy would let children bypass it.
-        if allowed_tcp_ports:
-            logger.info(
-                f"Sandbox: use_egress_proxy=True overrides "
-                f"allowed_tcp_ports={allowed_tcp_ports} with proxy port"
-            )
-        allowed_tcp_ports = [proxy_instance.port]
 
-        # UDP block — closes DNS/UDP exfil. Safe here because the proxy
-        # resolves hostnames on behalf of the child.
+        # Decide enforcement path. On Landlock ABI >= 4 (kernel 6.7+),
+        # the TCP-connect allowlist pins the child to the proxy port.
+        # On ABI < 4, that allowlist is inert — the child can bypass
+        # HTTPS_PROXY and connect directly. Fix: put the child in an
+        # empty netns and relay through a Unix socket bridge. The
+        # bridge forwarder (TCP inside netns → Unix socket outside)
+        # runs inside the child's netns before Landlock/seccomp, so it
+        # is unrestricted; the target is fully locked down.
+        _proxy_abi = (
+            _get_landlock_abi() if check_landlock_available() else 0
+        )
+        if _proxy_abi < 4 and sys.platform != "darwin" and not output:
+            logger.warning(
+                "Sandbox: Landlock ABI %d < 4 (no TCP allowlist); "
+                "proxy netns enforcement unavailable (no output= "
+                "directory for unix socket). Egress proxy allowlist "
+                "is advisory only on this kernel.",
+                _proxy_abi,
+            )
+        if _proxy_abi < 4 and sys.platform != "darwin" and output:
+            _use_proxy_netns = True
+            import tempfile as _tmpf
+            _proxy_unix_path = os.path.join(
+                output, f".raptor-proxy-{os.getpid()}.sock",
+            )
+            if len(_proxy_unix_path.encode()) > 104:
+                _proxy_unix_path = os.path.join(
+                    _tmpf.gettempdir(),
+                    f".raptor-proxy-{os.getpid()}.sock",
+                )
+            try:
+                proxy_instance.bind_unix(_proxy_unix_path)
+            except Exception as e:
+                logger.warning(
+                    "Sandbox: proxy unix socket bind failed (%s); "
+                    "falling back to TCP-only (ABI %d < 4, TCP "
+                    "allowlist NOT enforced on this kernel)", e,
+                    _proxy_abi,
+                )
+                _use_proxy_netns = False
+                _proxy_unix_path = None
+
+        if _use_proxy_netns:
+            # Netns enforcement: the child gets CLONE_NEWNET; the
+            # forwarder bridges TCP on loopback → Unix socket.
+            # Reuse the proxy's TCP port number for the forwarder
+            # inside the empty netns — no collision because the netns
+            # is fresh.
+            _proxy_forwarder_port = proxy_instance.port
+            block_network = True
+            allowed_tcp_ports = None
+        else:
+            # TCP-only path (ABI >= 4 or fallback).
+            if block_network:
+                logger.info(
+                    "Sandbox: use_egress_proxy=True overrides "
+                    "block_network=True (net-ns would hide the "
+                    "loopback proxy from the child)"
+                )
+                block_network = False
+            if allowed_tcp_ports:
+                logger.info(
+                    "Sandbox: use_egress_proxy=True overrides "
+                    "allowed_tcp_ports=%s with proxy port",
+                    allowed_tcp_ports,
+                )
+            allowed_tcp_ports = [proxy_instance.port]
+
+        _will_engage_audit = bool(audit_mode)
+
         seccomp_block_udp = True
 
-        # Child env needs HTTPS_PROXY etc. Both UPPERCASE (Node/curl/
-        # Python requests) AND lowercase (CodeQL's Java stack, git, wget
-        # on some distros). Setting both maximises compatibility.
-        proxy_url = f"http://127.0.0.1:{proxy_instance.port}"
+        _effective_proxy_port = (
+            _proxy_forwarder_port
+            if _use_proxy_netns
+            else proxy_instance.port
+        )
+        proxy_url = f"http://127.0.0.1:{_effective_proxy_port}"
         proxy_env_overrides = {
             "HTTPS_PROXY": proxy_url, "https_proxy": proxy_url,
             "HTTP_PROXY": proxy_url, "http_proxy": proxy_url,
-            # NO_PROXY = "" disables the user-env's NO_PROXY if any
-            # slipped through; an empty value means "no exclusions",
-            # i.e. route EVERYTHING through the proxy.
             "NO_PROXY": "", "no_proxy": "",
         }
 
@@ -696,7 +738,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"Valid profiles: {sorted(PROFILES)}."
             )
         p = PROFILES[profile]
-        block_network = p["block_network"]
+        if block_network is _UNSET:
+            block_network = p["block_network"]
         seccomp_profile = p["seccomp"] or None
         if not p["use_landlock"]:
             # Profile forces Landlock off — warn if the caller handed us
@@ -716,6 +759,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             target = None
             output = None
             allowed_tcp_ports = None
+    if block_network is _UNSET:
+        block_network = False
     strict_required = profile == "strict"
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
@@ -963,11 +1008,16 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             readable_paths,
         )
 
+    _preexec_readable = list(effective_read_paths or []) if effective_read_paths else None
+    if _preexec_readable is not None:
+        for _tp in (tool_paths or []):
+            if _tp and _tp not in _preexec_readable:
+                _preexec_readable.append(_tp)
     preexec = _make_preexec_fn(effective_limits, writable_paths=writable_paths,
                                allowed_tcp_ports=allowed_tcp_ports,
                                seccomp_profile=seccomp_profile,
                                seccomp_block_udp=seccomp_block_udp,
-                               readable_paths=effective_read_paths)
+                               readable_paths=_preexec_readable)
 
     # Host-fingerprint persona — opt-in. Built once per sandbox() context
     # and reused across every run() call inside it. Cleanup happens in
@@ -1134,6 +1184,24 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # get_safe_env path (see core/config.py); the caller path
         # is "you know what you're doing".
         strict_env = kwargs.pop("strict_env", False)
+        # ``env_caller_filtered``: opt-in assertion from the caller
+        # that the env dict was constructed from a get_safe_env-
+        # equivalent base AND that any DANGEROUS_ENV_VARS present
+        # are INTENTIONAL caller overrides (not operator-secret
+        # leakage). Suppresses the operational-hygiene warning
+        # below. ``strict_env=True`` is still preferable when the
+        # caller's intent is "neutralise a few keys on top of a
+        # base I trust" — but callers that INTENTIONALLY inject
+        # DANGEROUS_ENV_VARS as primitives (e.g. LD_PRELOAD /
+        # LD_LIBRARY_PATH for a controlled scenario) would have
+        # those stripped by ``strict_env=True``.
+        # ``env_caller_filtered=True`` is the "I know what I'm
+        # doing AND I can't use strict_env" escape valve.
+        env_caller_filtered = kwargs.pop("env_caller_filtered", False)
+        _skip_pid_ns = kwargs.pop("skip_pid_ns", False)
+        _skip_mount_ns = kwargs.pop("skip_mount_ns", False)
+        _inherit_netns = kwargs.pop("inherit_netns", False)
+        _start_new_session = kwargs.pop("start_new_session", True)
         if kwargs.get("env") is None:
             kwargs.pop("env", None)  # drop any explicit None
             kwargs["env"] = RaptorConfig.get_safe_env()
@@ -1148,24 +1216,24 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             # doesn't quietly wave through ``EDITOR`` / ``PAGER`` /
             # ``BROWSER`` from an attacker-influenced parent.
             #
-            # Gate on ``not strict_env``: ``strict_env=True`` is the
-            # safe-rebound form (applied below) where the caller has
-            # explicitly asked us to strip DANGEROUS_ENV_VARS from
-            # their env. Once they've opted into that, the warning is
-            # contradictory noise — the warning literally tells them
-            # to pass ``strict_env=True`` as the fix. Operator on PR
-            # #777 surfaced this firing ~12× per scan run from the
-            # semgrep path; the path passes a ``get_safe_env()``-
-            # derived env (already DANGEROUS-stripped) plus a few
-            # explicit overrides, exactly the "I know what I'm doing"
-            # case the gate is meant to silence.
-            if not strict_env:
+            # Gate on ``not strict_env`` AND ``not env_caller_filtered``:
+            # either flag is a caller-side assertion that the warning
+            # is contradictory noise — the warning literally tells the
+            # caller to pass ``strict_env=True`` as the fix.
+            # ``env_caller_filtered`` covers the case (engine
+            # local_lowpriv_shell, semgrep config-merger, etc.) where
+            # the caller has built the env from get_safe_env()
+            # upstream AND deliberately added DANGEROUS_ENV_VARS as
+            # intentional primitives that ``strict_env=True`` would
+            # incorrectly strip.
+            if not strict_env and not env_caller_filtered:
                 logger.warning(
                     "Sandbox: caller supplied custom env= for "
                     "%s — get_safe_env() not applied; caller env "
                     "passed through. Pass strict_env=True to strip "
-                    "DANGEROUS_ENV_VARS from the caller env if you "
-                    "only intended to override a few keys.",
+                    "DANGEROUS_ENV_VARS from the caller env, OR "
+                    "env_caller_filtered=True to acknowledge the "
+                    "caller has already filtered upstream.",
                     " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
                 )
             if strict_env:
@@ -1195,6 +1263,12 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # HOME=/home/user would silently defeat the feature).
         if fake_home_env:
             kwargs["env"] = {**kwargs["env"], **fake_home_env}
+
+        # The pid1 shim requires _RAPTOR_TRUSTED to run.  Only inject on
+        # the unshare path (where the shim is used); the shim strips it
+        # before exec'ing the target so it never leaks.
+        if use_sandbox and not use_seatbelt and (block_network or use_mount or restrict_reads):
+            kwargs["env"].setdefault("_RAPTOR_TRUSTED", "1")
 
         # Force FD close at fork. Python defaults close_fds=True on POSIX
         # but we reject explicit overrides — inheriting FDs from RAPTOR
@@ -1408,7 +1482,9 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 unshare_supports_kill_child,
             )
             unshare_cmd = [_resolve_sandbox_binary("unshare"),
-                           "--user", "--pid", "--fork", "--ipc"]
+                           "--user", "--fork", "--ipc"]
+            if not _skip_pid_ns:
+                unshare_cmd.append("--pid")
             if block_network:
                 unshare_cmd.append("--net")
             # Belt-and-braces orphan teardown: if `unshare` is killed
@@ -1492,6 +1568,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # setup fails — adaptive so we still get Landlock-only when
         # mount-ns is unusable.
         used_spawn = False
+        _audit_landlock_engaged = False
         # _spawn doesn't replicate every subprocess.run kwarg through its
         # manual os.fork() path. The Landlock-only subprocess.run path
         # handles them natively via Python's posix_spawn logic. Route
@@ -1675,6 +1752,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     (audit_run_dir or output)
                     if nonlocal_audit_mode else None
                 )
+                _mac_readable = list(effective_read_paths or [])
+                for _tp in (tool_paths or []):
+                    if _tp and _tp not in _mac_readable:
+                        _mac_readable.append(_tp)
                 result = _macos_mod.run_sandboxed(
                     cmd,
                     target=target, output=output,
@@ -1682,7 +1763,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     nproc_limit=nproc_limit,
                     limits=effective_limits,
                     writable_paths=writable_paths or [],
-                    readable_paths=effective_read_paths or [],
+                    readable_paths=_mac_readable,
                     allowed_tcp_ports=list(allowed_tcp_ports)
                         if allowed_tcp_ports else None,
                     # Linux-only kwargs accepted for signature parity
@@ -1708,7 +1789,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                 if proxy_instance is not None else None),
                     fake_home=fake_home,
                     map_root=map_root,
-                    start_new_session=kwargs.get("start_new_session", True),
+                    start_new_session=_start_new_session,
                     strict_env=strict_env,
                 )
                 used_spawn = True
@@ -1761,6 +1842,24 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             (audit_run_dir or output)
                             if nonlocal_audit_mode else None
                         )
+                        # skip_mount_ns: no bind-tree, host FS visible.
+                        # Landlock read-restrict needs ALL system dirs
+                        # enumerated (infeasible); pass None → reads
+                        # allowed everywhere, writes still restricted.
+                        _spawn_readable = (
+                            None if _skip_mount_ns
+                            else _readable_with_tools
+                        )
+                        _spawn_restrict_reads = (
+                            False if _skip_mount_ns
+                            else restrict_reads
+                        )
+                        if _skip_mount_ns and restrict_reads:
+                            logger.warning(
+                                "skip_mount_ns=True forces restrict_reads=False "
+                                "(Landlock cannot enumerate all system dirs "
+                                "without mount-ns). Writes are still restricted."
+                            )
                         result = _spawn_mod.run_sandboxed(
                             cmd,
                             target=target, output=output,
@@ -1768,7 +1867,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             nproc_limit=nproc_limit,
                             limits=effective_limits,
                             writable_paths=writable_paths or [],
-                            readable_paths=_readable_with_tools,
+                            readable_paths=_spawn_readable,
                             allowed_tcp_ports=list(allowed_tcp_ports)
                                 if allowed_tcp_ports else None,
                             seccomp_profile=seccomp_profile,
@@ -1786,7 +1885,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             observe_nonce=(nonlocal_observe_nonce
                                            if observe and nonlocal_audit_mode
                                            else None),
-                            restrict_reads=restrict_reads,
+                            restrict_reads=_spawn_restrict_reads,
                             strict_env=strict_env,
                             persona=_persona,
                             etc_overlay=etc_overlay,
@@ -1801,9 +1900,12 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             # /crash-analysis per run_untrusted's
                             # docstring) pass start_new_session=False
                             # explicitly and that is honoured.
-                            start_new_session=kwargs.get("start_new_session", True),
-                            inherit_netns=kwargs.get("inherit_netns", False),
-                            skip_pid_ns=kwargs.get("skip_pid_ns", False),
+                            start_new_session=_start_new_session,
+                            inherit_netns=_inherit_netns,
+                            skip_pid_ns=_skip_pid_ns,
+                            skip_mount_ns=_skip_mount_ns,
+                            proxy_unix_socket=_proxy_unix_path if _use_proxy_netns else None,
+                            proxy_forwarder_port=_proxy_forwarder_port if _use_proxy_netns else None,
                         )
                         used_spawn = True
                         # Authoritative setup-failure signal from the exec-
@@ -1887,6 +1989,12 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                     "isolation.",
                                     cmd[0],
                                 )
+                                if _use_proxy_netns:
+                                    logger.warning(
+                                        "Sandbox: proxy netns enforcement "
+                                        "lost in Landlock-only fallback "
+                                        "— child has no network connectivity.",
+                                    )
                                 # Companion DEBUG with the diagnostic
                                 # detail for operators investigating.
                                 logger.debug(
@@ -2006,14 +2114,19 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             _wp = list(writable_paths or [])
                             if "/tmp" not in _wp:
                                 _wp.append("/tmp")
+                            _la_readable = (
+                                list(effective_read_paths)
+                                if effective_read_paths else None
+                            )
+                            if _la_readable is not None:
+                                for _tp in (tool_paths or []):
+                                    if _tp and _tp not in _la_readable:
+                                        _la_readable.append(_tp)
                             _ll_preexec = _la_make_landlock(
                                 _wp,
                                 list(allowed_tcp_ports)
                                     if allowed_tcp_ports else None,
-                                readable_paths=(
-                                    list(effective_read_paths)
-                                    if effective_read_paths else None
-                                ),
+                                readable_paths=_la_readable,
                             )
                             _sc_preexec = _la_make_seccomp(
                                 seccomp_profile,
@@ -2036,7 +2149,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                         else None
                                     ),
                                     writable_paths=writable_paths or [],
-                                    readable_paths=effective_read_paths or [],
+                                    readable_paths=_la_readable or effective_read_paths or [],
                                     allowed_tcp_ports=(
                                         list(allowed_tcp_ports)
                                         if allowed_tcp_ports else None
@@ -2053,8 +2166,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                         "capture_output", False),
                                     text=kwargs.get("text", False),
                                     stdin=kwargs.get("stdin"),
-                                    start_new_session=kwargs.get(
-                                        "start_new_session", True),
+                                    start_new_session=_start_new_session,
                                 )
                                 _audit_landlock_engaged = True
                             except (RuntimeError, OSError) as _la_err:
@@ -2090,10 +2202,11 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         _death_r, _death_w = os.pipe()
                         try:
                             _dk = dict(kwargs)
+                            _dk["start_new_session"] = _start_new_session
                             _dk["pass_fds"] = (
                                 tuple(_dk.get("pass_fds") or ()) + (_death_r,)
                             )
-                            _denv = dict(_dk.get("env") or os.environ)
+                            _denv = dict(_dk.get("env") if _dk.get("env") is not None else os.environ)
                             _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
                             _dk["env"] = _denv
                             result = subprocess.run(full_cmd, **_dk)
@@ -2104,7 +2217,11 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                 except OSError:
                                     pass
                     else:
-                        result = subprocess.run(full_cmd, **kwargs)
+                        result = subprocess.run(
+                            full_cmd,
+                            start_new_session=_start_new_session,
+                            **kwargs,
+                        )
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
@@ -2123,8 +2240,13 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # if the child had mount-ns isolation or fell back to
         # Landlock-only mode. See ``core/security/THREAT_MODEL.md``
         # I2-(a) for why this matters.
-        result.sandbox_info["mount_ns_active"] = bool(use_mount)
-        result.sandbox_info["restrict_reads"] = bool(restrict_reads)
+        result.sandbox_info["mount_ns_active"] = bool(used_spawn and use_mount)
+        _eff_restrict_reads = restrict_reads and not (_skip_mount_ns and use_mount)
+        result.sandbox_info["restrict_reads"] = bool(_eff_restrict_reads)
+        if _use_proxy_netns:
+            result.sandbox_info["proxy_enforcement"] = "netns"
+        elif use_egress_proxy:
+            result.sandbox_info["proxy_enforcement"] = "landlock_tcp"
         # Observe nonce — only present when sandbox(observe=True)
         # actually engaged audit mode at spawn time; absent under
         # plain audit and absent when observe was requested but
@@ -2321,6 +2443,13 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     _persist_proxy_events(
                         _block_only, output=output, target=target,
                     )
+        if _use_proxy_netns and _proxy_unix_path and proxy_instance is not None:
+            try:
+                proxy_instance.unbind_unix(_proxy_unix_path)
+            except Exception:
+                logger.debug(
+                    "proxy unix socket cleanup failed", exc_info=True,
+                )
         if use_egress_proxy and _engaging_audit:
             try:
                 proxy_instance.release_audit_log_only()
@@ -2360,7 +2489,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
 
 
 # Convenience: standalone run function for one-off sandboxed commands
-def run(cmd: List[str], block_network: bool = False, target: str = None,
+def run(cmd: List[str], block_network: bool = True, target: str = None,
         output: str = None, allowed_tcp_ports: list = None,
         profile: str = None, disabled: bool = False, limits: dict = None,
         map_root: bool = False,
@@ -2440,6 +2569,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                   limits: dict = None,
                   restrict_reads: bool = True,
                   readable_paths: list = None,
+                  writable_paths: list = None,
                   fake_home: bool = True,
                   **kwargs) -> subprocess.CompletedProcess:
     """Run a command whose input is attacker-derived or otherwise untrusted.
@@ -2499,15 +2629,23 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
             "output= so Landlock actually engages. Pass a read-only target "
             "dir and/or a writable output dir."
         )
-    # Guard against silent misuse — the contract fixes these.
-    for forbidden in ("block_network", "allowed_tcp_ports", "strict_env"):
-        if forbidden in kwargs:
-            raise TypeError(
-                f"run_untrusted() does not accept {forbidden}= — it always "
-                f"runs with block_network=True, no TCP allowlist, and "
-                f"strict_env=True env-stripping. Use sandbox() directly "
-                f"for varied network or env policy."
-            )
+    _UNTRUSTED_ALLOWED_KWARGS = frozenset({
+        "env", "cwd", "timeout", "capture_output", "text",
+        "encoding", "errors",
+        "stdin", "input", "start_new_session", "pass_fds",
+        "caller_label",
+        "audit", "audit_verbose", "audit_run_dir",
+        "observe", "exclude_tmp_baseline",
+        "tool_paths",
+    })
+    rejected = set(kwargs.keys()) - _UNTRUSTED_ALLOWED_KWARGS
+    if rejected:
+        raise TypeError(
+            f"run_untrusted() does not accept {sorted(rejected)} — "
+            f"isolation policy (network, profile, writable_paths, "
+            f"namespace controls) is fixed. Use sandbox() directly "
+            f"for varied policy."
+        )
     # Default stdin to DEVNULL for untrusted code. If the parent's stdin
     # is the operator's TTY (common for interactive RAPTOR use) and the
     # sandboxed target reads stdin, the target gets a live channel to
@@ -2537,6 +2675,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                limits=limits,
                restrict_reads=restrict_reads,
                readable_paths=readable_paths,
+               writable_paths=writable_paths,
                fake_home=fake_home,
                strict_env=True,
                **kwargs)
@@ -2551,6 +2690,7 @@ def run_untrusted_networked(
     limits: dict = None,
     restrict_reads: bool = True,
     readable_paths: list = None,
+    writable_paths: list = None,
     fake_home: bool = False,
     **kwargs,
 ) -> subprocess.CompletedProcess:
@@ -2599,14 +2739,22 @@ def run_untrusted_networked(
             "the egress allowlist is mandatory; callers wanting unrestricted "
             "network should use sandbox() directly."
         )
-    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy", "strict_env"):
-        if forbidden in kwargs:
-            raise TypeError(
-                f"run_untrusted_networked() does not accept {forbidden}= — "
-                f"the network policy is fixed to egress-proxy-only on port "
-                f"443 and strict_env=True env-stripping is mandatory. Use "
-                f"sandbox() directly for varied network or env policy."
-            )
+    _NETWORKED_ALLOWED_KWARGS = frozenset({
+        "env", "cwd", "timeout", "capture_output", "text",
+        "encoding", "errors",
+        "stdin", "input", "start_new_session", "pass_fds",
+        "caller_label",
+        "audit", "audit_verbose", "audit_run_dir",
+        "observe", "exclude_tmp_baseline",
+        "tool_paths",
+    })
+    rejected = set(kwargs.keys()) - _NETWORKED_ALLOWED_KWARGS
+    if rejected:
+        raise TypeError(
+            f"run_untrusted_networked() does not accept {sorted(rejected)} — "
+            f"network and isolation policy is fixed to egress-proxy-only. "
+            f"Use sandbox() directly for varied policy."
+        )
     if "stdin" not in kwargs and "input" not in kwargs:
         kwargs["stdin"] = subprocess.DEVNULL
     if "start_new_session" not in kwargs:
@@ -2618,6 +2766,7 @@ def run_untrusted_networked(
         limits=limits,
         restrict_reads=restrict_reads,
         readable_paths=readable_paths,
+        writable_paths=writable_paths,
         fake_home=fake_home,
         use_egress_proxy=True,
         proxy_hosts=list(proxy_hosts),

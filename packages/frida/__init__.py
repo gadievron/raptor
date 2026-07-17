@@ -22,11 +22,16 @@ import shutil
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+__all__ = ["available", "parse_events"]
+
 _available: Optional[bool] = None
 
 
 def available(*, force: bool = False) -> bool:
-    """True when frida-python is importable and the ``frida`` CLI is on PATH.
+    """True when frida is usable — either the CLI is on PATH or
+    frida-python is importable (covers pipx/venv installs where
+    the Python bindings aren't in RAPTOR's interpreter but the
+    CLI wrapper is).
 
     Cached after first call. Pass ``force=True`` to re-probe (e.g.
     after a mid-session ``pip install frida-tools``). Pipeline consumers
@@ -36,31 +41,42 @@ def available(*, force: bool = False) -> bool:
     global _available
     if _available is not None and not force:
         return _available
+    if shutil.which("frida") is not None:
+        _available = True
+        return True
     try:
         import frida  # type: ignore  # noqa: F401
+        _available = True
     except ImportError:
         _available = False
-        return False
-    _available = shutil.which("frida") is not None
     return _available
 
 
-def parse_events(path: Path) -> Iterator[dict[str, Any]]:
+def parse_events(
+    path: Path, *, max_lines: int = 500_000,
+) -> Iterator[dict[str, Any]]:
     """Yield parsed records from an ``events.jsonl`` file.
 
     Skips malformed lines (truncated writes from a killed run).
     Consumers get structured dicts with ``ts``, ``type``, and
     template-dependent ``payload`` or ``error`` keys.
+
+    Processing stops after *max_lines* non-empty lines to bound memory
+    on very large event logs.
     """
     try:
-        with path.open("r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            count = 0
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
+                count += 1
+                if count > max_lines:
+                    return
                 try:
                     yield json.loads(line)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError):
                     continue
     except OSError:
         return

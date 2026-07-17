@@ -60,6 +60,7 @@ def test_extract_via_api_rejects_non_github_url() -> None:
         extract_via_api("CVE-2016-5195", ref)
 
 
+@pytest.mark.slow 
 def test_extract_via_api_accepts_dotted_repo_names(monkeypatch) -> None:
     """Repos with dots in the name (``socketio/engine.io``,
     ``expressjs/express.js``, ``microsoft/vscode.dev``) must NOT be

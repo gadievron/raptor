@@ -1,6 +1,6 @@
 """Sound-tier barrier synthesis: LLM proposes an isBarrier, CodeQL adjudicates.
 
-The loop (see ``~/design/trust-witness.md`` §9 — the validated mechanism):
+The loop:
 
   1. A ``proposer`` (the LLM) is handed a flagged FP + its source context and
      returns a CodeQL ``guardChecks`` predicate recognizing the project

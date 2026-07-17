@@ -38,6 +38,7 @@ from .importer import (
     mark_runtime,
     run_provenance,
 )
+from .frida_bridge import import_frida_coverage
 from .collect import (
     collect_gcov,
     collect_llvm,
@@ -93,6 +94,7 @@ __all__ = [
     "import_run_findings",
     "import_annotations",
     "import_understand",
+    "import_frida_coverage",
     "import_runtime",
     "mark_runtime",
     "collect_gcov",

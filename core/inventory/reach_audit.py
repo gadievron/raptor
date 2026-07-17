@@ -34,6 +34,7 @@ _DEAD_VERDICTS = frozenset({
 # Verdicts that mean "reachable / has a live path".
 _LIVE_VERDICTS = frozenset({
     "reachable", "framework_callable", "registered_via_call", "called",
+    "frida_runtime_trace",
 })
 # "uncertain" is neither — the substrate declines to claim.
 
@@ -72,6 +73,15 @@ def _stage_binary_oracle_absent(ctx: "_ClassifyCtx", R) -> Optional[str]:
         ctx.inventory, ctx.file_path, ctx.name, ctx.line,
     ):
         return "binary_oracle_absent"
+    return None
+
+
+def _stage_frida_runtime_trace(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    """Promote if frida observed the function at runtime."""
+    if R.frida_runtime_trace_present(
+        ctx.inventory, ctx.file_path, ctx.name, ctx.line,
+    ):
+        return "frida_runtime_trace"
     return None
 
 
@@ -161,6 +171,13 @@ def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
 PRECEDENCE = (
     _stage_module_aborts,
     _stage_lexical_dead,
+    # Frida runtime-trace promote (SOUND). Empirical runtime
+    # observation is the strongest reachability evidence — if frida
+    # saw the function execute, it's alive regardless of what static
+    # analysis (binary oracle, build_excluded, call graph) claims.
+    # MUST precede _stage_binary_oracle_absent so runtime evidence
+    # vetoes a stale/wrong "absent" verdict from nm+DWARF.
+    _stage_frida_runtime_trace,
     # binary_oracle absent is mechanically derivable from nm + DWARF —
     # stronger than build_excluded (build-config parsing heuristic), so
     # checked first among C/C++/Rust/Go dead witnesses. SOUND +

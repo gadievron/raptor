@@ -28,6 +28,18 @@ from typing import Any, Callable, Optional
 from .platform import HostInfo, detect_host
 
 
+__all__ = [
+    "FridaUnavailable",
+    "RunConfig",
+    "RunResult",
+    "TargetSpec",
+    "list_templates",
+    "load_script_source",
+    "parse_target",
+    "resolve_template",
+    "run",
+]
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
@@ -303,13 +315,18 @@ def run(cfg: RunConfig,
         def _on_sigint(_signum, _frame):
             stop.set()
 
-        prev_handler = signal.signal(signal.SIGINT, _on_sigint)
+        try:
+            prev_handler = signal.signal(signal.SIGINT, _on_sigint)
+            signal_installed = True
+        except ValueError:
+            signal_installed = False
         try:
             deadline = started + cfg.duration_sec
             while time.monotonic() < deadline and not stop.is_set():
                 time.sleep(0.1)
         finally:
-            signal.signal(signal.SIGINT, prev_handler)
+            if signal_installed:
+                signal.signal(signal.SIGINT, prev_handler)
 
         result.ok = True
     except FridaUnavailable:
@@ -399,3 +416,5 @@ def _write_report(cfg: RunConfig, result: RunResult) -> None:
                  "`metadata.json`. Script as executed: see `script.js`.")
     (cfg.out_dir / "frida-report.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8")
+
+

@@ -16,7 +16,7 @@ from core.threat_model import (
     render_report,
     save_model,
 )
-from core.verified_outcome.types import Oracle, OutcomeStatus, VerifiedOutcome
+from core.labeled_attempts.view import Oracle, OutcomeStatus, VerifiedOutcome
 
 
 def _project(tmp_path: Path, *, name: str = "demo", target: str | None = None):

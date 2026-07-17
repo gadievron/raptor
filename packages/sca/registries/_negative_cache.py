@@ -52,8 +52,11 @@ def log_fetch_failure(
     real problem worth a WARNING. ``exc`` is inspected for a ``status``
     attribute (set by :class:`core.http.HttpError`); absent it, WARNING.
     """
-    status = getattr(exc, "status", None)
-    level = logging.DEBUG if status in _NOT_FOUND_STATUSES else logging.WARNING
+    if getattr(exc, "circuit_break", False):
+        level = logging.DEBUG
+    else:
+        status = getattr(exc, "status", None)
+        level = logging.DEBUG if status in _NOT_FOUND_STATUSES else logging.WARNING
     if item_name:
         log.log(level, "%s: fetch failed for %r: %s", log_prefix, item_name, exc)
     else:

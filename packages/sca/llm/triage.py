@@ -126,8 +126,21 @@ def _trim_for_llm(
         "reachability", "in_kev", "epss",
         "cvss_score", "file_path", "line",
     }
+    from ..findings import severity_rank
+    def _sca(r):
+        s = r.get("sca")
+        return s if isinstance(s, dict) else {}
+
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            -severity_rank(r.get("severity", "info")),
+            not _sca(r).get("in_kev"),
+            -(_sca(r).get("epss") or 0.0),
+        ),
+    )
     out = []
-    for row in rows[:limit]:
+    for row in sorted_rows[:limit]:
         trimmed = {k: v for k, v in row.items() if k in keep_keys}
         sca = row.get("sca", {})
         if isinstance(sca, dict):

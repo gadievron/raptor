@@ -255,7 +255,7 @@ def _classify_url(
     if host == "github.com" or host.endswith(".github.com"):
         parts = repo_path.split("/", 1)
         if len(parts) != 2:
-            return _GENERIC_ECOSYSTEM, repo_path, _generic_purl(host, repo_path, sha)
+            return _GENERIC_ECOSYSTEM, f"{host}/{repo_path}", _generic_purl(host, repo_path, sha)
         owner, repo = parts
         purl = f"pkg:github/{owner}/{repo}"
         if sha:

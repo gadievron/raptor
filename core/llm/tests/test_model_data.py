@@ -17,6 +17,7 @@ from core.llm.model_data import (
     context_window_for,
     max_output_for,
     price_for,
+    rpm_for,
 )
 
 
@@ -172,3 +173,42 @@ def test_price_for_unknown_bedrock_model_returns_default():
     assert price_for(
         "us.anthropic.claude-opus-9-9", default=(-1.0, -1.0),
     ) == (-1.0, -1.0)
+
+
+# --- rpm_for ---------------------------------------------------------------
+
+def test_rpm_for_returns_table_value() -> None:
+    """rpm_for() returns the exact rpm from MODEL_LIMITS for every model."""
+    for model, limits in MODEL_LIMITS.items():
+        assert rpm_for(model) == limits["rpm"], (
+            f"rpm_for({model!r}) returned {rpm_for(model)}, "
+            f"expected {limits['rpm']}")
+
+
+def test_rpm_for_unknown_returns_default() -> None:
+    assert rpm_for("does-not-exist") == 0
+
+
+def test_rpm_for_honours_explicit_default() -> None:
+    assert rpm_for("does-not-exist", default=42) == 42
+
+
+def test_rpm_for_handles_bedrock_prefix() -> None:
+    anthropic = next(m for m in MODEL_LIMITS if m.startswith("claude-"))
+    bare = rpm_for(anthropic)
+    assert bare > 0
+    assert rpm_for(f"us.anthropic.{anthropic}") == bare
+    assert rpm_for(f"global.anthropic.{anthropic}") == bare
+
+
+def test_rpm_for_handles_dated_alias() -> None:
+    anthropic = next(m for m in MODEL_LIMITS if m.startswith("claude-"))
+    bare = rpm_for(anthropic)
+    assert rpm_for(f"{anthropic}-20250515") == bare
+
+
+def test_every_model_has_rpm() -> None:
+    """Every entry in MODEL_LIMITS must carry an ``rpm`` key so the
+    parallel executor can derive a safe concurrency cap."""
+    missing = [m for m, v in MODEL_LIMITS.items() if "rpm" not in v]
+    assert not missing, f"MODEL_LIMITS entries missing rpm: {missing}"

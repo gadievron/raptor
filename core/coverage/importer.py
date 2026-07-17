@@ -135,7 +135,9 @@ def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
         if not path:
             continue
         for fn in fe.get("items", fe.get("functions", [])):
-            lo = fn.get("line_start", 0)
+            lo = fn.get("line_start")
+            if lo is None:
+                continue
             hi = fn.get("line_end")
             hi = hi if hi is not None else lo
             for tool in fn.get("checked_by", []) or []:
@@ -297,7 +299,9 @@ def import_annotations(
         for it in fe.get("items", fe.get("functions", [])):
             name = it.get("name")
             if name:
-                ranges[(path, name)] = (it.get("line_start", 0), it.get("line_end"))
+                lo = it.get("line_start")
+                if lo is not None:
+                    ranges[(path, name)] = (lo, it.get("line_end"))
 
     imported = 0
     for ann in iter_all_annotations(base_dir):
@@ -382,8 +386,9 @@ def _function_ranges(checklist: Dict[str, Any]) -> Dict[tuple, tuple]:
             continue
         for it in fe.get("items", fe.get("functions", [])):
             name = it.get("name")
-            if name:
-                out[(path, name)] = (it.get("line_start", 0), it.get("line_end"))
+            lo = it.get("line_start")
+            if name and lo is not None:
+                out[(path, name)] = (lo, it.get("line_end"))
     return out
 
 
@@ -458,10 +463,23 @@ def backfill(
     store.set_content_id(checklist)            # git-X ≡ zip-X equivalence id
     inv_paths = _inventory_paths(checklist)
     total = import_checked_by(store, checklist)
-    for run_dir in run_dirs:
+    run_dir_list = list(run_dirs)
+    for run_dir in run_dir_list:
         total += import_run_dir(store, run_dir, checklist)
         total += import_understand(store, run_dir, checklist)   # /understand fold-in
         import_run_findings(store, run_dir, inv_paths)   # link findings for verdicts
+    try:
+        from core.coverage.frida_bridge import import_frida_coverage
+        total += import_frida_coverage(
+            store, checklist, [Path(d) for d in run_dir_list],
+        )
+    except ImportError:
+        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger("coverage.importer").info(
+            "frida coverage bridge failed: %s: %s", type(exc).__name__, exc,
+        )
     if annotations_base is not None:
         total += import_annotations(store, annotations_base, checklist)
     return total

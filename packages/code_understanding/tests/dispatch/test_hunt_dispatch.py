@@ -158,6 +158,128 @@ class TestHappyPath:
             )
         assert result == variants_payload
 
+
+class TestTrajectoryWiring:
+    """Hunt dispatch persists a trajectory under
+    ``$RAPTOR_TRAJECTORY_DIR/trajectories/hunt-<model>/`` when the
+    env var is set, no-op otherwise."""
+
+    def test_trajectory_written_when_env_var_set(
+        self, repo, fake_model_config, tmp_path, monkeypatch,
+    ):
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            default_hunt_dispatch,
+        )
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
+
+        monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
+        turns = [
+            FakeTurn(tool_calls=[("submit_variants", {"variants": []})]),
+        ]
+        with _patch_provider(turns):
+            default_hunt_dispatch(
+                fake_model_config, "strcpy", str(repo),
+            )
+
+        # Trajectory should land at the deterministic path the
+        # dispatch derives from the model name.
+        traj_path = (
+            tmp_path / "trajectories"
+            / f"hunt-{fake_model_config.model_name}"
+            / "trajectory.json"
+        )
+        assert traj_path.exists(), (
+            f"trajectory not at {traj_path}; "
+            f"tree was: {list(tmp_path.rglob('*'))}"
+        )
+        payload = json.loads(traj_path.read_text())
+        assert payload["run_id"] == f"hunt-{fake_model_config.model_name}"
+        assert payload["model_name"] == fake_model_config.model_name
+        # finding_id/cwe are empty because hunt isn't finding-driven.
+        assert payload["finding_id"] == ""
+        assert payload["cwe"] == ""
+
+    def test_unset_env_var_is_noop(
+        self, repo, fake_model_config, tmp_path, monkeypatch,
+    ):
+        """No env var → no trajectory directory created."""
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            default_hunt_dispatch,
+        )
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
+
+        monkeypatch.delenv(TRAJECTORY_DIR_ENV, raising=False)
+        turns = [
+            FakeTurn(tool_calls=[("submit_variants", {"variants": []})]),
+        ]
+        # Run from tmp_path so any accidental write would land there.
+        monkeypatch.chdir(tmp_path)
+        with _patch_provider(turns):
+            default_hunt_dispatch(
+                fake_model_config, "strcpy", str(repo),
+            )
+        assert not (tmp_path / "trajectories").exists()
+
+    def test_partial_trajectory_persisted_on_cost_cap(
+        self, repo, fake_model_config, tmp_path, monkeypatch,
+    ):
+        """When the loop raises CostBudgetExceeded, the partial-
+        trajectory helper writes whatever turns survived. This is
+        precisely when the trajectory is most useful for operator
+        debugging ("why did this model burn through its budget?").
+
+        Patches ToolUseLoop.run directly with a side_effect that
+        raises CostBudgetExceeded carrying partial state (PR #828
+        contract). Side-steps the natural-trigger path so the test
+        doesn't depend on cost-arithmetic edge cases of the fake
+        provider."""
+        from unittest.mock import patch as _patch
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            default_hunt_dispatch,
+        )
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
+        from core.llm.tool_use.types import (
+            CostBudgetExceeded, Message, TextBlock,
+        )
+
+        monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
+
+        partial_messages = [
+            Message(role="user", content=[TextBlock(text="hunt")]),
+            Message(role="assistant", content=[
+                TextBlock(text="exploring before budget hit"),
+            ]),
+        ]
+        exc = CostBudgetExceeded(
+            "budget", messages=partial_messages, tool_calls_made=0,
+        )
+
+        with _patch_provider([FakeTurn(text="never reached")]):
+            with _patch(
+                "core.llm.tool_use.loop.ToolUseLoop.run",
+                side_effect=exc,
+            ):
+                result = default_hunt_dispatch(
+                    fake_model_config, "x", str(repo),
+                )
+
+        assert isinstance(result, list) and result and "error" in result[0]
+        assert "cost budget exceeded" in result[0]["error"]
+
+        traj_path = (
+            tmp_path / "trajectories"
+            / f"hunt-{fake_model_config.model_name}"
+            / "trajectory.json"
+        )
+        assert traj_path.exists(), (
+            f"partial trajectory should land on cost-cap; "
+            f"not at {traj_path}\ntree: {list(tmp_path.rglob('*'))}"
+        )
+        payload = json.loads(traj_path.read_text())
+        assert payload["terminated_by"] == "max_cost_usd"
+        # Partial messages survived from the exception.
+        assert len(payload["steps"]) == len(partial_messages)
+
     def test_model_uses_grep_then_submits(self, repo, fake_model_config):
         """Multi-turn: model greps first, then submits."""
         from packages.code_understanding.dispatch.hunt_dispatch import (

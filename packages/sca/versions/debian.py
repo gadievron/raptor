@@ -22,6 +22,10 @@ from __future__ import annotations
 from typing import Tuple
 
 
+def _isascii_digit(c: str) -> bool:
+    return c in "0123456789"
+
+
 def _split(version: str) -> Tuple[int, str, str]:
     """Split into ``(epoch, upstream_version, debian_revision)``.
 
@@ -34,7 +38,7 @@ def _split(version: str) -> Tuple[int, str, str]:
     epoch = 0
     if ":" in v:
         head, _, rest = v.partition(":")
-        if not head.isdigit():
+        if not (head.isascii() and head.isdigit()):
             raise ValueError(f"invalid Debian epoch in {version!r}")
         epoch = int(head)
         v = rest
@@ -52,7 +56,7 @@ def _order(c: str) -> int:
     letters keep their code point; other punctuation sorts *after* all
     letters; digits are handled by the numeric path (return 0 here).
     """
-    if c == "" or c.isdigit():
+    if c == "" or _isascii_digit(c):
         return 0
     if c.isalpha():
         return ord(c)
@@ -67,7 +71,7 @@ def _verrevcmp(a: str, b: str) -> int:
     la, lb = len(a), len(b)
     while ia < la or ib < lb:
         # Non-digit run: advance both in lockstep until either hits a digit.
-        while (ia < la and not a[ia].isdigit()) or (ib < lb and not b[ib].isdigit()):
+        while (ia < la and not _isascii_digit(a[ia])) or (ib < lb and not _isascii_digit(b[ib])):
             oa = _order(a[ia] if ia < la else "")
             ob = _order(b[ib] if ib < lb else "")
             if oa != ob:
@@ -80,14 +84,14 @@ def _verrevcmp(a: str, b: str) -> int:
         while ib < lb and b[ib] == "0":
             ib += 1
         first_diff = 0
-        while ia < la and a[ia].isdigit() and ib < lb and b[ib].isdigit():
+        while ia < la and _isascii_digit(a[ia]) and ib < lb and _isascii_digit(b[ib]):
             if first_diff == 0:
                 first_diff = ord(a[ia]) - ord(b[ib])
             ia += 1
             ib += 1
-        if ia < la and a[ia].isdigit():     # a's number has more digits
+        if ia < la and _isascii_digit(a[ia]):     # a's number has more digits
             return 1
-        if ib < lb and b[ib].isdigit():
+        if ib < lb and _isascii_digit(b[ib]):
             return -1
         if first_diff != 0:
             return -1 if first_diff < 0 else 1

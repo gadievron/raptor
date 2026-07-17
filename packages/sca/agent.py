@@ -275,10 +275,9 @@ def _run_sandboxed(
     try:
         from core.sandbox.context import sandbox
     except ImportError:
-        logger.warning("sca.agent: sandbox not available, running unsandboxed")
-        return analyse(
-            target=target, output_dir=output_dir,
-            offline=offline, no_cache=no_cache, sarif_dirs=sarif_dirs,
+        raise RuntimeError(
+            "sca.agent: --sandbox requested but core.sandbox.context "
+            "is not importable; refusing to run unsandboxed"
         )
 
     with sandbox(

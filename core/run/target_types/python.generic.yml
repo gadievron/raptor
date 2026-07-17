@@ -1,0 +1,42 @@
+name: python.generic
+description: |
+  General Python projects that don't match a more specific shape
+  (python.web-app). CLI tools, libraries, data pipelines, ML code.
+  Catches any repo whose primary language is Python via
+  file-extension scoring.
+
+detection:
+  file_globs: []
+  file_extensions:
+    - .py
+  negative_globs: []
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+    - trailofbits
+  optional:
+    - secrets
+
+attack_surface:
+  high_priority_dirs: []
+  low_priority_dirs:
+    - tests
+    - test
+    - docs
+    - examples
+    - "**/__pycache__"
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+  estimated_cost_usd: [10, 30]
+  estimated_time_min: [15, 45]
+
+budget_defaults:
+  typical_findings_count: 15
+  typical_cost_per_run_usd: 15
+
+version: 1

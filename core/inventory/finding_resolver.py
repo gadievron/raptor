@@ -186,11 +186,13 @@ def _parse_input_format(
 def _parse_sarif(finding: Mapping[str, Any]) -> Union[_ParsedFinding, ResolutionFailure]:
     rule_tags = finding.get("properties", {}).get("tags", [])
     cwe = ""
+    from core.cve.cwe import format_cwe
     for tag in rule_tags:
         m = _CWE_TAG_RE.search(str(tag))
         if m:
-            cwe = f"CWE-{int(m.group(1))}"
-            break
+            cwe = format_cwe(m.group(1)) or ""
+            if cwe:
+                break
     if not cwe:
         return ResolutionFailure(reason="sarif: no CWE tag in properties.tags")
 
@@ -250,11 +252,13 @@ def _parse_semgrep(
     cwe = ""
     if isinstance(cwes, str):
         cwes = [cwes]
+    from core.cve.cwe import format_cwe
     for entry in cwes:
         m = _CWE_SEMGREP_RE.search(str(entry))
         if m:
-            cwe = f"CWE-{int(m.group(1))}"
-            break
+            cwe = format_cwe(m.group(1)) or ""
+            if cwe:
+                break
     if not cwe:
         return ResolutionFailure(
             reason="semgrep: no CWE in extra.metadata.cwe",

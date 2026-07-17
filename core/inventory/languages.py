@@ -28,6 +28,7 @@ LANGUAGE_MAP = {
     '.kt': 'kotlin',
     '.kts': 'kotlin',
     '.scala': 'scala',
+    '.lua': 'lua',
 }
 
 

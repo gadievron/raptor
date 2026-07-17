@@ -132,7 +132,7 @@ _BOT_NAME_MARKERS = (
 # the email-mismatch path catches the lower-bar shape).
 _CANONICAL_BOT_EMAIL_RE = re.compile(
     r"^\d+\+"
-    r"(?:dependabot|renovate|github-actions|snyk-bot|mend-bot|imgbot)"
+    r"(?:dependabot|renovate|github-actions|snyk-bot|mend-bot|imgbot|allcontributors)"
     r"\[bot\]"
     r"@users\.noreply\.github\.com$",
     re.IGNORECASE,
@@ -283,7 +283,7 @@ def _classify_bot_claim(name: str, email: str) -> str:
                 continue
             if suffix == "@users.noreply.github.com":
                 local = lemail.split("@", 1)[0]
-                if "bot" in local or "actions" in local:
+                if re.search(r'\bbot\b', local) or re.search(r'\bactions\b', local):
                     claims_bot = True
                     break
                 continue
@@ -303,7 +303,7 @@ def _date_skew_days(author_iso: str, committer_iso: str) -> Optional[int]:
     c = _parse_iso(committer_iso)
     if a is None or c is None:
         return None
-    return abs((c - a).days)
+    return abs(c - a).days
 
 
 def _parse_iso(iso: str) -> Optional[datetime]:
@@ -372,7 +372,7 @@ def _git_log_provenance(
     """
     # Use NUL between fields + form-feed between records so embedded
     # ``|`` in subjects doesn't break parsing.
-    fmt = "%H%x00%G?%x00%an%x00%ae%x00%aI%x00%cI%x00%s%x00%x0c"
+    fmt = "%x0c%H%x00%G?%x00%an%x00%ae%x00%aI%x00%cI%x00%s%x00"
     cmd = [
         "git", "-C", str(target), "log",
         f"--max-count={max_commits}",

@@ -84,6 +84,7 @@ def build_cmd(
         "--metrics", "off",
         "--error",
         "--sarif",
+        "--disable-nosem",
         "--timeout", str(rule_timeout),
     ]
     if json_output_path is not None:

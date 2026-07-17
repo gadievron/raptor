@@ -19,6 +19,9 @@ import shutil
 from dataclasses import dataclass
 
 
+__all__ = ["HostInfo", "detect_host"]
+
+
 @dataclass(frozen=True)
 class HostInfo:
     """Snapshot of host-side preconditions for a Frida run.

@@ -5,7 +5,7 @@ that ride the popularity feeds into the trusted list (npm ``loadash``), but it
 is hand-curated — so it needs a *discovery* loop to stay current without
 sacrificing the property that makes it sound (every entry is confirmed → zero
 false positives). This module is the mechanical, **LLM-free** half of that loop
-(see ``~/design/typosquat-denylist-curation.md``):
+:
 
   Stage 1 — generate near-name candidates from the rank-ordered feeds (a name
             one edit from a *much-higher-ranked* name is a candidate). This is

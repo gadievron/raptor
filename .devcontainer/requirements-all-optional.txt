@@ -13,5 +13,5 @@ anthropic==0.84.0
 # avoid the duplicate-with-different-pin footgun.
 
 # Web scanning package
-beautifulsoup4==4.14.3
-playwright==1.58.0
+beautifulsoup4==4.15.0
+playwright==1.60.0
