@@ -89,7 +89,7 @@ def extract_nosemgrep(
     """
     if _lines is None:
         try:
-            _lines = Path(file_path).read_text(errors="replace").splitlines()
+            _lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return None
 

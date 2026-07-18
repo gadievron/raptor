@@ -184,7 +184,11 @@ class SourceIntelValidator:
         candidate = Path(file_path)
         if not candidate.is_absolute():
             candidate = (self._repo_root / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
 
+        if not candidate.is_relative_to(self._repo_root.resolve()):
+            return None
         if not candidate.exists():
             return None
 

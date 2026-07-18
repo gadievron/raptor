@@ -171,8 +171,10 @@ def emit_finding_annotation(
         # didn't capture line_end for that function).
         file_path = getattr(vuln, "file_path", None)
         if file_path and line_start and line_end:
-            src = Path(repo_root) / file_path
-            h = compute_function_hash(src, line_start, line_end)
+            src = (Path(repo_root) / file_path).resolve()
+            if not src.is_relative_to(Path(repo_root).resolve()):
+                src = None
+            h = compute_function_hash(src, line_start, line_end) if src else None
             if h:
                 metadata["hash"] = h
                 metadata["start_line"] = str(line_start)

@@ -8,8 +8,8 @@ def compare_inventories(old: Dict[str, Any], new: Dict[str, Any]) -> Optional[Di
 
     Returns None if nothing changed, otherwise a dict describing the changes.
     """
-    old_shas = {f['path']: f.get('sha256') for f in old.get('files', [])}
-    new_shas = {f['path']: f.get('sha256') for f in new.get('files', [])}
+    old_shas = {f['path']: f.get('sha256') for f in old.get('files', []) if 'path' in f}
+    new_shas = {f['path']: f.get('sha256') for f in new.get('files', []) if 'path' in f}
 
     # If old inventory has no sha256 fields, can't compare
     if not any(old_shas.values()):

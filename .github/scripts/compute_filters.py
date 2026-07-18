@@ -217,6 +217,7 @@ FILTERS: dict[str, list[str]] = {
         "core/coverage/**",
         "core/cve/**",
         "core/dockerfile/**",
+        "core/git/**",
         "core/http/**",
         "core/inventory/**",
         "core/json/**",

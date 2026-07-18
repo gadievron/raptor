@@ -578,7 +578,7 @@ class CrashAnalysisAgent:
 
             # Save analysis
             analysis_file = self.out_dir / "analysis" / f"{crash_context.crash_id}.json"
-            analysis_file.parent.mkdir(exist_ok=True)
+            analysis_file.parent.mkdir(parents=True, exist_ok=True)
             
             # Include input file information
             input_info = {
@@ -697,7 +697,7 @@ class CrashAnalysisAgent:
 
                 # Save exploit with full response for debugging
                 exploit_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit.cpp"
-                exploit_file.parent.mkdir(exist_ok=True)
+                exploit_file.parent.mkdir(parents=True, exist_ok=True)
                 exploit_file.write_text(exploit_code, encoding="utf-8")
 
                 # Save full response for analysis
