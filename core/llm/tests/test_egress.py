@@ -47,7 +47,7 @@ def stub_proxy(monkeypatch):
     class _StubProxy:
         port = 51234
 
-    def stub_get_proxy(allowed_hosts):
+    def stub_get_proxy(allowed_hosts, **kwargs):
         seen_calls.append(list(allowed_hosts))
         return _StubProxy()
 
@@ -274,7 +274,7 @@ class TestEnableLLMEgress:
         class _StubProxy:
             port = 51234
 
-        def stub_get_proxy(allowed_hosts):
+        def stub_get_proxy(allowed_hosts, **kwargs):
             captured["env_at_call"] = os.environ.get("HTTPS_PROXY")
             return _StubProxy()
 

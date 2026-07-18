@@ -164,7 +164,7 @@ def divergence(
     per_model: Dict[str, float] = {}
     for i, m in enumerate(models):
         peer_distances = [pairwise[i][j] for j in range(n) if j != i]
-        per_model[m] = sum(peer_distances) / len(peer_distances)
+        per_model[m] = sum(peer_distances) / len(peer_distances) if peer_distances else 0.0
 
     # Iteration order on per_model matches `models = sorted(valid)`
     # because Python dicts preserve insertion order. ``max`` keeps the

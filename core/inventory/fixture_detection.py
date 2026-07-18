@@ -17,7 +17,7 @@ the path-pattern check is the cheap pre-filter — most fixture
 content lives in conventional paths.
 
 The reachability gate is delegated to
-:mod:`core.inventory.reachability`, which already has a
+:mod:`core.analysis.reachability`, which already has a
 ``exclude_test_files=True`` mode that excludes calls *from* test
 files when answering "is this called?". A function with no
 non-test callers gets ``NOT_CALLED``.
@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 # Path-pattern match. Matches the conventions
-# ``core.inventory.reachability._is_test_file`` already uses, plus a
+# ``core.analysis.reachability._is_test_file`` already uses, plus a
 # wider net (JS / Ruby / Go conventions) and explicit fixture
 # directory names operators commonly use.
 #
@@ -236,7 +236,7 @@ def detect_fixture(
         )
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             Verdict,
             function_called,
         )
@@ -326,7 +326,7 @@ def _default_qualified_name(file_path: str, function: str) -> str:
     # Strip extension; common Python / JS / Go cases. Other
     # languages fall back to bare function name (rejected as
     # too-coarse by the resolver).
-    for ext in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb"):
+    for ext in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb", ".java"):
         if norm.endswith(ext):
             norm = norm[: -len(ext)]
             break

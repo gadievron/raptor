@@ -1526,7 +1526,7 @@ Examples:
     script_root = Path(__file__).parent.resolve()  # RAPTOR-daniel-modular directory
     repo_path = Path(args.repo).resolve()
     if not repo_path.exists():
-        print(f"Error: Repository not found: {repo_path}")
+        print(f"✗ Repository not found: {repo_path}", file=sys.stderr)
         sys.exit(1)
 
     # Track temp git copy for cleanup
@@ -1613,7 +1613,7 @@ Examples:
                 print(f"  Temporary git repo created at {temp_repo}")
                 logger.info(f"Using temp git repo: {temp_repo}")
             else:
-                print(f"  Failed to initialize git repository: {result.stderr}")
+                print(f"  ✗ Failed to initialize git repository: {result.stderr}", file=sys.stderr)
                 logger.error(f"Git init failed: {result.stderr}")
                 sys.exit(1)
 
@@ -1622,15 +1622,15 @@ Examples:
             # top-level handler so the operator gets the actionable message.
             raise
         except subprocess.TimeoutExpired:
-            print("  Git initialization timed out")
+            print("  ✗ Git initialisation timed out", file=sys.stderr)
             logger.error("Git init timeout")
             sys.exit(1)
         except FileNotFoundError:
-            print("  Git is not installed. Please install git and try again.")
+            print("  ✗ Git is not installed. Please install git and try again.", file=sys.stderr)
             logger.error("Git not found in PATH")
             sys.exit(1)
         except Exception as e:
-            print(f"  Error initializing git: {e}")
+            print(f"  ✗ Error initializing git: {e}", file=sys.stderr)
             logger.error(f"Git init error: {e}")
             sys.exit(1)
 
@@ -1675,7 +1675,7 @@ Examples:
     # layering, RaptorConfig mutation, and the no-leak-across-runs
     # guarantee — lives in the shared CLI helper. raptor_codeql.py
     # uses the same call site to keep behaviour aligned.
-    from core.inventory.binary_oracle_cli import apply_to_config
+    from core.analysis.binary_oracle_cli import apply_to_config
     apply_to_config(args, Path(args.repo))
 
     workflow_start = time.time()
@@ -1712,12 +1712,29 @@ Examples:
         try:
             from packages.exploit_feasibility import analyze_binary, format_analysis_summary
 
+            # Optional source_intel wire: hand the reconciler the
+            # target's compile-time _FORTIFY_SOURCE level (extracted
+            # from compile_commands.json / Makefile / kconfig by
+            # ``core.build.build_flags.extract_flags``) so the %n
+            # verdict can override the ELF-derived ``__printf_chk``
+            # heuristic when they disagree. Defensive — returns an
+            # empty BuildFlagsContext on missing build metadata, which
+            # leaves the reconciler's pre-wire behaviour intact.
+            from core.build.build_flags import extract_flags
+            _agentic_build_flags = extract_flags(
+                Path(args.repo) if args.repo else Path.cwd()
+            )
+
             # --binary is action='append' (list) for binary-oracle's
             # hybrid multi-binary case; mitigation analysis is per-binary,
             # so analyse the FIRST declared binary.
             binary_path = (
                 str(Path(args.binary[0])) if args.binary else None)
-            mitigation_result = analyze_binary(binary_path, output_dir=str(out_dir))
+            mitigation_result = analyze_binary(
+                binary_path,
+                output_dir=str(out_dir),
+                build_flags=_agentic_build_flags,
+            )
 
             # Display formatted summary
             print(format_analysis_summary(mitigation_result, verbose=True))
@@ -1742,7 +1759,7 @@ Examples:
         except ImportError:
             print("Mitigation analysis module not available")
         except Exception as e:
-            print(f"Mitigation check failed: {e}")
+            print(f"⚠️  Mitigation check failed: {e}", file=sys.stderr)
             logger.error(f"Mitigation check error: {e}")
 
     # ========================================================================
@@ -1859,7 +1876,7 @@ Examples:
     # ========================================================================
     # PRE-PASS: reachability — always-on companion to /understand.
     # Marks dead-code functions priority=low in the agentic checklist using
-    # core.inventory.reachability. Runs regardless of --understand because
+    # core.analysis.reachability. Runs regardless of --understand because
     # the agentic LLM analysis prompt reads priority/priority_reason and
     # benefits from the dead-code signal even without context-map upgrades.
     # The returned inventory is threaded through to downstream consumers
@@ -2055,7 +2072,7 @@ Examples:
                     "abandoning communicate (FDs may leak)"
                 )
             rc = -1
-            print("❌ Semgrep scan timed out (30m)")
+            print("✗ Semgrep scan timed out (30m)", file=sys.stderr)
             logger.error("Semgrep scan timed out")
             # Surface the timeout in the agentic-run summary even when
             # CodeQL also runs. Pre-fix the `if not run_codeql:
@@ -2087,6 +2104,10 @@ Examples:
             # "0 findings". Kill the sibling codeql child first.
             if codeql_proc and codeql_proc.poll() is None:
                 codeql_proc.kill()
+                try:
+                    codeql_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             raise SandboxSetupError(
                 "the semgrep scan subprocess reported the sandbox could not "
                 f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above",
@@ -2119,7 +2140,7 @@ Examples:
                 semgrep_sarifs = list(actual_scan_dir.glob("semgrep_*.sarif"))
                 all_sarif_files.extend(semgrep_sarifs)
         elif rc != -1:  # -1 is timeout, already reported
-            print(f"❌ Semgrep scan failed (exit code {rc})")
+            print(f"✗ Semgrep scan failed (exit code {rc})", file=sys.stderr)
             if not run_codeql:
                 sys.exit(1)
 
@@ -2141,7 +2162,7 @@ Examples:
                     "abandoning communicate (FDs may leak)"
                 )
             rc = -1
-            print("❌ CodeQL scan timed out (30m)")
+            print("✗ CodeQL scan timed out (30m)", file=sys.stderr)
             logger.error("CodeQL scan timed out")
 
         if rc == SANDBOX_ENGAGE_EXIT_CODE:
@@ -2156,9 +2177,9 @@ Examples:
 
         if rc != 0:
             if all_sarif_files:
-                print("⚠️  CodeQL scan failed — continuing with existing findings")
+                print("⚠️  CodeQL scan failed — continuing with existing findings", file=sys.stderr)
             else:
-                print("⚠️  CodeQL scan failed — no findings from any scanner")
+                print("⚠️  CodeQL scan failed — no findings from any scanner", file=sys.stderr)
             # Surface the captured stderr so the operator can see WHY codeql
             # exited non-zero. Pre-fix the agentic wrapper threw away
             # codeql_stderr and only logged "rc={rc}", leaving the operator
@@ -2180,7 +2201,7 @@ Examples:
                 )
             logger.warning(f"CodeQL scan failed - rc={rc}")
             if args.codeql_only:
-                print("❌ CodeQL-only mode failed")
+                print("✗ CodeQL-only mode failed", file=sys.stderr)
                 sys.exit(1)
         else:
             codeql_out_dir = out_dir / "codeql"
@@ -2256,7 +2277,7 @@ Examples:
                 logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
                 sca_findings_count = 0
         except Exception as e:
-            print(f"⚠️  SCA failed: {e}")
+            print(f"⚠️  SCA failed: {e}", file=sys.stderr)
             logger.warning(f"SCA failed — continuing without dep findings: {e}")
             sca_findings_count = 0
     else:
@@ -2303,11 +2324,11 @@ Examples:
             normalized_path.write_text(_json.dumps(normalized_sarif, indent=2))
             all_sarif_files.append(normalized_path)
         elif not all_sarif_files:
-            print("\n✗ No findings in imported SARIF and no scan results")
+            print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
             sys.exit(1)
 
     if not all_sarif_files:
-        print("\n❌ No SARIF files generated from scanning")
+        print("\n✗ No SARIF files generated from scanning", file=sys.stderr)
         sys.exit(1)
 
     # Combine metrics
@@ -2394,10 +2415,10 @@ Examples:
                         sca_result.vuln_findings, sca_result.hygiene_findings,
                         sca_result.supply_chain_findings)
         except ImportError:
-            print("⚠️  SCA package not available — skipping dependency analysis")
+            print("⚠️  SCA package not available — skipping dependency analysis", file=sys.stderr)
             logger.warning("SCA import failed — packages/sca not installed")
         except Exception as e:
-            print(f"⚠️  SCA failed: {e}")
+            print(f"⚠️  SCA failed: {e}", file=sys.stderr)
             logger.error("SCA phase failed: %s", e, exc_info=True)
 
     # ========================================================================
@@ -2592,9 +2613,9 @@ Examples:
                     for line in elig_block.splitlines():
                         print(f"  {line}")
         else:
-            print("⚠️  Analysis failed or produced no output")
+            print("⚠️  Analysis failed or produced no output", file=sys.stderr)
             if stderr:
-                print(f"    Error: {stderr[:500]}")
+                print(f"    Error: {stderr[:500]}", file=sys.stderr)
             logger.warning(f"Phase 3 failed - rc={rc}, stderr={stderr[:200]}")
             analysis = {}
 
@@ -2885,7 +2906,7 @@ Examples:
                             logger.debug(f"Crash → validate handoff failed: {e}")
             except Exception as e:
                 logger.error(f"Fuzz phase failed: {e}", exc_info=True)
-                print(f"\n  Fuzz phase error: {e}")
+                print(f"\n  ✗ Fuzz phase error: {e}", file=sys.stderr)
 
     # ========================================================================
     # SAGE: Post-scan storage — store findings for cross-run learning

@@ -208,11 +208,17 @@ def _build_dep(
             if isinstance(raw_git, str):
                 git_url = raw_git
             pin_style = PinStyle.GIT
+            v = spec.get("version")
+            if isinstance(v, str):
+                version = v
         elif "path" in spec:
             raw_path = spec.get("path")
             if isinstance(raw_path, str):
                 path_ref = raw_path
             pin_style = PinStyle.PATH
+            v = spec.get("version")
+            if isinstance(v, str):
+                version = v
         else:
             v = spec.get("version")
             if isinstance(v, str):

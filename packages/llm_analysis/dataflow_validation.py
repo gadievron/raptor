@@ -1401,7 +1401,7 @@ def _tier4_smt_refine(
         # prompt builder dumped verbatim — useful for audit but not
         # for steering exploit generation.
         if model:
-            (analysis or {}).setdefault("smt_witness", {}).update({
+            analysis.setdefault("smt_witness", {}).update({
                 "model": dict(model),
                 "path_conditions": list(conditions),
                 "path_profile": profile_name,
@@ -1979,6 +1979,10 @@ def _finding_language(finding: Dict) -> Optional[str]:
         ".js": "javascript", ".jsx": "javascript",
         ".ts": "javascript", ".tsx": "javascript",
         ".go": "go",
+        ".rb": "ruby",
+        ".cs": "csharp",
+        ".swift": "swift",
+        ".rs": "rust",
     }
     for ext, lang in ext_to_lang.items():
         if file_path.endswith(ext):
@@ -2528,8 +2532,10 @@ def _fraction_used(cost_tracker: Any) -> float:
             # the implementation chained through a missing field.
             pass
     total = getattr(cost_tracker, "total_cost", None)
-    budget = getattr(cost_tracker, "budget", None) or getattr(cost_tracker, "max_cost", None)
-    if total is not None and budget:
+    budget = getattr(cost_tracker, "budget", None)
+    if budget is None:
+        budget = getattr(cost_tracker, "max_cost", None)
+    if total is not None and budget is not None:
         try:
             return float(total) / float(budget)
         except (TypeError, ValueError, ZeroDivisionError):

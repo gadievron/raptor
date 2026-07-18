@@ -113,7 +113,7 @@ def enrich_with_ast_view(
 
     try:
         from core.ast import view
-        from core.inventory.reachability import enclosing_function
+        from core.analysis.reachability import enclosing_function
     except ImportError:
         return 0
 
@@ -165,9 +165,7 @@ def enrich_with_ast_view(
             try:
                 fv = view(abs_path, host.name, at_line=line)
             except Exception:                              # noqa: BLE001
-                # core.ast.view is documented as returning None on
-                # error, but defensively swallow exceptions too —
-                # one bad entry must not block the rest.
+                logger.debug("ast view failed for %s:%s", abs_path, line, exc_info=True)
                 continue
             if fv is None:
                 continue

@@ -152,15 +152,18 @@ def scan(
         # Pre-build advisory symbol map for Go function-level reachability.
         go_symbols = _build_go_symbol_map(osv_results) if eco == "Go" else {}
         for d in eco_deps:
-            if d.name not in seen:
-                if eco == "Go" and d.key() in go_symbols:
-                    seen[d.name] = _gomod.resolve_dep(
+            if eco == "Go" and d.key() in go_symbols:
+                cache_key = d.key()
+                if cache_key not in seen:
+                    seen[cache_key] = _gomod.resolve_dep(
                         d.name, scan_result, target=target,
                         advisory_symbols=go_symbols[d.key()],
                     )
-                else:
+                out[d.key()] = seen[cache_key]
+            else:
+                if d.name not in seen:
                     seen[d.name] = resolver(d.name, scan_result, target)
-            out[d.key()] = seen[d.name]
+                out[d.key()] = seen[d.name]
 
     # Tier-3 escalation. Only PyPI today; other ecosystems' resolvers
     # don't yet support wheel-style on-demand metadata. Gated on:
@@ -185,7 +188,7 @@ def scan(
     eco_scans.clear()
 
     # Function-level reachability tier. Inventory-based resolver
-    # from ``core.inventory.reachability`` consumes per-language
+    # from ``core.analysis.reachability`` consumes per-language
     # call_graph data emitted by the inventory builder (Python AST
     # + JS / TS tree-sitter). Gated per-ecosystem on the presence
     # of advisory-shipped affected-function data — when no dep in
@@ -314,6 +317,9 @@ def scan(
     return out
 
 
+_inventory_build_failed: bool = False
+
+
 def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
     """Build the inventory once and share across function-level
     tiers. ``current`` is the value cached so far (None on first
@@ -334,6 +340,9 @@ def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
     inventory subdir; ``checklist.json`` regenerates from scratch
     on a missing file).
     """
+    global _inventory_build_failed
+    if _inventory_build_failed:
+        return None
     if current is not None:
         return current
     try:
@@ -347,6 +356,7 @@ def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
             "function-level tiers will skip",
             exc_info=True,
         )
+        _inventory_build_failed = True
         return None
 
 

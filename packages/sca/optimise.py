@@ -529,7 +529,8 @@ def _materialise_pin_changes(
                 out.append(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
-                    manifest=plan.manifest, advisory_ids=(),
+                    manifest=plan.manifest,
+                    advisory_ids=tuple(plan.advisory_ids),
                     skipped_reason=f"cannot read manifest: {e}",
                 ))
             continue
@@ -546,13 +547,15 @@ def _materialise_pin_changes(
                 out.append(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
-                    manifest=plan.manifest, advisory_ids=(),
+                    manifest=plan.manifest,
+                    advisory_ids=tuple(plan.advisory_ids),
                 ))
             else:
                 out.append(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
-                    manifest=plan.manifest, advisory_ids=(),
+                    manifest=plan.manifest,
+                    advisory_ids=tuple(plan.advisory_ids),
                     skipped_reason=reason or "rewriter found no match",
                 ))
 
@@ -636,7 +639,7 @@ def _pin_bare_package_json(
             return f"{m.group(1)}{plan.target}{m.group(3)}"
         return m.group(0)
 
-    new_text = pat.sub(_replace, text, count=1)
+    new_text = pat.sub(_replace, text)
     if not rewrote:
         return text, False, "no wildcard/empty spec found"
     return new_text, True, None

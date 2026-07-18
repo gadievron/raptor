@@ -807,7 +807,7 @@ Examples:
     build_commands = None
     if args.build_command:
         if not languages or len(languages) != 1:
-            print("Error: --build-command requires exactly one language specified with --languages")
+            print("✗ --build-command requires exactly one language specified with --languages", file=sys.stderr)
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
 
@@ -885,7 +885,7 @@ Examples:
         sys.exit(0 if result.success else 1)
 
     except KeyboardInterrupt:
-        print("\n\nAnalysis interrupted by user")
+        print("\n\nAnalysis interrupted by user", file=sys.stderr)
         sys.exit(130)
     except SandboxSetupError as e:
         # Sandbox could not engage. Emit the dedicated exit code so a parent
@@ -897,7 +897,7 @@ Examples:
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        print(f"\n✗ Fatal error: {e}")
+        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

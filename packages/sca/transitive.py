@@ -288,9 +288,12 @@ def expand_missing_transitives(
         # Registry-metadata walk — opt-in fallback, approximate.
         if not added and enable_metadata_fallback and http is not None:
             walk_deps, c_failures = _try_metadata_walk(
-                eco, [d for d in direct_deps if d.ecosystem == eco],
+                eco, [d for d in direct_deps
+                      if d.ecosystem == eco
+                      and d.declared_in.parent == project_dir],
                 http=http, cache=cache,
             )
+            failures = c_failures
             if walk_deps:
                 added = walk_deps
                 method = "metadata_walk"
@@ -299,7 +302,6 @@ def expand_missing_transitives(
                     "unavailable, fell back to registry metadata "
                     "(less accurate; declared deps not resolved)"
                 )
-                failures = c_failures
 
         # When nothing succeeded, surface the most-informative reason
         # we have — cascade's specific failure beats the generic

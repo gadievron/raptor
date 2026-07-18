@@ -32,6 +32,7 @@ if not (os.environ.get("CLAUDECODE")
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 
 def _is_project_dir(d: Path) -> bool:
@@ -398,7 +399,7 @@ def main():
     report = render_coverage(
         run_dirs, checklist, store_path, annotations_base, detailed=detailed)
     if not report:
-        print("No coverage data (missing checklist.json or coverage records).")
+        print("No coverage data (missing checklist.json or coverage records).", file=sys.stderr)
         return
     print(report)
 

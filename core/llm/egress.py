@@ -171,6 +171,22 @@ def _is_loopback(host: str) -> bool:
     return host.lower() in _LOCAL_BYPASS
 
 
+def _max_model_timeout(config: "LLMConfig") -> float:
+    """Return the longest per-model timeout across all configured models."""
+    candidates = []
+    if config.primary_model is not None:
+        candidates.append(config.primary_model)
+    candidates.extend(config.fallback_models or [])
+    if config.specialized_models:
+        candidates.extend(config.specialized_models.values())
+    timeouts = [
+        getattr(m, "timeout", 120)
+        for m in candidates
+        if m is not None
+    ]
+    return float(max(timeouts)) if timeouts else 300.0
+
+
 def _augment_no_proxy(existing: str) -> str:
     """Return a NO_PROXY value that includes ``localhost`` and
     ``127.0.0.1`` UNION-ed with whatever the operator already set.
@@ -218,8 +234,15 @@ def enable_llm_egress(config: "LLMConfig") -> None:
     # Step 1: bring up / extend the in-process proxy. MUST happen
     # before we mutate HTTPS_PROXY so upstream-chain autodetect sees
     # the operator's value (if any), not our self-pointer.
+    #
+    # Widen the proxy's per-tunnel idle timeout to the longest
+    # per-model timeout in this config.  Thinking models (Gemini 2.5,
+    # Claude with extended thinking) can be silent for minutes while
+    # processing large prompts — the default 300s idle kills the
+    # tunnel before the model responds.
     from core.sandbox.proxy import get_proxy
-    proxy = get_proxy(list(remote_hosts))
+    max_model_timeout = _max_model_timeout(config)
+    proxy = get_proxy(list(remote_hosts), idle_timeout=max_model_timeout)
 
     # Step 2: only mutate env on the first call. Subsequent
     # LLMClient constructors just union the allowlist via get_proxy

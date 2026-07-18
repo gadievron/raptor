@@ -523,13 +523,12 @@ class PomInheritanceResolver:
             if not (group and artifact and version):
                 continue
             coord_key = (group, artifact, version)
-            if coord_key in visited:
-                continue
-            visited.add(coord_key)
-
             if coord_key in self._cache:
                 _merge_into(view, self._cache[coord_key])
                 continue
+            if coord_key in visited:
+                continue
+            visited.add(coord_key)
 
             # Fetch the BOM POM the same way we'd fetch a parent.
             bom_root = self._read_network_parent_by_coord(

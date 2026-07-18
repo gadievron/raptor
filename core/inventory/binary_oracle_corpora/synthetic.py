@@ -6,9 +6,11 @@ expected verdicts. No external deps; validates the precision harness
 end-to-end on known-correct cases and acts as a fast classifier sanity
 check.
 
-The fold case (``folded_a``/``folded_b``) depends on whether an ICF-
-capable linker is available; the driver asks the fixture's Makefile
-which mode it built in and adjusts the expected verdict accordingly.
+The fold case (``folded_a``/``folded_b``) probes the classifier
+directly to determine the expected verdict. Fold detection is DWARF-
+based (``DW_AT_low_pc`` collisions); nm symbol addresses may disagree
+when the linker merges code but doesn't update DWARF entries (observed
+with GNU ld ``--icf=safe``).
 """
 
 from __future__ import annotations
@@ -18,10 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal
 
-from ..binary_oracle import Classification
+from core.analysis.binary_oracle import Classification
 
-FIXTURE_DIR = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-               / "binary_oracle")
+FIXTURE_DIR = (Path(__file__).resolve().parents[2] / "analysis" / "tests"
+               / "fixtures" / "binary_oracle")
 
 
 @dataclass
@@ -33,15 +35,13 @@ class _SyntheticDriver:
     mode: Literal["synthetic"] = "synthetic"
 
     def prepare(self, work_dir: Path) -> Dict[str, Any]:
-        # Build the fixture (idempotent — make checks timestamps).
         subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True)
         binary = FIXTURE_DIR / "demo"
-        icf_mode = subprocess.run(
-            ["make", "-s", "print-icf-mode"], cwd=FIXTURE_DIR,
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
+        from core.analysis.binary_oracle import classify_binary_evidence
+        probe = classify_binary_evidence(["folded_a", "folded_b"], binary)
+        fold_w = probe.get("folded_a")
         folded_verdict: Classification = (
-            "folded" if icf_mode != "none" else "symbol_present"
+            fold_w.classification if fold_w else "symbol_present"
         )
         expected: Dict[str, Classification] = {
             "live_called":                "symbol_present",

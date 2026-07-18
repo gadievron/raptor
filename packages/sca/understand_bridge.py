@@ -123,8 +123,9 @@ def annotate(
         f"{reach.confidence.reason}; context-map: dep "
         f"imported in {', '.join(kinds_uniq)} site(s)"
     )
+    promoted = new_verdict != reach.verdict
     new_confidence = Confidence(
-        level="high",
+        level="high" if promoted else reach.confidence.level,
         reason=reason,
     )
     return Reachability(

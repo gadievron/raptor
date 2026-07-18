@@ -107,10 +107,6 @@ def evaluate_platform_compat(
 
         if wm is None:
             continue
-        if not wm.wheel_tags and not wm.has_sdist:
-            # No data; treat as "no signal" rather than crash.
-            continue
-
         verdicts = check_compat(platform_matrix, wm)
         non_ok = [v for v in verdicts if v.verdict != "ok"]
         if not non_ok:
@@ -139,21 +135,21 @@ def _make_finding(
 ) -> HygieneFinding:
     sev = _FINDING_TIER.get(verdict.verdict, "low")
     rec_note = (
-        f" Recommended: pin {dep.name}=={recommendation} (last "
-        f"version with wheels compatible across the project "
-        f"platform matrix)."
+        f" Recommended: pin {dep.name}=={recommendation} (compatible "
+        f"version with wheels for the project platform matrix)."
         if recommendation else
-        " No earlier release on PyPI has wheels compatible across "
-        "the project platform matrix; consider upgrading the "
-        "base-image's libc, adding ``--platform=linux/amd64`` for "
-        "emulation, or installing build tools in the image so "
-        "sdist build works."
+        " No release on PyPI (within the search window) has wheels "
+        "compatible across the project platform matrix; consider "
+        "upgrading the base-image's libc, adding "
+        "``--platform=linux/amd64`` for emulation, or installing "
+        "build tools in the image so sdist build works."
     )
     detail = f"{verdict.reason}.{rec_note}"
+    pair_id = verdict.pair.as_str()
     return HygieneFinding(
         finding_id=(
             f"sca:hygiene:platform_compat:PyPI:{dep.name}:"
-            f"{dep.version}:{verdict.pair.arch}"
+            f"{dep.version}:{pair_id}"
         ),
         kind="platform_compat",
         dependency=dep,

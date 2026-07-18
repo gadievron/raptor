@@ -20,6 +20,7 @@ if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 from packages.binary_analysis.graph_store import (
     graph_path_for_run,
@@ -60,7 +61,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     if not payload.get("exists"):
-        print(f"Binary graph: not found ({db_path})")
+        print(f"✗ Binary graph: not found ({db_path})", file=sys.stderr)
         return 1
     print(f"Binary graph: {payload['path']}")
     latest = payload.get("latest_snapshot") or {}

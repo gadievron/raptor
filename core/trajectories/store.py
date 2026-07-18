@@ -1,16 +1,13 @@
 """Storage for trajectory records.
 
-One trajectory file per tool-use loop run, JSON, written under
+One trajectory file per engine run, JSON, written under
 
     <base>/trajectories/<run_id>/trajectory.json
 
-``<base>`` is caller-chosen — typically the run's output directory
-when the caller knows it (CLI mode), or a project root when the
-caller wants trajectories to accumulate across runs for cross-run
-analysis. The opt-in helper in :mod:`core.trajectories.auto` reads
-this from the ``RAPTOR_TRAJECTORY_DIR`` environment variable so
-consumers don't have to thread an output_dir kwarg through every
-function in their stack.
+``<base>`` is caller-chosen: in CLI mode it's ``args.output_dir``
+(per-run dir); when the /exploit command lands as a project-aware
+surface, ``<base>`` will be the project root so trajectories
+accumulate across runs for cross-run analysis.
 
 Atomic-write semantics: O_EXCL + retry on collision, same shape as
 ``core/labeled_attempts/store.py``. A trajectory write at the same
@@ -22,6 +19,7 @@ silent overwrite.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 from dataclasses import asdict
@@ -32,8 +30,11 @@ from core.llm.tool_use.types import Message, TextBlock, ToolCall, ToolResult
 
 from .types import TrajectoryRecord, TrajectoryStep
 
+_log = logging.getLogger(__name__)
+
 __all__ = [
     "TRAJECTORY_FILENAME",
+    "iter_trajectory_json",
     "serialize_messages",
     "trajectory_path",
     "write_trajectory",
@@ -153,27 +154,30 @@ def write_trajectory(
 
     Returns the on-disk path actually written. Raises:
       * ValueError — record itself is invalid (caught at construction
-        anyway; surfaced here for defensive callers). Also raised when
-        the resolved write path escapes ``base`` — e.g. an attacker
-        planted ``<base>/trajectories`` as a symlink before the run.
+        anyway; surfaced here for defensive callers). Also raised
+        when the resolved write path escapes ``base`` — e.g. an
+        attacker planted ``<base>/trajectories`` as a symlink before
+        the run.
       * OSError — filesystem error.
     """
     out = trajectory_path(base, record.run_id)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    # Defence-in-depth against a planted symlink at <base>/trajectories
-    # (or any parent component above the trajectory file). _write_atomic
-    # below uses O_NOFOLLOW on the FINAL component only — that catches
-    # someone planting <base>/trajectories/<run>/trajectory.json as a
-    # symlink, but not someone planting <base>/trajectories as a symlink
-    # to /etc/. realpath() walks every component, so post-mkdir we can
-    # verify the resolved write target is still inside the operator's
-    # chosen base.
+    # Defence-in-depth against a planted symlink at
+    # ``<base>/trajectories`` (or any parent component above the
+    # trajectory file). ``_write_atomic`` below uses O_NOFOLLOW on
+    # the FINAL component only — that catches someone planting
+    # ``<base>/trajectories/<run>/trajectory.json`` as a symlink,
+    # but not someone planting ``<base>/trajectories`` as a symlink
+    # to /etc/. ``realpath()`` walks every component, so post-mkdir
+    # we can verify the resolved write target still lives inside
+    # the operator's chosen base.
     base_real = os.path.realpath(base)
     out_real = os.path.realpath(out)
     if not (
-        out_real == os.path.join(base_real, "trajectories", record.run_id,
-                                 TRAJECTORY_FILENAME)
+        out_real == os.path.join(
+            base_real, "trajectories", record.run_id, TRAJECTORY_FILENAME,
+        )
         or out_real.startswith(base_real + os.sep)
     ):
         raise ValueError(
@@ -183,3 +187,41 @@ def write_trajectory(
 
     payload = _record_to_json(record)
     return _write_atomic(out, payload)
+
+
+def iter_trajectory_json(
+    base: Path,
+) -> "Iterable[tuple[Path, dict]]":
+    """Yield ``(path, parsed_json_dict)`` for each trajectory under
+    ``<base>/trajectories/``.
+
+    The distiller (``packages/llm_analysis/exploit_engine/distill/
+    trajectory_distill.py``) is the primary consumer — it wants the
+    raw dict shape rather than a typed ``TrajectoryRecord`` so its
+    reward-scoring path can extract fields that changed across
+    schema versions without forcing a schema-migration step at
+    read time.
+
+    Malformed / unreadable files are logged and skipped rather than
+    aborting the iteration — trajectory persistence is best-effort
+    and a corrupt file shouldn't fail an entire distillation run.
+    """
+    root = Path(base) / "trajectories"
+    if not root.is_dir():
+        return
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        candidate = entry / TRAJECTORY_FILENAME
+        if not candidate.is_file():
+            continue
+        try:
+            raw = candidate.read_text()
+            parsed = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as e:
+            _log.warning(
+                f"skipping unreadable trajectory {candidate}: "
+                f"{type(e).__name__}: {e}",
+            )
+            continue
+        yield candidate, parsed

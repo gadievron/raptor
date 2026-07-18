@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-07-07T09:22:55Z",
+    "fetched_at": "2026-07-14T07:46:23Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 6664,
+    "modules_scanned": 7109,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"

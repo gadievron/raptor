@@ -268,12 +268,14 @@ def _modal_report(
 
     lines: List[str] = ["# raptor-sca upgrade — proposed change set", ""]
 
+    has_introduced = False
     if spec_adds:
         lines.append("## Adds")
         lines.append("")
         for eco, name, ver in spec_adds:
             advs = _query_one(osv, eco, name, ver)
             if advs:
+                has_introduced = True
                 lines.append(
                     f"- ⚠ **{eco}:{name}@{ver}** would introduce "
                     f"{len(advs)} advisor{'y' if len(advs) == 1 else 'ies'}: "
@@ -307,7 +309,7 @@ def _modal_report(
         lines.append("(no add/remove specs supplied)")
         lines.append("")
 
-    return "\n".join(lines) + "\n", 0
+    return "\n".join(lines) + "\n", (1 if has_introduced else 0)
 
 
 def _parse_modal_spec(raw: str, *, expect_version: bool):
@@ -359,7 +361,8 @@ def _findings_clearing(
         rows = _json.loads(Path(findings_path).read_text(encoding="utf-8"))
     except (OSError, _json.JSONDecodeError):
         return {}
-    out: dict = {}
+    remove_set = {r[:2] for r in removes}
+    adv_to_deps: dict = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -369,8 +372,14 @@ def _findings_clearing(
         adv = (sca.get("advisory") or {}).get("id")
         if not (eco and name and adv):
             continue
-        if (eco, name) in [r[:2] for r in removes]:
-            out.setdefault((eco, name), []).append(adv)
+        adv_to_deps.setdefault(adv, set()).add((eco, name))
+    out: dict = {}
+    for adv, dep_keys in adv_to_deps.items():
+        removed_keys = dep_keys & remove_set
+        surviving_keys = dep_keys - remove_set
+        if removed_keys and not surviving_keys:
+            for key in removed_keys:
+                out.setdefault(key, []).append(adv)
     return out
 
 
@@ -456,6 +465,17 @@ def _candidates_report(
     kev: Optional[KevClient],
     epss: Optional[EpssClient],
 ) -> Tuple[str, int]:
+    from .versions import VersionError, compare as _vcompare
+    for cand in candidates:
+        try:
+            _vcompare(ecosystem, from_version, cand)
+        except VersionError as exc:
+            return (
+                f"# raptor-sca upgrade — {ecosystem}:{name} "
+                f"from {from_version}\n\n"
+                f"**Error:** unparseable candidate version {cand!r}: {exc}\n",
+                2,
+            )
     versions = [from_version] + list(candidates)
     deps = [_synthesise(ecosystem, name, v) for v in versions]
     osv_results = osv.query_batch(deps)
@@ -565,6 +585,8 @@ def _canonical_id(f: VulnFinding) -> str:
     advisories share a CVE alias. Falling back to ``osv_id`` covers
     advisories without a CVE assigned.
     """
+    if not f.advisories:
+        return f.package or ""
     advisory: Advisory = f.advisories[0]
     for alias in advisory.aliases:
         if isinstance(alias, str) and alias.upper().startswith("CVE-"):
@@ -585,6 +607,8 @@ def _ranked(findings: List[VulnFinding]) -> List[VulnFinding]:
 
 
 def _advisory_line(f: VulnFinding) -> str:
+    if not f.advisories:
+        return f"- {f.package or '?'}\n"
     primary = f.advisories[0]
     tags: List[str] = [f.severity.title()]
     if f.in_kev:

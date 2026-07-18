@@ -201,7 +201,7 @@ def _fetch_crates_ranked(
             data = http.get_json(url, retries=2)
         except Exception as e:                  # noqa: BLE001
             logger.warning("crates.io page %d failed: %s", page, e)
-            break
+            raise
         crates = data.get("crates") or []
         if not crates:
             break
@@ -217,7 +217,7 @@ def _fetch_crates_ranked(
 def fetch_crates(
     http: HttpClient, top_n: int, *, per_page: int = 100,
 ) -> List[str]:
-    return sorted(set(_fetch_crates_ranked(http, top_n, per_page=per_page)))[:top_n]
+    return sorted(set(_fetch_crates_ranked(http, top_n, per_page=per_page)))
 
 
 def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> List[str]:
@@ -231,7 +231,7 @@ def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> List[str]:
             data = http.get_json(url, retries=2)
         except Exception as e:                  # noqa: BLE001
             logger.warning("packagist page %d failed: %s", page, e)
-            break
+            raise
         packages = data.get("packages") or []
         if not packages:
             break
@@ -249,7 +249,7 @@ def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> List[str]:
 
 
 def fetch_packagist(http: HttpClient, top_n: int) -> List[str]:
-    return sorted(set(_fetch_packagist_ranked(http, top_n)))[:top_n]
+    return sorted(set(_fetch_packagist_ranked(http, top_n)))
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ def refresh_all(
     popular_dir.mkdir(parents=True, exist_ok=True)
     out: Dict[str, str] = {}
     for fname, (display, fetch) in _FETCHERS.items():
-        if only is not None and display not in only:
+        if only is not None and display.lower() not in {o.lower() for o in only}:
             out[fname] = "skipped"
             continue
         try:

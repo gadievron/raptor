@@ -134,7 +134,7 @@ def check_pypi_api_compat(
 # ---------------------------------------------------------------------------
 
 
-_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
 
 
 def _semver_bump_risk(
@@ -273,7 +273,7 @@ def _fetch_pypi_requires_dist(
     info = data.get("info") or {}
     reqs = info.get("requires_dist") or []
     if not isinstance(reqs, list):
-        return []
+        return None
     out = [r for r in reqs if isinstance(r, str)]
     if cache is not None:
         cache.put(cache_key, out, ttl_seconds=TTL_FOREVER)

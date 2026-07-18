@@ -314,7 +314,7 @@ class QueryRunner:
                             resolved_to_absolute = True
                             logger.info(f"✓ Resolved suite to absolute path (alt): {actual_suite_path}")
                         else:
-                            logger.error("❌ Cannot resolve suite path - will attempt pack reference (may cause conflicts)")
+                            logger.error("✗ Cannot resolve suite path - will attempt pack reference (may cause conflicts)")
             else:
                 # Already an absolute path or simple name
                 if Path(suite_name).exists():
@@ -996,9 +996,9 @@ def main():
         print(f"  SARIF: {result.sarif_path}")
         print(f"  Duration: {result.duration_seconds:.1f}s")
     else:
-        print("\n✗ Analysis failed")
+        print("\n✗ Analysis failed", file=sys.stderr)
         for error in result.errors:
-            print(f"  {error}")
+            print(f"  {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":

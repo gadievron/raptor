@@ -10,7 +10,7 @@ An LLM proposes a CodeQL guard predicate for the project-specific sanitizer on
 the path; CodeQL adjudicates it (the barrier must suppress the FP on the
 post-fix DB while leaving the real finding on the pre-fix DB). Emits the
 synthesized query to stdout; exit 0 = sound, 2 = compiled but not sound,
-1 = no compilable barrier after retries. See ~/design/trust-witness.md.
+1 = no compilable barrier after retries.
 
 Needs CodeQL + an LLM client configured. Dev-tooling, co-located with
 ``core/dataflow/`` rather than ``libexec/`` (operator-command surface). Sibling

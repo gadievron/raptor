@@ -30,6 +30,7 @@ if not (os.environ.get("CLAUDECODE")
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_RAPTOR_DIR))
+import core.startup.process_init  # noqa: E402,F401
 
 
 def main() -> int:
@@ -47,7 +48,11 @@ def main() -> int:
     except ImportError:
         return 0
 
-    ctx = json.loads(ctx_path.read_text())
+    try:
+        ctx = json.loads(ctx_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"✗ Cannot read context-map: {e}", file=sys.stderr)
+        return 1
     search_dirs = [workdir, workdir.parent]
 
     target_path = None

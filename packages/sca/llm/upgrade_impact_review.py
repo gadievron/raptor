@@ -287,7 +287,7 @@ def _import_patterns(dep: Dependency) -> List[re.Pattern]:
             patterns.append(re.compile(rf"""(?:require\s*\(\s*|from\s+)['"]({re.escape(bare)})"""))
     elif dep.ecosystem in ("Maven", "Gradle"):
         parts = name.split(":")
-        if len(parts) == 2:
+        if len(parts) >= 2:
             patterns.append(re.compile(rf"\bimport\s+{re.escape(parts[0])}\."))
     elif dep.ecosystem == "Go":
         patterns.append(re.compile(rf'"{re.escape(name)}'))
@@ -295,5 +295,10 @@ def _import_patterns(dep: Dependency) -> List[re.Pattern]:
         patterns.append(re.compile(rf"\buse\s+{re.escape(name.replace('-', '_'))}"))
     elif dep.ecosystem == "RubyGems":
         patterns.append(re.compile(rf"\brequire\s+['\"]({re.escape(name)})"))
+    elif dep.ecosystem == "NuGet":
+        patterns.append(re.compile(rf"\busing\s+{re.escape(name)}\b"))
+    elif dep.ecosystem == "Packagist":
+        ns = name.replace("/", "\\\\")
+        patterns.append(re.compile(rf"\buse\s+{re.escape(ns)}"))
 
     return patterns

@@ -131,6 +131,7 @@ def scan_dependencies(
         # action (e.g. ``actions/cache/restore`` → also try
         # ``actions/cache``). Most sunset records target the
         # repo, so the parent match catches sub-actions.
+        found = False
         for candidate in (dep.name, _parent_action(dep.name)):
             records = sunset_map.get(candidate)
             if not records:
@@ -145,8 +146,10 @@ def scan_dependencies(
                 if dep.version.lower() not in normalised:
                     continue
                 out.append(_build_finding(dep, record))
+                found = True
                 break
-            break
+            if found:
+                break
     return out
 
 

@@ -178,7 +178,10 @@ def _sca_exploit_priority(f: Dict) -> float:
         score += 50.0
     epss = sca.get("epss")
     if epss is not None:
-        score += float(epss) * 30.0
+        try:
+            score += float(epss) * 30.0
+        except (ValueError, TypeError):
+            pass
     reach = sca.get("reachability", "not_evaluated")
     if reach == "likely_called":
         score += 20.0
@@ -186,7 +189,10 @@ def _sca_exploit_priority(f: Dict) -> float:
         score += 10.0
     cvss = sca.get("cvss_score")
     if cvss is not None:
-        score += float(cvss)
+        try:
+            score += float(cvss)
+        except (ValueError, TypeError):
+            pass
     return score
 
 
@@ -199,12 +205,15 @@ def _build_sca_exploit_prompt(finding: Dict) -> str:
         f"Severity: {finding.get('severity', 'unknown')}",
         f"Description: {finding.get('description', 'N/A')}",
     ]
-    if sca.get("cvss_score"):
+    if sca.get("cvss_score") is not None:
         lines.append(f"CVSS: {sca['cvss_score']}")
     if sca.get("in_kev"):
         lines.append("KEV: YES — known exploited in the wild")
-    if sca.get("epss"):
-        lines.append(f"EPSS: {sca['epss']:.1%}")
+    if sca.get("epss") is not None:
+        try:
+            lines.append(f"EPSS: {float(sca['epss']):.1%}")
+        except (ValueError, TypeError):
+            lines.append(f"EPSS: {sca['epss']}")
     lines.append(f"Reachability: {sca.get('reachability', 'not_evaluated')}")
     if sca.get("fixed_version"):
         lines.append(f"Fixed in: {sca['fixed_version']}")
@@ -989,8 +998,9 @@ class RetryTask(AnalysisTask):
     HIGH = 0.7
 
     def __init__(self, results_by_id: Optional[Dict[str, Dict]] = None,
-                 profile: ModelDefenseProfile = CONSERVATIVE):
-        super().__init__(profile=profile)
+                 profile: ModelDefenseProfile = CONSERVATIVE,
+                 *, allow_unreachable: bool = False):
+        super().__init__(profile=profile, allow_unreachable=allow_unreachable)
         self.results_by_id = results_by_id or {}
 
     def select_items(self, findings, prior_results):
@@ -1064,6 +1074,7 @@ class RetryTask(AnalysisTask):
 
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=extra_blocks,
+            allow_unreachable=self.allow_unreachable,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -1165,8 +1176,9 @@ class CrossFamilyCheckTask(AnalysisTask):
     QUALITY_THRESHOLD = 0.7
 
     def __init__(self, checker_model, results_by_id=None,
-                 profile: ModelDefenseProfile = CONSERVATIVE):
-        super().__init__(profile=profile)
+                 profile: ModelDefenseProfile = CONSERVATIVE,
+                 *, allow_unreachable: bool = False):
+        super().__init__(profile=profile, allow_unreachable=allow_unreachable)
         self.checker_model = checker_model
         self.results_by_id = results_by_id or {}
 

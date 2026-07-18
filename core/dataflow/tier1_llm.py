@@ -54,6 +54,8 @@ from core.dataflow.smt_barrier import (
     _same_function_in_order,
     extract_validator as _mechanical_extract,
     prove_neutralizes,
+    substitution_dominates_sink,
+    validator_dominates_sink,
 )
 
 
@@ -224,6 +226,40 @@ def _find_best_validator_line(
     return max(candidates)
 
 
+def _validator_in_branch(tree, validator_line: int, sink_line: int) -> bool:
+    """Return True if ``validator_line`` is inside a conditional branch
+    of the function containing the sink — meaning the validator does NOT
+    dominate the sink unconditionally."""
+    import ast as _ast
+    fn = _function_containing(tree, sink_line)
+    body = fn.body if fn else tree.body
+
+    def _in_branch(stmts, target):
+        for stmt in stmts:
+            if isinstance(stmt, _ast.If):
+                if _spans(stmt.body, target) or _spans(stmt.orelse, target):
+                    return True
+            elif isinstance(stmt, (_ast.For, _ast.While)):
+                if _spans(stmt.body, target):
+                    return True
+            elif isinstance(stmt, _ast.Try):
+                for handler in stmt.handlers:
+                    if _spans(handler.body, target):
+                        return True
+        return False
+
+    def _spans(stmts, target):
+        for stmt in stmts:
+            if hasattr(stmt, "lineno") and hasattr(stmt, "end_lineno"):
+                if stmt.lineno <= target <= (stmt.end_lineno or stmt.lineno):
+                    return True
+            elif hasattr(stmt, "lineno") and stmt.lineno == target:
+                return True
+        return False
+
+    return _in_branch(body, validator_line)
+
+
 def _try_known_safe_call(
     spec: _LLMSpec, source_text: str, sink_uri: str, sink_line: int,
     sink_class: str, language: str,
@@ -284,6 +320,13 @@ def _try_known_safe_call(
             f"variable {spec.variable_name!r} sanitized by "
             f"{entry.library_call} does not reach the sink line",
         )
+    if language == "python" and tree is not None and spec.variable_name:
+        if _validator_in_branch(tree, validator_line, sink_line):
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                f"safe-call at line {validator_line} does not dominate "
+                f"sink (conditional branch)",
+            )
     artifact = f"library:{entry.library_call}@{sink_uri}:{validator_line}"
     return Tier0Result(
         Tier0Status.SOUND,
@@ -414,6 +457,22 @@ def try_tier1b(
                 f"sink at line {sink_line}",
                 spec=mech,
             )
+        if language == "python" and source_text:
+            if mech.kind == "charset_sub":
+                dominates = substitution_dominates_sink(
+                    source_text, validator_line, sink_line, mech.var_name,
+                )
+            else:
+                dominates = validator_dominates_sink(
+                    source_text, validator_line, sink_line,
+                )
+            if not dominates:
+                return Tier0Result(
+                    Tier0Status.NOT_APPLICABLE,
+                    f"Tier 1B: validator at line {validator_line} does "
+                    f"not dominate sink (advisory or reassigned)",
+                    spec=mech,
+                )
         # Same artifact format as Tier 0 mechanical extraction — the
         # soundness mechanism is identical (Z3 regex proof).  The
         # ``llm_extracted`` flag in ``extras`` records that the LLM

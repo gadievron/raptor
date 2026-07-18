@@ -70,7 +70,7 @@ _VERSION_SPEC_RE = re.compile(
 def parse_manifest(path: Path) -> List[Dependency]:
     """Parse a ``Gemfile`` and emit one Dependency per ``gem`` line."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gemfile: cannot read %s: %s", path, e)
         return []
@@ -78,7 +78,7 @@ def parse_manifest(path: Path) -> List[Dependency]:
     out: List[Dependency] = []
     seen_keys: set = set()
     has_control_flow = bool(
-        re.search(r"^\s*(if|unless|case|while)\b", text, re.MULTILINE))
+        re.search(r"(?:^\s*(?:if|unless|case|while|for|until)\b|\b(?:if|unless)\s+\S)", text, re.MULTILINE))
     confidence_level = "medium" if has_control_flow else "high"
     reason = ("Gemfile DSL — heuristic regex" if has_control_flow
               else "Gemfile DSL — straight-line script")
@@ -133,7 +133,7 @@ def parse_lockfile(path: Path) -> List[Dependency]:
     own top-level rows in the GEM section anyway).
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gemfile: cannot read %s: %s", path, e)
         return []
@@ -220,6 +220,8 @@ def _build_dep(
         pin_style = PinStyle.GIT
     elif re.search(r"\bgithub\s*:\s*(['\"])", rest_clean):
         pin_style = PinStyle.GIT
+    elif re.search(r"\bgitlab\s*:\s*(['\"])", rest_clean):
+        pin_style = PinStyle.GIT
     elif re.search(r"\bpath\s*:\s*(['\"])", rest_clean):
         pin_style = PinStyle.PATH
     else:
@@ -250,6 +252,10 @@ def _parse_version_specs(rest: str) -> Tuple[PinStyle, Optional[str]]:
     if not matches:
         return PinStyle.WILDCARD, None
     if len(matches) > 1:
+        valid = [m for m in matches
+                 if m.group("ver") and m.group("ver")[0].isdigit()]
+        if not valid:
+            return PinStyle.WILDCARD, None
         return PinStyle.RANGE, None
     m = matches[0]
     op = m.group("op") or "="

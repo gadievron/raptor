@@ -79,7 +79,7 @@ def read_bounded(
     try:
         st = (path.lstat() if not follow_symlinks else path.stat())
     except OSError as e:
-        logger.debug("sca.parsers: cannot stat %s: %s", path, e)
+        logger.warning("sca.parsers: cannot stat %s: %s", path, e)
         return None
     # Reject non-regular files up-front (symlinks, sockets, FIFOs,
     # devices). With ``follow_symlinks=False`` ``lstat`` reports
@@ -113,7 +113,7 @@ def read_bounded(
             with path.open("rb") as fh:
                 raw = fh.read(max_bytes + 1)
     except OSError as e:
-        logger.debug("sca.parsers: cannot read %s: %s", path, e)
+        logger.warning("sca.parsers: cannot read %s: %s", path, e)
         return None
     if len(raw) > max_bytes:
         logger.warning(

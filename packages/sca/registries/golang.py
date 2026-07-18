@@ -122,8 +122,9 @@ def _semver_key(v: str):
     parts = bare.split(".")
     out = []
     for p in parts:
+        core = p.split("+")[0]
         try:
-            out.append((0, int(p)))
+            out.append((0, int(core)))
         except ValueError:
             out.append((1, p))
     return tuple(out)

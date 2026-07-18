@@ -129,10 +129,12 @@ def rewrite_csproj(
         try:
             _atomic_write(path, new_text)
         except OSError as e:
-            return [RewriteResult(
-                edit=r.edit, applied=False,
-                reason=f"error: write failed: {e}",
-            ) for r in results]
+            return [
+                RewriteResult(edit=r.edit, applied=False,
+                              reason=f"error: write failed: {e}")
+                if r.applied else r
+                for r in results
+            ]
     return results
 
 
@@ -169,8 +171,11 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    from packages.sca._atomic import atomic_write_text
-    atomic_write_text(path, content)
-
+    """Atomic tempfile + rename via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees
+    (concurrent-reader safety, mode preservation, PID-suffix
+    isolation, BaseException catch)."""
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, content)
 
 __all__ = ["rewrite_csproj"]

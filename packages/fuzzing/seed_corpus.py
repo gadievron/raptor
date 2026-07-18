@@ -241,12 +241,11 @@ def _reset_generated_output(out_dir: Path) -> None:
         kind_dir = out_dir / kind
         if kind_dir.is_dir() and not kind_dir.is_symlink():
             shutil.rmtree(kind_dir)
-        elif kind_dir.exists():
-            kind_dir.unlink()
+        else:
+            kind_dir.unlink(missing_ok=True)
 
     manifest_path = out_dir / "manifest.json"
-    if manifest_path.is_file() or manifest_path.is_symlink():
-        manifest_path.unlink()
+    manifest_path.unlink(missing_ok=True)
 
 
 def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:

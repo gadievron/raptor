@@ -3,7 +3,7 @@
 Sibling of :mod:`core.dataflow.owasp_corpus_generator`, but the ground
 truth comes from the *fix commit* rather than a benchmark's
 ``expectedresults`` CSV. The labeling insight (see
-``~/design/trust-witness.md``):
+the design memo):
 
     Run the producer (CodeQL) on the pre-fix and post-fix source of a
     real injection CVE.

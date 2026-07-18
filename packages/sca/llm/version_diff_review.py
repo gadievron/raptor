@@ -64,7 +64,7 @@ _ARCHIVE_URLS: Dict[str, str] = {
     "NuGet": "https://api.nuget.org/v3-flatcontainer/{name_lower}/{version}/{name_lower}.{version}.nupkg",
     "Maven": "https://repo.maven.apache.org/maven2/{group_path}/{artifact}/{version}/{artifact}-{version}-sources.jar",
     "Gradle": "https://repo.maven.apache.org/maven2/{group_path}/{artifact}/{version}/{artifact}-{version}-sources.jar",
-    "Composer": "https://repo.packagist.org/p2/{name_lower}.json",
+    "Packagist": "https://repo.packagist.org/p2/{name_lower}.json",
 }
 
 # Maven sources jar unavailable → fall back to binary jar (degraded signal).
@@ -160,7 +160,7 @@ def _download_and_extract(
 ) -> Optional[Dict[str, str]]:
     """Fetch archive → dict of {relative_path: text_content}."""
     # Composer: resolve the actual archive URL from packagist metadata.
-    if dep.ecosystem == "Composer":
+    if dep.ecosystem == "Packagist":
         return _download_composer(dep, http)
 
     url = _archive_url(dep)
@@ -178,20 +178,24 @@ def _download_and_extract(
             logger.debug("sca.llm.version_diff: trying Maven binary jar fallback")
             data = _fetch(fallback, http)
 
-    # PyPI: sdist may not exist → fall back to smallest wheel.
+    # PyPI: sdist may not exist → fall back to smallest wheel (a zip).
+    is_wheel = False
     if data is None and dep.ecosystem == "PyPI":
         data = _fetch_pypi_wheel(dep, http)
+        if data is not None:
+            is_wheel = True
 
     if data is None:
         return None
 
-    return _extract_text_files(data, dep.ecosystem)
+    eco = "NuGet" if is_wheel else dep.ecosystem  # wheel is a zip
+    return _extract_text_files(data, eco)
 
 
 def _fetch(url: str, http: HttpClient) -> Optional[bytes]:
     """Download a URL, returning None on failure or oversize."""
     try:
-        data = http.get(url, timeout=30)
+        data = http.get_bytes(url, timeout=30)
     except Exception:  # noqa: BLE001
         logger.debug("sca.llm.version_diff: fetch failed for %s", url)
         return None
@@ -207,9 +211,7 @@ def _fetch_pypi_wheel(dep: Dependency, http: HttpClient) -> Optional[bytes]:
         return None
     json_url = f"https://pypi.org/pypi/{dep.name}/{dep.version}/json"
     try:
-        import json as _json
-        raw = http.get(json_url, timeout=15)
-        meta = _json.loads(raw)
+        meta = http.get_json(json_url, timeout=15)
         urls = meta.get("urls", [])
         wheels = [u for u in urls if u.get("packagetype") == "bdist_wheel"]
         if not wheels:
@@ -227,11 +229,9 @@ def _fetch_pypi_wheel(dep: Dependency, http: HttpClient) -> Optional[bytes]:
 
 def _download_composer(dep: Dependency, http: HttpClient) -> Optional[Dict[str, str]]:
     """Resolve Composer archive URL from packagist and extract."""
-    import json as _json
     meta_url = f"https://repo.packagist.org/p2/{dep.name.lower()}.json"
     try:
-        raw = http.get(meta_url, timeout=15)
-        meta = _json.loads(raw)
+        meta = http.get_json(meta_url, timeout=15)
         packages = meta.get("packages", {}).get(dep.name.lower(), [])
         match = next(
             (p for p in packages if p.get("version") == dep.version), None,
@@ -265,6 +265,8 @@ def _archive_url(dep: Dependency) -> Optional[str]:
         basename = name.split("/")[-1] if "/" in name else name
         return template.format(name=name, basename=basename, version=version)
     if dep.ecosystem == "PyPI":
+        if not name:
+            return None
         initial = name[0].lower()
         return template.format(name=name, initial=initial, version=version)
     if dep.ecosystem == "NuGet":
@@ -280,7 +282,7 @@ def _archive_url(dep: Dependency) -> Optional[str]:
         return template.format(
             group_path=group_path, artifact=artifact, version=version,
         )
-    if dep.ecosystem == "Composer":
+    if dep.ecosystem == "Packagist":
         return template.format(name_lower=name.lower())
     return template.format(name=name, version=version)
 
@@ -305,7 +307,7 @@ def _extract_text_files(
     try:
         if ecosystem in ("npm", "PyPI", "Cargo", "RubyGems"):
             _extract_tar(data, files)
-        elif ecosystem in ("Go", "NuGet", "Maven", "Gradle", "Composer"):
+        elif ecosystem in ("Go", "NuGet", "Maven", "Gradle", "Packagist"):
             _extract_zip(data, files)
         else:
             _extract_tar(data, files)
@@ -359,6 +361,11 @@ def _extract_zip(data: bytes, out: Dict[str, str]) -> None:
                 continue
             parts = Path(info.filename).parts
             rel = "/".join(parts[1:]) if len(parts) > 1 else info.filename
+            if "@v" in rel:
+                rel = "/".join(
+                    seg.partition("@")[0] if "@v" in seg else seg
+                    for seg in rel.split("/")
+                )
             out[rel] = content
 
 

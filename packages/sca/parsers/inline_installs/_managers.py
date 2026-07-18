@@ -348,6 +348,10 @@ def _emit_npm_pkg(
         return name, version[1:], PinStyle.CARET
     if version.startswith("~"):
         return name, version[1:], PinStyle.TILDE
+    if version.startswith((">=", "<=", ">", "<")) or "*" in version or ".x" in version:
+        return name, version, PinStyle.RANGE
+    if not version[:1].isdigit():
+        return name, version, PinStyle.WILDCARD
     return name, version, PinStyle.EXACT
 
 

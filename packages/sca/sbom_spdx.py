@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -82,7 +83,7 @@ def render_sbom_spdx(
     if namespace_uri is None:
         namespace_uri = (
             f"https://raptor-sca.local/spdxdocs/"
-            f"{target_name}-{created.replace(':', '').replace('-', '')}"
+            f"{target_name}-{uuid.uuid4()}"
         )
 
     packages: List[Dict[str, Any]] = []
@@ -189,12 +190,15 @@ def _spdx_license_value(declared: str) -> str:
     # "MIT OR Apache-2.0" passes because "mit" is too short, "or" is
     # a keyword, "apache-2.0" isn't all-alphabetic.
     keywords = {"and", "or", "with"}
+    prose_count = 0
     for tok in text.split():
         low = tok.lower()
         if (tok.islower() and tok.isalpha()
                 and low not in keywords
                 and len(tok) >= 3):
-            return "NOASSERTION"
+            prose_count += 1
+    if prose_count >= 2:
+        return "NOASSERTION"
     return text
 
 

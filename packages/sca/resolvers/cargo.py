@@ -85,8 +85,9 @@ class CargoResolver:
 
         # Copy the manifest + lockfile to a temp dir; never mutate
         # the operator's checkout. Workspace members aren't copied
-        # — for cascade-validation purposes the top-level manifest
-        # is what matters; member-only crates get partial coverage.
+        # — virtual workspaces (no [package]) will fail to resolve
+        # since member manifests are absent; .cargo/config.toml
+        # (private registries, source replacements) is also omitted.
         with tempfile.TemporaryDirectory(prefix="raptor-sca-cargo-") as tmp:
             tmp_path = Path(tmp)
             for fname in ("Cargo.toml", "Cargo.lock"):

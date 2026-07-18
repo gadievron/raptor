@@ -129,6 +129,32 @@ class FailureMode(str, Enum):
     # lessons to attempts in different environments where it might.
     CONSTRAINED_BY_ENV = "constrained_by_env"
 
+    # Model wrote past a boundary (ASan confirmed a WRITE-class OOB —
+    # corruption_confirmed rung) but couldn't turn the corruption into
+    # PC control. A finer-grained sibling of TRIGGER_FIRED_NO_
+    # CONTROLLED_EFFECT: the primitive is known, the gap is
+    # target-selection / heap-shaping / saved-return-slot discovery.
+    # Routes to chain_closer with a "landed a write, need to find the
+    # right target" framing.
+    CORRUPTION_NO_CONTROL_PC = "corruption_no_control_pc"
+
+    # Model hijacked PC (fault-PC-outside-.text observed on the crash)
+    # but the redirect landed on garbage — no instructions executed
+    # from the hijacked region. Finer than TRIGGER_FIRED_NO_CONTROLLED_
+    # EFFECT: the primitive is control-flow, the gap is either shellcode
+    # / ROP chain construction or gadget selection. Routes to
+    # chain_closer with a "have PC control, need to point at valid
+    # instructions" framing.
+    CONTROL_PC_NO_CODE_EXECUTION = "control_pc_no_code_execution"
+
+    # Model achieved orthogonal signals (info_leak or controlled_write)
+    # without any main-ladder progress. Read-primitive CVEs (zlib-class)
+    # commonly land here — the bug leaks addresses / lets the attacker
+    # write, but the specific chain to controlled_effect isn't there.
+    # Routes to chain_closer with a "have primitive, need to chain into
+    # effect" framing.
+    ORTHOGONAL_ONLY_NO_MAIN_LADDER = "orthogonal_only_no_main_ladder"
+
     # Catch-all for "the run failed but we can't classify why."
     UNKNOWN = "unknown"
 
@@ -322,6 +348,16 @@ class LabeledAttempt:
     # === Audit ===
     timestamp: str = ""                   # ISO-8601 UTC
 
+    # === Distilled chain-of-thought (v3 §self-critique 12) ===
+    # ~200-token summary of what the agent tried during this attempt,
+    # produced post-fire by a cheap LLM summary call. Surfaces "the
+    # AGENT'S REASONING SHAPE" to the mutator + refuter without
+    # polluting their context with raw chain-of-thought (anchoring
+    # risk per Voyager). Empty string when no summariser ran (default
+    # for back-compat — older records and runs without the
+    # ``--summariser-model`` flag).
+    distilled_summary: str = ""
+
     def __post_init__(self) -> None:
         oracle_count = sum(
             1 for e in (
@@ -415,8 +451,25 @@ class LabeledAttempt:
         def _build(name: str, evidence_cls, raw):
             if raw is None:
                 return None
+            # Filter to declared fields — a record persisted by a
+            # newer schema may carry keys the current code doesn't
+            # know about. Passing raw ``**raw`` would raise TypeError
+            # and (per the callsite chain) silently drop the whole
+            # record via ``_iter_records_in_dir``. Forward-compat
+            # symmetric with :meth:`LabeledAttempt.from_dict`, which
+            # already filters through its own dataclass fields.
+            from dataclasses import fields as _dc_fields
             try:
-                return evidence_cls(**raw)
+                known = {f.name for f in _dc_fields(evidence_cls)}
+            except TypeError:
+                # evidence_cls is not a dataclass — unexpected, but
+                # don't turn a defensive guard into a hard failure.
+                known = None
+            filtered = raw if known is None else {
+                k: v for k, v in raw.items() if k in known
+            }
+            try:
+                return evidence_cls(**filtered)
             except (TypeError, ValueError) as e:
                 raise ValueError(
                     f"failed to build {evidence_cls.__name__} from "
@@ -504,10 +557,19 @@ def compute_finding_signature(
 
     NOT a security primitive — collision-resistance is sufficient for
     deduplication, not for cryptographic claims.
+
+    ``cwe`` is trusted as-passed (whitespace stripped). If callers
+    want dedup across spellings (``"CWE-121"`` vs ``"cwe121"`` vs
+    ``"121"``), they must canonicalise upstream via
+    :func:`core.cve.cwe.canonicalize_cwe` before calling this
+    helper. Signature-level canonicalisation would silently invalidate
+    every existing on-disk ``<project>/labeled_attempts/<signature>/``
+    directory written under a different spelling — data-integrity
+    matters more than automatic spelling alignment here.
     """
     import hashlib
     blob = "|".join([
-        cwe.strip().upper(),
+        cwe.strip(),
         file_path.strip(),
         function.strip(),
         str(line),

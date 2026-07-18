@@ -241,7 +241,7 @@ class AFLRunner:
                 
                 # If afl-fuzz --help fails with shmget error, the system needs configuration
                 if "shmget" in result.stderr or "No space left on device" in result.stderr:
-                    logger.error("❌ AFL shared memory configuration issue detected!")
+                    logger.error("✗ AFL shared memory configuration issue detected!")
                     logger.error("   On macOS, AFL requires higher shared memory limits.")
                     logger.error("   Run the following commands:")
                     logger.error("   1. afl-system-config (as root/sudo)")
@@ -451,38 +451,20 @@ class AFLRunner:
             stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
             (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n")
 
-            # Intentionally bare Popen — AFL fuzz daemon is long-running and
-            # needs streaming output. Cannot use sandbox_run (blocks until exit).
-            #
-            # `stdout=DEVNULL` instead of `PIPE`. Pre-fix both
-            # streams went to PIPE buffers without ANY drainer
-            # thread consuming them while AFL ran. AFL's
-            # status-screen writes to stdout periodically; after
-            # roughly the OS-default 64KB pipe buffer filled, the
-            # next write blocked AFL waiting for a reader — the
-            # whole fuzzing daemon stalled silently with no
-            # error visible to the operator (process showed as
-            # alive but execs/sec dropped to 0). The stall could
-            # last hours before the operator noticed in the
-            # status dashboard.
-            #
-            # stdout=DEVNULL discards the (verbose, redundant
-            # with our own status capture) AFL output without
-            # buffer-fill risk. stderr stays PIPE because:
-            #  (1) it's much lower volume — AFL only writes to
-            #      stderr on startup errors and shutdown,
-            #  (2) the post-exit `proc.communicate(timeout=1)`
-            #      below collects it for diagnostic logging
-            #      (the shmget / SHM-config error messages
-            #      operators rely on for setup troubleshooting).
-            # 64KB stderr pre-exit is plenty for either case.
-            proc = subprocess.Popen(
-                cmd,
-                stdout=stdout_fp,
-                stderr=stderr_fp,
-                text=True,
-                env=afl_env,
-            )
+            try:
+                from core.sandbox.preexec import set_pdeathsig
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=stdout_fp,
+                    stderr=stderr_fp,
+                    text=True,
+                    env=afl_env,
+                    preexec_fn=set_pdeathsig(),
+                )
+            except Exception:
+                stdout_fp.close()
+                stderr_fp.close()
+                raise
             processes.append({
                 "name": instance_name,
                 "proc": proc,
@@ -747,9 +729,8 @@ class AFLRunner:
     def _afl_paths_found(cls, stats: dict) -> int:
         """Map current AFL++ stats to a useful path/corpus discovery count."""
         for key in ("paths_found", "corpus_found", "queued_paths", "cur_path"):
-            value = cls._parse_afl_int(stats.get(key))
-            if value:
-                return value
+            if key in stats:
+                return cls._parse_afl_int(stats[key])
         return cls._parse_afl_int(stats.get("corpus_count"))
 
     @staticmethod
@@ -850,27 +831,15 @@ class AFLRunner:
     def get_stats(self) -> dict:
         """Get fuzzing statistics from AFL."""
         stats_file = self.output_dir / "main" / "fuzzer_stats"
-
-        if not stats_file.exists():
-            return {}
-
         stats = {}
-        # Explicit `encoding="utf-8"` + `errors="replace"`. Pre-fix
-        # bare `open(stats_file)` used the host locale encoding —
-        # AFL writes its `fuzzer_stats` file in UTF-8 (the C side
-        # writes ASCII keys + UTF-8 stringified values), so a
-        # latin-1 / cp1252 default could mojibake non-ASCII path
-        # components in `target_mode`, `command_line`, etc., and
-        # raise UnicodeDecodeError on operator paths with i18n
-        # characters. `errors="replace"` keeps the parse going even
-        # if a byte sequence somehow doesn't decode (preferred over
-        # crashing the whole stats read for a single bad value).
-        with open(stats_file, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if ":" in line:
-                    key, value = line.strip().split(":", 1)
-                    stats[key.strip()] = value.strip()
-
+        try:
+            with open(stats_file, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if ":" in line:
+                        key, value = line.strip().split(":", 1)
+                        stats[key.strip()] = value.strip()
+        except FileNotFoundError:
+            pass
         return stats
 
     def run_showmap(self) -> dict:

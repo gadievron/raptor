@@ -83,6 +83,7 @@ def run_stage(
     schema_cls: Type[BaseModel],
     model_id: Optional[str] = None,
     task_type: str = _TASK_TYPE,
+    _record_preflight: bool = True,
 ) -> StageResult:
     """Execute the full defence-in-depth LLM call pattern.
 
@@ -103,8 +104,9 @@ def run_stage(
     any_hit = any(pf.has_injection_indicators for pf in pf_results)
     haircut = 0.5 if any_hit else 1.0
 
-    for pf in pf_results:
-        defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
+    if _record_preflight:
+        for pf in pf_results:
+            defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
 
     # 2. Build prompt with defence envelope.
     if model_id is None:
@@ -231,6 +233,7 @@ def cross_family_check(
         schema_cls=schema_cls,
         model_id=checker_model,
         task_type=task_type + "_cross_check",
+        _record_preflight=False,
     )
 
     if checker_result.model is None:
@@ -247,8 +250,10 @@ def cross_family_check(
         primary_verdict, checker_verdict,
     )
     if hasattr(primary_result.model, "confidence"):
+        cur = getattr(primary_result.model, "confidence", "medium")
+        capped = cur if cur in ("low",) else "medium"
         updated = primary_result.model.model_copy(
-            update={"confidence": "medium"},
+            update={"confidence": capped},
         )
         return StageResult(
             model=updated,

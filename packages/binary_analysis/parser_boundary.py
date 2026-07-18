@@ -24,6 +24,14 @@ from .evidence import EvidenceRecord, EvidenceTier, make_evidence
 _MAX_PATH_DEPTH = 6
 
 
+def _addr(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, int):
+        return hex(v)
+    return str(v)
+
+
 def _id(*parts: Any) -> str:
     raw = "::".join(str(part) for part in parts)
     return f"BPARSER-{hashlib.sha256(raw.encode('utf-8', 'surrogateescape')).hexdigest()[:12]}"
@@ -98,7 +106,7 @@ def extract_parser_boundaries(
         ingress_id = str(ingress.get("id") or "")
         start_id = str(ingress.get("bound_function_id") or "")
         if start_id not in functions:
-            ingress_address = str(ingress.get("address") or "")
+            ingress_address = _addr(ingress.get("address"))
             ingress_name = str(ingress.get("bound_function_name") or ingress.get("name") or "")
             start_id = next(
                 (
@@ -106,7 +114,7 @@ def extract_parser_boundaries(
                     for function_id, item in functions.items()
                     if (
                         ingress_address
-                        and str(item.get("address") or "") == ingress_address
+                        and _addr(item.get("address")) == ingress_address
                     ) or (
                         ingress_name
                         and str(item.get("name") or "") == ingress_name

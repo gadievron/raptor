@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from packages.binary_analysis.topology import build_component_topology
+from packages.binary_analysis.topology import (
+    _find_declared_artifact,
+    build_component_topology,
+)
 
 
 @dataclass
@@ -77,3 +80,49 @@ def test_macos_platform():
     manifest = _FakeManifest(binary_path="/App.app/Contents/MacOS/App", target_kind="macho")
     result = build_component_topology(manifest, ingress=[])
     assert result["platform"] == "macos"
+
+
+# ---------------------------------------------------------------------------
+# Path-traversal prevention in _find_declared_artifact
+# ---------------------------------------------------------------------------
+
+def test_traversal_name_rejected(tmp_path):
+    bundle = tmp_path / "Evil.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    outside = tmp_path / "secret.txt"
+    outside.write_text("sensitive")
+
+    result = _find_declared_artifact(bundle, "../../../secret.txt")
+    assert result is None, f"Path traversal escaped bundle root: {result}"
+
+
+def test_traversal_two_levels(tmp_path):
+    bundle = tmp_path / "Test.app"
+    (bundle / "Contents" / "Resources").mkdir(parents=True)
+    escape_target = tmp_path / "etc" / "passwd"
+    escape_target.parent.mkdir(parents=True, exist_ok=True)
+    escape_target.write_text("root:x:0:0")
+
+    result = _find_declared_artifact(bundle, "../../etc/passwd")
+    assert result is None
+
+
+def test_legitimate_name_works(tmp_path):
+    bundle = tmp_path / "Good.app"
+    macos = bundle / "Contents" / "MacOS"
+    macos.mkdir(parents=True)
+    helper = macos / "com.example.helper"
+    helper.write_text("#!/bin/sh\necho hi")
+    helper.chmod(0o755)
+
+    result = _find_declared_artifact(bundle, "com.example.helper")
+    assert result is not None
+    assert result.name == "com.example.helper"
+
+
+def test_absolute_path_rejected(tmp_path):
+    bundle = tmp_path / "Abs.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+
+    result = _find_declared_artifact(bundle, "/etc/passwd")
+    assert result is None

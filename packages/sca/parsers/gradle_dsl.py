@@ -62,6 +62,14 @@ _CONFIG_TO_SCOPE = {
     "testCompileOnly": "test",
     "testRuntimeOnly": "test",
     "androidTestImplementation": "test",
+    "debugImplementation": "main",
+    "debugApi": "main",
+    "debugCompileOnly": "main",
+    "debugRuntimeOnly": "main",
+    "releaseImplementation": "main",
+    "releaseApi": "main",
+    "releaseCompileOnly": "main",
+    "releaseRuntimeOnly": "main",
 }
 
 
@@ -120,7 +128,7 @@ def parse(path: Path) -> List[Dependency]:
     """Parse a Gradle build script and emit one Dependency per
     recognised dependency declaration."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gradle_dsl: %s: %s", path, e)
         return []
@@ -188,7 +196,8 @@ def parse(path: Path) -> List[Dependency]:
                 scope=scope, declared_in=path,
                 source_origin=(
                     "gradle_catalog_ref"
-                    if lib.version_via_ref else "gradle_catalog_inline"
+                    if lib.version_via_ref and lib.version is not None
+                    else "gradle_catalog_inline"
                 ),
                 catalog_path=str(catalog.path),
                 catalog_alias=alias,
@@ -370,7 +379,7 @@ def _classify_version(version: Optional[str]) -> PinStyle:
     if "+" in version and version.endswith("+"):
         # Gradle "dynamic version" e.g. ``1.+``
         return PinStyle.RANGE
-    if version.endswith("-SNAPSHOT") or version == "latest.release":
+    if version.endswith("-SNAPSHOT") or version.startswith("latest."):
         return PinStyle.RANGE
     return PinStyle.EXACT
 

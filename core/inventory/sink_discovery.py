@@ -324,7 +324,11 @@ def discover_sinks(
         queue.append((key, 0))
 
     # BFS — propagate sink sets backwards through the call graph.
-    # Must merge sinks even at equal distance (diamond graphs).
+    # Sinks are merged unconditionally on every edge traversal so a
+    # function that is itself a direct dangerous caller AND transitively
+    # reaches other sinks gets the full set.  When new sinks arrive via
+    # a longer path, the node is re-enqueued at its existing distance
+    # so the additions propagate to its callers.
     head = 0
     while head < len(queue):
         current, dist = queue[head]
@@ -334,12 +338,14 @@ def discover_sinks(
         for caller_key in reverse_edges.get(current, set()):
             new_dist = dist + 1
             prev_dist = visited.get(caller_key)
+            old_count = len(reachable_sinks.get(caller_key, set()))
+            reachable_sinks[caller_key] |= reachable_sinks[current]
+            sinks_grew = len(reachable_sinks[caller_key]) > old_count
             if prev_dist is None or prev_dist > new_dist:
                 visited[caller_key] = new_dist
-                reachable_sinks[caller_key] |= reachable_sinks[current]
                 queue.append((caller_key, new_dist))
-            elif prev_dist == new_dist:
-                reachable_sinks[caller_key] |= reachable_sinks[current]
+            elif sinks_grew:
+                queue.append((caller_key, prev_dist))
 
     for key, dist in sorted(visited.items()):
         if dist == 0:
@@ -443,6 +449,7 @@ def discover_sinks_for_target(
             if graph.calls:
                 call_graphs[rel] = graph
         except Exception:  # noqa: BLE001
+            logger.debug("sink discovery: callgraph extraction failed for %s", rel, exc_info=True)
             continue
 
     return discover_sinks(
@@ -455,6 +462,8 @@ def discover_sinks_for_target(
 
 def _get_call_graph_extractors():
     """Return available call-graph extractors keyed by language."""
+    from functools import partial
+
     from core.inventory.call_graph import (
         extract_call_graph_python,
         extract_call_graph_javascript,
@@ -467,6 +476,8 @@ def _get_call_graph_extractors():
     return {
         "python": extract_call_graph_python,
         "javascript": extract_call_graph_javascript,
+        "typescript": partial(extract_call_graph_javascript, language="typescript"),
+        "tsx": partial(extract_call_graph_javascript, language="tsx"),
         "c": extract_call_graph_c,
         "cpp": extract_call_graph_cpp,
         "go": extract_call_graph_go,

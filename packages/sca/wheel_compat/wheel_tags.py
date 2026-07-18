@@ -64,7 +64,7 @@ _PLATFORM_ARCH_ALIASES = {
     "i686": "i686", "i386": "i686",
     "ppc64le": "ppc64le", "ppc64": "ppc64",
     "s390x": "s390x",
-    "universal2": "any",       # macosx universal — covers x86_64+arm64
+    "universal2": "universal2", # macosx universal — covers x86_64+arm64
 }
 
 

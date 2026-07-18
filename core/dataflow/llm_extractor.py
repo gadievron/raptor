@@ -353,9 +353,12 @@ def extract_from_files(
     all_errors: List[str] = []
 
     for rel in file_paths:
-        full = repo_root / rel
+        full = (repo_root / rel).resolve()
+        if not full.is_relative_to(repo_root.resolve()):
+            all_errors.append(f"{rel}: path escapes repo root")
+            continue
         try:
-            content = full.read_text()
+            content = full.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
             all_errors.append(f"{rel}: read failed ({e})")
             continue

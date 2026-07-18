@@ -55,8 +55,7 @@ def _load_sentinels() -> Dict[_SentinelKey, List[dict]]:
     except (OSError, _json.JSONDecodeError) as e:
         logger.warning("sca.supply_chain.sentinel: cannot load %s: %s",
                        _DATA_FILE, e)
-        _CACHE = {}
-        return _CACHE
+        return {}
     out: Dict[_SentinelKey, List[dict]] = {}
     for entry in data.get("packages", []):
         eco = entry.get("ecosystem", "")

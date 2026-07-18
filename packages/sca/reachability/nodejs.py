@@ -166,7 +166,10 @@ def _specifier_to_package(spec: str) -> Optional[str]:
             return None
         return f"{parts[0]}/{parts[1]}"
     # Bare or ``name/sub``.
-    return s.split("/", 1)[0]
+    base = s.split("/", 1)[0]
+    if base in _BUILTINS:
+        return None
+    return base
 
 
 def _walk_js_sources(target: Path, *, max_depth: int) -> Iterable[Path]:

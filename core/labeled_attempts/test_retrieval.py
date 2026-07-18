@@ -18,6 +18,7 @@ from core.labeled_attempts import (  # noqa: E402
     SandboxEvidence,
     WebEvidence,
     compute_finding_signature,
+    retrieve_cross_cwe_probe,
     retrieve_exemplars,
     write,
 )
@@ -450,3 +451,108 @@ def test_malformed_timestamp_treated_as_age_zero(project_dir):
     assert retrieve_exemplars(
         cwe="CWE-787", project_dir=project_dir, include_bundled=False,
     ) == []
+
+
+# --------------------------------------------------------------------------
+# Cross-CWE probe — v3 §4 sycophancy input to the refuter.
+# --------------------------------------------------------------------------
+
+
+class TestRetrieveCrossCWEProbe:
+    def test_returns_none_when_pool_empty(self, project_dir):
+        assert retrieve_cross_cwe_probe(
+            exclude_cwe="CWE-787",
+            project_dir=project_dir, include_bundled=False,
+        ) is None
+
+    def test_returns_none_when_only_matching_cwe(self, project_dir):
+        # All pool entries are CWE-787; excluding it leaves nothing.
+        write(_attempt(cwe="CWE-787"), project_dir=project_dir)
+        write(_attempt(cwe="CWE-787", finding_id="FND-2"), project_dir=project_dir)
+        assert retrieve_cross_cwe_probe(
+            exclude_cwe="CWE-787",
+            project_dir=project_dir, include_bundled=False,
+        ) is None
+
+    def test_returns_one_from_other_cwe(self, project_dir):
+        write(_attempt(cwe="CWE-787"), project_dir=project_dir)
+        write(
+            _attempt(cwe="CWE-122", finding_id="FND-OTHER"),
+            project_dir=project_dir,
+        )
+        probe = retrieve_cross_cwe_probe(
+            exclude_cwe="CWE-787",
+            project_dir=project_dir, include_bundled=False,
+        )
+        assert probe is not None
+        assert probe.cwe == "CWE-122"
+
+    def test_picks_most_recent_when_multiple(self, project_dir):
+        # Three non-matching records with distinct timestamps.
+        write(
+            _attempt(
+                cwe="CWE-122", finding_id="FND-OLD",
+                timestamp="2026-01-01T00:00:00+00:00",
+            ),
+            project_dir=project_dir,
+        )
+        write(
+            _attempt(
+                cwe="CWE-22", finding_id="FND-MID",
+                timestamp="2026-03-01T00:00:00+00:00",
+            ),
+            project_dir=project_dir,
+        )
+        write(
+            _attempt(
+                cwe="CWE-416", finding_id="FND-NEW",
+                timestamp="2026-06-15T00:00:00+00:00",
+            ),
+            project_dir=project_dir,
+        )
+        probe = retrieve_cross_cwe_probe(
+            exclude_cwe="CWE-787",
+            project_dir=project_dir, include_bundled=False,
+            now=datetime(2026, 6, 28, tzinfo=timezone.utc),
+        )
+        assert probe is not None
+        # Most-recent record wins.
+        assert probe.cwe == "CWE-416"
+
+    def test_case_insensitive_exclude(self, project_dir):
+        write(_attempt(cwe="CWE-787"), project_dir=project_dir)
+        write(
+            _attempt(cwe="CWE-122", finding_id="FND-OTHER"),
+            project_dir=project_dir,
+        )
+        # Mixed case in exclude_cwe still excludes correctly.
+        probe = retrieve_cross_cwe_probe(
+            exclude_cwe="cwe-787",
+            project_dir=project_dir, include_bundled=False,
+        )
+        assert probe is not None
+        assert probe.cwe == "CWE-122"
+
+    def test_exclude_matches_across_spellings(self, project_dir):
+        """Regression: record stored under ``"cwe787"`` (no dash) must
+        be excluded when caller passes ``"CWE-787"``. Bare ``.upper()``
+        left ``"CWE787" != "CWE-787"`` and slipped the same-class
+        record through, defeating sycophancy detection."""
+        # Two records with the same CWE spelled differently, plus
+        # a distinct third CWE. Both same-class spellings must be
+        # excluded; only the third should be returned.
+        write(_attempt(cwe="cwe787"), project_dir=project_dir)
+        write(
+            _attempt(cwe="CWE-787", finding_id="FND-DASHED"),
+            project_dir=project_dir,
+        )
+        write(
+            _attempt(cwe="CWE-122", finding_id="FND-OTHER"),
+            project_dir=project_dir,
+        )
+        probe = retrieve_cross_cwe_probe(
+            exclude_cwe="CWE-787",
+            project_dir=project_dir, include_bundled=False,
+        )
+        assert probe is not None
+        assert probe.cwe == "CWE-122"

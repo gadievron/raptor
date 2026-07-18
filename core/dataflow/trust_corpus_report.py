@@ -150,9 +150,9 @@ def analyze(synth_db: Path) -> CorpusReport:
         ))
     except sqlite3.OperationalError:
         # Table doesn't exist yet (bridge hasn't written its first row).
-        con.close()
         return rep
-    con.close()
+    finally:
+        con.close()
 
     for cve_id, cwe, lang, status, backend, detail in rows:
         if status in _PIPELINE_ERRORS:

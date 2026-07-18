@@ -222,7 +222,7 @@ def run_autonomous_workflow(args):
                         else:
                             logger.info("  ⚠ Exploit failed to compile")
                 else:
-                    logger.info("❌ Not exploitable")
+                    logger.info("✗ Not exploitable")
 
             except Exception as e:
                 logger.error(f"Analysis failed: {e}", exc_info=True)
@@ -249,7 +249,7 @@ def run_autonomous_workflow(args):
     print("AUTONOMOUS ANALYSIS SUMMARY")
     print(f"{'=' * 70}")
     print(f"Total findings: {scan_result.total_findings}")
-    print(f"Analyzed: {total_analyzed}")
+    print(f"Analysed: {total_analyzed}")
     print(f"Exploitable: {total_exploitable}")
     print(f"Exploits generated: {total_exploits_generated}")
     print(f"Exploits compiled: {total_exploits_compiled}")
@@ -326,7 +326,7 @@ Examples:
             "raptor_agentic.py for detail."
         ),
     )
-    from core.inventory.binary_oracle_cli import add_binary_args
+    from core.analysis.binary_oracle_cli import add_binary_args
     add_binary_args(parser)
     # Sanitizer-cut value-bound suppression mode (review #4, PR #794).
     from core.dataflow import sanitizer_cut_config
@@ -384,7 +384,7 @@ Examples:
     # auto-detect walk, active-project binary layering, RaptorConfig
     # mutation, and the no-leak-across-runs guarantee. raptor_agentic.py
     # uses the same call site to keep behaviour aligned.
-    from core.inventory.binary_oracle_cli import apply_to_config
+    from core.analysis.binary_oracle_cli import apply_to_config
     apply_to_config(args, Path(args.repo), parser=parser)
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
@@ -419,7 +419,7 @@ Examples:
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        print(f"\n✗ Fatal error: {e}")
+        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -10,7 +10,7 @@ sanitizers; this module adds two things on top:
    identifier (the shape every static analyser emits) can be matched
    against the catalogue's sink-class keys.
 2. A recognizer :func:`match_sanitizers_in_cfg` that walks a CFG
-   produced by :mod:`core.inventory.cfg_builder` and returns the set
+   produced by :mod:`core.analysis.cfg_builder` and returns the set
    of nodes whose statement-level calls (or, for the C/C++ call
    graph, whose own function name) are catalogue sanitizers for the
    given CWE + language.
@@ -137,12 +137,25 @@ def _normalize_cwe(cwe: str) -> str:
     """Accept ``"CWE-79"``, ``"cwe-79"``, ``"79"``, ``"CWE-079"`` and
     return the canonical ``"CWE-79"`` form. Returns the input
     unchanged when it doesn't look like a CWE id so unknown lookups
-    return a clean empty set rather than raising."""
-    raw = cwe.strip().upper()
-    if raw.startswith("CWE-"):
-        raw = raw[4:]
+    return a clean empty set rather than raising.
+
+    Delegates to :func:`core.cwe.canonicalize_cwe` with a
+    bare-number fallback (the shared canonicaliser rejects plain
+    ``"79"`` since it isn't prefixed) and preserves the
+    return-raw-on-unknown semantics the catalog's lookup depends on.
+    """
+    from core.cve.cwe import canonicalize_cwe, format_cwe
+    canon = canonicalize_cwe(cwe)
+    if canon is not None:
+        # canonicalize_cwe preserves leading zeros in the number
+        # group; re-run through format_cwe to strip them (CWE-079 →
+        # CWE-79 for consistent catalog keys).
+        return format_cwe(canon.split("-", 1)[1]) or canon
+    # Bare number (``"79"``) is not accepted by the shared
+    # canonicaliser but the sanitizer catalog historically has.
+    raw = cwe.strip()
     if raw.isdigit():
-        return f"CWE-{int(raw)}"
+        return format_cwe(raw) or cwe
     return cwe
 
 
@@ -201,7 +214,7 @@ def _node_calls(node: N) -> Iterable[str]:
     legacy projection used when the node has no Phase-1 ``call_sites``.
 
     Duck-typed for both producers from
-    :mod:`core.inventory.cfg_builder`:
+    :mod:`core.analysis.cfg_builder`:
 
     * :class:`PyCFGNode` — ``calls`` field, frozen set of statement-
       level call names.
@@ -223,7 +236,7 @@ def match_sanitizers_in_cfg(
     correspond to catalog-matched sanitizer calls in ``graph`` for
     ``cwe`` + ``language``.
 
-    The graph must satisfy :class:`core.inventory.dominators.Graph`
+    The graph must satisfy :class:`core.analysis.dominators.Graph`
     (``nodes()`` available). Each binding carries the node, the
     matched callable, the call's input/output symbols (from Phase
     1's :class:`CallSite`), and the call's line number. Multiple

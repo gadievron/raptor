@@ -118,6 +118,40 @@ def _pack_tuple_for_id(pack_id: str) -> Tuple[str, str]:
     return (f"semgrep_{safe}", full_id)
 
 
+def _drop_unreachable_registry_packs(
+    configs: List[Tuple[str, str]],
+) -> List[Tuple[str, str]]:
+    """Drop uncached registry packs when semgrep.dev is unreachable.
+
+    A 3-second TCP probe distinguishes "airgapped" from "slow link".
+    Cached packs (resolved to local paths by ``get_semgrep_config``)
+    and local rule directories pass through unchanged.
+    """
+    needs_network = [
+        (n, c) for n, c in configs
+        if c.startswith("p/") or c.startswith("category/")
+    ]
+    if not needs_network:
+        return configs
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(3)
+    try:
+        sock.connect(("semgrep.dev", 443))
+        return configs
+    except (OSError, socket.timeout):
+        dropped = [n for n, _ in needs_network]
+        logger.warning(
+            "semgrep.dev unreachable (3 s probe failed) — "
+            "dropping %d uncached registry pack(s): %s",
+            len(dropped), ", ".join(dropped),
+        )
+        drop_set = {c for _, c in needs_network}
+        return [(n, c) for n, c in configs if c not in drop_set]
+    finally:
+        sock.close()
+
+
 def _resolve_baseline_packs(
     repo_path: Optional[Path],
 ) -> List[Tuple[str, str]]:
@@ -1062,6 +1096,8 @@ def semgrep_scan_parallel(
         _used_names.add(unique)
         configs.append((unique, extra))
 
+    configs = _drop_unreachable_registry_packs(configs)
+
     logger.info(f"Starting {len(configs)} Semgrep scans in parallel (max {RaptorConfig.MAX_SEMGREP_WORKERS} workers)")
     logger.info(f"  - Local rule directories: {len([c for c in configs if c[0].startswith('category_')])}")
     logger.info(f"  - Standard/baseline packs: {len([c for c in configs if not c[0].startswith('category_')])}")
@@ -1217,6 +1253,8 @@ def semgrep_scan_sequential(
         _used_names.add(unique)
         configs.append((unique, extra))
 
+    configs = _drop_unreachable_registry_packs(configs)
+
     for idx, (name, config) in enumerate(configs, 1):
         logger.info(f"Running scan {idx}/{len(configs)}: {name}")
         sarif_path, success = run_single_semgrep(
@@ -1332,6 +1370,7 @@ def run_codeql(
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, start_new_session=True,
+            env=RaptorConfig.get_safe_env(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=3600)
@@ -1519,7 +1558,7 @@ def _sarif_has_findings(sarif_path: Path) -> bool:
     "unknown" the same as "empty" because the goal is opportunistic cleanup.
     """
     try:
-        data = json.loads(sarif_path.read_text())
+        data = json.loads(sarif_path.read_text(encoding="utf-8"))
     except Exception:
         return False
     for run_obj in data.get("runs", []) or []:
@@ -1538,8 +1577,8 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
 
     Cleanup rules (per pack):
       - Always remove: .exit, .json, empty .stderr.log
-      - On exit==0: also remove .sarif
-      - On exit!=0: keep .exit, keep non-empty .stderr.log, keep .sarif if
+      - On exit in (0, 1): also remove .sarif (semgrep returns 1 on findings)
+      - On exit>=2: keep .exit, keep non-empty .stderr.log, keep .sarif if
         it has findings; delete the .sarif if it is empty/zero-results
         (still redundant — combined.sarif holds those results too)
 
@@ -1574,7 +1613,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
         except Exception:
             exit_code = None
 
-        success = exit_code == 0
+        success = exit_code in (0, 1)
 
         # Always delete: .json (intermediate machine output)
         for victim in (json_file,):
@@ -1839,6 +1878,14 @@ def main():
         ),
     )
 
+    ap.add_argument(
+        "--show-suppressed", action="store_true",
+        dest="show_suppressed",
+        help="Include nosemgrep-suppressed findings in the output summary. "
+             "The SARIF always contains all findings regardless of this flag; "
+             "it only controls the presentation layer.",
+    )
+
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
@@ -2083,6 +2130,7 @@ def main():
         merged = out_dir / "combined.sarif"
         exclude_globs = args.exclude_dir
         excluded_count = 0
+        nosemgrep_count = 0
         if sarif_inputs:
             logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
             try:
@@ -2099,6 +2147,14 @@ def main():
                         f"--exclude-dir dropped {excluded_count} results "
                         f"from combined.sarif ({exclude_globs})"
                     )
+                # Annotate SARIF results whose source lines carry
+                # nosemgrep inline-suppression comments.  The annotation
+                # lives in result.properties.nosemgrep so any downstream
+                # consumer (/validate, external SARIF viewers) can see
+                # that a finding was developer-suppressed.
+                nosemgrep_count = semgrep_pkg.annotate_sarif(
+                    merged_data, str(repo_path),
+                )
                 save_json(merged, merged_data)
                 logger.info(f"Merged SARIF created: {merged}")
             except Exception as e:
@@ -2120,9 +2176,9 @@ def main():
         # tracked this, nothing failed") rather than absent-key
         # (couldn't-be-bothered).
         metrics["semgrep_failed_packs"] = semgrep_failed
+        metrics["nosemgrep_suppressed_count"] = nosemgrep_count
+        metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
         save_json(out_dir / "scan_metrics.json", metrics)
-
-        logger.info(f"Scan complete: {metrics['total_findings']} findings in {metrics['total_files_scanned']} files")
 
         # Write coverage records and derive total_files_scanned from them
         try:
@@ -2164,6 +2220,19 @@ def main():
                 save_json(out_dir / "scan_metrics.json", metrics)
         except Exception as e:
             logger.debug(f"Coverage record write failed (non-fatal): {e}")
+
+        if nosemgrep_count:
+            _active = metrics['total_findings'] - nosemgrep_count
+            logger.info(
+                f"Scan complete: {_active} findings + "
+                f"{nosemgrep_count} developer-suppressed "
+                f"in {metrics['total_files_scanned']} files"
+            )
+        else:
+            logger.info(
+                f"Scan complete: {metrics['total_findings']} findings "
+                f"in {metrics['total_files_scanned']} files"
+            )
 
         # Provenance manifest. MUST be composed BEFORE cleanup runs,
         # because cleanup deletes most of the per-pack SARIFs we hash.

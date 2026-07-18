@@ -5,7 +5,7 @@ covering npm packages instead of PyPI. Same architecture: when an
 OSV advisory carries ``imports[].symbols`` data and the project's
 JS / TS source has been inventoried via
 ``core.inventory.call_graph.extract_call_graph_javascript``, the
-resolver in ``core.inventory.reachability`` matches each affected
+resolver in ``core.analysis.reachability`` matches each affected
 function name against project call sites.
 
 OSV npm advisories ship symbol data less consistently than Go
@@ -155,31 +155,31 @@ def refine_npm_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )
 
     for d in candidates:
         funcs = npm_symbol_map[d.key()]
-        results = []
+        paired = []
         for fn in funcs:
             qualified = _qualified_name(d.name, fn)
             if qualified is None:
                 continue
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((fn, function_called(inventory, qualified)))
             except ValueError:
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_fn_names: List[str] = []
-            for fn, r in zip(funcs, results):
+            evidence_lines: list[str] = []
+            called_fn_names: list[str] = []
+            for fn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_fn_names.append(fn)
                     evidence_lines.extend(
@@ -203,7 +203,7 @@ def refine_npm_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"npm dep imported but the {len(funcs)} "
+                        f"npm dep imported but the {len(paired)} "
                         f"OSV-listed affected function(s) are not "
                         f"called from non-test JS / TS source"
                     ),

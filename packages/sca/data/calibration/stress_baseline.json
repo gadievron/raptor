@@ -468,11 +468,11 @@
     "tokio": {
       "deps_analysed": 238,
       "eco_breakdown": {
-        "Cargo": 5
+        "Cargo": 11
       },
       "ecosystem": "Cargo",
       "elapsed_seconds_p50": 7.7,
-      "vuln_findings": 5
+      "vuln_findings": 11
     },
     "wagtail-2.10": {
       "deps_analysed": 2232,

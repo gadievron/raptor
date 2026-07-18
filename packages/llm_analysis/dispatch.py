@@ -7,6 +7,7 @@ Task subclasses define semantics: what prompt, what schema, which model.
 
 import logging
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
@@ -473,15 +474,20 @@ def dispatch_task(
                 else:
                     status = "done"
                 cost = processed.get("cost_usd")
-                cost_str = f"  ${cost:.2f}" if cost else ""
+                try:
+                    cost_str = f"  ${float(cost):.2f}" if cost else ""
+                except (ValueError, TypeError):
+                    cost_str = ""
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} {status}{cost_str}")
 
             except Exception as e:
                 err_str = str(e)
                 error_type = _classify_error(err_str)
+                model_name = model.model_name if model is not None else "?"
                 results.append({"finding_id": item_id, "error": err_str,
-                                "error_type": error_type})
+                                "error_type": error_type,
+                                "analysed_by": model_name})
                 display = task.get_item_display(item)
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} FAILED — {err_str}")
@@ -529,7 +535,7 @@ def dispatch_task(
                     _per_model_auth_fail.add(model_key)
                     distinct_models = {_model_key(m) for m, _ in work}
                     if _per_model_auth_fail >= distinct_models:
-                        print("\n  All models hit auth/billing errors — aborting remaining")
+                        print("\n  ✗ All models hit auth/billing errors — aborting remaining", file=sys.stderr)
                         abort = True
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
@@ -537,7 +543,7 @@ def dispatch_task(
                         # Single-model auth failure — keep dispatching
                         # to other models. Surface the per-model
                         # failure but don't kill peers.
-                        print(f"  (model {model_key} auth-failed; continuing with other models)")
+                        print(f"  ⚠️  model {model_key} auth-failed; continuing with other models", file=sys.stderr)
 
                 # Per-model consecutive_errors. Pre-fix the global
                 # counter triggered "3 consecutive failures" abort
@@ -556,7 +562,8 @@ def dispatch_task(
                 pm["consec"] += 1
                 if pm["consec"] >= 3 and pm["completed"] == pm["consec"]:
                     print(f"\n  Model {model_key}: {pm['consec']} consecutive failures — "
-                          "stopping dispatch to this model (others continue)")
+                          "stopping dispatch to this model (others continue)",
+                          file=sys.stderr)
                     _per_model_dead.add(model_key)
                     distinct_models = {_model_key(m) for m, _ in work}
                     if _per_model_dead >= distinct_models:

@@ -28,6 +28,7 @@ if not (os.environ.get("CLAUDECODE")
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 import hashlib
 from core.json import load_json, save_json
@@ -117,11 +118,11 @@ def _validate_file(workdir, filename, validator_func):
         return True, []
     data = load_json(Path(workdir) / filename)
     if not data:
-        print(f"  {filename}: not found")
+        print(f"  {filename}: not found", file=sys.stderr)
         return False, ["missing"]
     valid, errors = validator_func(data)
     if not valid:
-        print(f"  {filename}: ERRORS {errors}")
+        print(f"  {filename}: ERRORS {errors}", file=sys.stderr)
     else:
         print(f"  {filename}: OK")
     return valid, errors
@@ -182,7 +183,7 @@ def _apply_stage_file(workdir, stage_letter):
 
     staged = load_json(stage_path)
     if not staged:
-        print(f"  WARNING: stage-{stage_letter.lower()}.json exists but is empty/invalid")
+        print(f"  ⚠️  stage-{stage_letter.lower()}.json exists but is empty/invalid", file=sys.stderr)
         return False
 
     findings_path = Path(workdir) / "findings.json"
@@ -199,7 +200,7 @@ def _apply_stage_file(workdir, stage_letter):
         # Update: merge per-finding updates into existing findings.json
         container = load_json(findings_path)
         if not container:
-            print(f"  ERROR: findings.json not found — cannot apply stage-{stage_letter.lower()}.json")
+            print(f"  ✗ findings.json not found — cannot apply stage-{stage_letter.lower()}.json", file=sys.stderr)
             return False
 
         by_id = {f["id"]: f for f in container.get("findings", [])}
@@ -213,7 +214,7 @@ def _apply_stage_file(workdir, stage_letter):
                     _deep_merge(finding, update_dict)
                     applied += 1
                 else:
-                    print(f"  WARNING: {finding_id} not found in findings.json — skipped")
+                    print(f"  WARNING: {finding_id} not found in findings.json — skipped", file=sys.stderr)
 
         elif "findings" in staged and isinstance(staged["findings"], list):
             # Fallback: Claude wrote a findings array — merge by ID, don't replace
@@ -341,7 +342,7 @@ def _build_standalone_pocs(target, build_dir):
         try:
             _sp.run([compiler, "--version"], capture_output=True, check=True)
         except (FileNotFoundError, _sp.CalledProcessError):
-            print("No C compiler found — skipping PoC build")
+            print("No C compiler found — skipping PoC build", file=sys.stderr)
             return
 
     # Sandbox the compile invocations. Pre-fix `_sp.run(cmd)`
@@ -375,7 +376,8 @@ def _build_standalone_pocs(target, build_dir):
         _safe_env = RaptorConfig.get_safe_env()
     except ImportError:
         _sandbox_run = None
-        _safe_env = None
+        import os as _os
+        _safe_env = _os.environ.copy()
 
     built = 0
     for source in sources:
@@ -395,15 +397,16 @@ def _build_standalone_pocs(target, build_dir):
                     env=_safe_env,
                 )
             else:
-                result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+                result = _sp.run(cmd, capture_output=True, text=True, timeout=30,
+                                env=_safe_env)
             if result.returncode == 0:
                 print(f"  Built: {source.name} -> {output.name}")
                 if result.stderr.strip():
                     for line in result.stderr.strip().splitlines()[:5]:
-                        print(f"    warning: {line}")
+                        print(f"    warning: {line}", file=sys.stderr)
                 built += 1
             else:
-                print(f"  Build failed: {source.name} ({result.stderr.strip()[:80]})")
+                print(f"  Build failed: {source.name} ({result.stderr.strip()[:80]})", file=sys.stderr)
         except Exception:
             pass
 
@@ -415,7 +418,7 @@ def prepare_A(workdir, target=None):
     checklist = load_json(Path(workdir) / "checklist.json")
     existing = load_json(Path(workdir) / "findings.json")
     if not checklist:
-        print("ERROR: checklist.json not found")
+        print("✗ checklist.json not found", file=sys.stderr)
         sys.exit(1)
     total_files = checklist['total_files']
     total_sloc = checklist.get('total_sloc', 0)
@@ -500,11 +503,11 @@ def prepare_B(workdir, target=None):
             continue
         sa = finding.get("stage_a_summary")
         if not sa:
-            print(f"  WARN: {finding['id']} missing stage_a_summary — add it")
+            print(f"  WARN: {finding['id']} missing stage_a_summary — add it", file=sys.stderr)
         elif not all(k in sa for k in ("confidence", "status")):
-            print(f"  WARN: {finding['id']} stage_a_summary incomplete — needs confidence, status")
+            print(f"  WARN: {finding['id']} stage_a_summary incomplete — needs confidence, status", file=sys.stderr)
         if not finding.get("origin"):
-            print(f"  WARN: {finding['id']} missing origin field")
+            print(f"  WARN: {finding['id']} missing origin field", file=sys.stderr)
 
     # --- ast_view enrichment ---
     # Attach a compact per-function AST view (signature, calls
@@ -535,7 +538,7 @@ def prepare_B(workdir, target=None):
             from core.ast import view as _ast_view
         except ImportError:
             _ast_view = None
-            print("  Note: core.ast not importable; skipping ast_view enrichment")
+            print("  Note: core.ast not importable; skipping ast_view enrichment", file=sys.stderr)
         if _ast_view is not None:
             for finding in findings:
                 if finding.get("status") == "disproven":
@@ -708,16 +711,16 @@ def prepare_C(workdir, target=None):
         if (Path(workdir) / name).exists():
             _validate_file(workdir, name, validator)
         else:
-            print(f"  {name}: not found")
+            print(f"  {name}: not found", file=sys.stderr)
 
     # --- Carry-forward check (Stage B) ---
     findings_data = _findings(workdir)
     for finding in _active(findings_data):
         sb = finding.get("stage_b_summary")
         if not sb:
-            print(f"  WARN: {finding['id']} missing stage_b_summary — add it")
+            print(f"  WARN: {finding['id']} missing stage_b_summary — add it", file=sys.stderr)
         elif not all(k in sb for k in ("hypothesis_id", "hypothesis_status", "proximity")):
-            print(f"  WARN: {finding['id']} stage_b_summary incomplete")
+            print(f"  WARN: {finding['id']} stage_b_summary incomplete", file=sys.stderr)
 
     # --- Pre-check findings against inventory ---
     checklist = load_json(Path(workdir) / "checklist.json")
@@ -738,10 +741,10 @@ def prepare_C(workdir, target=None):
             inv = inv_files.get(normalised) if normalised else None
         if inv is None:
             finding["checklist_verified"] = False
-            print(f"  C0 FAIL: {finding['id']} — file '{fpath}' not in inventory")
+            print(f"  C0 FAIL: {finding['id']} — file '{fpath}' not in inventory", file=sys.stderr)
         elif fline > inv.get("lines", 0):
             finding["checklist_verified"] = False
-            print(f"  C0 FAIL: {finding['id']} — line {fline} > file length {inv['lines']}")
+            print(f"  C0 FAIL: {finding['id']} — line {fline} > file length {inv['lines']}", file=sys.stderr)
         else:
             finding["checklist_verified"] = True
 
@@ -842,12 +845,12 @@ def prepare_D(workdir, target=None):
             continue
         sc = finding.get("stage_c_summary")
         if not sc:
-            print(f"  WARN: {finding['id']} missing stage_c_summary — add it")
+            print(f"  WARN: {finding['id']} missing stage_c_summary — add it", file=sys.stderr)
         elif not isinstance(sc.get("checks"), dict):
             print(f"  WARN: {finding['id']} stage_c_summary.checks must be a dict "
-                  f"with keys: {REQUIRED_CHECKS}")
+                  f"with keys: {REQUIRED_CHECKS}", file=sys.stderr)
         elif not all(k in sc["checks"] for k in REQUIRED_CHECKS):
-            print(f"  WARN: {finding['id']} stage_c_summary.checks incomplete")
+            print(f"  WARN: {finding['id']} stage_c_summary.checks incomplete", file=sys.stderr)
 
     passed = sum(1 for f in data["findings"]
                  if f.get("sanity_check", {}).get("passed"))
@@ -984,8 +987,9 @@ def _discover_executables(target):
                 # `bin/foo` < `tools/_aux/foo`).
                 paths.sort(key=lambda s: (len(s), s))
                 print(
-                    f"WARNING: multiple executables named {stem!r}: "
+                    f"⚠️  multiple executables named {stem!r}: "
                     f"{paths!r} — picking {paths[0]!r}",
+                    file=sys.stderr,
                 )
             result[stem] = paths[0]
     except Exception:
@@ -1070,9 +1074,9 @@ def prepare_E(workdir, target=None):
             continue
         sd = finding.get("stage_d_summary")
         if not sd:
-            print(f"  WARN: {finding['id']} missing stage_d_summary — add it")
+            print(f"  WARN: {finding['id']} missing stage_d_summary — add it", file=sys.stderr)
         elif "ruling" not in sd:
-            print(f"  WARN: {finding['id']} stage_d_summary missing 'ruling' key")
+            print(f"  WARN: {finding['id']} stage_d_summary missing 'ruling' key", file=sys.stderr)
 
     ruled_out = sum(1 for f in data["findings"]
                     if f.get("ruling", {}).get("status") == "ruled_out")
@@ -1149,7 +1153,7 @@ def prepare_F(workdir, target=None):
     for finding in data.get("findings", []):
         se = finding.get("stage_e_summary")
         if not se and finding.get("vuln_type") in MEMORY_CORRUPTION_TYPES:
-            print(f"  WARN: {finding['id']} missing stage_e_summary — add it")
+            print(f"  WARN: {finding['id']} missing stage_e_summary — add it", file=sys.stderr)
 
     _save_findings(workdir, data)
 
@@ -1164,7 +1168,7 @@ def prepare_F(workdir, target=None):
                 print(f"  {finding['id']}: {vector} -> {score}")
         _save_findings(workdir, data)
     except Exception as e:
-        print(f"  CVSS scoring error: {e}")
+        print(f"  ⚠️  CVSS scoring error: {e}", file=sys.stderr)
 
     # --- Verdict mapping consistency ---
     # This guards against future code paths between the verdict-mapping
@@ -1399,7 +1403,7 @@ def prepare_1(workdir, target=None, model=None):
         write_validation_report(workdir)
         print("Report generated")
     except Exception as e:
-        print(f"Report error: {e}")
+        print(f"⚠️  Report error: {e}", file=sys.stderr)
 
     print(generate_summary(workdir))
 
@@ -1425,7 +1429,7 @@ def prepare_1(workdir, target=None, model=None):
         render_and_write(Path(workdir))
         print("Diagrams generated")
     except Exception as e:
-        print(f"Diagram error: {e}")
+        print(f"⚠️  Diagram error: {e}", file=sys.stderr)
 
     # Coverage summary (unified store-backed report; file-level tier when
     # there's no function inventory).
@@ -1448,7 +1452,7 @@ def prepare_1(workdir, target=None, model=None):
         manifest = {"models": [entry]} if entry else None
         complete_run(Path(workdir), manifest=manifest)
     except Exception as e:
-        print(f"Lifecycle error: {e}")
+        print(f"⚠️  Lifecycle error: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1470,7 +1474,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]")
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]

@@ -111,9 +111,11 @@ class TestLoader:
     def test_all_entries_loads_seed_yamls(self):
         entries = all_entries()
         names = {e.name for e in entries}
-        # Three seed entries shipped with the substrate.
         assert "c.userspace-daemon" in names
+        assert "c.generic" in names
+        assert "go.generic" in names
         assert "python.web-app" in names
+        assert "python.generic" in names
         assert "generic" in names
 
     def test_load_by_name_returns_match(self):
@@ -185,10 +187,11 @@ class TestDetect:
         })
         winner = load(tmp_path)
         assert winner is not None
-        # Must fall through to generic — no framework signals
-        # validate the python.web-app specificity claim.
-        assert winner.name == "generic", (
-            f"expected generic for Python-library-shaped tree; "
+        # Must NOT match python.web-app — no framework signals
+        # validate the specificity claim. python.generic (extension-
+        # only match) is the correct winner for a plain library.
+        assert winner.name in ("generic", "python.generic"), (
+            f"expected generic or python.generic for Python-library-shaped tree; "
             f"got {winner.name!r} — specificity gate regression"
         )
 
@@ -278,7 +281,10 @@ class TestLoadFallback:
 class TestSeedEntrySanity:
     @pytest.mark.parametrize("name,expected_has_packs", [
         ("c.userspace-daemon", True),
+        ("c.generic", True),
+        ("go.generic", True),
         ("python.web-app", True),
+        ("python.generic", True),
         ("generic", True),
     ])
     def test_seed_has_default_packs(self, name, expected_has_packs):

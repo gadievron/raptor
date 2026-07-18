@@ -4,7 +4,7 @@ Wires the shipped CodeQL runner (:mod:`core.dataflow.codeql_augmented_run`)
 to the generator (:mod:`core.dataflow.cvefix_corpus_generator`). Runs the
 *same* (stock) queries on the pre- and post-fix CodeQL databases — the
 diff in what's flagged is what the generator labels (post-fix-still-flagged
-→ FP candidate, pre-fix → TP). See ``~/design/trust-witness.md``.
+→ FP candidate, pre-fix → TP).
 
 This is corpus *generation*, distinct from the sound-tier *measurement*
 (baseline vs custom-``.ql`` isBarrier on the same post-fix DB) which uses the
@@ -60,8 +60,14 @@ def generate_corpus_for_pair(
         after_db, queries, sarif_dir / "after.sarif",
         codeql_bin=codeql_bin, runner=runner,
     )
-    before_sarif = json.loads(Path(a_before.sarif_path).read_text())
-    after_sarif = json.loads(Path(a_after.sarif_path).read_text())
+    try:
+        before_sarif = json.loads(Path(a_before.sarif_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"before-SARIF read/parse failed: {e}") from e
+    try:
+        after_sarif = json.loads(Path(a_after.sarif_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"after-SARIF read/parse failed: {e}") from e
 
     pairs = generate_from_sarif(
         before_sarif, after_sarif,

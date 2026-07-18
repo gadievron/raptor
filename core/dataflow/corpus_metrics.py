@@ -127,7 +127,7 @@ def render(m: Metrics) -> str:
     else:
         total_fps = sum(m.fp_categories.values())
         for cat, count in m.fp_categories.most_common():
-            pct = count / total_fps * 100
+            pct = count / total_fps * 100 if total_fps else 0.0
             lines.append(f"  {cat}: {count} ({pct:.1f}%)")
     return "\n".join(lines)
 

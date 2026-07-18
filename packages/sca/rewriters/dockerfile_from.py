@@ -175,17 +175,19 @@ def _apply_one_from(
         rf"(\s|$|@|#)",              # boundary
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    matches = list(pattern.finditer(text))
+    if not matches:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_tag = match.group(2)
-    if current_tag == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if current_tag != edit.old_value:
+    target_matches = [m for m in matches if m.group(2) == edit.old_value]
+    if not target_matches:
+        already_done = [m for m in matches if m.group(2) == edit.new_value]
+        if already_done:
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
+        current_tag = matches[0].group(2)
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
@@ -193,38 +195,22 @@ def _apply_one_from(
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    # Group 1 = prefix-up-to-colon, group 3 = boundary char.
-    new_text = pattern.sub(
-        rf"\g<1>{edit.new_value}\g<3>",
-        text, count=1,
-    )
+    new_text = text
+    for m in reversed(target_matches):
+        new_text = (
+            new_text[:m.start(2)]
+            + edit.new_value
+            + new_text[m.end(2):]
+        )
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Atomic tempfile + rename. Shared pattern with
-    ``dockerfile_arg``; could be factored to a shared
-    ``rewriters/_atomic.py`` when a third rewriter lands."""
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Atomic tempfile + rename via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees
+    (concurrent-reader safety, mode preservation, PID-suffix
+    isolation, BaseException catch)."""
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, content)

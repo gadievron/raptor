@@ -13,7 +13,7 @@ Join path: `cwe_classification(cve_id, cwe_id)` → `fixes(cve_id, hash, repo_ur
 only single-parent commits (merges have ambiguous before-state).
 
 PHP is excluded: it's the largest injection bucket but has no CodeQL extractor
-(see `~/design/trust-witness.md` §10 — PHP needs the Semgrep-flavored tier).
+.
 """
 
 from __future__ import annotations

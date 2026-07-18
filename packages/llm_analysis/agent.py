@@ -403,14 +403,11 @@ class VulnerabilityContext:
         Returns:
             True if this looks like a sanitizer
         """
-        sanitizer_keywords = [
-            'sanitiz', 'validat', 'filter', 'escape', 'encode',
-            'clean', 'strip', 'remove', 'replace', 'whitelist',
-            'blacklist', 'check', 'verify', 'safe'
-        ]
-
-        label_lower = label.lower()
-        return any(keyword in label_lower for keyword in sanitizer_keywords)
+        return bool(re.search(
+            r'\b(?:sanitiz|validat|filter|escape|encode|clean|strip'
+            r'|remove|replace|whitelist|blacklist|check|verify|safe)\b',
+            label, re.IGNORECASE,
+        ))
 
     def extract_dataflow(self) -> bool:
         """
@@ -712,7 +709,7 @@ class AutonomousSecurityAgentV2:
             if availability.claude_code:
                 print("\n🤖 No external LLM configured — Claude Code will handle analysis")
             else:
-                print("\n⚠️  No LLM available — producing structured findings for manual review")
+                print("\n⚠️  No LLM available — producing structured findings for manual review", file=sys.stderr)
             print()
 
     def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
@@ -1007,7 +1004,7 @@ class AutonomousSecurityAgentV2:
             # Compute CVSS score from vector if provided
             from packages.cvss import score_finding
             score_finding(analysis)
-            if analysis.get("cvss_score_estimate"):
+            if analysis.get("cvss_score_estimate") is not None:
                 logger.info(f"  CVSS: {analysis['cvss_score_estimate']} ({analysis.get('severity_assessment', '?')}) from {analysis.get('cvss_vector')}")
             else:
                 logger.info(f"  CVSS Estimate: {analysis.get('cvss_score_estimate', 'N/A')}")
@@ -1115,7 +1112,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.")
+                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.", file=sys.stderr)
             else:
                 logger.warning("  Using fallback heuristic analysis")
             # Fallback to marking as potentially exploitable
@@ -1390,7 +1387,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     # File extensions that map to languages the gcc-based validator
@@ -1565,11 +1562,9 @@ class AutonomousSecurityAgentV2:
             intent_verdict = None
             intent_confidence = None
             if vuln.intent_match is not None:
-                intent_verdict = getattr(
-                    vuln.intent_match, "verdict", None,
-                )
-                intent_confidence = getattr(
-                    vuln.intent_match, "confidence", None,
+                intent_verdict = vuln.intent_match.get("verdict")
+                intent_confidence = vuln.intent_match.get(
+                    "confidence",
                 )
             witness, data = witness_from_exploit(
                 exploit_code,
@@ -1609,7 +1604,7 @@ class AutonomousSecurityAgentV2:
 
         logger.info("   ✓ Reading full file for context...")
 
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8", errors="replace") as f:
             full_file_content = f.read()
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
@@ -1693,7 +1688,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"   ✗ Patch generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     # Match a markdown fenced code block. Captures the optional
@@ -2130,7 +2125,7 @@ class AutonomousSecurityAgentV2:
                 reach_skipped_this = False
                 if checklist:
                     try:
-                        from core.inventory.reach_chokepoint import (
+                        from core.analysis.reach_chokepoint import (
                             check_suppress,
                         )
                         rel = (finding.get("file_path")
@@ -2164,7 +2159,7 @@ class AutonomousSecurityAgentV2:
                             # walking each per-finding annotation.
                             # Best-effort; never blocks.
                             try:
-                                from core.inventory.reach_chokepoint \
+                                from core.analysis.reach_chokepoint \
                                     import record_suppression
                                 record_suppression(
                                     self.out_dir,
@@ -2613,7 +2608,7 @@ def main() -> None:
                 )
                 if result:
                     return
-        print("\n  Orchestration skipped — check model/API key configuration")
+        print("\n  ✗ Orchestration skipped — check model/API key configuration", file=sys.stderr)
         return
 
     if report.get('mode') != 'prep_only':

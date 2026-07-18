@@ -475,7 +475,10 @@ def _qlpack_yaml(rule: str) -> str:
     for line in rule.splitlines()[:20]:
         s = line.strip()
         if s.startswith("import "):
-            head = s.split()[1].split(".")[0].lower()
+            tokens = s.split()
+            if len(tokens) < 2:
+                continue
+            head = tokens[1].split(".")[0].lower()
             if head in {"cpp", "java", "python", "javascript", "go", "csharp", "ruby", "swift"}:
                 lang = head
                 break
@@ -492,7 +495,7 @@ def _qlpack_yaml(rule: str) -> str:
 def _parse_sarif(sarif_path: Path) -> List[Dict]:
     """Extract matches from a CodeQL SARIF file."""
     try:
-        data = json.loads(sarif_path.read_text())
+        data = json.loads(sarif_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     matches: List[Dict] = []

@@ -212,6 +212,14 @@ class FuzzingTelemetry:
             "plateau", "first_path", "fuzzer_error",
         }
         self._announced_first_path = False
+        self._plateau_announced = False
+
+    def __del__(self) -> None:
+        if self._events_fp:
+            try:
+                self._events_fp.close()
+            except Exception:
+                pass
 
     def start(self) -> None:
         with self._lock:
@@ -240,7 +248,11 @@ class FuzzingTelemetry:
             if self._events_fp:
                 self._events_fp.close()
                 self._events_fp = None
-            self.summary_path.write_text(json.dumps(self.stats.to_dict(), indent=2, default=str))
+            from core.atomic_fs import write_text_atomically
+            write_text_atomically(
+                self.summary_path,
+                json.dumps(self.stats.to_dict(), indent=2, default=str),
+            )
             logger.info(
                 f"Fuzzing campaign complete: {self.stats.duration_s:.1f}s, "
                 f"{self.stats.total_executions} execs, "
@@ -300,11 +312,13 @@ class FuzzingTelemetry:
             # New paths reset plateau timer
             if self.stats.paths_found > old_paths:
                 self.stats.last_path_at = time.time()
+                self._plateau_announced = False
 
             # Plateau detection
             since_last = time.time() - self.stats.last_path_at
             self.stats.plateau_seconds = int(since_last)
-            if since_last > self.plateau_threshold and since_last - self.stats.plateau_seconds < 1:
+            if since_last > self.plateau_threshold and not self._plateau_announced:
+                self._plateau_announced = True
                 self._emit(FuzzEvent(
                     kind="plateau",
                     timestamp=time.time(),

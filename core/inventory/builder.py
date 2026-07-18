@@ -408,7 +408,7 @@ def build_inventory(
     bin_paths = RaptorConfig.BINARY_ORACLE_PATHS
     if bin_paths:
         try:
-            from .binary_oracle import enrich_inventory_with_binary_oracle
+            from core.analysis.binary_oracle import enrich_inventory_with_binary_oracle
             enrich_inventory_with_binary_oracle(inventory, bin_paths)
         except Exception as exc:                          # noqa: BLE001
             logger.warning("binary_oracle enrichment failed for %r: %s",
@@ -419,7 +419,7 @@ def build_inventory(
         # via r2 ``aaa``) so gated behind RaptorConfig.BINARY_ORACLE_EDGES.
         if RaptorConfig.BINARY_ORACLE_EDGES:
             try:
-                from .binary_oracle_edges import (
+                from core.analysis.binary_oracle_edges import (
                     extract_direct_call_edges,
                     annotate_inventory_with_edges,
                 )
@@ -786,7 +786,7 @@ def _process_single_file(
                 if ls and any(lo <= ls <= hi for lo, hi in dead_ranges):
                     item_dict['lexical_dead'] = True
         # Call-graph extraction. The resolver in
-        # core.inventory.reachability is language-agnostic; per-file
+        # core.analysis.reachability is language-agnostic; per-file
         # extractors emit the same FileCallGraph dataclass for
         # whichever languages have a walker.
         if language == 'python':

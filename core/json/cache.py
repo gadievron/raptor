@@ -636,8 +636,13 @@ class JsonCache:
             ttl = int(ttl_raw)
         except (OverflowError, ValueError, TypeError) as e:
             raise ValueError(f"non-numeric ttl_seconds: {ttl_raw!r}") from e
+        written_raw = data["written_at"]
+        try:
+            written_at = float(written_raw)
+        except (OverflowError, ValueError, TypeError) as e:
+            raise ValueError(f"non-numeric written_at: {written_raw!r}") from e
         return CacheEnvelope(
-            written_at=float(data["written_at"]),
+            written_at=written_at,
             ttl_seconds=ttl,
             value=data["value"],
         )

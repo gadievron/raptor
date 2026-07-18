@@ -21,7 +21,6 @@
       "Bash(libexec/raptor-threat-model *)",
       "Bash(libexec/raptor-validate-schema *)",
       "Bash(libexec/raptor-validation-helper *)",
-      "Write(/out/**)",
       "Edit(/out/**)"
     ]
   },

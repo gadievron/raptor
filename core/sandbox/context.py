@@ -222,6 +222,7 @@ def _persist_proxy_events(
             "persistence: %s", _log_path, _log_err,
         )
         return
+    _fd_owned = True
     try:
         _log_st = os.fstat(_log_fd)
         if not stat.S_ISREG(_log_st.st_mode):
@@ -231,6 +232,7 @@ def _persist_proxy_events(
                 _log_path, _log_st.st_mode,
             )
             os.close(_log_fd)
+            _fd_owned = False
             return
         # Clear O_NONBLOCK for the actual append: only needed to
         # stop a FIFO-open hang at the os.open() above; on a
@@ -240,15 +242,21 @@ def _persist_proxy_events(
         _fcntl.fcntl(_log_fd, _fcntl.F_SETFL, _flags & ~os.O_NONBLOCK)
         import json as _json
         with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
+            _fd_owned = False  # fdopen took ownership
             for e in events:
                 _f.write(_json.dumps(e) + "\n")
-    except BaseException:
+    except BaseException as _persist_exc:
         # os.fdopen takes ownership on success; on any pre-fdopen
-        # failure we still own the fd and must close.
-        try:
-            os.close(_log_fd)
-        except OSError:
-            pass
+        # failure we still own the fd and must close.  Post-fdopen
+        # the `with` block already closed it — a second os.close
+        # would risk closing another thread's newly-opened fd.
+        if _fd_owned:
+            try:
+                os.close(_log_fd)
+            except OSError:
+                pass
+        if not isinstance(_persist_exc, Exception):
+            raise
         # Demoted from raise → debug-log: persistence failure
         # shouldn't poison the caller, same posture as the open
         # failure above.
@@ -491,12 +499,12 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
     # `sandbox(audit=True, disabled=True)` call would acquire the
     # ref-count without ever using audit, leaking the count if the
     # release path doesn't fire (which it does, but defensive).
-    _effectively_disabled = (
-        bool(disabled)
-        or bool(state._cli_sandbox_disabled)
-        or state._cli_sandbox_profile == "none"
-        or profile == "none"
-    )
+    if state._cli_sandbox_profile is not None:
+        _effectively_disabled = (state._cli_sandbox_profile == "none")
+    elif profile is not None:
+        _effectively_disabled = (profile == "none")
+    else:
+        _effectively_disabled = bool(disabled) or bool(state._cli_sandbox_disabled)
     # Observe mode is "audit + audit_verbose + write to a separate
     # JSONL file + extend the trace set with stat-family". Engaging
     # observe implies audit (TRACE action requires a tracer) and
@@ -1069,12 +1077,17 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                 raise RuntimeError(msg + " (require_sanitisation=True)")
             logger.warning("Sandbox: %s; identity surfaces will be host-real.", msg)
         else:
+            import shutil as _shutil
             import tempfile as _tf
             _persona_tmpdir = _tf.mkdtemp(prefix="raptor-persona-")
             _effective_cpu_count = cpu_count if cpu_count is not None else 4
-            _persona = build_persona(
-                Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
-            )
+            try:
+                _persona = build_persona(
+                    Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
+                )
+            except BaseException:
+                _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+                raise
     elif cpu_count is not None:
         # cpu_count without the master switch is a caller mistake — the
         # CPU-mask change is part of the fingerprint persona, not an
@@ -1176,6 +1189,20 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # get_safe_env path (see core/config.py); the caller path
         # is "you know what you're doing".
         strict_env = kwargs.pop("strict_env", False)
+        # ``env_caller_filtered``: opt-in assertion from the caller
+        # that the env dict was constructed from a get_safe_env-
+        # equivalent base AND that any DANGEROUS_ENV_VARS present
+        # are INTENTIONAL caller overrides (not operator-secret
+        # leakage). Suppresses the operational-hygiene warning
+        # below. ``strict_env=True`` is still preferable when the
+        # caller's intent is "neutralise a few keys on top of a
+        # base I trust" — but callers that INTENTIONALLY inject
+        # DANGEROUS_ENV_VARS as primitives (e.g. LD_PRELOAD /
+        # LD_LIBRARY_PATH for a controlled scenario) would have
+        # those stripped by ``strict_env=True``.
+        # ``env_caller_filtered=True`` is the "I know what I'm
+        # doing AND I can't use strict_env" escape valve.
+        env_caller_filtered = kwargs.pop("env_caller_filtered", False)
         _skip_pid_ns = kwargs.pop("skip_pid_ns", False)
         _skip_mount_ns = kwargs.pop("skip_mount_ns", False)
         _inherit_netns = kwargs.pop("inherit_netns", False)
@@ -1194,24 +1221,24 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
             # doesn't quietly wave through ``EDITOR`` / ``PAGER`` /
             # ``BROWSER`` from an attacker-influenced parent.
             #
-            # Gate on ``not strict_env``: ``strict_env=True`` is the
-            # safe-rebound form (applied below) where the caller has
-            # explicitly asked us to strip DANGEROUS_ENV_VARS from
-            # their env. Once they've opted into that, the warning is
-            # contradictory noise — the warning literally tells them
-            # to pass ``strict_env=True`` as the fix. Operator on PR
-            # #777 surfaced this firing ~12× per scan run from the
-            # semgrep path; the path passes a ``get_safe_env()``-
-            # derived env (already DANGEROUS-stripped) plus a few
-            # explicit overrides, exactly the "I know what I'm doing"
-            # case the gate is meant to silence.
-            if not strict_env:
+            # Gate on ``not strict_env`` AND ``not env_caller_filtered``:
+            # either flag is a caller-side assertion that the warning
+            # is contradictory noise — the warning literally tells the
+            # caller to pass ``strict_env=True`` as the fix.
+            # ``env_caller_filtered`` covers the case (engine
+            # local_lowpriv_shell, semgrep config-merger, etc.) where
+            # the caller has built the env from get_safe_env()
+            # upstream AND deliberately added DANGEROUS_ENV_VARS as
+            # intentional primitives that ``strict_env=True`` would
+            # incorrectly strip.
+            if not strict_env and not env_caller_filtered:
                 logger.warning(
                     "Sandbox: caller supplied custom env= for "
                     "%s — get_safe_env() not applied; caller env "
                     "passed through. Pass strict_env=True to strip "
-                    "DANGEROUS_ENV_VARS from the caller env if you "
-                    "only intended to override a few keys.",
+                    "DANGEROUS_ENV_VARS from the caller env, OR "
+                    "env_caller_filtered=True to acknowledge the "
+                    "caller has already filtered upstream.",
                     " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
                 )
             if strict_env:
@@ -1241,6 +1268,12 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # HOME=/home/user would silently defeat the feature).
         if fake_home_env:
             kwargs["env"] = {**kwargs["env"], **fake_home_env}
+
+        # The pid1 shim requires _RAPTOR_TRUSTED to run.  Only inject on
+        # the unshare path (where the shim is used); the shim strips it
+        # before exec'ing the target so it never leaks.
+        if use_sandbox and not use_seatbelt and (block_network or use_mount or restrict_reads):
+            kwargs["env"].setdefault("_RAPTOR_TRUSTED", "1")
 
         # Force FD close at fork. Python defaults close_fds=True on POSIX
         # but we reject explicit overrides — inheriting FDs from RAPTOR
@@ -1540,6 +1573,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # setup fails — adaptive so we still get Landlock-only when
         # mount-ns is unusable.
         used_spawn = False
+        _audit_landlock_engaged = False
         # _spawn doesn't replicate every subprocess.run kwarg through its
         # manual os.fork() path. The Landlock-only subprocess.run path
         # handles them natively via Python's posix_spawn logic. Route
@@ -2137,8 +2171,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                         "capture_output", False),
                                     text=kwargs.get("text", False),
                                     stdin=kwargs.get("stdin"),
-                                    start_new_session=kwargs.get(
-                                        "start_new_session", True),
+                                    start_new_session=_start_new_session,
                                 )
                                 _audit_landlock_engaged = True
                             except (RuntimeError, OSError) as _la_err:
@@ -2174,6 +2207,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                         _death_r, _death_w = os.pipe()
                         try:
                             _dk = dict(kwargs)
+                            _dk["start_new_session"] = _start_new_session
                             _dk["pass_fds"] = (
                                 tuple(_dk.get("pass_fds") or ()) + (_death_r,)
                             )
@@ -2188,7 +2222,11 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                 except OSError:
                                     pass
                     else:
-                        result = subprocess.run(full_cmd, **kwargs)
+                        result = subprocess.run(
+                            full_cmd,
+                            start_new_session=_start_new_session,
+                            **kwargs,
+                        )
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
@@ -2207,7 +2245,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # if the child had mount-ns isolation or fell back to
         # Landlock-only mode. See ``core/security/THREAT_MODEL.md``
         # I2-(a) for why this matters.
-        result.sandbox_info["mount_ns_active"] = bool(use_mount)
+        result.sandbox_info["mount_ns_active"] = bool(used_spawn and use_mount)
         _eff_restrict_reads = restrict_reads and not (_skip_mount_ns and use_mount)
         result.sandbox_info["restrict_reads"] = bool(_eff_restrict_reads)
         if _use_proxy_netns:
@@ -2536,6 +2574,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                   limits: dict = None,
                   restrict_reads: bool = True,
                   readable_paths: list = None,
+                  writable_paths: list = None,
                   fake_home: bool = True,
                   **kwargs) -> subprocess.CompletedProcess:
     """Run a command whose input is attacker-derived or otherwise untrusted.
@@ -2597,6 +2636,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
         )
     _UNTRUSTED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
+        "encoding", "errors",
         "stdin", "input", "start_new_session", "pass_fds",
         "caller_label",
         "audit", "audit_verbose", "audit_run_dir",
@@ -2640,6 +2680,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                limits=limits,
                restrict_reads=restrict_reads,
                readable_paths=readable_paths,
+               writable_paths=writable_paths,
                fake_home=fake_home,
                strict_env=True,
                **kwargs)
@@ -2654,6 +2695,7 @@ def run_untrusted_networked(
     limits: dict = None,
     restrict_reads: bool = True,
     readable_paths: list = None,
+    writable_paths: list = None,
     fake_home: bool = False,
     **kwargs,
 ) -> subprocess.CompletedProcess:
@@ -2704,6 +2746,7 @@ def run_untrusted_networked(
         )
     _NETWORKED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
+        "encoding", "errors",
         "stdin", "input", "start_new_session", "pass_fds",
         "caller_label",
         "audit", "audit_verbose", "audit_run_dir",
@@ -2728,6 +2771,7 @@ def run_untrusted_networked(
         limits=limits,
         restrict_reads=restrict_reads,
         readable_paths=readable_paths,
+        writable_paths=writable_paths,
         fake_home=fake_home,
         use_egress_proxy=True,
         proxy_hosts=list(proxy_hosts),

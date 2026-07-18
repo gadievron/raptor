@@ -42,6 +42,7 @@ if not (os.environ.get("CLAUDECODE")
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 
 # Per-model cost floor. Each model gets at LEAST this much budget so
@@ -570,7 +571,7 @@ def _print_summary(payload: dict, output_path: Path) -> None:
         print("Models: none (mechanical binary substrate)")
     print(f"Items: {len(items)}")
     if failed:
-        print(f"Failed models: {', '.join(failed)}")
+        print(f"Failed models: {', '.join(failed)}", file=sys.stderr)
         # Show first error per failed model so operators can debug
         # without needing to dig into raw substrate output.
         errors = payload.get("model_errors") or {}
@@ -578,7 +579,7 @@ def _print_summary(payload: dict, output_path: Path) -> None:
             err = errors.get(m)
             if err:
                 # Truncate so a giant traceback doesn't fill the screen
-                print(f"  {m}: {err[:200]}{'...' if len(err) > 200 else ''}")
+                print(f"  {m}: {err[:200]}{'...' if len(err) > 200 else ''}", file=sys.stderr)
 
     total_cost = payload.get("total_cost_usd") or 0.0
     if total_cost > 0:

@@ -612,7 +612,7 @@ def _augment_library_surface(context_map: Dict[str, Any],
     # non-static, Go-exported, Rust-pub) — so a C/Rust/Go library's public API
     # surfaces too, not just the dynamic langs. library_mode=True is correct
     # here because we only reach this for a library/hybrid target.
-    from core.inventory.reachability import _item_is_entry
+    from core.analysis.reachability import _item_is_entry
     added = 0
     for fi in _list_at(checklist, "files"):
         if not isinstance(fi, dict):
@@ -724,7 +724,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     for fn in funcs:
         if not isinstance(fn, dict):
             continue
-        line_start = fn.get("line_start") or fn.get("line")
+        ls = fn.get("line_start")
+        line_start = ls if ls is not None else fn.get("line")
         line_end = fn.get("line_end")
         # Require both bounds to be ints — string-typed line numbers
         # from a corrupt checklist would otherwise raise TypeError on
@@ -745,7 +746,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     for fn in funcs:
         if not isinstance(fn, dict):
             continue
-        line_start = fn.get("line_start") or fn.get("line")
+        ls = fn.get("line_start")
+        line_start = ls if ls is not None else fn.get("line")
         if not isinstance(line_start, int) or isinstance(line_start, bool):
             continue
         if line_start > line:

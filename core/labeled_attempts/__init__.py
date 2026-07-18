@@ -21,6 +21,7 @@ from .pruning import PruneReport, prune_pool
 from .retrieval import (
     RetrievedExemplar,
     recent_failure_summary,
+    retrieve_cross_cwe_probe,
     retrieve_exemplars,
 )
 from .store import (
@@ -75,6 +76,7 @@ __all__ = [
     "prune_pool",
     "read_all",
     "recent_failure_summary",
+    "retrieve_cross_cwe_probe",
     "retrieve_exemplars",
     "set_failure_mode",
     "write",

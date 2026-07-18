@@ -1,6 +1,6 @@
 """Typosquat-denylist curation: triage (Stage 3 evidence + Stage A LLM + Stage 4 gate).
 
-Step 2 of the curation loop (``~/design/typosquat-denylist-curation.md``), run
+Step 2 of the curation loop (the design memo), run
 OPERATOR-side by ``raptor-sca triage --llm`` where an LLM is available — never
 in CI. Step 1 (``typosquat_audit.py``) generates the pending candidate delta;
 this module decides what to do with each one:
@@ -32,8 +32,6 @@ from __future__ import annotations
 import datetime
 import enum
 import json as _json
-import os
-import tempfile
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -239,15 +237,11 @@ def apply_auto_legit(
 
 
 def _atomic_write_json(path: Path, obj: object) -> None:
+    """Atomic JSON write via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees."""
+    from core.atomic_fs import write_text_atomically
     text = _json.dumps(obj, indent=2) + "\n"
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    write_text_atomically(path, text)
 
 
 # ---------------------------------------------------------------------------

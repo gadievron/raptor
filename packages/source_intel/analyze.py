@@ -1288,8 +1288,9 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
         for ch in stripped:
             if ch == "{":
                 depth += 1
-                if function_open_at is None and depth == 1:
+                if depth == 1:
                     function_open_at = i
+                    saw_early_exit_at_depth_1 = False
             elif ch == "}":
                 depth -= 1
                 if depth < 0:
@@ -1852,7 +1853,7 @@ def _enclosing_function_via_inventory(
     if inv is None:
         return None
     try:
-        from core.inventory.reachability import enclosing_function as _inv_enc
+        from core.analysis.reachability import enclosing_function as _inv_enc
     except ImportError:
         return None
     # Inventory keys files by the relative path from the target dir.
@@ -2140,6 +2141,9 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
         in_block_comment = False
         for line_no, line in enumerate(lines, start=1):
             if _PREPROC_LINE_RE.match(line):
+                _, in_block_comment = _strip_c_source_comments_and_literals(
+                    line, in_block_comment=in_block_comment,
+                )
                 continue
             stripped, in_block_comment = _strip_c_source_comments_and_literals(
                 line, in_block_comment=in_block_comment,

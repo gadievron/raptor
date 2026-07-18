@@ -34,6 +34,7 @@ if not (os.environ.get("CLAUDECODE")
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 from core.json import load_json, save_json
 
@@ -157,8 +158,8 @@ def is_already_validated(filepath):
 
 def main():
     if len(sys.argv) < 3 or sys.argv[1] not in VALIDATORS:
-        print(f"Usage: {sys.argv[0]} <type> <file>")
-        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}")
+        print(f"Usage: {sys.argv[0]} <type> <file>", file=sys.stderr)
+        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}", file=sys.stderr)
         sys.exit(2)
 
     schema_type = sys.argv[1]
@@ -167,16 +168,16 @@ def main():
     # Auto-detect stage files regardless of what type was requested
     if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
         if schema_type != "stage":
-            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'")
+            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'", file=sys.stderr)
             schema_type = "stage"
 
     if not filepath.exists():
-        print(f"ERROR: file not found: {filepath}")
+        print(f"✗ file not found: {filepath}", file=sys.stderr)
         sys.exit(2)
 
     data = load_json(filepath)
     if data is None:
-        print(f"ERROR: cannot parse JSON: {filepath}")
+        print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
         sys.exit(2)
 
     # Stage file validation (different format from findings.json)
@@ -186,9 +187,9 @@ def main():
             _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
             print(f"OK: {filepath.name}")
         else:
-            print(f"ERRORS in {filepath.name}:")
+            print(f"✗ Errors in {filepath.name}:", file=sys.stderr)
             for e in errors:
-                print(f"  {e}")
+                print(f"  {e}", file=sys.stderr)
             sys.exit(1)
         return
 
@@ -213,9 +214,9 @@ def main():
         _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
         print(f"OK: {filepath.name}")
     else:
-        print(f"ERRORS in {filepath.name}:")
+        print(f"ERRORS in {filepath.name}:", file=sys.stderr)
         for e in errors:
-            print(f"  {e}")
+            print(f"  {e}", file=sys.stderr)
         sys.exit(1)
 
 

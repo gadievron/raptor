@@ -75,27 +75,32 @@ def _safe_float(value: Any, *, default: float) -> float:
     raised ValueError on the non-numeric-string case mid-stack and
     aborted the entire turn. Track the failure in debug logs so a
     real upstream regression is visible without crashing the run.
+
+    Delegates to :func:`core.coerce.to_float_safe` with a CC-
+    envelope-specific ``on_error`` so the debug log line stays
+    scoped to this producer.
     """
-    if value is None or value == "":
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        logger.debug("CC envelope: non-numeric cost/tokens value %r — using %r",
-                     value, default)
-        return default
+    from core.llm.coerce import to_float_safe
+
+    def _log(v, d):
+        logger.debug(
+            "CC envelope: non-numeric cost/tokens value %r — using %r",
+            v, d,
+        )
+
+    return to_float_safe(value, default=default, on_error=_log)
 
 
 def _safe_int(value: Any, *, default: int) -> int:
     """Same as `_safe_float` for int conversion."""
-    if value is None or value == "":
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        logger.debug("CC envelope: non-int tokens value %r — using %r",
-                     value, default)
-        return default
+    from core.llm.coerce import to_int_safe
+
+    def _log(v, d):
+        logger.debug(
+            "CC envelope: non-int tokens value %r — using %r", v, d,
+        )
+
+    return to_int_safe(value, default=default, on_error=_log)
 
 
 # SDK availability flags (canonical source is detection.py)
@@ -697,7 +702,8 @@ def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         field_desc_str = str(field_desc)
-        field_type = field_desc_str.split()[0].strip()
+        parts = field_desc_str.split()
+        field_type = parts[0].strip() if parts else "string"
         field_type = type_aliases.get(field_type, field_type)
 
         # Detect nullable: "string or null", "float or null"

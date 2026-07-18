@@ -285,8 +285,8 @@ def main():
     if llm:
         logger.info("LLM client initialized")
     else:
-        print("\n⚠️  Warning: Could not initialize LLM client")
-        print("    Web scanning will work but fuzzing will be limited")
+        print("\n⚠️  Warning: Could not initialize LLM client", file=sys.stderr)
+        print("    Web scanning will work but fuzzing will be limited", file=sys.stderr)
 
     # Run scan
     verify_ssl = not args.insecure
@@ -324,11 +324,11 @@ def main():
         return 0 if results['total_vulnerabilities'] == 0 else 1
 
     except KeyboardInterrupt:
-        print("\n\n⚠️  Scan interrupted by user")
+        print("\n\n⚠️  Scan interrupted by user", file=sys.stderr)
         logger.warning("Scan interrupted by user")
         return 130
     except Exception as e:
-        print(f"\n❌ Scan failed: {e}")
+        print(f"\n✗ Scan failed: {e}", file=sys.stderr)
         logger.error(f"Scan failed: {e}", exc_info=True)
         return 1
 

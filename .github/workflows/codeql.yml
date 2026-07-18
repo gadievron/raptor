@@ -56,7 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
       actions: read
+      pull-requests: read
     outputs:
       should_skip: ${{ steps.dup.outputs.should_skip }}
     steps:
@@ -73,6 +75,8 @@ jobs:
           should_skip=false
           if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
              && "$EVENT" != "merge_group" ]]; then
+            # 1. Exact-SHA match — covers fast-forward merges and
+            #    explicit re-runs where the SHA is identical.
             dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
                     -f "head_sha=${SHA}" -f "status=success" \
                     --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
@@ -80,6 +84,23 @@ jobs:
             if [[ -n "${dup:-}" ]]; then
               should_skip=true
               echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+            # 2. Squash-merge fallback — the push-to-main SHA is brand
+            #    new, but GitHub links it to the source PR. Look up the
+            #    PR's head SHA and check whether *that* already passed.
+            if [[ "$should_skip" == "false" && "$EVENT" == "push" ]]; then
+              pr_head=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+                          --jq '[.[] | select(.merged_at != null)][0].head.sha // empty' || true)
+              if [[ -n "${pr_head:-}" ]]; then
+                dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                        -f "head_sha=${pr_head}" -f "status=success" \
+                        --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                      | head -n1 || true)
+                if [[ -n "${dup:-}" ]]; then
+                  should_skip=true
+                  echo "Skipping: source PR head ${pr_head} already passed in run ${dup}"
+                fi
+              fi
             fi
           fi
           echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
@@ -101,7 +122,7 @@ jobs:
       codeql_actions: ${{ steps.filter.outputs.codeql_actions }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
-      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
       - id: force
@@ -220,14 +241,14 @@ jobs:
 
       - name: Checkout repository
         if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
       # Initializes the CodeQL tools for scanning.
       - name: Initialize CodeQL
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/init@1a818fd5f97ed0ee9a823421bd5b171add01227f  # was v4.36.2
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -253,7 +274,7 @@ jobs:
       # left default-on).
       - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/analyze@1a818fd5f97ed0ee9a823421bd5b171add01227f  # was v4.36.2
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
         with:
           category: "/language:${{matrix.language}}"
           upload: never
@@ -339,12 +360,25 @@ jobs:
 
     steps:
       - name: Checkout (needed by upload-sarif for repo metadata)
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
           persist-credentials: false
 
+      # download-artifact's JS client treats Azure intermediary 403s
+      # as non-retryable, causing transient failures (~1-in-20 runs).
+      # A second attempt after the implicit delay between steps is
+      # enough for the intermediary to recover.
       - name: Download all SARIF artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        id: dl
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          path: ./sarif-in
+          pattern: sarif-*
+        continue-on-error: true
+
+      - name: Retry artifact download on transient failure
+        if: steps.dl.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: ./sarif-in
           pattern: sarif-*
@@ -406,7 +440,7 @@ jobs:
       # the multi-run file as one batch and the meta-check fires with
       # all three configs visible.
       - name: Upload combined SARIF
-        uses: github/codeql-action/upload-sarif@1a818fd5f97ed0ee9a823421bd5b171add01227f  # was v4.36.2
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
         with:
           sarif_file: combined.sarif
           # No `category:` here — each run carries its own

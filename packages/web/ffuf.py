@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from core.logging import get_logger
-from core.sandbox import run_untrusted
+from core.sandbox import run_untrusted_networked
 from core.security.redaction import is_secret_field_name, redact_secrets
 
 logger = get_logger()
@@ -224,13 +224,13 @@ class FfufRunner:
         redacted_cmd = self._redact_command(cmd)
         logger.info(f"Running sandboxed ffuf: {' '.join(redacted_cmd)}")
 
-        completed = run_untrusted(
+        completed = run_untrusted_networked(
             cmd,
             target=str(config.wordlist.parent),
             output=str(self.out_dir),
             readable_paths=[str(config.wordlist.parent)],
-            use_egress_proxy=True,
             proxy_hosts=[target_host],
+            fake_home=True,
             tool_paths=[str(Path(binary_path).parent)],
             caller_label="web-ffuf",
             timeout=config.max_runtime,
@@ -241,11 +241,11 @@ class FfufRunner:
         results: list[dict[str, Any]] = []
         if output_file.exists():
             try:
-                parsed = json.loads(output_file.read_text(encoding="utf-8"))
+                parsed = json.loads(output_file.read_text(encoding="utf-8", errors="replace"))
                 raw_results = parsed.get("results") or []
                 if isinstance(raw_results, list):
                     results = [r for r in raw_results if isinstance(r, dict)]
-            except json.JSONDecodeError as exc:
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.warning(f"Could not parse ffuf JSON output: {exc}")
 
         summarized_results = [self._summarize_result(r) for r in results[: config.report_limit]]

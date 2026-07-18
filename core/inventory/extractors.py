@@ -2246,21 +2246,21 @@ def extract_items(filepath: str, language: str, content: str,
             if functions:
                 items.extend(functions)
         except Exception:
-            pass  # Fall through to AST/regex fallback
+            logger.debug("tree-sitter function extraction failed for %s", filepath, exc_info=True)
 
         # Globals + module-scope executable code from the same parse tree
         try:
             items.extend(_extract_globals_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter globals extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_top_level_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter top-level extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_c_types_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter c-types extraction failed for %s", filepath, exc_info=True)
 
     # Fallback: functions from AST/regex if tree-sitter didn't produce any
     if not ts_parsed or not any(i.kind == KIND_FUNCTION for i in items):

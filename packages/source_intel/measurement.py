@@ -429,7 +429,7 @@ def main() -> int:
     print(f"  error reduction:     {stats['err_reduction']:.1f}%  "
           f"(exit gate: ≥10%)")
 
-    if args.output:
+    if args.output and results:
         with args.output.open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=results[0].keys())
             writer.writeheader()

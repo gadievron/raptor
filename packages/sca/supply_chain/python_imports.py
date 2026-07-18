@@ -15,7 +15,7 @@ top-level statements whose semantics imply *execution at import time*:
   ``requests`` / ``httpx`` / ``http.client`` calls
 - ``eval`` / ``exec`` / ``compile`` / ``__import__`` / ``importlib``
   dynamic-import calls
-- File IO at module scope (``open(...)`` followed by ``.write/.read``)
+- File IO at module scope (``open(...)``)
 
 Tolerates the common legitimate shapes:
 
@@ -100,7 +100,7 @@ _SUSPICIOUS_MODULE_PREFIXES: Set[str] = {
 # Bare names — calls like ``eval(...)``, ``exec(...)``, ``__import__(...)``
 # at module scope without a module qualifier.
 _SUSPICIOUS_BARE_CALLS: Set[str] = {
-    "eval", "exec", "compile", "__import__",
+    "eval", "exec", "compile", "__import__", "open",
 }
 
 # Specific (module, attr) pairs we always want to flag.
@@ -227,6 +227,28 @@ def _scan_module(
                              ast.ClassDef)):
             continue
         if _is_main_guard(node) or _is_type_checking_guard(node):
+            for else_stmt in getattr(node, "orelse", []):
+                if isinstance(else_stmt, (ast.FunctionDef,
+                                          ast.AsyncFunctionDef,
+                                          ast.ClassDef)):
+                    continue
+                for call in _find_suspicious_calls(else_stmt):
+                    yield ImportTimeFinding(
+                        dependency=_project_host_dep(manifests, path, target),
+                        detail=(
+                            f"`{_rel(path, target)}:{call.lineno}` runs "
+                            f"`{_render_call(call)}` at import time "
+                            f"(else-branch of guard)"
+                        ),
+                        path=path,
+                        line=call.lineno,
+                        severity="medium",
+                        confidence=Confidence(
+                            "medium",
+                            reason="suspicious call in else-branch of "
+                            "main/TYPE_CHECKING guard",
+                        ),
+                    )
             continue
         if _is_constant_assignment(node):
             continue
@@ -256,12 +278,16 @@ def _scan_module(
 
 def _find_suspicious_calls(node: ast.AST) -> Iterable[ast.Call]:
     """Yield every ``ast.Call`` inside ``node`` whose target is in our
-    suspicious set."""
-    for sub in ast.walk(node):
-        if not isinstance(sub, ast.Call):
+    suspicious set, skipping nested function/class bodies."""
+    queue = list(ast.iter_child_nodes(node))
+    while queue:
+        sub = queue.pop()
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef,
+                            ast.ClassDef)):
             continue
-        if _is_suspicious_call(sub):
+        if isinstance(sub, ast.Call) and _is_suspicious_call(sub):
             yield sub
+        queue.extend(ast.iter_child_nodes(sub))
 
 
 def _is_suspicious_call(call: ast.Call) -> bool:

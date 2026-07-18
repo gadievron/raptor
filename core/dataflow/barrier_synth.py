@@ -1,6 +1,6 @@
 """Sound-tier barrier synthesis: LLM proposes an isBarrier, CodeQL adjudicates.
 
-The loop (see ``~/design/trust-witness.md`` §9 — the validated mechanism):
+The loop:
 
   1. A ``proposer`` (the LLM) is handed a flagged FP + its source context and
      returns a CodeQL ``guardChecks`` predicate recognizing the project
@@ -443,7 +443,10 @@ def _count_sarif_results(sarif_path: Path, target_uri: Optional[str] = None,
     (a file with N unrelated findings shouldn't make a correct single-flow
     barrier look unsound). The preserve check stays file-scoped (the pre-fix vuln
     sits at a different line after the patch's line shifts)."""
-    data = json.loads(Path(sarif_path).read_text())
+    try:
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
     if target_uri is None:
         return sum(len(r.get("results", [])) for r in data.get("runs", []))
     n = 0
@@ -479,7 +482,7 @@ def _summarise_surviving_finding(
       ``"surviving flow: <source-file>:<line> <msg> -> ... -> <sink-file>:<line> <sink-snippet>"``
     """
     try:
-        data = json.loads(Path(sarif_path).read_text())
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
 

@@ -91,6 +91,10 @@ DEFAULT_DEPS_WARN_PCT = 0.10       # ±10% → warn (parsers shift)
 DEFAULT_DEPS_FAIL_PCT = 0.30       # ±30% → fail
 DEFAULT_ELAPSED_WARN_X = 3.0       # 3× slower → warn
 DEFAULT_ELAPSED_FAIL_X = 5.0       # 5× slower → fail
+# Minimum baseline elapsed (seconds) for timing regression checks.
+# Short scans are noise-dominated on CI runners — a 4s scan can
+# vary 5-6× from network roundtrip and runner variance alone.
+_ELAPSED_MIN_BASELINE_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -252,6 +256,8 @@ def _scan_one(
         _rmtree(sca_out)
 
     try:
+        from core.config import RaptorConfig
+        from core.sandbox.preexec import set_pdeathsig
         subprocess.run(
             [
                 "git", "clone", "--depth", "1",
@@ -260,6 +266,8 @@ def _scan_one(
             ],
             check=True, capture_output=True, text=True,
             timeout=git_clone_timeout,
+            env=RaptorConfig.get_safe_env(),
+            preexec_fn=set_pdeathsig(),
         )
     except (subprocess.TimeoutExpired,
             subprocess.CalledProcessError) as e:
@@ -489,10 +497,8 @@ def _diff_one(
             severity = "warn"
         issues.append(f"eco categories disappeared: {sorted(missing_ecos)}")
 
-    # Elapsed-time drift. Use generous bounds — single-run timing
-    # noise is normal; only flag obvious regressions.
     be = float(baseline.get("elapsed_seconds_p50", 0.0) or 0.0)
-    if be > 0:
+    if be >= _ELAPSED_MIN_BASELINE_SECONDS:
         ratio = current.elapsed_seconds / be
         if ratio >= elapsed_fail_x:
             severity = "fail"

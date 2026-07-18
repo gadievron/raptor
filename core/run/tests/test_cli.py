@@ -18,6 +18,7 @@ LIFECYCLE = str(REPO_ROOT / "libexec" / "raptor-run-lifecycle")
 def _run(*args, tmp_home=None):
     """Run libexec/raptor-run-lifecycle with given args."""
     env = os.environ.copy()
+    env.pop("RAPTOR_CALLER_DIR", None)
     if tmp_home:
         env["HOME"] = tmp_home
     result = subprocess.run(
@@ -25,6 +26,14 @@ def _run(*args, tmp_home=None):
         capture_output=True, text=True, env=env,
     )
     return result
+
+
+def _extract_out_dir(result):
+    """Parse OUTPUT_DIR=<path> from the last line of stdout."""
+    for line in reversed(result.stdout.strip().splitlines()):
+        if line.startswith("OUTPUT_DIR="):
+            return Path(line.split("=", 1)[1])
+    raise ValueError(f"no OUTPUT_DIR= in stdout: {result.stdout!r}")
 
 
 def _setup_project_symlink(home_dir, project_dir):
@@ -50,8 +59,7 @@ class TestRunLifecycle(unittest.TestCase):
             _setup_project_symlink(home, d)
             result = _run("start", "scan", tmp_home=home)
             self.assertEqual(result.returncode, 0, result.stderr)
-            # Last line is OUTPUT_DIR=<path>
-            out_dir = Path(result.stdout.strip().split("=", 1)[1])
+            out_dir = _extract_out_dir(result)
             self.assertTrue(out_dir.exists())
             self.assertTrue(out_dir.name.startswith("scan-"))
             meta = load_json(out_dir / RUN_METADATA_FILE)
@@ -62,7 +70,8 @@ class TestRunLifecycle(unittest.TestCase):
         with TemporaryDirectory() as d, TemporaryDirectory() as home:
             _setup_project_symlink(home, d)
             result = _run("start", "validate", tmp_home=home)
-            out_dir = Path(result.stdout.strip().split("=", 1)[1])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out_dir = _extract_out_dir(result)
             result = _run("complete", str(out_dir))
             self.assertEqual(result.returncode, 0)
             meta = load_json(out_dir / RUN_METADATA_FILE)
@@ -72,7 +81,8 @@ class TestRunLifecycle(unittest.TestCase):
         with TemporaryDirectory() as d, TemporaryDirectory() as home:
             _setup_project_symlink(home, d)
             result = _run("start", "scan", tmp_home=home)
-            out_dir = Path(result.stdout.strip().split("=", 1)[1])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out_dir = _extract_out_dir(result)
             result = _run("fail", str(out_dir), "semgrep crashed")
             self.assertEqual(result.returncode, 0)
             meta = load_json(out_dir / RUN_METADATA_FILE)
@@ -83,7 +93,8 @@ class TestRunLifecycle(unittest.TestCase):
         with TemporaryDirectory() as d, TemporaryDirectory() as home:
             _setup_project_symlink(home, d)
             result = _run("start", "scan", tmp_home=home)
-            out_dir = Path(result.stdout.strip().split("=", 1)[1])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out_dir = _extract_out_dir(result)
             result = _run("cancel", str(out_dir))
             self.assertEqual(result.returncode, 0)
             meta = load_json(out_dir / RUN_METADATA_FILE)
@@ -94,7 +105,7 @@ class TestRunLifecycle(unittest.TestCase):
         with TemporaryDirectory() as home:
             result = _run("start", "scan", tmp_home=home)
             self.assertEqual(result.returncode, 0, result.stderr)
-            out_dir = Path(result.stdout.strip().split("=", 1)[1])
+            out_dir = _extract_out_dir(result)
             self.assertTrue(out_dir.name.startswith("scan_"))
 
     def test_start_no_command_fails(self):

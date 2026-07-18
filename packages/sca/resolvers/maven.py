@@ -77,7 +77,7 @@ class MavenResolver:
             )
 
         cmd = _resolve_mvn_cmd(project_dir) + [
-            "dependency:resolve", "--batch-mode", "--quiet",
+            "dependency:resolve", "--batch-mode",
         ]
 
         try:

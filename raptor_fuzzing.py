@@ -538,7 +538,7 @@ Examples:
 
     except Exception as e:
         logger.error(f"Fuzzing failed: {e}")
-        print(f"\n✗ Fuzzing failed: {e}")
+        print(f"\n✗ Fuzzing failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     # ========================================================================
@@ -771,15 +771,15 @@ Examples:
                   f"{skipped_duplicates} duplicates skipped")
 
         print("\n✓ Analysis complete:")
-        print(f"  - analysed: {analysed}")
+        print(f"  - Analysed: {analysed}")
         print(f"  - Exploitable: {exploitable}")
         print(f"  - Exploits generated: {exploits_generated}")
 
     except Exception as e:
         logger.error(f"Crash analysis failed: {e}")
-        print(f"\n✗ Analysis failed: {e}")
+        print(f"\n✗ Analysis failed: {e}", file=sys.stderr)
         import traceback
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
     # ========================================================================

@@ -112,20 +112,27 @@ def parse(path: Path) -> List[Dependency]:
     tool = data.get("tool") or {}
     poetry = tool.get("poetry") if isinstance(tool, dict) else None
     if isinstance(poetry, dict):
-        for name, spec in (poetry.get("dependencies") or {}).items():
-            d = _from_poetry(name, spec, path, scope="main")
-            if d is not None:
-                deps.append(d)
-        for name, spec in (poetry.get("dev-dependencies") or {}).items():
-            d = _from_poetry(name, spec, path, scope="dev")
-            if d is not None:
-                deps.append(d)
+        _poetry_deps = poetry.get("dependencies") or {}
+        if isinstance(_poetry_deps, dict):
+            for name, spec in _poetry_deps.items():
+                d = _from_poetry(name, spec, path, scope="main")
+                if d is not None:
+                    deps.append(d)
+        _poetry_dev = poetry.get("dev-dependencies") or {}
+        if isinstance(_poetry_dev, dict):
+            for name, spec in _poetry_dev.items():
+                d = _from_poetry(name, spec, path, scope="dev")
+                if d is not None:
+                    deps.append(d)
         groups = poetry.get("group") or {}
         if isinstance(groups, dict):
             for _gname, gbody in groups.items():
                 if not isinstance(gbody, dict):
                     continue
-                for name, spec in (gbody.get("dependencies") or {}).items():
+                _gbody_deps = gbody.get("dependencies") or {}
+                if not isinstance(_gbody_deps, dict):
+                    continue
+                for name, spec in _gbody_deps.items():
                     d = _from_poetry(name, spec, path, scope="dev")
                     if d is not None:
                         deps.append(d)
@@ -169,7 +176,7 @@ def _extract_license(data: Dict[str, Any]) -> Optional[str]:
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
         if isinstance(raw, dict):
-            for key in ("text", "name"):
+            for key in ("text", "file"):
                 v = raw.get(key)
                 if isinstance(v, str) and v.strip():
                     return v.strip()

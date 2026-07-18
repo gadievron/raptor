@@ -167,7 +167,7 @@ class DataflowVisualizer:
                     continue
                 
                 if file_path.exists():
-                    with open(file_path) as f:
+                    with open(file_path, encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
 
                     start = max(0, node['line'] - 6)
@@ -620,7 +620,7 @@ class DataflowVisualizer:
         lines.append("")
 
         # Add source node
-        lines.append(f'    A0["🔴 SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
+        lines.append(f'    A0["⚠️ SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
         lines.append('    style A0 fill:#f48771,stroke:#fff,stroke-width:2px,color:#000')
         lines.append("")
 
@@ -730,7 +730,7 @@ class DataflowVisualizer:
 
         # Source
         lines.append("┌─────────────────────────────────────────────────────────────────────────────┐")
-        lines.append("│ 🔴 SOURCE (User-Controlled Input)                                          │")
+        lines.append("│ ⚠️ SOURCE (User-Controlled Input)                                          │")
         lines.append("└─────────────────────────────────────────────────────────────────────────────┘")
         lines.append(f"  Location: {dataflow.source.file_path}:{dataflow.source.line}:{dataflow.source.column}")
         lines.append(f"  Label: {dataflow.source.label}")

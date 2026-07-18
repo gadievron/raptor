@@ -35,12 +35,12 @@ _TEST_DIR_NAMES = {"tests", "examples", "benches", "fuzz"}
 # ``use foo::...`` or ``use foo;`` or ``use foo as bar`` — captures the
 # top-level crate identifier.
 _USE_RE = re.compile(
-    r"^\s*(?:pub\s+)?use\s+([A-Za-z_][A-Za-z0-9_]*)",
+    r"^[ \t]*(?:pub\s+)?use\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
 )
 # Legacy ``extern crate foo;`` form.
 _EXTERN_RE = re.compile(
-    r"^\s*extern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)",
+    r"^[ \t]*(?:pub\s+)?extern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
 )
 
@@ -78,7 +78,7 @@ def resolve_dep(
             verdict="not_reachable",
             confidence=Confidence(
                 "medium",
-                reason=f"no `use {key}` / `extern crate {key}` found",
+                reason=f"no `use {dep_name}` / `extern crate {dep_name}` found",
             ),
             evidence=[],
         )

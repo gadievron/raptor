@@ -97,7 +97,7 @@ def enrich_with_forward_reachable(
             return 0
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ExternalFunction,
             InternalFunction,
             enclosing_function,
@@ -130,6 +130,7 @@ def enrich_with_forward_reachable(
                 inventory, [host], max_depth=max_depth,
             )
         except Exception:                              # noqa: BLE001
+            logger.debug("callgraph enrichment failed for %s", host, exc_info=True)
             continue
 
         internal_names: list = []
