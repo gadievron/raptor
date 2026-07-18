@@ -178,6 +178,8 @@ def _understand_domain(repo_path: str) -> str:
 
 
 def _binary_key(binary_path: str) -> str:
+    if not binary_path:
+        return ""
     return sha256_string(str(Path(binary_path).resolve()))[:12]
 
 
@@ -377,6 +379,7 @@ def recall_context_for_scan(
         return []
 
     try:
+        _sage_metrics["recall_attempted"] += 1
         repo_name = Path(repo_path).name
         lang_str = ", ".join(languages) if languages else "unknown"
 
@@ -394,6 +397,7 @@ def recall_context_for_scan(
         )
 
         all_results = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(all_results)
         if all_results:
             logger.info(
                 f"SAGE: Recalled {len(all_results)} historical memories for scan context"
@@ -587,7 +591,7 @@ def store_scan_results(
     sorted_findings = sorted(
         findings,
         key=lambda f: {"error": 4, "warning": 3, "note": 2, "none": 1}.get(
-            f.get("level", f.get("severity", "none")), 0
+            str(f.get("level", f.get("severity", "none"))).lower(), 0
         ),
         reverse=True,
     )

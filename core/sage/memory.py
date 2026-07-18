@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.logging import get_logger
+from core.security.redaction import redact_secrets
 
 from .client import SageClient
 from .config import SageConfig
@@ -129,7 +130,7 @@ class SageFuzzingMemory(FuzzingMemory):
         for key, k in self.knowledge.items():
             try:
                 if self._sage_client.propose(
-                    content=_knowledge_to_natural_language(k),
+                    content=redact_secrets(_knowledge_to_natural_language(k)),
                     memory_type="observation",
                     domain_tag=_domain_tag_for_knowledge(k),
                     confidence=k.confidence,
@@ -151,7 +152,7 @@ class SageFuzzingMemory(FuzzingMemory):
 
         try:
             self._sage_client.propose(
-                content=_knowledge_to_natural_language(knowledge),
+                content=redact_secrets(_knowledge_to_natural_language(knowledge)),
                 memory_type="observation",
                 domain_tag=_domain_tag_for_knowledge(knowledge),
                 confidence=knowledge.confidence,
@@ -168,7 +169,7 @@ class SageFuzzingMemory(FuzzingMemory):
 
         try:
             self._sage_client.propose(
-                content=_campaign_to_natural_language(campaign_data),
+                content=redact_secrets(_campaign_to_natural_language(campaign_data)),
                 memory_type="observation",
                 domain_tag="raptor-campaigns",
                 confidence=0.85,

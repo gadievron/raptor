@@ -401,6 +401,37 @@ class TestGetClientThreadSafety(unittest.TestCase):
         self.assertEqual(mock_instance.is_available.call_count, 1)
 
 
+    @patch("core.sage.hooks.SageClient")
+    def test_reprobe_after_ttl_expiry(self, mock_cls):
+        """When SAGE was unavailable but TTL has elapsed, re-probe."""
+        import time
+        import core.sage.hooks as hooks
+
+        # First call: SAGE unavailable → _client = None
+        mock_instance = MagicMock()
+        mock_instance.is_available.return_value = False
+        mock_cls.return_value = mock_instance
+
+        self.assertIsNone(hooks._get_client())
+        self.assertTrue(hooks._client_initialised)
+        self.assertEqual(mock_cls.call_count, 1)
+
+        # Second call within TTL: cached None, no re-probe
+        self.assertIsNone(hooks._get_client())
+        self.assertEqual(mock_cls.call_count, 1)
+
+        # Expire the TTL
+        hooks._client_none_decided_at = time.time() - hooks._CLIENT_NONE_TTL_S - 1
+
+        # Third call: TTL expired → re-probe, now SAGE is available
+        mock_instance2 = MagicMock()
+        mock_instance2.is_available.return_value = True
+        mock_cls.return_value = mock_instance2
+
+        result = hooks._get_client()
+        self.assertIs(result, mock_instance2)
+        self.assertEqual(mock_cls.call_count, 2)
+
     @patch("core.sage.hooks.SageConfig")
     def test_init_exception_returns_none(self, mock_config_cls):
         """_get_client() must never propagate exceptions to callers."""
