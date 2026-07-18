@@ -1597,7 +1597,7 @@ def _print_code_findings(merged, detailed=False):
         fname = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
 
         # Lines: show all lines in the group
-        lines_in_group = sorted(set(f.get("line", 0) for f in findings))
+        lines_in_group = sorted(set(f.get("line") or 0 for f in findings))
         if len(lines_in_group) == 1:
             loc = f"{fname}:{lines_in_group[0]}"
         else:
@@ -1612,7 +1612,7 @@ def _print_code_findings(merged, detailed=False):
 
         grouped_rows.append((loc, vtype, status, cvss_str, findings, fpath))
 
-    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line", 0) for f in r[4])))
+    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line") or 0 for f in r[4])))
 
     # Compact table
     headers = ("File", "Type", "Status", "CVSS")

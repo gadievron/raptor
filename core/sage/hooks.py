@@ -766,7 +766,7 @@ def enrich_analysis_prompt(
                 "\n**Historical Context from SAGE (cross-run learning):**"
             ]
             for r in findings_hits:
-                confidence = r.get("confidence", 0)
+                confidence = r.get("confidence") or 0
                 content = r.get("content", "")[:200]
                 parts.append(f"- [{confidence:.0%}] {content}")
             sections.append("\n".join(parts))
@@ -776,7 +776,7 @@ def enrich_analysis_prompt(
                 "\n**Methodology hints from SAGE (cross-run learning):**"
             ]
             for r in methodology_hits:
-                confidence = r.get("confidence", 0)
+                confidence = r.get("confidence") or 0
                 content = r.get("content", "")[:200]
                 parts.append(f"- [{confidence:.0%}] {content}")
             sections.append("\n".join(parts))
@@ -1335,7 +1335,7 @@ def store_hunt_results(
 
         for group in groups[:5]:
             g_name = group.get("name", "unknown")
-            g_count = group.get("count", 0)
+            g_count = group.get("count") or 0
             g_fix = group.get("fix_strategy", "")[:200]
             group_content = (
                 f"Root cause group '{g_name}' in {repo_name}: "

@@ -1203,7 +1203,7 @@ def _threats_from_context_map(
         category = _category_from_sink(str(flow.get("sink") or ""))
         threats.append({
             "id": f"T-{i + 1:03d}",
-            "title": f"Unchecked flow from {flow.get('source')} to {flow.get('sink')}",
+            "title": f"Unchecked flow from {flow.get('source') or '?'} to {flow.get('sink') or '?'}",
             "category": category,
             "stride": _stride_for_category(category),
             "status": "needs_evidence",
