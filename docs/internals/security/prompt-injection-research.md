@@ -1,5 +1,18 @@
 # Prompt Injection Defenses: State of the Art (2024–2026) for RAPTOR
 
+> **Shipped?** Yes, in large part. This doc reads as forward-looking ("planned
+> PR-1", "PR-1 can ship without it") but the PR-1/PR-2/PR-3 defenses it
+> surveys are implemented in `core/security/`:
+> - `prompt_defense_profiles.py` — per-model envelope profiles (PR-1)
+> - `llm_family.py` — cross-family checker routing (PR-2)
+> - `prompt_output_sanitise.py` — output sanitisation / markdown defang (PR-1/PR-2)
+> - `rule_of_two.py` — Rule-of-Two enforcement (PR-3)
+>
+> Treat the "Verdict"/"Adopt"/"Consider" language below as the research
+> rationale behind those modules, not an open TODO list. If you're deciding
+> whether to build one of these, check the module first — it may already be
+> there.
+
 Scope: techniques **not** in RAPTOR's planned PR-1 set (envelope/nonce, slot discipline, control-char sanitisation, base64 wrapping, output schema validation, capability isolation, system priming, trust-tag propagation). Verdicts target a security-research framework that must **read** untrusted source code, run on heterogeneous backends (Claude / Gemini / OpenAI / Ollama), and dispatch via subprocess (`claude -p`) and SDK calls.
 
 The single most important meta-result of 2025: Anthropic, OpenAI and DeepMind's joint *"The Attacker Moves Second"* (arXiv 2510.09023) ran adaptive attacks against **12 published defences** and bypassed all of them at >90% ASR. Treat every "near-zero ASR" claim below as fragile under adaptive pressure. Defence-in-depth, not point solutions.

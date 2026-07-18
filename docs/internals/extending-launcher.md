@@ -20,7 +20,7 @@ The unified launcher (`raptor.py`) provides a single entry point for all RAPTOR 
 Create a new package in `packages/` with your scanner implementation:
 
 ```
-packages/my-scanner/
+packages/my_scanner/
 ├── __init__.py
 ├── agent.py          # Main entry point with CLI
 └── scanner.py        # Core scanning logic (optional)
@@ -83,19 +83,19 @@ Open `raptor.py` and add a new mode handler function:
 def mode_my_scanner(args: list) -> int:
     """Run my custom scanner."""
     script_root = Path(__file__).parent
-    scanner_script = script_root / "packages/my-scanner/agent.py"
+    scanner_script = script_root / "packages/my_scanner/agent.py"
     
     if not scanner_script.exists():
         print(f"✗ Scanner not found: {scanner_script}")
         return 1
     
     print("\n[*] Running my custom scanner...\n")
-    return run_script(scanner_script, args)
+    return _run_script(scanner_script, args)
 ```
 
 ### Step 4: Register Your Mode
 
-In the `main()` function of `raptor.py`, add your mode to the `mode_handlers` dictionary:
+In the `main()` function of `raptor.py`, add your mode to the `mode_handlers` dictionary. This is the real, current dict (raptor.py's `main()`) — not a trimmed example — so add your entry alongside all of these, not just a couple:
 
 ```python
 def main():
@@ -104,11 +104,16 @@ def main():
     # Route to appropriate mode
     mode_handlers = {
         'scan': mode_scan,
+        'sca': mode_sca,
+        'binary': mode_binary,
         'fuzz': mode_fuzz,
         'web': mode_web,
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'doctor': mode_doctor,
+        'describe': mode_describe,
+        'frida': mode_frida,
         'myscan': mode_my_scanner,  # Add your new mode here
     }
     
@@ -150,11 +155,37 @@ python3 raptor.py myscan --target /path/to/target
 python3 raptor.py help myscan
 ```
 
+### Step 7: Wire Up the Slash Command and Run Lifecycle (optional)
+
+Steps 1-6 make `python3 raptor.py myscan` work. Two more things are needed
+before it behaves like the built-in modes:
+
+- **Slash-command dispatch.** If operators should be able to run `/myscan` in
+  Claude Code, add `.claude/commands/myscan.md` with a `dispatch:` frontmatter
+  field — e.g. `dispatch: python3 raptor.py myscan` (see `.claude/commands/scan.md`
+  for the pattern). CI (`.github/scripts/check_command_metadata.py`) enforces
+  that every command file has a parseable `dispatch:` field whose target
+  exists on disk, so a typo'd or missing dispatch fails the build, not the
+  operator's first run. See CLAUDE.md's SLASH-COMMAND DISPATCH section for
+  the full contract.
+- **Run lifecycle.** If your mode does a real analysis run (not a quick
+  one-shot), wrap your handler with `_run_with_lifecycle()` instead of calling
+  `_run_script()` directly — compare `mode_scan`, `mode_fuzz`, `mode_web`,
+  `mode_agentic`, and `mode_codeql` in `raptor.py`. `_run_with_lifecycle()`
+  resolves the output directory (active project, or `out/`), creates and
+  seals it, prints the `OUTPUT_DIR=<path>` sentinel downstream tooling greps
+  for, and calls `start_run()`/`complete_run()`/`fail_run()` around your
+  script. Modes dispatched straight through `python3 raptor.py <mode>` manage
+  this internally — you do not additionally call
+  `libexec/raptor-run-lifecycle` for them (that stub is for skill-driven
+  commands like `/validate` that have no single `raptor.py` mode). See
+  CLAUDE.md's RUN LIFECYCLE section for the full contract.
+
 ## Example: Adding a Dependency Scanner
 
 Here's a complete example of adding a dependency vulnerability scanner:
 
-### 1. Create packages/dependency-scan/agent.py
+### 1. Create packages/dependency_scan/agent.py
 
 ```python
 #!/usr/bin/env python3
@@ -241,14 +272,14 @@ if __name__ == "__main__":
 def mode_depscan(args: list) -> int:
     """Run dependency vulnerability scanner."""
     script_root = Path(__file__).parent
-    scanner_script = script_root / "packages/dependency-scan/agent.py"
+    scanner_script = script_root / "packages/dependency_scan/agent.py"
     
     if not scanner_script.exists():
         print(f"✗ Dependency scanner not found: {scanner_script}")
         return 1
     
     print("\n[*] Scanning for vulnerable dependencies...\n")
-    return run_script(scanner_script, args)
+    return _run_script(scanner_script, args)
 
 # Add to mode_handlers
 mode_handlers = {
@@ -271,7 +302,15 @@ python3 raptor.py help depscan
 
 ### 1. Follow Naming Conventions
 
-- Use lowercase with hyphens for package names: `packages/my-scanner/`
+- Use lowercase with underscores for package names: `packages/my_scanner/`. This
+  matches the convention used by most existing packages (`binary_analysis`,
+  `exploit_feasibility`, `code_understanding`, etc.) and is required if
+  anything ever needs `from packages.my_scanner.agent import ...` — Python's
+  import syntax cannot reference a hyphenated path segment. `packages/static-analysis/`
+  is the one legacy exception in this codebase, and it works only because
+  `mode_scan` invokes it purely as a subprocess script path (`_run_script`
+  never imports it as a module). Don't repeat that pattern for a new package
+  unless you're certain it will never be imported directly.
 - Use descriptive mode names: `myscan`, `depscan`, `vulncheck`
 - Main entry point should be `agent.py` or `scanner.py`
 
@@ -280,16 +319,16 @@ python3 raptor.py help depscan
 ```python
 def mode_my_scanner(args: list) -> int:
     script_root = Path(__file__).parent
-    scanner_script = script_root / "packages/my-scanner/agent.py"
+    scanner_script = script_root / "packages/my_scanner/agent.py"
     
     # Check if script exists
     if not scanner_script.exists():
         print(f"✗ Scanner not found: {scanner_script}")
-        print(f"  Please ensure packages/my-scanner/agent.py exists")
+        print(f"  Please ensure packages/my_scanner/agent.py exists")
         return 1
     
     print("\n[*] Running my scanner...\n")
-    return run_script(scanner_script, args)
+    return _run_script(scanner_script, args)
 ```
 
 ### 3. Provide Good Help Text
@@ -391,7 +430,7 @@ If you need help adding a new scanner:
 
 Adding a new scanner to RAPTOR is simple:
 
-1. Create `packages/my-scanner/agent.py`
+1. Create `packages/my_scanner/agent.py`
 2. Add `mode_my_scanner()` function to `raptor.py`
 3. Register in `mode_handlers` dictionary
 4. Update help text

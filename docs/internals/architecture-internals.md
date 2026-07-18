@@ -320,7 +320,7 @@ Phases: AFL++ fuzz (`afl_runner.py`) → collect/rank crashes (`crash_collector.
 ## Calibrated aggregation
 
 **Phase 3 of the calibrated-aggregation arc — see
-[`../design-aggregation-dominators-wp.md`](../design-aggregation-dominators-wp.md).**
+[`aggregation-dominators.md`](aggregation-dominators.md).**
 
 Each finding in `orchestrated_report.json` gains an additive
 `calibrated_aggregation` field carrying a Dawid–Skene calibrated posterior over
@@ -372,5 +372,5 @@ that always records *soft* credits (the legacy discrete update being the
 `correct=1.0, incorrect=0.0` special case), grade against the Dawid–Skene
 posterior (`correct_credit = p if verdict else (1-p)`), and draw its priors from
 `/validate` ground truth rather than the scorecard. See
-[`../design-aggregation-dominators-wp.md`](../design-aggregation-dominators-wp.md)
+[`aggregation-dominators.md`](aggregation-dominators.md)
 Phase 4.

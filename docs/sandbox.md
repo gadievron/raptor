@@ -124,7 +124,7 @@ an untrusted repo. `/scan` (static analysis, no `Write`/`Bash`) is low-risk.
 `/agentic` and `/validate` grant the agent `Write`+`Bash` — run those
 interactively so the permission prompts are your human-in-the-loop, and review
 outputs before trusting them. Full threat model:
-[`security/adversarial-repo-threat-model.md`](security/adversarial-repo-threat-model.md).
+[`internals/security/adversarial-repo-threat-model.md`](internals/security/adversarial-repo-threat-model.md).
 
 ## Configuration
 
