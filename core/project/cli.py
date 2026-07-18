@@ -1080,8 +1080,8 @@ def _count_sarif_results(run_dir):
         data = load_json(sarif_path)
         if not data or not isinstance(data, dict):
             continue
-        for run in data.get("runs", []):
-            count += len(run.get("results", []))
+        for run in (data.get("runs") or []):
+            count += len(run.get("results") or [])
     return count
 
 

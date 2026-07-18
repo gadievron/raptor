@@ -370,7 +370,7 @@ class BaseSetAdapter(ABC):
             rid = self.item_id(item)
             # Dedupe: a single model returning the same item twice
             # shouldn't show up as two separate "finders" in the matrix.
-            unique_models = sorted(set(item.get("found_by_models", [])))
+            unique_models = sorted(set(item.get("found_by_models") or []))
             presence[rid] = unique_models
             n_found = len(unique_models)
 

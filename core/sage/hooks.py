@@ -642,7 +642,7 @@ def store_scan_results(
             f"(critical={by_sev.get('error', 0)}, "
             f"warning={by_sev.get('warning', 0)}, "
             f"note={by_sev.get('note', 0)}). "
-            f"Tools: {', '.join(scan_metrics.get('tools_used', ['Semgrep']))}."
+            f"Tools: {', '.join(scan_metrics.get('tools_used') or ['Semgrep'])}."
         )
         _propose_redacted(
             client=client,

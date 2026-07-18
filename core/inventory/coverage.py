@@ -128,13 +128,13 @@ def format_coverage_summary(inventory: Dict[str, Any]) -> str:
     """
     stats = get_coverage_stats(inventory)
     total_files = inventory.get('total_files', 0)
-    excluded = len(inventory.get('excluded_files', []))
+    excluded = len(inventory.get('excluded_files') or [])
     sloc = stats.get('total_sloc', 0)
 
     # Inventory line: files, SLOC, items by kind
     _PLURALS = {"function": "functions", "global": "globals", "macro": "macros", "class": "classes"}
     kind_parts = []
-    for kind, counts in sorted(stats.get('by_kind', {}).items()):
+    for kind, counts in sorted((stats.get('by_kind') or {}).items()):
         label = _PLURALS.get(kind, kind + "s")
         kind_parts.append(f"{counts['total']} {label}")
     items_str = ", ".join(kind_parts) if kind_parts else f"{stats['total_items']} items"

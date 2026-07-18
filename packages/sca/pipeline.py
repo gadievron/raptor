@@ -1208,8 +1208,8 @@ def _run_slopsquat_review(
         except Exception:  # noqa: BLE001
             continue
 
-        reasons = list(f.evidence.get("reasons", []))
-        score = float(f.evidence.get("score", 0.0))
+        reasons = list(f.evidence.get("reasons") or [])
+        score = float(f.evidence.get("score") or 0.0)
         suspected_root = f.evidence.get("suspected_root")
         verdict = assess_slopsquat(
             client, dep, reasons, score, suspected_root, meta,

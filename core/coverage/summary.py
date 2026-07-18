@@ -70,7 +70,7 @@ def _missing_semgrep_groups(tools: Dict[str, Any]) -> list:
     try:
         from core.config import RaptorConfig
         all_groups = set(RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.keys())
-        return sorted(all_groups - set(semgrep.get("rules_applied", [])))
+        return sorted(all_groups - set(semgrep.get("rules_applied") or []))
     except (AttributeError, ImportError) as exc:
         # Narrowed: a renamed constant must surface, not silently claim
         # complete policy coverage (the audit flagged this).

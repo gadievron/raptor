@@ -929,7 +929,7 @@ class ModelScorecard:
             model_version=cell.get("model_version", ""),
             policy_override=cell.get("policy_override", "auto"),
             events=events,
-            disagreement_samples=list(cell.get("disagreement_samples", [])),
+            disagreement_samples=list(cell.get("disagreement_samples") or []),
             calls=_safe_int(cell.get("calls"), 0),
             cost_usd=_safe_float(cell.get("cost_usd"), 0.0),
             tokens=_safe_int(cell.get("tokens"), 0),

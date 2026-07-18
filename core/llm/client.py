@@ -841,7 +841,7 @@ class LLMClient:
                 if not alias:
                     continue
                 cur = agg.setdefault(alias, {"calls": 0, "resolved": None})
-                cur["calls"] += int(f.get("calls", 0)) or 1
+                cur["calls"] += int(f.get("calls") or 0) or 1
                 if f.get("resolved"):
                     cur["resolved"] = f["resolved"]
             uses = []
@@ -851,8 +851,8 @@ class LLMClient:
             for a, v in agg.items():
                 m = usage_metrics.get(a, {})
                 calls = int(v["calls"])
-                cost = float(m.get("cost_usd", 0.0))
-                lat_sum = int(m.get("latency_ms_sum", 0))
+                cost = float(m.get("cost_usd") or 0.0)
+                lat_sum = int(m.get("latency_ms_sum") or 0)
                 tot_calls += calls
                 tot_cost += cost
                 tot_lat_ms += lat_sum
@@ -860,11 +860,11 @@ class LLMClient:
                     "model": a, "decision_class": "_usage",
                     "calls": calls, "model_version": v["resolved"],
                     "cost_usd": cost,
-                    "tokens": int(m.get("tokens", 0)),
-                    "input_tokens": int(m.get("input_tokens", 0)),
-                    "output_tokens": int(m.get("output_tokens", 0)),
+                    "tokens": int(m.get("tokens") or 0),
+                    "input_tokens": int(m.get("input_tokens") or 0),
+                    "output_tokens": int(m.get("output_tokens") or 0),
                     "latency_ms_sum": lat_sum,
-                    "latency_ms_max": int(m.get("latency_ms_max", 0)),
+                    "latency_ms_max": int(m.get("latency_ms_max") or 0),
                 })
             # Append _structured entries for schema-validity outcomes. Different
             # decision_class from _usage so the schema reliability signal is
@@ -873,8 +873,8 @@ class LLMClient:
             for alias, counts in schema_dict.items():
                 if not alias:
                     continue
-                p = int(counts.get("pass", 0))
-                f = int(counts.get("fail", 0))
+                p = int(counts.get("pass") or 0)
+                f = int(counts.get("fail") or 0)
                 if not (p or f):
                     continue
                 uses.append({

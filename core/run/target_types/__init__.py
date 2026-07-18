@@ -162,10 +162,10 @@ class CatalogEntry:
             pipeline_recommended=_t(pipeline.get("recommended")),
             estimated_cost_usd=(float(cost_pair[0]), float(cost_pair[1])),
             estimated_time_min=(int(time_pair[0]), int(time_pair[1])),
-            typical_findings_count=int(budget.get("typical_findings_count", 0)),
+            typical_findings_count=int(budget.get("typical_findings_count") or 0),
             typical_cost_per_run_usd=float(
-                budget.get("typical_cost_per_run_usd", 0)),
-            version=int(data.get("version", 1)),
+                budget.get("typical_cost_per_run_usd") or 0),
+            version=int(data.get("version") or 1),
         )
 
 

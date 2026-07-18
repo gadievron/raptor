@@ -450,11 +450,11 @@ def _count_sarif_results(sarif_path: Path, target_uri: Optional[str] = None,
     except (OSError, json.JSONDecodeError):
         return 0
     if target_uri is None:
-        return sum(len(r.get("results", [])) for r in data.get("runs", []))
+        return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
     n = 0
-    for run in data.get("runs", []):
-        for res in run.get("results", []):
-            for loc in res.get("locations", []):
+    for run in (data.get("runs") or []):
+        for res in (run.get("results") or []):
+            for loc in (res.get("locations") or []):
                 phys = loc.get("physicalLocation", {})
                 if phys.get("artifactLocation", {}).get("uri") != target_uri:
                     continue

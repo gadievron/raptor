@@ -1335,9 +1335,9 @@ def _merge_attack_surface(
             existing.get("trust_boundaries", []), new_boundaries, key="boundary"
         )
         # Only rewrite if the merge added something
-        changed = (len(merged_sources) != len(existing.get("sources", []))
-                   or len(merged_sinks) != len(existing.get("sinks", []))
-                   or len(merged_boundaries) != len(existing.get("trust_boundaries", [])))
+        changed = (len(merged_sources) != len(existing.get("sources") or [])
+                   or len(merged_sinks) != len(existing.get("sinks") or [])
+                   or len(merged_boundaries) != len(existing.get("trust_boundaries") or []))
     else:
         merged_sources = new_sources
         merged_sinks = new_sinks
@@ -1358,7 +1358,7 @@ def _merge_attack_surface(
         # spot map for any sibling process.
         save_json(surface_path, attack_surface, mode=0o600)
 
-    unchecked_count = len(context_map.get("unchecked_flows", []))
+    unchecked_count = len(context_map.get("unchecked_flows") or [])
     return {
         "sources": len(merged_sources),
         "sinks": len(merged_sinks),
