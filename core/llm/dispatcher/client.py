@@ -46,7 +46,12 @@ def read_token(fd: Optional[int] = None) -> str:
                 "RAPTOR_LLM_TOKEN_FD not set — worker must be spawned via "
                 "core.llm.dispatcher.spawn_worker"
             )
-        fd = int(env)
+        try:
+            fd = int(env)
+        except (ValueError, TypeError):
+            raise RuntimeError(
+                f"RAPTOR_LLM_TOKEN_FD is not a valid fd number: {env!r}"
+            )
     try:
         # 64 bytes is plenty for a 32-byte url-safe token.
         raw = os.read(fd, 64)

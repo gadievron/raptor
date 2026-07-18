@@ -1770,6 +1770,8 @@ def _parse_since(spec: str):
     if not spec:
         return None
     spec = spec.strip().lower()
+    if not spec:
+        return None
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
     if spec[-1] in multipliers:
         try:

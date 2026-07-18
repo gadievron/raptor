@@ -164,7 +164,10 @@ def _merge_disk(path: Path, increments: Dict[str, Dict[str, int]]) -> None:
                     lang, {"verdicts": {}, "last_seen_at": now})
                 vs = slot.setdefault("verdicts", {})
                 for v, n in verdicts.items():
-                    vs[v] = int(vs.get(v, 0)) + int(n)
+                    try:
+                        vs[v] = int(vs.get(v, 0)) + int(n)
+                    except (ValueError, TypeError):
+                        pass
                 slot["last_seen_at"] = now
             save_json(path, data)
         finally:

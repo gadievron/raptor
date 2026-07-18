@@ -653,11 +653,18 @@ class BinaryUnderstand:
                 addr = raw.get("minaddr")
             if addr is None:
                 addr = 0
-            size = int(raw.get("size", 0) or 0)
+            try:
+                size = int(raw.get("size", 0) or 0)
+            except (ValueError, TypeError):
+                size = 0
             is_imported = name.startswith(("sym.imp.", "imp."))
+            try:
+                addr = int(addr)
+            except (ValueError, TypeError):
+                addr = 0
             info = FunctionInfo(
                 name=name,
-                address=int(addr),
+                address=addr,
                 size=size,
                 type=str(raw.get("type", "fcn")),
                 is_imported=is_imported,
