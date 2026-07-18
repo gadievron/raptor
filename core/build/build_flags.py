@@ -179,7 +179,14 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     and we want the most-hardened observed setting per flag.
     """
     raw = path.read_text(errors="replace")
-    entries = json.loads(raw)
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("malformed compile_commands.json at %s", path)
+        return BuildFlagsContext(
+            source="compile_commands.json",
+            extraction_confidence="absent",
+        )
     if not isinstance(entries, list) or not entries:
         return BuildFlagsContext(
             source="compile_commands.json",

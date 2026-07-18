@@ -140,7 +140,11 @@ def _scan_tokens(tokens: List[str], defined: Dict[str, str],
 
 def _from_compile_commands(path: Path) -> MacroConfig:
     raw = path.read_text(errors="replace")
-    entries = json.loads(raw)
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("malformed compile_commands.json at %s", path)
+        return MacroConfig(source="compile_commands.json")
     if not isinstance(entries, list) or not entries:
         return MacroConfig(source="compile_commands.json")
     defined: Dict[str, str] = {}

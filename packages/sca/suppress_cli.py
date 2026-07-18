@@ -132,7 +132,12 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
     if not entries:
         print(f"raptor-sca suppress: {suppress_path} has no entries.")
         return 0
-    rows = json.loads(findings_path.read_text(encoding="utf-8"))
+    try:
+        rows = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"raptor-sca suppress: cannot read {findings_path}: {exc}",
+              file=sys.stderr)
+        return 2
     if not isinstance(rows, list):
         print("raptor-sca suppress: findings.json top-level is not a "
               "list", file=sys.stderr)

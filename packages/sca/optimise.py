@@ -113,9 +113,13 @@ def main(argv: Sequence[str]) -> int:
         logger.exception("raptor-sca fix: analyse prepass failed")
         return 3
 
-    findings_rows: List[Dict[str, Any]] = json.loads(
-        result.findings_path.read_text(encoding="utf-8"),
-    )
+    try:
+        findings_rows: List[Dict[str, Any]] = json.loads(
+            result.findings_path.read_text(encoding="utf-8"),
+        )
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.error("raptor-sca fix: cannot read findings: %s", exc)
+        return 3
 
     # ---- Phase 2: plan CVE fixes --------------------------------------------
     vuln_plans = _plan_targets(
