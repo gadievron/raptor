@@ -789,30 +789,38 @@ def _collect_one(
         # ``--branch`` accepts branches and tags; commit SHAs need
         # a fetch-by-SHA approach since ``--branch`` rejects them.
         _is_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", sample.git_ref))
+        from core.config import RaptorConfig
+        from core.sandbox.preexec import set_pdeathsig
+        _env = RaptorConfig.get_safe_env()
+        _pre = set_pdeathsig()
         try:
             if _is_sha:
                 subprocess.run(
                     ["git", "init", str(clone_root)],
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
+                    env=_env, preexec_fn=_pre,
                 )
                 subprocess.run(
                     ["git", "-C", str(clone_root), "remote", "add",
                      "origin", sample.repo_url],
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
+                    env=_env, preexec_fn=_pre,
                 )
                 subprocess.run(
                     ["git", "-C", str(clone_root), "fetch",
                      "--depth", "1", "origin", sample.git_ref],
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
+                    env=_env, preexec_fn=_pre,
                 )
                 subprocess.run(
                     ["git", "-C", str(clone_root), "checkout",
                      "FETCH_HEAD"],
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
+                    env=_env, preexec_fn=_pre,
                 )
             else:
                 subprocess.run(
@@ -823,6 +831,7 @@ def _collect_one(
                     ],
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
+                    env=_env, preexec_fn=_pre,
                 )
         except (subprocess.TimeoutExpired,
                 subprocess.CalledProcessError) as e:

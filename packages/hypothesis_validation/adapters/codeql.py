@@ -475,7 +475,10 @@ def _qlpack_yaml(rule: str) -> str:
     for line in rule.splitlines()[:20]:
         s = line.strip()
         if s.startswith("import "):
-            head = s.split()[1].split(".")[0].lower()
+            tokens = s.split()
+            if len(tokens) < 2:
+                continue
+            head = tokens[1].split(".")[0].lower()
             if head in {"cpp", "java", "python", "javascript", "go", "csharp", "ruby", "swift"}:
                 lang = head
                 break

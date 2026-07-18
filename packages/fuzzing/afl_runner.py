@@ -452,12 +452,14 @@ class AFLRunner:
             (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n")
 
             try:
+                from core.sandbox.preexec import set_pdeathsig
                 proc = subprocess.Popen(
                     cmd,
                     stdout=stdout_fp,
                     stderr=stderr_fp,
                     text=True,
                     env=afl_env,
+                    preexec_fn=set_pdeathsig(),
                 )
             except Exception:
                 stdout_fp.close()

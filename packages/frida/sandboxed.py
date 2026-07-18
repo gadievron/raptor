@@ -64,7 +64,10 @@ def _find_frida_site() -> str | None:
         with open(frida_bin, "r", encoding="utf-8") as f:
             shebang = f.readline(256).strip()
         if shebang.startswith("#!"):
-            python = shebang[2:].strip().split()[0]
+            parts = shebang[2:].strip().split()
+            if not parts:
+                return None
+            python = parts[0]
             if not any(python.startswith(p) for p in _KNOWN_PYTHON_PREFIXES):
                 return None
             return _probe(python)
