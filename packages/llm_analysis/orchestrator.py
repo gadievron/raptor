@@ -987,7 +987,7 @@ def orchestrate(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
             )
             if not accept_weakened_defenses:
-                print(f"\n  ✗ Envelope probe failed for {model_label}: {_fail_summary}", file=sys.stderr)
+                print(f"\n  ✗ Envelope probe failed for {mode_policy.model_label}: {_fail_summary}", file=sys.stderr)
                 print("  The model cannot honour the defence envelope — aborting.", file=sys.stderr)
                 print("  To proceed with weakened defences, re-run with --accept-weakened-defenses", file=sys.stderr)
                 return None
@@ -1011,7 +1011,7 @@ def orchestrate(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
                     _fmname, _ferr,
                 )
-            print(f"\n  ⚠️  Defence warning: envelope probe failed for {model_label}", file=sys.stderr)
+            print(f"\n  ⚠️  Defence warning: envelope probe failed for {mode_policy.model_label}", file=sys.stderr)
             print("  Running with reduced defences (--accept-weakened-defenses)", file=sys.stderr)
             print(f"  Reason: {_fail_summary}", file=sys.stderr)
             print("  Model-independent floor still applies (autofetch redaction,"
