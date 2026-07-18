@@ -43,7 +43,7 @@ def _load_coverage_record(out_dir: Path, tool: str) -> Optional[Dict]:
     if not p.is_file():
         return None
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -115,7 +115,7 @@ def render_scan_coverage(out_dir: Path) -> Optional[str]:
     metrics_path = out_dir / "scan_metrics.json"
     if metrics_path.is_file():
         try:
-            metrics = json.loads(metrics_path.read_text())
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             metrics = {}
 

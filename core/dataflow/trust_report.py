@@ -70,7 +70,7 @@ def report(
     total = tp = trust_fp = 0
     coverage_n = false_suppression_n = defer_n = 0
     suppressed_total = suppressed_on_fp = 0
-    with Path(csv_path).open() as f:
+    with Path(csv_path).open(encoding="utf-8") as f:
         for row in csv.DictReader(f):
             total += 1
             label = row["label_verdict"]

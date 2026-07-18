@@ -67,7 +67,7 @@ class Metrics:
 
 def compute(csv_path: Path) -> Metrics:
     m = Metrics()
-    with csv_path.open() as f:
+    with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             m.total += 1

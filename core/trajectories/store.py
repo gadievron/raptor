@@ -216,7 +216,7 @@ def iter_trajectory_json(
         if not candidate.is_file():
             continue
         try:
-            raw = candidate.read_text()
+            raw = candidate.read_text(encoding="utf-8")
             parsed = json.loads(raw)
         except (OSError, json.JSONDecodeError) as e:
             _log.warning(

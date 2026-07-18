@@ -42,7 +42,7 @@ def _find_active_run():
         if not project_file.exists():
             return None, None
 
-        data = json.loads(project_file.read_text())
+        data = json.loads(project_file.read_text(encoding="utf-8"))
         project_dir = data.get("output_dir", "")
         target = data.get("target", "")
         if not project_dir or not Path(project_dir).is_dir():
@@ -77,7 +77,7 @@ def _find_active_run():
                 # disappeared between the `entries` build above and
                 # this read; treat it as "no longer running" rather
                 # than aborting.
-                meta_text = meta_file.read_text()
+                meta_text = meta_file.read_text(encoding="utf-8")
             except OSError:
                 continue
             try:

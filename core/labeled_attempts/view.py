@@ -30,6 +30,7 @@ field regardless of which evidence shape produced the record.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -41,6 +42,8 @@ from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_envelope import neutralize_tag_forgery
 
 from .types import LabeledAttempt
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # type-only — keep this module import-cheap
     from core.dataflow.barrier_synth import BarrierProposal, SynthResult
@@ -490,8 +493,8 @@ def collect_outcomes(
         stores = discover_witness_stores(output_dir, project_root=project_root)
         for _root, w in iter_visible_witnesses(stores):
             outcomes.append(from_witness(w))
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.debug("legacy witness discovery failed: %s", exc)
 
     return outcomes
 

@@ -64,7 +64,7 @@ def set_failure_mode(
             f"set_failure_mode: not a file: {record_path}"
         )
     try:
-        blob = json.loads(record_path.read_text())
+        blob = json.loads(record_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ValueError(
             f"set_failure_mode: {record_path} is not valid JSON: "
