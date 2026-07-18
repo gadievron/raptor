@@ -169,6 +169,14 @@ def _web_domain(repo_path: str) -> str:
     return f"raptor-web-{_repo_key(repo_path)}"
 
 
+def _validation_domain(repo_path: str) -> str:
+    return f"raptor-validation-{_repo_key(repo_path)}"
+
+
+def _understand_domain(repo_path: str) -> str:
+    return f"raptor-understand-{_repo_key(repo_path)}"
+
+
 def _binary_key(binary_path: str) -> str:
     return sha256_string(str(Path(binary_path).resolve()))[:12]
 
@@ -909,3 +917,436 @@ def store_fuzzing_strategy_outcome(
         )
     except Exception as e:
         logger.debug(f"SAGE fuzzing strategy store failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exploitability validation hooks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def recall_context_for_validation(
+    repo_path: str,
+    vuln_type: Optional[str] = None,
+    cwe_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query_parts = ["Prior exploitability validation verdicts"]
+        if vuln_type:
+            query_parts.append(f"for {vuln_type}")
+        if cwe_id:
+            query_parts.append(f"({cwe_id})")
+        query_parts.append("including attack paths, blockers, and disproven hypotheses")
+        results = client.query(
+            text=" ".join(query_parts) + ".",
+            domain_tag=_validation_domain(repo_path),
+            top_k=5,
+            min_confidence=0.5,
+        )
+        methodology = client.query(
+            text=(
+                "Exploitability validation methodology: hypothesis testing, "
+                "attack tree construction, and common disqualifiers."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=3,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
+    except Exception as e:
+        logger.debug(f"SAGE validation recall failed: {e}")
+        return []
+
+
+def store_validation_verdicts(
+    repo_path: str,
+    findings: List[Dict[str, Any]],
+    summary: Optional[Dict[str, Any]] = None,
+) -> int:
+    client = _get_client()
+    if client is None or not findings:
+        return 0
+
+    repo_name = Path(repo_path).name
+    stored = 0
+
+    for finding in findings[:20]:
+        try:
+            finding_id = finding.get("id", "unknown")
+            vuln_type = finding.get("vuln_type", "unknown")
+            cwe_id = finding.get("cwe_id", "")
+            status = finding.get("final_status") or finding.get("status", "unknown")
+            confidence = finding.get("confidence", "medium")
+            file_path = finding.get("file", "unknown")
+            function = finding.get("function", "unknown")
+
+            ruling = finding.get("ruling", {})
+            reason = ruling.get("reason", "")[:200] if ruling else ""
+            disqualifier = ruling.get("disqualifier", "")
+
+            content = (
+                f"Validation verdict for {vuln_type}"
+                f"{f' ({cwe_id})' if cwe_id else ''} "
+                f"in {repo_name} ({file_path}:{function}): "
+                f"status {status}, confidence {confidence}."
+            )
+            if reason:
+                content += f" Reason: {reason}."
+            if disqualifier:
+                content += f" Disqualifier: {disqualifier}."
+
+            conf_score = {
+                "exploitable": 0.95,
+                "likely_exploitable": 0.90,
+                "confirmed": 0.90,
+                "confirmed_constrained": 0.85,
+                "confirmed_blocked": 0.85,
+                "ruled_out": 0.90,
+                "disproven": 0.90,
+            }.get(status, 0.75)
+
+            tags = ["validation", "verdict", vuln_type]
+            if cwe_id:
+                tags.append(cwe_id)
+
+            if _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="fact",
+                domain_tag=_validation_domain(repo_path),
+                confidence=conf_score,
+                tags=tags,
+            ):
+                stored += 1
+            _throttle()
+        except Exception as e:
+            logger.debug(f"SAGE validation verdict store failed: {e}")
+
+    if summary:
+        try:
+            total = summary.get("total_input", 0)
+            confirmed = summary.get("confirmed", 0)
+            ruled_out = summary.get("ruled_out", 0)
+            exploitable = summary.get("exploitable", 0)
+            content = (
+                f"Validation summary for {repo_name}: "
+                f"{total} findings validated, "
+                f"{exploitable} exploitable, {confirmed} confirmed, "
+                f"{ruled_out} ruled out."
+            )
+            _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="observation",
+                domain_tag=_validation_domain(repo_path),
+                confidence=0.85,
+                tags=["validation", "summary"],
+            )
+        except Exception as e:
+            logger.debug(f"SAGE validation summary store failed: {e}")
+
+    if stored > 0:
+        logger.info(f"SAGE: Stored {stored} validation verdicts")
+    return stored
+
+
+def store_validation_disproven(
+    repo_path: str,
+    disproven: List[Dict[str, Any]],
+) -> None:
+    client = _get_client()
+    if client is None or not disproven:
+        return
+    try:
+        for entry in disproven[:10]:
+            finding_ref = entry.get("finding", "unknown")
+            claim = entry.get("original_claim", "")[:200]
+            why = entry.get("why_wrong", "")[:200]
+            lesson = entry.get("lesson", "")[:200]
+            content = (
+                f"Disproven hypothesis for {finding_ref} in "
+                f"{Path(repo_path).name}: claim was '{claim}'. "
+                f"Why wrong: {why}. Lesson: {lesson}."
+            )
+            _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="inference",
+                domain_tag=_validation_domain(repo_path),
+                confidence=0.90,
+                tags=["validation", "disproven"],
+            )
+            _throttle()
+    except Exception as e:
+        logger.debug(f"SAGE disproven store failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Code understanding hooks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def recall_context_for_map(
+    repo_path: str,
+    languages: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        lang_str = ", ".join(languages) if languages else "unknown"
+        results = client.query(
+            text=(
+                f"Attack surface for {lang_str} project {Path(repo_path).name}: "
+                f"entry points, sinks, trust boundaries, and unchecked flows"
+            ),
+            domain_tag=_understand_domain(repo_path),
+            top_k=5,
+            min_confidence=0.5,
+        )
+        methodology = client.query(
+            text=(
+                "Attack surface mapping methodology: entry point enumeration, "
+                "sink cataloguing, and trust boundary identification."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=3,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
+    except Exception as e:
+        logger.debug(f"SAGE map recall failed: {e}")
+        return []
+
+
+def recall_context_for_trace(
+    repo_path: str,
+    entry_point: Optional[str] = None,
+    sink: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query_parts = ["Prior data flow traces"]
+        if entry_point:
+            query_parts.append(f"from entry point {entry_point}")
+        if sink:
+            query_parts.append(f"to sink {sink}")
+        query_parts.append("including proximity, blockers, and attacker control")
+        results = client.query(
+            text=" ".join(query_parts) + ".",
+            domain_tag=_understand_domain(repo_path),
+            top_k=5,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, top_k=5)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
+    except Exception as e:
+        logger.debug(f"SAGE trace recall failed: {e}")
+        return []
+
+
+def recall_context_for_hunt(
+    repo_path: str,
+    pattern: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query = "Prior variant hunt results"
+        if pattern:
+            query += f" for pattern {pattern}"
+        query += ", including root cause groups and taint status distribution."
+        results = client.query(
+            text=query,
+            domain_tag=_understand_domain(repo_path),
+            top_k=5,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, top_k=5)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
+    except Exception as e:
+        logger.debug(f"SAGE hunt recall failed: {e}")
+        return []
+
+
+def store_map_results(
+    repo_path: str,
+    context_map: Dict[str, Any],
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        repo_name = Path(repo_path).name
+        meta = context_map.get("meta", {})
+        entry_points = context_map.get("entry_points", [])
+        sinks = context_map.get("sink_details", context_map.get("sinks", []))
+        boundaries = context_map.get("boundary_details", context_map.get("trust_boundaries", []))
+        unchecked = context_map.get("unchecked_flows", [])
+
+        ep_types = {}
+        for ep in entry_points:
+            t = ep.get("type", "unknown")
+            ep_types[t] = ep_types.get(t, 0) + 1
+        ep_summary = ", ".join(f"{v} {k}" for k, v in sorted(ep_types.items(), key=lambda x: -x[1]))
+
+        sink_types = {}
+        for s in sinks:
+            t = s.get("type", "unknown")
+            sink_types[t] = sink_types.get(t, 0) + 1
+        sink_summary = ", ".join(f"{v} {k}" for k, v in sorted(sink_types.items(), key=lambda x: -x[1]))
+
+        content = (
+            f"Attack surface map for {repo_name}: "
+            f"{len(entry_points)} entry points ({ep_summary}), "
+            f"{len(sinks)} sinks ({sink_summary}), "
+            f"{len(boundaries)} trust boundaries, "
+            f"{len(unchecked)} unchecked flows."
+        )
+        if meta.get("frameworks"):
+            content += f" Frameworks: {', '.join(meta['frameworks'])}."
+
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_understand_domain(repo_path),
+            confidence=0.85,
+            tags=["understand", "map", "summary"],
+        )
+
+        for flow in unchecked[:10]:
+            ep_ref = flow.get("entry_point", "unknown")
+            sink_ref = flow.get("sink", "unknown")
+            missing = flow.get("missing_boundary", "unknown")
+            flow_content = (
+                f"Unchecked flow in {repo_name}: "
+                f"entry {ep_ref} → sink {sink_ref}, "
+                f"missing boundary: {missing}."
+            )
+            _propose_redacted(
+                client=client,
+                content=flow_content,
+                memory_type="observation",
+                domain_tag=_understand_domain(repo_path),
+                confidence=0.80,
+                tags=["understand", "map", "unchecked_flow"],
+            )
+            _throttle()
+    except Exception as e:
+        logger.debug(f"SAGE map store failed: {e}")
+
+
+def store_trace_result(
+    repo_path: str,
+    trace: Dict[str, Any],
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        repo_name = Path(repo_path).name
+        trace_id = trace.get("id", "unknown")
+        trace_name = trace.get("name", "")
+        meta = trace.get("meta", {})
+        entry = meta.get("entry_point", "unknown")
+        sink = meta.get("target_sink", "unknown")
+        steps = trace.get("steps", [])
+        proximity = trace.get("proximity", 0)
+        blockers = trace.get("blockers", [])
+        attacker = trace.get("attacker_control", {})
+        summary = trace.get("summary", {})
+
+        content = (
+            f"Flow trace {trace_id} in {repo_name}: "
+            f"{entry} → {sink}, "
+            f"{len(steps)} steps, proximity {proximity}/10."
+        )
+        if attacker:
+            content += f" Attacker control: {attacker.get('level', 'unknown')}."
+        if blockers:
+            content += f" Blockers: {', '.join(str(b) for b in blockers[:3])}."
+        if summary.get("verdict"):
+            content += f" Verdict: {summary['verdict']}."
+
+        confidence = 0.85 if summary.get("flow_confirmed") else 0.75
+
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_understand_domain(repo_path),
+            confidence=confidence,
+            tags=["understand", "trace", trace_id],
+        )
+    except Exception as e:
+        logger.debug(f"SAGE trace store failed: {e}")
+
+
+def store_hunt_results(
+    repo_path: str,
+    variants_data: Dict[str, Any],
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        repo_name = Path(repo_path).name
+        meta = variants_data.get("meta", {})
+        pattern = meta.get("pattern", "unknown")
+        total = meta.get("total_matches", 0)
+        confirmed = meta.get("confirmed_tainted", 0)
+        likely = meta.get("likely_tainted", 0)
+        fp = meta.get("false_positive", 0)
+        groups = variants_data.get("root_cause_groups", [])
+
+        content = (
+            f"Variant hunt for pattern '{pattern}' in {repo_name}: "
+            f"{total} matches ({confirmed} confirmed, {likely} likely, {fp} FP). "
+            f"{len(groups)} root cause groups."
+        )
+        if groups:
+            group_names = [g.get("name", "?") for g in groups[:5]]
+            content += f" Groups: {', '.join(group_names)}."
+
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_understand_domain(repo_path),
+            confidence=0.85,
+            tags=["understand", "hunt", pattern],
+        )
+
+        for group in groups[:5]:
+            g_name = group.get("name", "unknown")
+            g_count = group.get("count", 0)
+            g_fix = group.get("fix_strategy", "")[:200]
+            group_content = (
+                f"Root cause group '{g_name}' in {repo_name}: "
+                f"{g_count} variants. Fix strategy: {g_fix}."
+            )
+            _propose_redacted(
+                client=client,
+                content=group_content,
+                memory_type="inference",
+                domain_tag=_understand_domain(repo_path),
+                confidence=0.85,
+                tags=["understand", "hunt", "root_cause", g_name],
+            )
+            _throttle()
+    except Exception as e:
+        logger.debug(f"SAGE hunt store failed: {e}")

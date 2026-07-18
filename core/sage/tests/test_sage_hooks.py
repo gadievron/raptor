@@ -483,6 +483,219 @@ class TestSage11Features(unittest.TestCase):
         self.assertEqual(kwargs["tags"], ["fuzzing", "strategy", "havoc-splice"])
 
 
+class TestValidationHooks(unittest.TestCase):
+    """Exploitability validation recall and store hooks."""
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_recall_returns_empty_when_unavailable(self, _):
+        from core.sage.hooks import recall_context_for_validation
+        self.assertEqual(recall_context_for_validation("/repo"), [])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_queries_validation_and_methodology(self, mock_get_client):
+        mock_client = MagicMock()
+        domains = []
+
+        def _q(**kwargs):
+            domains.append(kwargs.get("domain_tag", ""))
+            return [{"content": "prior verdict", "confidence": 0.9}]
+
+        mock_client.query.side_effect = _q
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_validation
+        out = recall_context_for_validation("/repo", vuln_type="sqli", cwe_id="CWE-89")
+        self.assertEqual(mock_client.query.call_count, 2)
+        self.assertTrue(any("validation" in d for d in domains))
+        self.assertIn("raptor-methodology", domains)
+
+    @patch("core.sage.hooks._throttle")
+    @patch("core.sage.hooks._get_client")
+    def test_store_verdicts_tags_and_counts(self, mock_get_client, _throttle):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_validation_verdicts
+        findings = [
+            {
+                "id": "FIND-0001", "vuln_type": "sql_injection",
+                "cwe_id": "CWE-89", "final_status": "exploitable",
+                "confidence": "high", "file": "db.py", "function": "query",
+                "ruling": {"reason": "unsanitised input", "disqualifier": None},
+            },
+            {
+                "id": "FIND-0002", "vuln_type": "xss",
+                "final_status": "ruled_out", "confidence": "high",
+                "file": "view.py", "function": "render",
+                "ruling": {"reason": "autoescaped", "disqualifier": "D-1"},
+            },
+        ]
+        summary = {"total_input": 5, "confirmed": 1, "ruled_out": 1, "exploitable": 1}
+        stored = store_validation_verdicts("/repo", findings, summary)
+        self.assertEqual(stored, 2)
+        # 2 findings + 1 summary
+        self.assertEqual(mock_client.propose.call_count, 3)
+
+        first_call = mock_client.propose.call_args_list[0]
+        self.assertIn("CWE-89", first_call.kwargs["tags"])
+        self.assertIn("validation", first_call.kwargs["tags"])
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_store_verdicts_noop_when_unavailable(self, _):
+        from core.sage.hooks import store_validation_verdicts
+        self.assertEqual(store_validation_verdicts("/repo", [{"id": "X"}]), 0)
+
+    @patch("core.sage.hooks._throttle")
+    @patch("core.sage.hooks._get_client")
+    def test_store_disproven_stores_lessons(self, mock_get_client, _throttle):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_validation_disproven
+        store_validation_disproven("/repo", [
+            {
+                "finding": "FIND-0003",
+                "original_claim": "buffer overflow via memcpy",
+                "why_wrong": "length is bounded by prior check",
+                "lesson": "check callers for bounds before claiming overflow",
+            },
+        ])
+        self.assertEqual(mock_client.propose.call_count, 1)
+        kwargs = mock_client.propose.call_args.kwargs
+        self.assertEqual(kwargs["tags"], ["validation", "disproven"])
+        self.assertEqual(kwargs["memory_type"], "inference")
+
+
+class TestUnderstandHooks(unittest.TestCase):
+    """Code understanding recall and store hooks (map/trace/hunt)."""
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_recall_map_returns_empty_when_unavailable(self, _):
+        from core.sage.hooks import recall_context_for_map
+        self.assertEqual(recall_context_for_map("/repo"), [])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_map_queries_understand_and_methodology(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "prior entry points", "confidence": 0.8}
+        ]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_map
+        out = recall_context_for_map("/repo", languages=["python"])
+        self.assertEqual(mock_client.query.call_count, 2)
+        self.assertGreater(len(out), 0)
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_trace_accepts_entry_and_sink(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = []
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_trace
+        recall_context_for_trace("/repo", entry_point="EP-001", sink="SINK-002")
+        call_text = mock_client.query.call_args.kwargs["text"]
+        self.assertIn("EP-001", call_text)
+        self.assertIn("SINK-002", call_text)
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_hunt_accepts_pattern(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = []
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_hunt
+        recall_context_for_hunt("/repo", pattern="format-string")
+        call_text = mock_client.query.call_args.kwargs["text"]
+        self.assertIn("format-string", call_text)
+
+    @patch("core.sage.hooks._throttle")
+    @patch("core.sage.hooks._get_client")
+    def test_store_map_stores_summary_and_unchecked_flows(self, mock_get_client, _throttle):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_map_results
+        context_map = {
+            "meta": {"frameworks": ["express"]},
+            "entry_points": [
+                {"id": "EP-001", "type": "http_handler"},
+                {"id": "EP-002", "type": "http_handler"},
+            ],
+            "sink_details": [
+                {"id": "SINK-001", "type": "sql_query"},
+            ],
+            "boundary_details": [
+                {"id": "TB-001", "type": "auth_check"},
+            ],
+            "unchecked_flows": [
+                {"entry_point": "EP-001", "sink": "SINK-001",
+                 "missing_boundary": "input validation"},
+            ],
+        }
+        store_map_results("/repo", context_map)
+        # 1 summary + 1 unchecked flow
+        self.assertEqual(mock_client.propose.call_count, 2)
+        summary_tags = mock_client.propose.call_args_list[0].kwargs["tags"]
+        self.assertEqual(summary_tags, ["understand", "map", "summary"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_trace_stores_flow_summary(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_trace_result
+        trace = {
+            "id": "TRACE-001", "name": "sqli via search",
+            "meta": {"entry_point": "GET /search", "target_sink": "db.execute"},
+            "steps": [{"step": 1}, {"step": 2}, {"step": 3}],
+            "proximity": 8,
+            "blockers": [],
+            "attacker_control": {"level": "full"},
+            "summary": {"flow_confirmed": True, "verdict": "reachable"},
+        }
+        store_trace_result("/repo", trace)
+        self.assertEqual(mock_client.propose.call_count, 1)
+        kwargs = mock_client.propose.call_args.kwargs
+        self.assertIn("TRACE-001", kwargs["tags"])
+        self.assertIn("proximity 8/10", kwargs["content"])
+        self.assertEqual(kwargs["confidence"], 0.85)
+
+    @patch("core.sage.hooks._throttle")
+    @patch("core.sage.hooks._get_client")
+    def test_store_hunt_stores_summary_and_root_cause_groups(self, mock_get_client, _throttle):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_hunt_results
+        variants_data = {
+            "meta": {
+                "pattern": "format-string",
+                "total_matches": 12,
+                "confirmed_tainted": 5,
+                "likely_tainted": 3,
+                "false_positive": 4,
+            },
+            "root_cause_groups": [
+                {"id": "RCG-001", "name": "unchecked-printf",
+                 "count": 4, "fix_strategy": "use printf with format literal"},
+            ],
+        }
+        store_hunt_results("/repo", variants_data)
+        # 1 summary + 1 root cause group
+        self.assertEqual(mock_client.propose.call_count, 2)
+        summary_tags = mock_client.propose.call_args_list[0].kwargs["tags"]
+        self.assertEqual(summary_tags, ["understand", "hunt", "format-string"])
+        group_tags = mock_client.propose.call_args_list[1].kwargs["tags"]
+        self.assertIn("root_cause", group_tags)
+
+
 class TestFormatSageMemoriesForPrompt(unittest.TestCase):
     def test_empty(self):
         from core.sage.hooks import format_sage_memories_for_prompt
