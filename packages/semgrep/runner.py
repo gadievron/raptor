@@ -196,7 +196,7 @@ def run_rule(
         json_text = ""
         if json_path.exists():
             try:
-                json_text = json_path.read_text()
+                json_text = json_path.read_text(encoding="utf-8")
             except OSError:
                 json_text = ""
     finally:

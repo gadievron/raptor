@@ -495,7 +495,7 @@ def _qlpack_yaml(rule: str) -> str:
 def _parse_sarif(sarif_path: Path) -> List[Dict]:
     """Extract matches from a CodeQL SARIF file."""
     try:
-        data = json.loads(sarif_path.read_text())
+        data = json.loads(sarif_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     matches: List[Dict] = []

@@ -399,7 +399,7 @@ def main():
     report = render_coverage(
         run_dirs, checklist, store_path, annotations_base, detailed=detailed)
     if not report:
-        print("No coverage data (missing checklist.json or coverage records).")
+        print("No coverage data (missing checklist.json or coverage records).", file=sys.stderr)
         return
     print(report)
 

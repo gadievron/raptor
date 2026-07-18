@@ -312,7 +312,7 @@ def _extract_proposal(
     if sink_class is None:
         return None
     try:
-        data = json.loads(Path(sarif_path).read_text())
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     for run in data.get("runs", []):

@@ -69,10 +69,10 @@ def link_related_findings(
 
 def _load_findings(path: Path) -> List[Dict[str, Any]]:
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug("sca.cross_tool: cannot read %s: %s", path, exc)
         return []
 
@@ -133,7 +133,7 @@ def _scan_sarif_file(
     out: Dict[str, List[str]],
 ) -> None:
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             sarif = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return

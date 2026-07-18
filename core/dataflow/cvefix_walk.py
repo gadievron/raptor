@@ -316,7 +316,7 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
         return None
     try:
         import json
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         return sum(len(r.get("results", [])) for r in data.get("runs", []))
     except (OSError, ValueError):
         return None

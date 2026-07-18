@@ -168,7 +168,7 @@ def main():
     # Auto-detect stage files regardless of what type was requested
     if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
         if schema_type != "stage":
-            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'")
+            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'", file=sys.stderr)
             schema_type = "stage"
 
     if not filepath.exists():
@@ -214,9 +214,9 @@ def main():
         _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
         print(f"OK: {filepath.name}")
     else:
-        print(f"ERRORS in {filepath.name}:")
+        print(f"ERRORS in {filepath.name}:", file=sys.stderr)
         for e in errors:
-            print(f"  {e}")
+            print(f"  {e}", file=sys.stderr)
         sys.exit(1)
 
 

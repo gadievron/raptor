@@ -178,7 +178,7 @@ def generate(
     expected = parse_expected_results(expected_results_csv)
 
     try:
-        sarif = json.loads(sarif_path.read_text())
+        sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise RuntimeError(f"SARIF read/parse failed: {sarif_path}: {e}") from e
     runs = sarif.get("runs", [])

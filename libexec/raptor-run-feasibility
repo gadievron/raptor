@@ -222,7 +222,8 @@ def _enrich_with_empirical_mitigation_map(
     except ImportError as e:
         print(
             f"  WARN: empirical mitigation map skipped — "
-            f"import failed: {type(e).__name__}: {e}"
+            f"import failed: {type(e).__name__}: {e}",
+            file=sys.stderr,
         )
         return
 
@@ -235,7 +236,8 @@ def _enrich_with_empirical_mitigation_map(
     except Exception as e:  # noqa: BLE001
         print(
             f"  WARN: active project resolution failed "
-            f"({type(e).__name__}: {e}); using run-local stores only"
+            f"({type(e).__name__}: {e}); using run-local stores only",
+            file=sys.stderr,
         )
 
     stores = discover_witness_stores(output_dir, project_root=project_root)
@@ -274,7 +276,8 @@ def _enrich_with_empirical_mitigation_map(
         except Exception as e:  # noqa: BLE001
             print(
                 f"  WARN: {finding['id']}: couldn't load witness "
-                f"bytes ({type(e).__name__}: {e})"
+                f"bytes ({type(e).__name__}: {e})",
+                file=sys.stderr,
             )
             continue
 
@@ -287,7 +290,8 @@ def _enrich_with_empirical_mitigation_map(
         except Exception as e:  # noqa: BLE001
             print(
                 f"  WARN: {finding['id']}: empirical analysis raised "
-                f"({type(e).__name__}: {e}); skipping"
+                f"({type(e).__name__}: {e}); skipping",
+                file=sys.stderr,
             )
             continue
 

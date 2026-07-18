@@ -1558,7 +1558,7 @@ def _sarif_has_findings(sarif_path: Path) -> bool:
     "unknown" the same as "empty" because the goal is opportunistic cleanup.
     """
     try:
-        data = json.loads(sarif_path.read_text())
+        data = json.loads(sarif_path.read_text(encoding="utf-8"))
     except Exception:
         return False
     for run_obj in data.get("runs", []) or []:

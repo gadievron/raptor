@@ -444,7 +444,7 @@ def _count_sarif_results(sarif_path: Path, target_uri: Optional[str] = None,
     barrier look unsound). The preserve check stays file-scoped (the pre-fix vuln
     sits at a different line after the patch's line shifts)."""
     try:
-        data = json.loads(Path(sarif_path).read_text())
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return 0
     if target_uri is None:
@@ -482,7 +482,7 @@ def _summarise_surviving_finding(
       ``"surviving flow: <source-file>:<line> <msg> -> ... -> <sink-file>:<line> <sink-snippet>"``
     """
     try:
-        data = json.loads(Path(sarif_path).read_text())
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
 
