@@ -666,10 +666,15 @@ def test_phase67_compose_rewrite_rejects_privileged_true(tmp_path: Path) -> None
 # unconfined security_opt, and host IPC/user namespaces. ``devices:`` is kept.
 
 
-def _rewrite_and_reload(tmp_path: Path, service: dict[str, Any]) -> dict[str, Any]:
+def _rewrite_and_reload(
+    tmp_path: Path,
+    service: dict[str, Any],
+    *,
+    allow_devices: bool = False,
+) -> dict[str, Any]:
     compose = tmp_path / "docker-compose.yml"
     compose.write_text(yaml.safe_dump({"services": {"web": service}}))
-    _phase67_rewrite(compose)
+    _phase67_rewrite(compose, allow_devices=allow_devices)
     return yaml.safe_load(compose.read_text())["services"]["web"]
 
 
@@ -715,11 +720,38 @@ def test_compose_strips_security_opt_and_host_namespaces(tmp_path: Path) -> None
     assert web.get("userns_mode") != "host"
 
 
-def test_compose_keeps_devices_intentionally(tmp_path: Path) -> None:
-    """``devices:`` is intentionally NOT stripped (a hardware-class CVE may
-    legitimately need a device mapping)."""
+def test_compose_strips_dangerous_devices(tmp_path: Path) -> None:
+    """Dangerous device mappings are stripped; safe pseudo-devices kept."""
+    web = _rewrite_and_reload(
+        tmp_path,
+        {"image": "x", "devices": ["/dev/mem:/dev/mem", "/dev/null:/dev/null"]},
+    )
+    assert web.get("devices") == ["/dev/null:/dev/null"]
+
+
+def test_compose_strips_all_dangerous_devices(tmp_path: Path) -> None:
+    """When only dangerous devices are present, the key is removed."""
+    web = _rewrite_and_reload(
+        tmp_path, {"image": "x", "devices": ["/dev/sda:/dev/sda"]}
+    )
+    assert web.get("devices") is None
+
+
+def test_compose_allows_all_devices_with_env(tmp_path: Path, monkeypatch: Any) -> None:
+    """CVE_ENV_ALLOW_DEVICES=1 passes all devices through."""
+    monkeypatch.setenv("CVE_ENV_ALLOW_DEVICES", "1")
     web = _rewrite_and_reload(
         tmp_path, {"image": "x", "devices": ["/dev/foo:/dev/foo"]}
+    )
+    assert web.get("devices") == ["/dev/foo:/dev/foo"]
+
+
+def test_compose_allows_all_devices_with_param(tmp_path: Path) -> None:
+    """allow_devices=True passes all devices through."""
+    web = _rewrite_and_reload(
+        tmp_path,
+        {"image": "x", "devices": ["/dev/foo:/dev/foo"]},
+        allow_devices=True,
     )
     assert web.get("devices") == ["/dev/foo:/dev/foo"]
 

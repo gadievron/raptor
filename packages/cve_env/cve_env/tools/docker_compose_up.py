@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -153,6 +154,8 @@ def _extract_container_ports(spec: Any) -> list[int]:
 def rewrite_for_localhost(
     compose_file: Path,
     cve_id: str = "",
+    *,
+    allow_devices: bool = False,
 ) -> tuple[Path, Path]:
     """Copy ``compose_file``'s parent dir to a tmpdir + rewrite ports to 127.0.0.1:0.
 
@@ -177,7 +180,7 @@ def rewrite_for_localhost(
         raise
     staged_compose = staging / compose_file.name
     try:
-        _rewrite_ports_in_place(staged_compose, cve_id=cve_id)
+        _rewrite_ports_in_place(staged_compose, cve_id=cve_id, allow_devices=allow_devices)
     except ComposeError:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -212,7 +215,45 @@ def _mounts_docker_socket(volume: Any) -> bool:
     return False
 
 
-def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
+_SAFE_DEVICE_PREFIXES = (
+    "/dev/null",
+    "/dev/zero",
+    "/dev/urandom",
+    "/dev/random",
+    "/dev/stdin",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/fd/",
+)
+
+
+def _filter_devices(spec: dict, *, allow_all: bool = False) -> None:
+    """Strip dangerous device mappings, keep safe pseudo-devices.
+
+    When ``allow_all`` is True (from the tool's ``allow_devices``
+    parameter) or ``CVE_ENV_ALLOW_DEVICES=1`` is set, all devices
+    pass through unfiltered.
+    """
+    devices = spec.get("devices")
+    if not isinstance(devices, list) or not devices:
+        spec.pop("devices", None)
+        return
+    if allow_all or os.environ.get("CVE_ENV_ALLOW_DEVICES", "").strip() == "1":
+        return
+    kept = []
+    for dev in devices:
+        src = str(dev).split(":")[0] if isinstance(dev, str) else ""
+        if any(src == p or src.startswith(p) for p in _SAFE_DEVICE_PREFIXES):
+            kept.append(dev)
+    if kept:
+        spec["devices"] = kept
+    else:
+        spec.pop("devices", None)
+
+
+def _rewrite_ports_in_place(
+    compose_file: Path, cve_id: str = "", *, allow_devices: bool = False,
+) -> None:
     """Rewrite each service's ``ports:`` list to ``127.0.0.1:0:<container>``.
 
     Also strips compose features that bypass the P17 (no-priv) / P18
@@ -299,7 +340,7 @@ def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
         # Security hardening: strip seccomp/apparmor-unconfined etc. (Docker's
         # default profiles then apply).
         spec.pop("security_opt", None)
-        spec.pop("devices", None)
+        _filter_devices(spec, allow_all=allow_devices)
         if str(spec.get("ipc")).strip().lower() == "host":
             spec.pop("ipc", None)
         if str(spec.get("userns_mode")).strip().lower() == "host":
@@ -594,6 +635,7 @@ def docker_compose_up_payload(
     compose_yaml_path: str,
     cve_id: str,
     platform: str | None = None,
+    allow_devices: bool = False,
 ) -> dict[str, Any]:
     """Agent-tool-ready dict shape.
 
@@ -617,7 +659,9 @@ def docker_compose_up_payload(
         _teardown_stack(cve_id)
 
     try:
-        rewritten, staging = rewrite_for_localhost(compose_path, cve_id=cve_id)
+        rewritten, staging = rewrite_for_localhost(
+            compose_path, cve_id=cve_id, allow_devices=allow_devices,
+        )
     except (OSError, ComposeError) as exc:
         return {
             "ok": False,

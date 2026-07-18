@@ -661,6 +661,12 @@ async def docker_run(args: dict[str, Any]) -> dict[str, Any]:
             str,
             "optional --platform value (e.g. 'linux/amd64' for Rosetta on arm64)",
         ],
+        "allow_devices": Annotated[
+            bool,
+            "pass True for hardware/driver CVEs that need device node access. "
+            "Default False: only safe pseudo-devices (/dev/null, /dev/urandom, "
+            "etc.) are kept; dangerous mappings are stripped",
+        ],
     },
 )
 async def docker_compose_up(args: dict[str, Any]) -> dict[str, Any]:
@@ -668,6 +674,7 @@ async def docker_compose_up(args: dict[str, Any]) -> dict[str, Any]:
         compose_yaml_path=str(args["compose_yaml_path"]),
         cve_id=str(args["cve_id"]),
         platform=args.get("platform") or None,
+        allow_devices=bool(args.get("allow_devices")),
     )
     return _ok(payload)
 

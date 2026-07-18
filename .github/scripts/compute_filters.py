@@ -183,6 +183,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/fuzzing/**",
         "packages/autonomous/**",
         "packages/binary_analysis/**",
+        "core/atomic_fs/**",
         "core/config/**",
         "core/hash/**",
         "core/json/**",
