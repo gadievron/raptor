@@ -477,7 +477,7 @@ def _carry_forward_coverage(
         modified = set()
 
     def _get_items(fi):
-        return fi.get("items", fi.get("functions", []))
+        return fi.get("items", fi.get("functions", [])) or []
 
     # Build lookup: (path, name, kind) -> checked_by from old inventory
     old_coverage = {}

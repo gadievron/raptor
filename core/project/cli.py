@@ -1963,7 +1963,7 @@ def _do_correlate(project, json_out=False):
         display = persistent[:10]
         rows = []
         for pf in display:
-            models = ", ".join(pf.get("models", [])) or "—"
+            models = ", ".join(pf.get("models") or []) or "—"
             rows.append((
                 f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
                 pf.get("vuln_type", ""),
