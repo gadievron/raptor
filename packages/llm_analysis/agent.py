@@ -1604,7 +1604,7 @@ class AutonomousSecurityAgentV2:
 
         logger.info("   ✓ Reading full file for context...")
 
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8", errors="replace") as f:
             full_file_content = f.read()
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle

@@ -512,7 +512,7 @@ class AutonomousCodeQLAnalyzer:
         file_path = joined
 
         try:
-            with open(file_path) as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
 
             start = max(0, finding.start_line - context_lines - 1)

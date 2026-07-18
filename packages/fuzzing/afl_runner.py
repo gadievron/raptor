@@ -829,27 +829,15 @@ class AFLRunner:
     def get_stats(self) -> dict:
         """Get fuzzing statistics from AFL."""
         stats_file = self.output_dir / "main" / "fuzzer_stats"
-
-        if not stats_file.exists():
-            return {}
-
         stats = {}
-        # Explicit `encoding="utf-8"` + `errors="replace"`. Pre-fix
-        # bare `open(stats_file)` used the host locale encoding —
-        # AFL writes its `fuzzer_stats` file in UTF-8 (the C side
-        # writes ASCII keys + UTF-8 stringified values), so a
-        # latin-1 / cp1252 default could mojibake non-ASCII path
-        # components in `target_mode`, `command_line`, etc., and
-        # raise UnicodeDecodeError on operator paths with i18n
-        # characters. `errors="replace"` keeps the parse going even
-        # if a byte sequence somehow doesn't decode (preferred over
-        # crashing the whole stats read for a single bad value).
-        with open(stats_file, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if ":" in line:
-                    key, value = line.strip().split(":", 1)
-                    stats[key.strip()] = value.strip()
-
+        try:
+            with open(stats_file, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if ":" in line:
+                        key, value = line.strip().split(":", 1)
+                        stats[key.strip()] = value.strip()
+        except FileNotFoundError:
+            pass
         return stats
 
     def run_showmap(self) -> dict:

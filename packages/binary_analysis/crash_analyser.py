@@ -927,18 +927,21 @@ class CrashAnalyser:
             for line in backtrace_lines:
                 if "`" in line and "(" in line:
                     func_part = line.split("`")[1].split("(")[0].strip()
-                    context.function_name = func_part
-                    
+                    if func_part:
+                        context.function_name = func_part
+
                     # Extract source location if available
                     if " at " in line and (".c:" in line or ".cpp:" in line):
-                        source_part = line.split(" at ")[1].split()[0].strip()
-                        context.source_location = source_part
-                        logger.info(f"✓ Source location extracted from backtrace: {source_part}")
+                        parts = line.split(" at ")[1].split()
+                        if parts:
+                            context.source_location = parts[0].strip()
+                            logger.info(f"✓ Source location extracted from backtrace: {parts[0].strip()}")
                     break
                 # Alternative format without backticks
                 elif " in " in line:
-                    func_part = line.split(" in ")[1]
-                    context.function_name = func_part.split()[0].split("(")[0].strip()
+                    parts = line.split(" in ")[1].split()
+                    if parts:
+                        context.function_name = parts[0].split("(")[0].strip()
                     break
 
     def _parse_gdb_output(self, context: CrashContext, gdb_output: str) -> None:
@@ -1090,8 +1093,9 @@ class CrashAnalyser:
         if backtrace_lines:
             first_frame = backtrace_lines[0]
             if "in " in first_frame:
-                func_part = first_frame.split("in ")[1]
-                context.function_name = func_part.split()[0].split("(")[0].strip()  # Handle function(args)
+                parts = first_frame.split("in ")[1].split()
+                if parts:
+                    context.function_name = parts[0].split("(")[0].strip()
             elif "@" in first_frame:  # Alternative format
                 func_part = first_frame.split("@")[0].strip()
                 context.function_name = func_part

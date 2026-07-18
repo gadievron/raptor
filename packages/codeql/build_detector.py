@@ -1137,6 +1137,7 @@ for i, src in enumerate(FILES):
         # write(2) waiting for a reader).
         while proc.stderr.read(64 * 1024):
             pass
+        proc.stderr.close()
     # Per-file compile timeout. Pre-fix `proc.wait()` had no
     # bound — a runaway compile (gcc on a pathological template
     # instantiation, javac on infinite annotation processing,

@@ -138,10 +138,8 @@ def _drop_unreachable_registry_packs(
     sock.settimeout(3)
     try:
         sock.connect(("semgrep.dev", 443))
-        sock.close()
         return configs
     except (OSError, socket.timeout):
-        sock.close()
         dropped = [n for n, _ in needs_network]
         logger.warning(
             "semgrep.dev unreachable (3 s probe failed) — "
@@ -150,6 +148,8 @@ def _drop_unreachable_registry_packs(
         )
         drop_set = {c for _, c in needs_network}
         return [(n, c) for n, c in configs if c not in drop_set]
+    finally:
+        sock.close()
 
 
 def _resolve_baseline_packs(
