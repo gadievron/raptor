@@ -1030,9 +1030,10 @@ def _project_threat_model_json_path(project: Any) -> Optional[Path]:
     ``project.output_dir``. Anything outside is refused (returns
     None; caller treats as "no threat model").
     """
-    output_dir = Path(getattr(project, "output_dir", "") or "")
-    if not str(output_dir):
+    output_dir_str = getattr(project, "output_dir", "") or ""
+    if not output_dir_str:
         return None
+    output_dir = Path(output_dir_str)
     configured = getattr(project, "threat_model_path", "")
     if configured:
         candidate = Path(configured)

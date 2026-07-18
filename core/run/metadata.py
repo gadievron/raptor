@@ -337,8 +337,9 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
             from core.json import load_json as _load
             data = _load(PROJECTS_DIR / f"{name}.json")
             if data:
-                candidate = Path(data.get("output_dir", ""))
-                if candidate.is_dir():
+                candidate_str = data.get("output_dir") or ""
+                candidate = Path(candidate_str) if candidate_str else None
+                if candidate and candidate.is_dir():
                     project_dir = candidate
     except (FileNotFoundError, ImportError, json.JSONDecodeError, KeyError, PermissionError) as exc:
         # Narrowed from bare Exception. Pre-fix a corrupt project

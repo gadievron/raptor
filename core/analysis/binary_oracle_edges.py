@@ -209,9 +209,10 @@ def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
     requested_sha256 = _content_hash(binary_path)
     if not requested_sha256:
         return None
-    raptor_dir = Path(os.environ.get("RAPTOR_DIR", ""))
+    raptor_dir_str = os.environ.get("RAPTOR_DIR", "")
     search_dirs = [binary_path.parent]
-    if raptor_dir.is_dir():
+    raptor_dir = Path(raptor_dir_str) if raptor_dir_str else None
+    if raptor_dir and raptor_dir.is_dir():
         out_dir = raptor_dir / "out"
         if out_dir.is_dir():
             search_dirs.append(out_dir)

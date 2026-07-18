@@ -255,7 +255,11 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
     lines.append("")
 
     # Reasoning / analysis (from agentic or validate)
-    reasoning = finding.get("reasoning") or finding.get("analysis")
+    reasoning = (
+        finding.get("reasoning")
+        or finding.get("candidate_reasoning")
+        or finding.get("analysis")
+    )
     if reasoning:
         lines.append(f"\n**Analysis:**\n{sanitise_string(str(reasoning).strip(), max_chars=3000)}")
 

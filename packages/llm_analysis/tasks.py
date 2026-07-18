@@ -360,7 +360,10 @@ class ExploitTask(DispatchTask):
             cwe_id = finding.get("cwe_id", "")
             mitigations = []
             feasibility = finding.get("feasibility") or {}
-            for path_info in (feasibility.get("exploitation_paths") or {}).values():
+            exp_paths = feasibility.get("exploitation_paths") or {}
+            if isinstance(exp_paths, list):
+                exp_paths = {str(i): p for i, p in enumerate(exp_paths) if isinstance(p, dict)}
+            for path_info in exp_paths.values():
                 mitigations.extend(path_info.get("chain_breaks", []))
 
             rows = recall_context_for_exploit(

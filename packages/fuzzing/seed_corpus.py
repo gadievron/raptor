@@ -371,9 +371,12 @@ def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict
             continue
 
         name = str(item.get("name") or "").strip()
-        source_rel = Path(str(item.get("path") or ""))
+        path_str = str(item.get("path") or "").strip()
         if not name or "/" in name or "\\" in name or name in {".", ".."}:
             raise ValueError(f"invalid built-in seed name: {name!r}")
+        if not path_str:
+            raise ValueError(f"empty path for built-in seed: {name!r}")
+        source_rel = Path(path_str)
         if source_rel.is_absolute() or ".." in source_rel.parts:
             raise ValueError(f"invalid built-in seed path: {source_rel}")
 
