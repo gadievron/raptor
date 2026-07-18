@@ -12,11 +12,13 @@
 
 ## Global Constraints
 
-Every task's requirements implicitly include these (verbatim from the spec):
+> **Revision 2026-07-18 — Option B:** a mid-execution doc↔code audit (see the PR findings log) confirmed several internal design docs are referenced by hardcoded code paths, and that Task 11's original consolidation would break a golden-file test. Per operator decision, scope was widened from docs-only to **docs + reference-only code edits**: the internal design docs move to `docs/internals/` as intended, and the hardcoded `docs/...` path strings in a fixed, enumerated set of code files are repointed. **No code logic changes.** The audit also confirmed the code is correct and the docs merely lagged — so doc→code content (paths/counts/plan-narratives) is corrected in Task 19.
 
-- **Diff touches ONLY `docs/**` and root `README.md`.** Nothing under `.claude/`, `core/`, `packages/`, `engine/`, `tiers/`, `test/`, `CITATION.cff`, `LICENSE` may change.
+Every task's requirements implicitly include these (verbatim from the spec, as amended by the revision above):
+
+- **Scope (revised — Option B):** the diff touches `docs/**`, root `README.md`, **and only the enumerated code files in Task 11** whose sole change is repointing a hardcoded `docs/...` path string (plus the regenerated golden fixture). Nothing under `.claude/`, `engine/`, `tiers/`, `CITATION.cff`, `LICENSE`, and no OTHER code file, may change. No logic, no new deps, no CI edits.
 - **`.claude/` is read-only** — read `.claude/commands/*.md` as a source for `commands.md`; make zero edits there.
-- **Markdown only** — no code, no CI changes, no generator scripts committed.
+- **Code edits are reference-only + must keep tests green.** The only permitted non-doc changes are: updating `docs/...` path strings in the Task 11 file list, updating the golden-fixture test's path, and regenerating the golden fixture. The affected `core/dataflow` tests MUST be run and pass (this is no longer a docs-only PR).
 - **Document `pip` as-is** — the repo has `requirements.txt` + pip and no `pyproject.toml`/`uv.lock`. Do not advocate or add uv.
 - **All relocations use `git mv`** (history = receipt). Never delete-then-create a file whose content survives.
 - **Nothing lost:** the archive (Task 0) + 100% salvage coverage (Task 21). Every pre-existing fact ends either relocated or dropped-with-a-verified-receipt.
@@ -308,20 +310,38 @@ git commit -m "docs: add canonical command reference"
 
 ---
 
-## Task 11: Consolidate `internals/sanitizer-cut.md` (4 sources → 1)
+## Task 11: Relocate sanitizer-cut design docs to `internals/` + repoint code→doc references (Option B)
+
+**Context:** the prior consolidation commit `7c652c56` deleted 5 sanitizer-cut docs into `internals/sanitizer-cut.md`. That broke a golden-file test (`first-report.md` is a committed test fixture) and orphaned code path-references. Option B instead moves each doc to `docs/internals/` (keeping it a file) and repoints the code that references it. **This is the docs + reference-only-code task.**
 
 **Files:**
-- Create: `docs/internals/sanitizer-cut.md`
-- Delete after salvage: `docs/design-sanitizer-cut-value-binding.md`, `docs/sanitizer-cut-parity/CLOSURE.md`, `docs/sanitizer-cut-parity/HORIZON.md`, `docs/sanitizer-cut-parity/first-report.md`, `docs/phase-8-substrate-spike/DECISION.md`
-- Source: the archive copies of those five
+- Revert consolidation: undo `7c652c56` (restores the 5 docs, removes `docs/internals/sanitizer-cut.md`).
+- `git mv` (keep filenames, recreate the two subdirs under `internals/`):
+  - `docs/design-sanitizer-cut-value-binding.md` → `docs/internals/design-sanitizer-cut-value-binding.md`
+  - `docs/sanitizer-cut-parity/{CLOSURE,HORIZON,first-report}.md` → `docs/internals/sanitizer-cut-parity/`
+  - `docs/phase-8-substrate-spike/DECISION.md` → `docs/internals/phase-8-substrate-spike/DECISION.md`
+- Reference-only code edits (repoint a `docs/...` path string ONLY — no logic): `core/dataflow/smt_barrier.py`, `core/dataflow/sanitizer_cut_parity_report.py`, `core/dataflow/tests/test_lexical_removal_switch.py`, `core/dataflow/tests/test_sanitizer_cut_parity_report.py`, `core/analysis/cfg_builder_cpp.py`, `core/analysis/sanitizer_cut.py`, `core/llm/scorecard/audit.py`, `core/inventory/extractors.py`, `packages/llm_analysis/orchestrator.py`
+- Regenerate: `docs/internals/sanitizer-cut-parity/first-report.md` (golden fixture)
 
 **Interfaces:**
-- Produces: one internal sanitizer-cut doc; collapses the two ad-hoc subdirs.
+- Produces: all 7 internal design docs under `docs/internals/` (aggregation-dominators.md + inventory-metadata.md already moved in Task 10). Every code→doc reference resolves to the new path. Affected tests pass.
 
-- [ ] **Step 1: Write `docs/internals/sanitizer-cut.md`** merging: `--sanitizer-cut=off/on/strict/shadow` operator interface + `--sanitizer-cut-parity-log` (from value-binding); `strict` end-state (CLOSURE); `shadow` + parity-log usage + regen command (HORIZON); the tree-sitter-vs-libclang-vs-r2 ADR + revisit trigger (phase-8 DECISION). `first-report.md` contributes nothing (regenerable).
-- [ ] **Step 2: Verify salvage.** `for t in "--sanitizer-cut=strict" "--sanitizer-cut=shadow" "--sanitizer-cut-parity-log"; do grep -Fq -- "$t" docs/internals/sanitizer-cut.md || echo "MISSING: $t"; done` → Expected: none.
-- [ ] **Step 3: Remove the five sources + now-empty subdirs.** `git rm docs/design-sanitizer-cut-value-binding.md docs/sanitizer-cut-parity/*.md docs/phase-8-substrate-spike/*.md` (then dirs disappear).
-- [ ] **Step 4: Commit.** `git add -A && git commit -m "docs: consolidate sanitizer-cut design docs into one internals page"`
+- [ ] **Step 1: Revert the consolidation.** `git revert --no-edit 7c652c56` (restores the 5 docs, removes `internals/sanitizer-cut.md`). Confirm: `ls docs/sanitizer-cut-parity/ docs/phase-8-substrate-spike/ && test ! -e docs/internals/sanitizer-cut.md`.
+- [ ] **Step 2: Relocate via `git mv`** (the moves above; `mkdir -p docs/internals/sanitizer-cut-parity docs/internals/phase-8-substrate-spike` first). Verify history: `git log --follow --oneline -- docs/internals/sanitizer-cut-parity/HORIZON.md | head -1`.
+- [ ] **Step 3: Repoint code→doc references** (change ONLY the `docs/...` path substring):
+  - `smt_barrier.py`: `docs/sanitizer-cut-parity/HORIZON.md` → `docs/internals/sanitizer-cut-parity/HORIZON.md`
+  - `sanitizer_cut_parity_report.py` (the emitted "see …HORIZON.md" line): same swap
+  - `test_lexical_removal_switch.py` (assertion message path): same swap
+  - `cfg_builder_cpp.py` docstring: `docs/phase-8-substrate-spike/DECISION.md` → `docs/internals/phase-8-substrate-spike/DECISION.md`
+  - `test_sanitizer_cut_parity_report.py`: the `committed = repo_root/"docs"/"sanitizer-cut-parity"/"first-report.md"` path AND the regen-command docstring → `docs/internals/sanitizer-cut-parity/first-report.md`
+  - `audit.py`, `sanitizer_cut.py`, `orchestrator.py`: `docs/design-aggregation-dominators-wp.md` → `docs/internals/aggregation-dominators.md`
+  - `extractors.py`: `docs/design-inventory-metadata.md` → `docs/internals/inventory-metadata.md`
+- [ ] **Step 4: Regenerate the golden fixture** at its new path (do this AFTER Step 3 so the emitted HORIZON path is already updated): `RAPTOR_SANITIZER_CUT=1 core/dataflow/scripts/sanitizer-cut-parity-report > docs/internals/sanitizer-cut-parity/first-report.md`
+- [ ] **Step 5: Run affected tests — MUST pass.** `python -m pytest core/dataflow/tests/test_sanitizer_cut_parity_report.py core/dataflow/tests/test_lexical_removal_switch.py -q` and an import smoke: `python -c "import core.analysis.cfg_builder_cpp, core.analysis.sanitizer_cut, core.llm.scorecard.audit, core.inventory.extractors, core.dataflow.smt_barrier, core.dataflow.sanitizer_cut_parity_report, packages.llm_analysis.orchestrator"`
+- [ ] **Step 6: Verify no stale doc-path strings remain in code.** `grep -rn "docs/sanitizer-cut-parity\|docs/phase-8-substrate-spike\|docs/design-aggregation-dominators-wp\|docs/design-inventory-metadata" core/ packages/ | grep -v "docs/internals/"` → Expected: **no output**.
+- [ ] **Step 7: Commit.** `git add -A && git commit -m "docs: relocate sanitizer-cut design docs to internals/ and repoint code references"`
+
+**Deferred to Task 19:** the doc→code CONTENT-accuracy fixes (core/inventory→core/analysis paths, the "5→6 fields"/"4→3 entries" miscounts, drifted line anchors, and the 7 "⚠ Superseded" plan-narrative notes) inside these relocated docs. This task only relocates + repoints references; Task 19 corrects the docs' internal content.
 
 ---
 
@@ -439,13 +459,14 @@ Expected: no `SALVAGE GAP` line.
 
 ---
 
-## Task 19: Cross-doc wiring + doc index
+## Task 19: Cross-doc wiring + doc index + internal-doc reference accuracy
 
 **Files:**
 - Modify: any pages whose relative links point at moved/renamed/removed targets; ensure `README.md` doc index and `commands.md` guide links all resolve.
+- Modify: the relocated internal design docs under `docs/internals/` (doc→code content-accuracy fixes — audit-verified).
 
 **Interfaces:**
-- Produces: a fully connected doc set, max 2 hops, no orphans.
+- Produces: a fully connected doc set (max 2 hops, no orphans) whose internal design docs reference current code paths/names/counts, with stale plan-narratives flagged (not rewritten).
 
 - [ ] **Step 1: Find dangling internal links.**
 ```bash
@@ -458,7 +479,13 @@ for g in validate.md sca.md fuzzing.md crash-analysis.md binary-understanding.md
 ```
 Expected: none.
 - [ ] **Step 3: Verify `README.md` doc index targets exist.** For each `docs/*.md` link in README, `test -e`. Expected: all present.
-- [ ] **Step 4: Commit.** `git add -A && git commit -m "docs: fix cross-references to renamed/moved pages; wire doc index"`
+- [ ] **Step 3b: Fix stale doc→code references inside the relocated internal design docs** (audit-verified; docs only — no code):
+  - **(a) Path fixes:** `core/inventory/<M>.py` → `core/analysis/<M>.py` **only for modules that moved**: `cfg_builder`, `cfg_builder_cpp`, `dataflow`, `dominators`, `sanitizer_cut`, `binary_oracle`, `binary_oracle_edges`, `finding_resolver`, `reach_chokepoint`, `taint_summaries`, `interproc`, `callgraph`→`python_module_callgraph`, and their `tests/`. **Do NOT change** `core/inventory/{extractors,builder,lookup,call_graph}.py` — those stayed. Affects `design-sanitizer-cut-value-binding.md`, `aggregation-dominators.md`, `phase-8-substrate-spike/DECISION.md`, `sanitizer-cut-parity/CLOSURE.md`.
+  - **(a) Counts/renames:** `inventory-metadata.md`: "5 metadata fields" → 6 (`class_attributes`, `extractors.py:84`); `build_analysis_prompt(` → `build_analysis_prompt_bundle(`. `design-sanitizer-cut-value-binding.md`: "4 GLib/SQLite entries" → 3. `aggregation-dominators.md`: drop/fix `binary_oracle_edges.py` "591 lines" (→688). Fix drifted `smt_barrier.py` line anchors (746/940 → 936/1183) or switch to `::symbol`.
+  - **(b) Add a one-line `⚠ Superseded — actually shipped: …` note** (do NOT rewrite the narrative) at each of the 7 stale-plan spots: dominator pre-filter (code does none — unsound), D-S `dispatch.py:226` wiring, `--consensus=vote` flag, `--sanitizer-cut` on `/validate` + persist, "SARIF→analysis without checklist", prompt metadata-arg "not yet", `multi_model_panel.jsonl`. (Exact per-note text is in the PR findings log.)
+  - **Untouched:** `sanitizer-cut-parity/HORIZON.md` (audited consistent) and `sanitizer-cut-parity/first-report.md` (generated fixture — never hand-edit).
+- [ ] **Step 3c: Verify accuracy fixes.** `grep -rn "core/inventory/\(cfg_builder\|dataflow\|dominators\|sanitizer_cut\|binary_oracle\|finding_resolver\|reach_chokepoint\|taint_summaries\|interproc\)" docs/internals/ | grep -v _archive` → Expected: no output. `grep -rl "Superseded" docs/internals/ | wc -l` → expect ≥5 files carrying the notes.
+- [ ] **Step 4: Commit.** `git add -A && git commit -m "docs: fix cross-references and internal-doc code references; wire doc index"`
 
 ---
 
@@ -504,11 +531,16 @@ Expected: none.
 **Interfaces:**
 - Produces: the PR description with all three receipts; final go/no-go against spec §12.
 
-- [ ] **Step 1: Diff-scope check.** `git diff --name-only main...HEAD | grep -vE '^(docs/|README.md)$'` → Expected: **no output** (nothing outside scope changed).
-- [ ] **Step 2: Net line-count check.** Compare live user-facing doc line totals before (archive) vs after; assert net negative or flat. Record the numbers.
-- [ ] **Step 3: Assemble PR body** = migration ledger (spec §7) + link-check report (Task 20) + salvage-coverage table (Task 21) + removal receipts (Task 22) + net-line-count.
-- [ ] **Step 4: Walk spec §12 acceptance criteria** and tick each with evidence. Any unchecked box blocks the PR.
-- [ ] **Step 5: Report to the operator** that the branch is ready; do NOT push or open the PR (dangerous op — ask first per project CLAUDE.md).
+- [ ] **Step 1: Diff-scope check (Option B allowlist).** Only `docs/**`, `README.md`, and the Task-11 enumerated code files may appear:
+```bash
+git diff --name-only main...HEAD | grep -vE '^(docs/|README\.md$|core/dataflow/smt_barrier\.py$|core/dataflow/sanitizer_cut_parity_report\.py$|core/dataflow/tests/test_lexical_removal_switch\.py$|core/dataflow/tests/test_sanitizer_cut_parity_report\.py$|core/analysis/cfg_builder_cpp\.py$|core/analysis/sanitizer_cut\.py$|core/llm/scorecard/audit\.py$|core/inventory/extractors\.py$|packages/llm_analysis/orchestrator\.py$)'
+```
+→ Expected: **no output**. Then confirm the code diffs are **reference-only**: `git diff main...HEAD -- <those 9 files>` must show only `docs/...` path-string changes (plus the regenerated fixture) — no logic edits.
+- [ ] **Step 2: Affected tests green.** Re-run `python -m pytest core/dataflow/tests/test_sanitizer_cut_parity_report.py core/dataflow/tests/test_lexical_removal_switch.py -q` → all pass. Also run the diff-scoped ruff gate on changed `.py`: `git diff --name-only main...HEAD -- '*.py' | xargs -r ruff check --select F401,F811,F821,F841`.
+- [ ] **Step 3: Net line-count check.** Compare live user-facing doc line totals before (archive) vs after; assert net negative or flat. Record the numbers.
+- [ ] **Step 4: Assemble PR body** = migration ledger (spec §7) + **findings log** (docs fixed · code-side flags not fixed · out-of-scope contributor-doc staleness) + doc↔code audit summary (code correct, docs lagged) + link-check report (Task 20) + salvage-coverage table (Task 21) + removal receipts (Task 22) + net-line-count + the Option-B code-reference change list.
+- [ ] **Step 5: Walk spec §12 acceptance criteria** (as amended by the Option-B revision) and tick each with evidence. Any unchecked box blocks the PR.
+- [ ] **Step 6: Report to the operator** that the branch is ready; do NOT push or open the PR (dangerous op — ask first per project CLAUDE.md).
 
 ---
 
