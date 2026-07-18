@@ -29,6 +29,9 @@ Frida-server on the target is the operator's concern. Common shapes:
 
 `raptor doctor` only checks the host side. Target reachability is your job.
 
+For platform-specific host setup (ptrace permissions, SIP/entitlements, PEP 668
+venvs), see [Frida on Linux](SETUP_LINUX.md) and [Frida on macOS](SETUP_MACOS.md).
+
 ## Run
 
 ```bash

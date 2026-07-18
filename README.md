@@ -120,18 +120,18 @@ Full reference — grouped by workflow stage, with parameters and maturity — i
 |---------|-------------|--------|
 | `/agentic` | Full autonomous workflow: scan, validate, exploit, patch | Stable |
 | `/scan` | Static analysis with Semgrep and CodeQL | Stable |
-| `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
-| `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
+| `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Beta |
+| `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Stable |
 | `/validate` | Multi-stage exploitability validation pipeline | Stable |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
-| `/sca` | Software composition analysis: dependencies, advisories, SBOMs, fixes | Beta |
+| `/sca` | Software composition analysis: dependencies, advisories, SBOMs, fixes | Stable |
 | `/exploit` | Generate proof-of-concept exploit code | Beta |
 | `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
 | `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
 | `/project` | Named workspaces to organise runs and track findings over time | Stable |
-| `/threat-model` | Project-owned threat model: focus areas, trust boundaries, proof expectations | Beta |
+| `/threat-model` | Project-owned threat model: focus areas, trust boundaries, proof expectations | Stable |
 | `/web` | Web application scanning | Alpha/stub |
 
 ---

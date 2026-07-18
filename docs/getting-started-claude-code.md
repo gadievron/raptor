@@ -40,7 +40,7 @@ claude
 |------|----------|
 | AFL++ | Binary fuzzing (`/fuzz`) |
 | CodeQL | Deep dataflow static analysis (`/codeql`, and `/scan`/`/agentic` deeper passes) |
-| LLDB / GDB | Crash analysis (`/crash-analysis`). LLDB is pre-installed on macOS. |
+| rr + GDB | Crash analysis (`/crash-analysis`). Linux x86_64 only — `rr` has no macOS/Windows build. |
 
 ---
 

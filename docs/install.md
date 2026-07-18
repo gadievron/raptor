@@ -16,7 +16,7 @@ page tells you the minimum to get a `/scan` working and what to add per feature.
 
 | Tool | Needed by | Install |
 |------|-----------|---------|
-| Python 3.12 | everything | your OS / package manager |
+| Python 3.10+ (3.12 is the tested/CI version) | everything | your OS / package manager |
 | Python deps (`pip install -r requirements.txt`) | everything | see [Install](#install-pip-as-is) |
 | Node.js + Claude Code CLI (`claude`) | the launcher — RAPTOR runs *inside* Claude Code | `npm install -g @anthropic-ai/claude-code` |
 | **Semgrep** | `/scan`, `/agentic` (the default static engine) | `pip install semgrep` |

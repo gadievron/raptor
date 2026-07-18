@@ -56,7 +56,7 @@ python3 raptor.py help scan
 
 ## Prerequisites
 
-- Python 3.12
+- Python 3.10+ (3.12 is the tested/CI version)
 - `pip install -r requirements.txt`
 - `pip install semgrep`
 - One LLM provider SDK + its API key — `pip install anthropic` (or `openai` /
