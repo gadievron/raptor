@@ -515,6 +515,8 @@ def _render_scan_report(target: Path, scans, any_blocking: bool,
         except ValueError:
             rel = fs.path
         print(f"  {_safe(str(rel))}")
+        if not fs.findings:
+            continue
         label_w = max(len(f.label) for f in fs.findings) + 2
         for f in fs.findings:
             print(f"    {f.label:<{label_w}}{f.value}")

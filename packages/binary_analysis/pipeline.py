@@ -1082,22 +1082,22 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
         "",
         "## Evidence Summary",
         "",
-        f"- Entry point candidates: {len(context.get('entry_points', []))}",
+        f"- Entry point candidates: {len(context.get('entry_points') or [])}",
         f"- Input channel candidates: {len(result.input_channels)}",
-        f"- Security-relevant imported primitive candidates: {len(context.get('sink_details', []))}",
-        f"- Security-relevant non-sink surfaces: {len(context.get('surface_details', [])) - len(context.get('sink_details', []))}",
-        f"- Candidate call-graph flows: {len(context.get('candidate_flows', []))}",
-        f"- Decompiled functions persisted: {coverage.get('decompiled_functions', 0)} / {coverage.get('recovered_functions', 0)}",
-        f"- Runtime observation summaries: {len(context.get('runtime_observations', []))}",
-        f"- Runtime input callsites bound to recovered functions: {len(context.get('runtime_input_flows', []))}",
-        f"- Runtime parser callsites bound to recovered functions: {len(context.get('runtime_parser_flows', []))}",
+        f"- Security-relevant imported primitive candidates: {len(context.get('sink_details') or [])}",
+        f"- Security-relevant non-sink surfaces: {len(context.get('surface_details') or []) - len(context.get('sink_details') or [])}",
+        f"- Candidate call-graph flows: {len(context.get('candidate_flows') or [])}",
+        f"- Decompiled functions persisted: {coverage.get('decompiled_functions') or 0} / {coverage.get('recovered_functions') or 0}",
+        f"- Runtime observation summaries: {len(context.get('runtime_observations') or [])}",
+        f"- Runtime input callsites bound to recovered functions: {len(context.get('runtime_input_flows') or [])}",
+        f"- Runtime parser callsites bound to recovered functions: {len(context.get('runtime_parser_flows') or [])}",
         f"- Runtime evidence records ingested: {sum(1 for item in result.evidence if item.tier == EvidenceTier.OBSERVED_RUNTIME)}",
         f"- Fuzz crash witnesses ingested: {len(result.fuzz.crashes)}",
-        f"- Recovered Objective-C / Swift classes: {class_summary.get('class_count', 0)}",
-        f"- Recovered class methods: {class_summary.get('method_count', 0)}",
-        f"- Framework callback candidates: {len(context.get('framework_callback_candidates', []))}",
-        f"- External ingress candidates: {len(context.get('external_ingress_candidates', []))}",
-        f"- Parser boundary candidates: {len(context.get('parser_boundary_candidates', []))}",
+        f"- Recovered Objective-C / Swift classes: {class_summary.get('class_count') or 0}",
+        f"- Recovered class methods: {class_summary.get('method_count') or 0}",
+        f"- Framework callback candidates: {len(context.get('framework_callback_candidates') or [])}",
+        f"- External ingress candidates: {len(context.get('external_ingress_candidates') or [])}",
+        f"- Parser boundary candidates: {len(context.get('parser_boundary_candidates') or [])}",
         "",
         "## Analysis Scope",
         "",
@@ -1217,7 +1217,7 @@ def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None
     binary_file = Path(result.manifest.binary_path).name
     count = 0
 
-    for ep in result.context_map.get("entry_points", []):
+    for ep in (result.context_map.get("entry_points") or []):
         if not ep.get("name"):
             continue
         ann = Annotation(
@@ -1233,7 +1233,7 @@ def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None
         if write_annotation(ann_dir, ann, overwrite="respect-manual"):
             count += 1
 
-    for sink in result.context_map.get("sink_details", []):
+    for sink in (result.context_map.get("sink_details") or []):
         if not sink.get("name"):
             continue
         status = _STATUS_MAP.get(sink.get("type", ""), "flow_step")
@@ -1251,7 +1251,7 @@ def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None
         if write_annotation(ann_dir, ann, overwrite="respect-manual"):
             count += 1
 
-    for boundary in result.context_map.get("boundary_details", []):
+    for boundary in (result.context_map.get("boundary_details") or []):
         boundary_name = boundary.get("name") or boundary.get("id", "")
         if not boundary_name:
             continue
@@ -1268,7 +1268,7 @@ def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None
         if write_annotation(ann_dir, ann, overwrite="respect-manual"):
             count += 1
 
-    for ingress in result.context_map.get("external_ingress_candidates", []):
+    for ingress in (result.context_map.get("external_ingress_candidates") or []):
         if not ingress.get("name"):
             continue
         ann = Annotation(
@@ -1361,7 +1361,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             confidence="confirmed",
         )
     ingress_nodes: dict[str, str] = {}
-    for ingress in result.context_map.get("external_ingress_candidates", []):
+    for ingress in (result.context_map.get("external_ingress_candidates") or []):
         node = store.add_node(
             snapshot_id,
             manifest.binary_sha256,
@@ -1413,7 +1413,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         channel_nodes[channel.id] = node
         store.add_edge(snapshot_id, manifest.binary_sha256, "HAS_INPUT_CHANNEL", binary_node, node,
                        confidence=channel.confidence, evidence_ids=channel.evidence_ids)
-    for observation in result.context_map.get("runtime_observations", []):
+    for observation in (result.context_map.get("runtime_observations") or []):
         node = store.add_node(
             snapshot_id,
             manifest.binary_sha256,
@@ -1434,7 +1434,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         )
     function_nodes: dict[str, str] = {}
     function_nodes_by_address: dict[str, str] = {}
-    for fn in result.context_map.get("interesting_functions", []):
+    for fn in (result.context_map.get("interesting_functions") or []):
         node = store.add_node(
             snapshot_id,
             manifest.binary_sha256,
@@ -1449,7 +1449,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         if fn.get("address"):
             function_nodes_by_address[str(fn["address"])] = node
         store.add_edge(snapshot_id, manifest.binary_sha256, "CONTAINS", binary_node, node, confidence="high")
-    for fn in result.context_map.get("runtime_support_functions", []):
+    for fn in (result.context_map.get("runtime_support_functions") or []):
         node = store.add_node(
             snapshot_id,
             manifest.binary_sha256,
@@ -1460,7 +1460,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             props=fn,
         )
         store.add_edge(snapshot_id, manifest.binary_sha256, "CONTAINS", binary_node, node, confidence="high")
-    for ingress in result.context_map.get("external_ingress_candidates", []):
+    for ingress in (result.context_map.get("external_ingress_candidates") or []):
         ingress_node = ingress_nodes.get(ingress.get("id") or "")
         function_node = function_nodes.get(ingress.get("bound_function_id") or "")
         if function_node is None and ingress.get("address"):
@@ -1479,7 +1479,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
     method_nodes: dict[str, str] = {}
     callback_by_method_id = {
         item["method_id"]: item
-        for item in result.context_map.get("framework_callback_candidates", [])
+        for item in (result.context_map.get("framework_callback_candidates") or [])
         if isinstance(item, dict) and item.get("method_id")
     }
     for class_info in (result.context_map.get("class_inventory") or {}).get("classes", []):
@@ -1571,7 +1571,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 confidence="candidate",
                 evidence_ids=[decomp["evidence_id"]],
             )
-    for runtime_flow in result.context_map.get("runtime_input_flows", []):
+    for runtime_flow in (result.context_map.get("runtime_input_flows") or []):
         channel_node = channel_nodes.get(runtime_flow["channel_id"])
         function_node = function_nodes.get(runtime_flow["function_id"])
         if channel_node and function_node:
@@ -1586,7 +1586,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 evidence_ids=runtime_flow.get("evidence_ids") or [],
             )
     surface_nodes: dict[str, str] = {}
-    for surface in result.context_map.get("surface_details", []):
+    for surface in (result.context_map.get("surface_details") or []):
         if surface.get("is_sink"):
             continue
         node = store.add_node(
@@ -1602,7 +1602,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         surface_nodes[surface["id"]] = node
         store.add_edge(snapshot_id, manifest.binary_sha256, "IMPORTS_SURFACE", binary_node, node, confidence="confirmed")
     sink_nodes: dict[str, str] = {}
-    for sink in result.context_map.get("sink_details", []):
+    for sink in (result.context_map.get("sink_details") or []):
         node = store.add_node(
             snapshot_id,
             manifest.binary_sha256,
@@ -1615,7 +1615,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         )
         sink_nodes[sink["id"]] = node
         store.add_edge(snapshot_id, manifest.binary_sha256, "IMPORTS", binary_node, node, confidence="confirmed")
-    for flow in result.context_map.get("candidate_flows", []):
+    for flow in (result.context_map.get("candidate_flows") or []):
         src = function_nodes.get(flow["source_function"])
         dst = sink_nodes.get(flow["sink"])
         if src and dst:
@@ -1630,7 +1630,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 evidence_ids=flow.get("evidence_ids") or [],
             )
     all_surface_nodes = {**surface_nodes, **sink_nodes}
-    for flow in result.context_map.get("runtime_parser_flows", []):
+    for flow in (result.context_map.get("runtime_parser_flows") or []):
         surface_node = all_surface_nodes.get(flow["parser_surface_id"])
         function_node = function_nodes.get(flow["function_id"])
         if surface_node and function_node:
@@ -1644,7 +1644,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 props=flow,
                 evidence_ids=flow.get("evidence_ids") or [],
             )
-    for edge in result.context_map.get("call_graph_edges", []):
+    for edge in (result.context_map.get("call_graph_edges") or []):
         source_node = function_nodes.get(edge.get("source_function") or "")
         target_node = function_nodes.get(edge.get("target_function") or "")
         if source_node and target_node:
@@ -1668,7 +1668,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 confidence=edge.get("confidence") or "high",
                 props=edge,
             )
-    for boundary in result.context_map.get("parser_boundary_candidates", []):
+    for boundary in (result.context_map.get("parser_boundary_candidates") or []):
         boundary_node = store.add_node(
             snapshot_id,
             manifest.binary_sha256,

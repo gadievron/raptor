@@ -1767,7 +1767,7 @@ class AutonomousSecurityAgentV2:
         converted = convert_validated_to_agent_format(data)
 
         logger.info(f"Loaded {len(converted)} findings from {Path(findings_path).name} "
-                    f"(skipped {len(data.get('findings', [])) - len(converted)} ruled out/unlikely)")
+                    f"(skipped {len(data.get('findings') or []) - len(converted)} ruled out/unlikely)")
         return converted
 
     def _emit_finding_annotation(

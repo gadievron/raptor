@@ -1151,7 +1151,7 @@ def _compute_with_overrides(
         ecosystem=dep_dict.get("ecosystem", "PyPI"),
         name=dep_dict.get("name", "unknown"),
         version=dep_dict.get("version"),
-        declared_in=Path(dep_dict.get("declared_in", "/unknown")),
+        declared_in=Path(dep_dict.get("declared_in") or "/unknown"),
         scope=dep_dict.get("scope", "main"),
         is_lockfile=bool(dep_dict.get("is_lockfile", False)),
         pin_style=pin_style,
