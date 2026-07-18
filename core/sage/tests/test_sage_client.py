@@ -208,6 +208,88 @@ class TestSageClientWithMock(unittest.TestCase):
             _restore_sdk(client_mod, snapshot)
 
 
+class TestSageClientTagsAndMinConfidence(unittest.TestCase):
+    """SAGE 11.9.2 features: tags on propose, min_confidence on query."""
+
+    def test_propose_passes_tags_when_provided(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1, 0.2]
+
+            sc.propose("hello", tags=["scan", "finding", "xss"])
+            kwargs = mock_instance.propose.call_args.kwargs
+            self.assertEqual(kwargs["tags"], ["scan", "finding", "xss"])
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_propose_omits_tags_when_none(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1, 0.2]
+
+            sc.propose("hello")
+            kwargs = mock_instance.propose.call_args.kwargs
+            self.assertNotIn("tags", kwargs)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_query_passes_min_confidence_when_provided(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1]
+            mock_instance.query.return_value = SimpleNamespace(results=[])
+
+            sc.query("test", min_confidence=0.5)
+            kwargs = mock_instance.query.call_args.kwargs
+            self.assertEqual(kwargs["min_confidence"], 0.5)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_query_omits_min_confidence_when_none(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1]
+            mock_instance.query.return_value = SimpleNamespace(results=[])
+
+            sc.query("test")
+            kwargs = mock_instance.query.call_args.kwargs
+            self.assertNotIn("min_confidence", kwargs)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+
 class TestSageClientEgressProxyRegistration(unittest.TestCase):
     """SAGE registers its host with the in-process egress proxy when
     LLM egress is active so its httpx calls aren't refused by the
@@ -340,7 +422,7 @@ class TestSageClientWithFakeSdk(unittest.TestCase):
                 def propose(self, **kwargs):
                     self.last_proposed = kwargs
 
-                def query(self, embedding, domain_tag, top_k):
+                def query(self, embedding, domain_tag, top_k, **kwargs):
                     content = f"embedded={embedding[0]} domain={domain_tag} top_k={top_k}"
                     return SimpleNamespace(
                         results=[_FakeRecord(content, 0.88, domain_tag)]

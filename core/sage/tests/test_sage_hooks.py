@@ -410,6 +410,79 @@ class TestGetClientThreadSafety(unittest.TestCase):
         self.assertTrue(hooks._client_initialised)
 
 
+class TestSage11Features(unittest.TestCase):
+    """SAGE 11.9.2: tags on propose calls, min_confidence on query calls."""
+
+    @patch("core.sage.hooks._throttle")
+    @patch("core.sage.hooks._get_client")
+    def test_store_scan_results_passes_tags(self, mock_get_client, _throttle):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_scan_results
+        store_scan_results(
+            "/repo",
+            [{"rule_id": "xss.reflected", "level": "error",
+              "file_path": "a.js", "message": "xss"}],
+            {"total_findings": 1},
+        )
+        calls = mock_client.propose.call_args_list
+        finding_call = calls[0]
+        self.assertEqual(
+            finding_call.kwargs["tags"],
+            ["scan", "finding", "xss.reflected"],
+        )
+        summary_call = calls[1]
+        self.assertEqual(summary_call.kwargs["tags"], ["scan", "summary"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_queries_pass_min_confidence(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = []
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_scan
+        recall_context_for_scan("/repo", languages=["python"])
+
+        for call in mock_client.query.call_args_list:
+            self.assertEqual(
+                call.kwargs.get("min_confidence"), 0.5,
+                f"min_confidence missing from query call: {call}",
+            )
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_crash_pattern_passes_tags(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_crash_analysis_pattern
+        store_crash_analysis_pattern(
+            repo_path="/repo", binary_path="/bin/test",
+            signal="SIGSEGV", function_name="parse",
+            crash_type="heap-buffer-overflow",
+        )
+        kwargs = mock_client.propose.call_args.kwargs
+        self.assertEqual(kwargs["tags"], ["crash", "pattern", "heap-buffer-overflow"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_fuzzing_strategy_passes_tags(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_fuzzing_strategy_outcome
+        store_fuzzing_strategy_outcome(
+            repo_path="/repo", binary_fingerprint="abc",
+            strategy_id="havoc-splice", duration_s=300,
+            execs=100000, unique_crashes=2, hangs=0,
+            exploitable_crashes=1,
+        )
+        kwargs = mock_client.propose.call_args.kwargs
+        self.assertEqual(kwargs["tags"], ["fuzzing", "strategy", "havoc-splice"])
+
+
 class TestFormatSageMemoriesForPrompt(unittest.TestCase):
     def test_empty(self):
         from core.sage.hooks import format_sage_memories_for_prompt

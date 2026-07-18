@@ -180,6 +180,7 @@ def _propose_redacted(
     memory_type: str,
     domain_tag: str,
     confidence: float,
+    tags: Optional[List[str]] = None,
 ) -> bool:
     _sage_metrics["propose_attempted"] += 1
     redacted_content = redact_secrets(content)
@@ -188,6 +189,7 @@ def _propose_redacted(
         memory_type=memory_type,
         domain_tag=domain_tag,
         confidence=confidence,
+        tags=tags,
     )
     if ok:
         _sage_metrics["propose_succeeded"] += 1
@@ -374,11 +376,13 @@ def recall_context_for_scan(
             text=f"security findings and vulnerability patterns for {lang_str} project {repo_name}",
             domain_tag=_findings_domain(repo_path),
             top_k=5,
+            min_confidence=0.5,
         )
         methodology = client.query(
             text=f"analysis methodology and best practices for {lang_str} security scanning",
             domain_tag="raptor-methodology",
             top_k=3,
+            min_confidence=0.5,
         )
 
         all_results = _merge_recall_rows(results, methodology, top_k=8)
@@ -416,6 +420,7 @@ def recall_context_for_crash_analysis(
             text=query,
             domain_tag=_crashes_domain(repo_path),
             top_k=5,
+            min_confidence=0.5,
         )
         meth_parts = [
             "Native crash triage, sanitizer interpretation, and exploitability heuristics",
@@ -428,6 +433,7 @@ def recall_context_for_crash_analysis(
             text=", ".join(meth_parts) + ".",
             domain_tag="raptor-methodology",
             top_k=3,
+            min_confidence=0.5,
         )
         merged = _merge_recall_rows(results, methodology, top_k=8)
         _sage_metrics["recall_hits"] += len(merged)
@@ -453,6 +459,7 @@ def recall_context_for_web_scan(
             ),
             domain_tag=_web_domain(repo_path),
             top_k=5,
+            min_confidence=0.5,
         )
         methodology = client.query(
             text=(
@@ -461,6 +468,7 @@ def recall_context_for_web_scan(
             ),
             domain_tag="raptor-methodology",
             top_k=3,
+            min_confidence=0.5,
         )
         merged = _merge_recall_rows(results, methodology, top_k=8)
         _sage_metrics["recall_hits"] += len(merged)
@@ -487,6 +495,7 @@ def recall_context_for_codeql_build(
             ),
             domain_tag=_findings_domain(repo_path),
             top_k=3,
+            min_confidence=0.5,
         )
         methodology = client.query(
             text=(
@@ -495,6 +504,7 @@ def recall_context_for_codeql_build(
             ),
             domain_tag="raptor-methodology",
             top_k=5,
+            min_confidence=0.5,
         )
         merged = _merge_recall_rows(findings, methodology, top_k=8)
         _sage_metrics["recall_hits"] += len(merged)
@@ -524,6 +534,7 @@ def recall_context_for_fuzzing_strategy(
             text=query,
             domain_tag="raptor-fuzzing",
             top_k=5,
+            min_confidence=0.5,
         )
         methodology = client.query(
             text=(
@@ -532,6 +543,7 @@ def recall_context_for_fuzzing_strategy(
             ),
             domain_tag="raptor-methodology",
             top_k=3,
+            min_confidence=0.5,
         )
         merged = _merge_recall_rows(results, methodology, top_k=8)
         _sage_metrics["recall_hits"] += len(merged)
@@ -600,6 +612,7 @@ def store_scan_results(
                 memory_type="observation",
                 domain_tag=_findings_domain(repo_path),
                 confidence=confidence,
+                tags=["scan", "finding", rule_id],
             ):
                 stored += 1
 
@@ -625,6 +638,7 @@ def store_scan_results(
             memory_type="observation",
             domain_tag=_findings_domain(repo_path),
             confidence=0.85,
+            tags=["scan", "summary"],
         )
     except Exception as e:
         logger.debug(f"SAGE scan summary store failed: {e}")
@@ -666,6 +680,7 @@ def store_analysis_results(
             memory_type="observation",
             domain_tag=_findings_domain(repo_path),
             confidence=0.85,
+            tags=["analysis", "summary"],
         )
 
         if orchestration:
@@ -684,6 +699,7 @@ def store_analysis_results(
                         memory_type="fact",
                         domain_tag=_exploits_domain(repo_path),
                         confidence=0.90,
+                        tags=["analysis", "exploitable", rule_id],
                     )
                     _throttle()
     except Exception as e:
@@ -717,6 +733,7 @@ def enrich_analysis_prompt(
             text=f"{vuln_type} vulnerability findings and exploitability in {lang} code",
             domain_tag=_findings_domain(repo_path),
             top_k=3,
+            min_confidence=0.5,
         )
         methodology_hits = client.query(
             text=(
@@ -725,6 +742,7 @@ def enrich_analysis_prompt(
             ),
             domain_tag="raptor-methodology",
             top_k=2,
+            min_confidence=0.5,
         )
 
         if not findings_hits and not methodology_hits:
@@ -788,6 +806,7 @@ def store_crash_analysis_pattern(
             memory_type="observation",
             domain_tag=_crashes_domain(repo_path),
             confidence=confidence,
+            tags=["crash", "pattern", crash_type],
         )
     except Exception as e:
         logger.debug(f"SAGE crash pattern store failed: {e}")
@@ -820,6 +839,7 @@ def store_web_payload_effectiveness(
             memory_type="observation",
             domain_tag=_web_domain(repo_path),
             confidence=confidence,
+            tags=["web", "payload", payload_class],
         )
     except Exception as e:
         logger.debug(f"SAGE web payload store failed: {e}")
@@ -852,6 +872,7 @@ def store_codeql_build_reliability(
             memory_type="observation",
             domain_tag="raptor-methodology",
             confidence=confidence,
+            tags=["codeql", "build", auto_detect_outcome],
         )
     except Exception as e:
         logger.debug(f"SAGE codeql reliability store failed: {e}")
@@ -884,6 +905,7 @@ def store_fuzzing_strategy_outcome(
             memory_type="observation",
             domain_tag="raptor-fuzzing",
             confidence=confidence,
+            tags=["fuzzing", "strategy", strategy_id],
         )
     except Exception as e:
         logger.debug(f"SAGE fuzzing strategy store failed: {e}")
