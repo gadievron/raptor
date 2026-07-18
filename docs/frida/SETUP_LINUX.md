@@ -25,7 +25,7 @@ To attach to a sibling process you own (the common case), drop to 0 temporarily:
 sudo sysctl -w kernel.yama.ptrace_scope=0
 ```
 
-`raptor doctor` reports the current `ptrace_scope` in its host snapshot, and `metadata.json` from each run records it - useful for "why did attach fail" forensics.
+`metadata.json` from each Frida run records the host's `ptrace_scope` at run time - useful for "why did attach fail" forensics. `raptor doctor` does not report it.
 
 ## Spawn-and-attach
 

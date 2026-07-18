@@ -6,10 +6,10 @@ Target: any macOS process you have permission to instrument.
 ## Host install
 
 ```bash
-pipx install frida-tools
+pipx install frida-tools       # macOS system Python is externally-managed (PEP 668)
+# or, in a venv:
+pip install frida-tools
 ```
-
-System Python on macOS is externally-managed under PEP 668; `pipx` is the cleanest path. Plain `pip install frida-tools` works inside a virtualenv.
 
 ## Attaching to your own processes
 

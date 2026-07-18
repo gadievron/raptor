@@ -195,167 +195,22 @@ CFLAGS="--coverage -g" LDFLAGS="--coverage" make
 
 ## Skills Reference
 
-The crash analysis system includes four skills located in `.claude/skills/crash-analysis/`:
+Skills live in `.claude/skills/crash-analysis/`:
 
-### rr-debugger
-
-**Location:** `.claude/skills/crash-analysis/rr-debugger/`
-
-Deterministic record-replay debugging with reverse execution capabilities.
-
-**Files:**
-- `SKILL.md` - Skill documentation and usage
-- `scripts/crash_trace.py` - Automated crash trace extraction
-
-**Key Commands:**
-```bash
-rr record ./program args        # Record execution
-rr replay                       # Replay in gdb
-reverse-next                    # Step backwards
-reverse-continue                # Continue backwards to breakpoint
-```
-
-**Use Cases:**
-- Trace memory corruption to its source
-- Find exact sequence of events before crash
-- Debug non-deterministic bugs deterministically
-
----
-
-### function-tracing
-
-**Location:** `.claude/skills/crash-analysis/function-tracing/`
-
-Function call instrumentation via GCC's `-finstrument-functions` flag.
-
-**Files:**
-- `SKILL.md` - Skill documentation
-- `trace_instrument.c` - Instrumentation library source
-- `trace_to_perfetto.cpp` - Converter to Perfetto JSON format
-
-**Usage:**
-```bash
-# Build instrumentation library
-gcc -c -fPIC trace_instrument.c -o trace_instrument.o
-gcc -shared trace_instrument.o -o libtrace.so -ldl -lpthread
-
-# Build target with instrumentation
-gcc -finstrument-functions -g target.c -L. -ltrace -o target
-
-# Run and convert
-LD_LIBRARY_PATH=. ./target
-./trace_to_perfetto trace_*.log -o trace.json
-
-# View at ui.perfetto.dev
-```
-
-**Output Format:**
-```
-[seq] [timestamp] [depth] [ENTRY|EXIT!] function_name
-[0] [1.000000000]  [ENTRY] main
-[1] [1.000050000] . [ENTRY] process_data
-[2] [1.000100000] . [EXIT!] process_data
-```
-
----
-
-### gcov-coverage
-
-**Location:** `.claude/skills/crash-analysis/gcov-coverage/`
-
-Line and branch coverage collection using GCC's gcov.
-
-**Files:**
-- `SKILL.md` - Skill documentation
-
-**Usage:**
-```bash
-# Build with coverage
-gcc --coverage -g target.c -o target
-
-# Run program (generates .gcda files)
-./target input_file
-
-# Generate coverage report
-gcov target.c
-
-# View coverage (##### = not executed)
-cat target.c.gcov
-```
-
-**Output Format:**
-```
-        1:   10:    int main() {
-        1:   11:        if (condition) {
-    #####:   12:            unreached_code();  // Not executed
-        -:   13:        }
-        1:   14:        return 0;
-```
-
----
-
-### line-execution-checker
-
-**Location:** `.claude/skills/crash-analysis/line-execution-checker/`
-
-Fast queries for whether specific source lines were executed.
-
-**Files:**
-- `SKILL.md` - Skill documentation
-- `line_checker.cpp` - Tool source code
-
-**Usage:**
-```bash
-# Build the checker
-g++ -o line_checker line_checker.cpp
-
-# Check if a specific line was executed
-./line_checker src/file.c:123
-
-# Exit codes:
-#   0 = line was executed
-#   1 = line was NOT executed
-#   2 = error (file not found, invalid line, etc.)
-```
-
-**Use Cases:**
-- Validate that specific code paths were taken during crash
-- Quickly check coverage without parsing full gcov files
-- Script-friendly for automated validation
-
----
+- `rr-debugger` - Deterministic record-replay debugging (reverse execution)
+- `function-tracing` - Function instrumentation with `-finstrument-functions`
+- `gcov-coverage` - Code coverage collection
+- `line-execution-checker` - Fast line execution queries
 
 ## Agents Reference
 
-The crash analysis uses five specialized agents in `.claude/agents/`:
+Agents live in `.claude/agents/`:
 
-| Agent | File | Purpose |
-|-------|------|---------|
-| **crash-analysis-agent** | `crash-analysis-agent.md` | Main orchestrator - coordinates the full workflow |
-| **crash-analyzer-agent** | `crash-analyzer-agent.md` | Deep root-cause analysis using rr, traces, coverage |
-| **crash-analyzer-checker-agent** | `crash-analyzer-checker-agent.md` | Rigorous validation of hypotheses |
-| **function-trace-generator-agent** | `function-trace-generator-agent.md` | Builds and runs function tracing |
-| **coverage-analysis-generator-agent** | `coverage-analysis-generator-agent.md` | Builds and collects gcov data |
-
-### Agent Workflow
-
-```
-crash-analysis-agent (orchestrator)
-    │
-    ├── function-trace-generator-agent
-    │       └── Generates traces/ directory
-    │
-    ├── coverage-analysis-generator-agent
-    │       └── Generates gcov/ directory
-    │
-    ├── crash-analyzer-agent
-    │       └── Writes root-cause-hypothesis-NNN.md
-    │
-    └── crash-analyzer-checker-agent
-            ├── PASS → root-cause-hypothesis-NNN-confirmed.md
-            └── FAIL → root-cause-hypothesis-NNN-rebuttal.md
-                       (loops back to crash-analyzer-agent)
-```
+- `crash-analysis-agent` - Main orchestrator, coordinates the full workflow
+- `crash-analyzer-agent` - Deep root-cause analysis using rr, traces, coverage
+- `crash-analyzer-checker-agent` - Rigorous validation of hypotheses
+- `function-trace-generator-agent` - Builds and runs function tracing
+- `coverage-analysis-generator-agent` - Builds and collects gcov data
 
 ## Integration with RAPTOR
 

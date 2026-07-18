@@ -25,6 +25,28 @@ declared helper/sibling artefacts, automatic graph rollups and a priority queue
 of next evidence actions. The lower-level `map` command is still there when
 you only want the mechanical substrate.
 
+## Prerequisites
+
+Required:
+
+- `radare2` in `PATH` (`apt install radare2` / `brew install radare2`)
+- the `r2pipe` Python module (`pip install r2pipe`)
+
+Optional, enable specific evidence tiers:
+
+- `r2ghidra` radare2 plugin for higher-quality decompilation (falls back to
+  the built-in `pdc` otherwise)
+- `frida-tools`, for `--runtime` / `trace-parser` dynamic evidence
+- `z3-solver`, for explicit-condition SMT checks (`--constraint-file`)
+- AFL++, for `--fuzz` witnesses
+
+Every `/binary map` / `/binary investigate` run resolves its own output
+directory the same way `/understand` does: `--out <dir>` if given, otherwise
+an auto-generated `out/understand_<target-stem>_<timestamp>_pid.../` (or, with
+an active project, a timestamped `understand-...` run inside the project
+directory). The examples below use `out/understand_app_.../` as a stand-in
+for that generated path.
+
 ## What it does
 
 `/binary map` takes one compiled artefact and builds:
@@ -129,7 +151,7 @@ spawn, attach to or fuzz the target.
 For the raw map only:
 
 ```bash
-/binary map /path/to/app --out out/binary-app
+/binary map /path/to/app --out out/understand_app_.../
 ```
 
 For universal Mach-O applications, RAPTOR inventories every slice and deeply
@@ -139,7 +161,7 @@ opened; pin it when you need the other side of the app:
 ```bash
 /binary map /path/to/App.app/Contents/MacOS/App \
   --slice-arch x86_64 \
-  --out out/binary-app-x86
+  --out out/understand_App_x86_.../
 ```
 
 By default it persists pseudocode for the 20 highest-value recovered
@@ -155,7 +177,7 @@ The lower-level helper and its old positional form still work for tests and
 power users, but they are not the normal operator surface:
 
 ```bash
-_RAPTOR_TRUSTED=1 libexec/raptor-binary map /path/to/app --out out/binary-app
+_RAPTOR_TRUSTED=1 libexec/raptor-binary map /path/to/app --out out/understand_app_.../
 ```
 
 ## Add runtime evidence
@@ -185,7 +207,7 @@ run you want to ingest:
 /binary runtime /path/to/app --duration 20
 
 /binary map /path/to/app \
-  --out out/binary-app \
+  --out out/understand_app_.../ \
   --runtime-dir out/frida-...
 ```
 
@@ -194,8 +216,8 @@ directory again as well:
 
 ```bash
 /binary map /path/to/app \
-  --out out/binary-app \
-  --runtime-dir out/binary-app/parser-runtime \
+  --out out/understand_app_.../ \
+  --runtime-dir out/understand_app_.../parser-runtime \
   --fuzz-dir out/fuzz-...
 ```
 
@@ -308,7 +330,7 @@ it can emit source honestly.
 /binary fuzz /path/to/app --duration 60
 
 /binary map /path/to/app \
-  --out out/binary-app \
+  --out out/understand_app_.../ \
   --fuzz-dir out/fuzz-...
 ```
 
@@ -335,7 +357,7 @@ RAPTOR ingests successful ASAN/debug sibling replays as separate
 
 ```bash
 /binary map /path/to/app \
-  --out out/binary-app \
+  --out out/understand_app_.../ \
   --constraint-file conditions.json
 ```
 
@@ -347,7 +369,7 @@ pretend whole-binary symbolic execution has happened.
 ```bash
 /binary map /path/to/new/app \
   --compare /path/to/old/app \
-  --out out/binary-app
+  --out out/understand_app_.../
 ```
 
 `binary-diff.json` reports byte, metadata, import capability and runtime-marker
@@ -356,10 +378,10 @@ changes. It does not claim the new build introduced a reachable bug.
 ## Query the graph
 
 ```bash
-/binary graph out/binary-app
-/binary graph out/binary-app --edges --json
-/binary graph out/binary-app --edges --kind MAY_REACH --json
-/binary graph out/binary-app --evidence --tier replayed_crash --json
+/binary graph out/understand_app_.../
+/binary graph out/understand_app_.../ --edges --json
+/binary graph out/understand_app_.../ --edges --kind MAY_REACH --json
+/binary graph out/understand_app_.../ --evidence --tier replayed_crash --json
 ```
 
 The graph is internal memory, not the public contract. The JSON files remain
