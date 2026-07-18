@@ -761,8 +761,8 @@ class AutonomousCodeQLAnalyzer:
                 tm_block = threat_model_untrusted_block(repo_path)
                 if tm_block:
                     blocks.append(tm_block)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("threat_model_untrusted_block failed: %s", exc)
 
         slots = {
             "rule_id": TaintedString(value=finding.rule_id, trust="untrusted"),
@@ -1158,7 +1158,7 @@ class AutonomousCodeQLAnalyzer:
                     ),
                 )
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("record_suppression failed for %s", _finding_dict.get("id", "?"))
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,

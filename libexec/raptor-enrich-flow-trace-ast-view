@@ -87,7 +87,8 @@ def main() -> int:
     if not trace_files:
         print(
             "raptor-enrich-flow-trace-ast-view: no flow-trace-*.json "
-            "files in directory; nothing to enrich"
+            "files in directory; nothing to enrich",
+            file=sys.stderr,
         )
         return 0
 
@@ -121,7 +122,8 @@ def main() -> int:
             f"raptor-enrich-flow-trace-ast-view: no steps enriched "
             f"across {len(trace_files)} trace file(s) "
             "(no steps with resolvable definitions, or inventory "
-            "build skipped)"
+            "build skipped)",
+            file=sys.stderr,
         )
     return 0
 

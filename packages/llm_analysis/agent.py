@@ -931,8 +931,8 @@ class AutonomousSecurityAgentV2:
             tm_block = threat_model_untrusted_block(Path(vuln.repo_path))
             if tm_block:
                 extra_blocks.append(tm_block)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("threat_model_untrusted_block failed: %s", exc)
 
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,

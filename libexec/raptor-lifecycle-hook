@@ -130,7 +130,7 @@ def main():
                 meta_path = d / RUN_METADATA_FILE
                 if not meta_path.exists():
                     continue
-                meta = json.loads(meta_path.read_text())
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
             if (meta.get("status") != STATUS_RUNNING

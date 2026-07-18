@@ -49,7 +49,7 @@ def main() -> int:
         return 0
 
     try:
-        ctx = json.loads(ctx_path.read_text())
+        ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         print(f"✗ Cannot read context-map: {e}", file=sys.stderr)
         return 1
@@ -59,7 +59,7 @@ def main() -> int:
     checklist_path = workdir / "checklist.json"
     if checklist_path.is_file():
         try:
-            cl = json.loads(checklist_path.read_text())
+            cl = json.loads(checklist_path.read_text(encoding="utf-8"))
             target_path = cl.get("target_path")
         except (json.JSONDecodeError, OSError):
             pass

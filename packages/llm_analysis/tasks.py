@@ -977,7 +977,7 @@ class GroupAnalysisTask(DispatchTask):
         return group.get("group_id", "unknown")
 
     def get_item_display(self, group):
-        return f"{group.get('criterion', '?')}={group.get('criterion_value', '?')[:30]}"
+        return f"{group.get('criterion', '?')}={(group.get('criterion_value') or '?')[:30]}"
 
     def get_schema(self, group):
         return None

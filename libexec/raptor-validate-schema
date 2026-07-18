@@ -60,7 +60,7 @@ def _read_validated(directory):
     vfile = Path(directory) / ".validated"
     result = {}
     if vfile.exists():
-        for line in vfile.read_text().splitlines():
+        for line in vfile.read_text(encoding="utf-8").splitlines():
             if ":" in line:
                 name, h = line.split(":", 1)
                 result[name.strip()] = h.strip()
@@ -73,7 +73,7 @@ def _write_validated(directory, filename, filehash):
     existing = _read_validated(directory)
     existing[filename] = filehash
     lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
-    vfile.write_text("\n".join(lines) + "\n")
+    vfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _validate_stage_file(data, filename):

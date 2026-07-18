@@ -101,7 +101,7 @@ def discover_codeql_databases(out_dir: Path) -> Dict[str, Path]:
     if report_path.is_file():
         try:
             import json
-            data = json.loads(report_path.read_text())
+            data = json.loads(report_path.read_text(encoding="utf-8"))
             for lang, info in (data.get("databases_created") or {}).items():
                 if not isinstance(info, dict) or not info.get("success"):
                     continue

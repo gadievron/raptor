@@ -123,7 +123,8 @@ def main() -> int:
         suffix = f" ({reason})" if reason else ""
         print(
             "raptor-enrich-context-map-sites: no ownership/privilege sites "
-            f"detected{suffix}"
+            f"detected{suffix}",
+            file=sys.stderr,
         )
     return 0
 

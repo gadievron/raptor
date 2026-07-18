@@ -249,7 +249,7 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
         lines.append(f"| CVSS | {cvss_str} |")
 
     confidence = finding.get("confidence")
-    if confidence:
+    if confidence is not None:
         lines.append(f"| Confidence | {_md_table_cell(str(confidence).title())} |")
 
     lines.append("")

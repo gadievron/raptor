@@ -718,8 +718,8 @@ class LLMClient:
             # so mocked/cached clients that never call a provider never register
             # an atexit handler or write to the scorecard.
             self._arm_usage_flush()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_record_fired_model failed: %s", exc)
 
     def _record_usage(
         self, alias: str, *, cost: float = 0.0, tokens: int = 0,
@@ -748,8 +748,8 @@ class LLMClient:
                 cur["latency_ms_sum"] += ms
                 if ms > cur["latency_ms_max"]:
                     cur["latency_ms_max"] = ms
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_record_usage failed: %s", exc)
 
     def _record_schema_validity(self, alias: str, *, success: bool) -> None:
         """Accumulate per-alias schema-validation outcomes for the run-end
@@ -770,8 +770,8 @@ class LLMClient:
                     cur["pass"] += 1
                 else:
                     cur["fail"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_record_schema_validity failed: %s", exc)
 
     def _arm_usage_flush(self) -> None:
         """Register the run-end usage flush exactly once, the first time a real
@@ -785,8 +785,8 @@ class LLMClient:
                 return
             import atexit
             atexit.register(self.flush_usage_to_scorecard)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_arm_usage_flush failed: %s", exc)
 
     def _snapshot_and_clear_fired(self) -> tuple:
         """Atomically copy + clear ``_fired_models`` / ``_fired_usage`` /
@@ -925,8 +925,8 @@ class LLMClient:
                     f"`raptor-llm-scorecard` for details",
                     file=_sys.stderr,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("scorecard summary print failed: %s", exc)
         except Exception as e:  # pragma: no cover - shutdown-path best effort
             logger.debug("scorecard usage flush failed: %s", e)
 

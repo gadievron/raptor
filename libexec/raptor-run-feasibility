@@ -111,7 +111,7 @@ def main():
         ]
 
         if not group:
-            print(f"No findings reference binary: {binary_path}")
+            print(f"No findings reference binary: {binary_path}", file=sys.stderr)
             return
 
         # Determine vuln_type from first finding if not specified

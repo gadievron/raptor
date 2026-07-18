@@ -778,7 +778,7 @@ class DatabaseManager:
                 os.close(fd)
                 build_script = Path(script_name)
                 try:
-                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
+                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n", encoding="utf-8")
                     # 0o500 (read+execute, no write) for parity with
                     # `build_detector.py:871`'s synthesised-script mode
                     # — TOCTOU mitigation: a separate process can't

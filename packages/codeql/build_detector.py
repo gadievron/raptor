@@ -1183,7 +1183,7 @@ for i, src in enumerate(FILES):
             )
 
 print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
-''')
+''', encoding="utf-8")
         # SECURITY: make read+execute only after writing — prevents modification
         # between generation and CodeQL execution (TOCTOU mitigation).
         script_path.chmod(0o500)
