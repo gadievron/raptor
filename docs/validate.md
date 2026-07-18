@@ -149,6 +149,33 @@ recorded as Ruled Out (`ruled_out`), and disproven hypotheses are tracked separa
 Disproven (`disproven`). Downstream steps such as `/exploit` skip Ruled Out, Disproven,
 and Confirmed (Blocked) findings.
 
+### Non-memory-corruption verdicts: `_derive_verdict_from_source`
+
+Web/injection findings never enter Stage E (no binary feasibility check runs), so they
+need a verdict derived from Stage B/C source-level analysis alone. `_derive_verdict_from_source`
+(`packages/exploitability_validation/orchestrator.py`) does that, reading the
+`chain_breaks` and `what_would_help` lists Stage B/C attached to the finding:
+
+| `chain_breaks` | `what_would_help` | Verdict | Rationale |
+|:---:|:---:|---|---|
+| present | present | `difficult` | Blockers exist, but so do routes around them. |
+| present | empty | `unlikely` | Blockers exist and nothing was found to work around them. |
+| empty | present | `difficult` | No blockers found, but open unknowns remain — not fully confirmed. |
+| empty | empty | `likely_exploitable` | No blockers, no open unknowns. |
+
+**Precondition cap:** if the finding also carries non-trivial `preconditions` (e.g.
+"requires uid 0", "requires local access") and the rule above would land on
+`likely_exploitable`, the verdict is capped down to `difficult` instead — a real
+precondition means it isn't a clean "just send the payload" case even when nothing
+else blocks it.
+
+The derived verdict is then mapped to `final_status` for these findings via
+`_finalize_non_memory_findings`'s own `verdict_mapping`: `exploitable` → `exploitable`,
+`likely_exploitable` → `likely_exploitable`, `difficult` → `confirmed_constrained`,
+`unlikely` → `confirmed_blocked`, `unknown` / `error` → `confirmed_unverified`. This is
+a separate mapping from the memory-corruption `final_status` table above — it runs for
+findings that skip Stage E entirely.
+
 ---
 
 ## The MUST-GATEs
@@ -168,6 +195,35 @@ verifying, and dismiss findings that turn out to be real. Full definitions are i
 | **GATE-6** (Proof)            | Show the vulnerable code for every finding. | Hallucinations |
 | **GATE-7** (Consistency)      | Verify `vuln_type`, `severity`, and `status` match the description and proof. | Misclassifications |
 | **GATE-8** (PoC-Evidence)     | A PoC needs observable evidence — a crash, changed output, callback. "Ran without error" is not evidence. | Unverified PoCs |
+
+---
+
+## SARIF ingestion & deduplication
+
+When `--findings` points at a SARIF file, Stage 0 converts each result into an internal
+finding and deduplicates so the same underlying bug reported by multiple tools (e.g.
+Semgrep + CodeQL both flagging the same line) collapses into one finding instead of
+being counted, and reviewed, twice. Two dedup passes cooperate, both in
+`packages/exploitability_validation/orchestrator.py`:
+
+1. **At SARIF conversion** (`convert_sarif_result`) — the rule ID is normalized to a
+   canonical `vuln_type` (`normalize_rule_id()`), then a fingerprint is computed: the
+   SARIF tool's own `partialFingerprints.primaryLocationLineHash` if present, otherwise
+   `"{file}:{line}:{normalized_vuln_type}"`. A result whose fingerprint was already seen
+   is dropped.
+2. **After ingestion** (`_deduplicate_findings`) — a second, coarser pass runs over the
+   full findings list (whether it came from SARIF conversion or a pre-existing findings
+   JSON) keyed on **`(file, line, vuln_type)`**. This catches duplicates that survive
+   step 1 because they carried different tool-supplied fingerprints.
+
+The key is on the *normalized* vuln type, not the raw rule ID, so `CWE-89`,
+`java/sql-injection`, and a Semgrep rule ID all ending up as `sql_injection` will dedup
+against each other even though their raw rule IDs differ.
+
+This is distinct from the SARIF-merge dedup used upstream by `/agentic` and `/scan`
+(`core/sarif/parser.py`, keyed on `(ruleId, uri, startLine, endLine, startColumn,
+partialFingerprint)`), which runs earlier, when raw SARIF files from multiple tools are
+merged before `/validate` ever loads them.
 
 ---
 
