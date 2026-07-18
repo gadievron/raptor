@@ -5,9 +5,10 @@ the internals of the `calibrated_aggregation` output. For the conceptual "how it
 works" tour (modes, design principles, model reasoning), read
 [`../concepts.md`](../concepts.md) first.
 
-> This document tracks the source layout and is expected to drift as the tree
-> changes. Treat the paths as a map, not a contract — verify against the working
-> copy when precision matters.
+> Inventory current as of 2026-07-18 (verified against every `packages/*` and
+> `core/*` directory in the working tree). Regenerate from the working tree
+> (`ls -d packages/*/ core/*/`) if directories are added, removed, or renamed —
+> treat this as a snapshot, not a contract.
 
 ---
 
@@ -16,12 +17,21 @@ works" tour (modes, design principles, model reasoning), read
 ```
 raptor/
 │
-├── core/                           # Shared utilities layer
+├── core/                           # Shared utilities layer (45 subpackages)
 │   ├── __init__.py
+│   ├── analysis/                   # Taint approx, reachability, binary-oracle verdicts, CFG, dataflow
+│   ├── annotations/                # Per-function prose annotations (markdown mirroring source tree)
+│   ├── archive/                    # Archive facade — multi-format detection + safe extraction
+│   ├── ast/                        # Structured per-function views over the inventory substrate
+│   ├── atomic_fs/                  # Atomic file-write primitive (tempfile + rename)
+│   ├── binary/                     # Binary substrate: fingerprinting + capability diff
 │   ├── build/                      # Build-system detection + toolchain probes
 │   ├── config/                     # RaptorConfig (paths, settings)
 │   ├── coverage/                   # Read-coverage tracking + summary
+│   ├── cve/                        # Per-CVE signal layer: EPSS, KEV, vulnrichment
+│   ├── dataflow/                   # Producer-neutral dataflow finding schema + adapters
 │   ├── dockerfile/                 # Dockerfile parsing helpers (FROM/ENV)
+│   ├── function_taxonomy/          # Shared taxonomy of function-name categories with security significance
 │   ├── git/                        # Sandbox-routed clone + URL allowlist
 │   ├── hash/                       # SHA-256 helpers (tree/file/bytes/string)
 │   ├── http/                       # EgressClient + per-host allowlists
@@ -35,6 +45,8 @@ raptor/
 │   │   ├── reachability.py         # Function-call reachability (substrate)
 │   │   └── coverage.py             # checked_by tracking + coverage stats
 │   ├── json/                       # BOM-tolerant JSON utils + cache helpers
+│   ├── labeled_attempts/           # Finding-keyed append-only corpus of oracle-verified attempts
+│   ├── license/                    # Target license detection + classification (SPDX)
 │   ├── llm/                        # LLM substrate (clients, providers, scorecard, tool-use loop)
 │   ├── logging/                    # Structured logging with JSONL audit trail
 │   ├── oci/                        # OCI image-ref parsing + canonicalisation
@@ -49,17 +61,39 @@ raptor/
 │   │   └── parser.py               # SARIF 2.1.0 parsing utilities
 │   ├── schema_constants/           # Shared schema field-name constants
 │   ├── security/                   # Prompt envelope, secret redaction, env sanitisation, cc_trust
+│   ├── sentinels/                  # Reload-stable sentinel objects
 │   ├── smt_solver/                 # Z3-based path-feasibility (rejection, witness, csem)
-│   └── startup/                    # CLI startup banner + env validation
+│   ├── startup/                    # CLI startup banner + env validation
+│   ├── status/                     # Status/verdict string normalisation (single source of truth)
+│   ├── tar/                        # Tar primitives for attacker-influenced archives
+│   ├── threat_model/               # Project-level threat model artefact (assets, trust boundaries, scope)
+│   ├── trajectories/                # Trajectory persistence — per-iteration tool-call traces
+│   ├── tuning/                     # Hardware-aware resource tuning
+│   ├── upstream_latest/            # Look up latest stable version of an upstream package/release
+│   ├── url_patterns/               # Canonical URL regex patterns for commit-URL extraction
+│   ├── witness/                    # Canonical "input bytes that triggered a bug" artefact
+│   └── zip/                        # Zip primitives for attacker-influenced archives (mirrors core/tar)
 │
-├── packages/                       # Security capabilities layer
+├── packages/                       # Security capabilities layer (27 subpackages)
 │   ├── __init__.py
 │   │
-│   ├── static-analysis/            # Static code scanning
+│   ├── autonomous/                 # Autonomous agent capabilities
 │   │   ├── __init__.py
-│   │   ├── scanner.py              # Main: Semgrep orchestrator
-│   │   └── codeql/
-│   │       └── env.py              # CodeQL environment setup
+│   │   ├── corpus_generator.py     # Fuzzing corpus generation
+│   │   ├── dialogue.py             # Agent dialogue management
+│   │   ├── exploit_validator.py    # Exploit code validation
+│   │   ├── goal_planner.py         # Goal-oriented planning
+│   │   ├── memory.py               # Agent memory and context
+│   │   └── planner.py              # Task planning and decomposition
+│   │
+│   ├── binary_analysis/            # Binary crash analysis
+│   │   ├── __init__.py
+│   │   ├── crash_analyser.py       # Main: GDB crash analysis
+│   │   └── debugger.py             # GDB wrapper and automation
+│   │
+│   ├── checker_synthesis/          # KNighter-style checker synthesis: bug → Semgrep/Coccinelle rule → variant hunt
+│   │
+│   ├── coccinelle/                 # Coccinelle integration: semantic patching + inconsistency detection for C/C++
 │   │
 │   ├── codeql/                     # CodeQL deep analysis
 │   │   ├── __init__.py
@@ -71,6 +105,32 @@ raptor/
 │   │   ├── dataflow_visualizer.py  # Dataflow visualization
 │   │   ├── language_detector.py    # Programming language detection
 │   │   └── query_runner.py         # CodeQL query execution
+│   │
+│   ├── code_understanding/         # Code-understanding multi-model consumers (--hunt / --trace orchestration)
+│   │
+│   ├── cve_diff/                   # CVE patch discovery: find, acquire, diff the fix commit for a CVE
+│   │
+│   ├── cvss/                       # CVSS v3.1 base score calculator
+│   │
+│   ├── describe/                   # Target description: language mix, build system, catalog match, cost estimate
+│   │
+│   ├── diagram/                    # Mermaid diagram generation from /understand and /validate outputs
+│   │
+│   ├── exploitability_validation/  # Multi-stage pipeline validating findings are real/reachable/exploitable
+│   │
+│   ├── exploitation/               # Exploit-development workflow support (bootstrap, reporting)
+│   │
+│   ├── exploit_feasibility/        # Mitigation + exploitation-factor analysis (run before exploit dev)
+│   │
+│   ├── frida/                      # Frida dynamic-instrumentation substrate (runner, CLI, hook templates)
+│   │
+│   ├── fuzzing/                    # Binary fuzzing
+│   │   ├── __init__.py
+│   │   ├── afl_runner.py           # AFL++ orchestration
+│   │   ├── crash_collector.py      # Crash triage and ranking
+│   │   └── corpus_manager.py       # Seed corpus generation
+│   │
+│   ├── hypothesis_validation/      # Hypothesis-driven, tool-grounded vulnerability validation
 │   │
 │   ├── llm_analysis/               # LLM-powered analysis
 │   │   ├── __init__.py
@@ -85,25 +145,9 @@ raptor/
 │   │       ├── model_data.py       # Model costs, limits, provider endpoints
 │   │       └── providers.py        # Provider implementations (Anthropic, OpenAI, etc.)
 │   │
-│   ├── autonomous/                 # Autonomous agent capabilities
-│   │   ├── __init__.py
-│   │   ├── corpus_generator.py     # Fuzzing corpus generation
-│   │   ├── dialogue.py             # Agent dialogue management
-│   │   ├── exploit_validator.py    # Exploit code validation
-│   │   ├── goal_planner.py         # Goal-oriented planning
-│   │   ├── memory.py               # Agent memory and context
-│   │   └── planner.py              # Task planning and decomposition
+│   ├── nvd/                        # NVD API v2.0 shared client + parser
 │   │
-│   ├── fuzzing/                    # Binary fuzzing
-│   │   ├── __init__.py
-│   │   ├── afl_runner.py           # AFL++ orchestration
-│   │   ├── crash_collector.py      # Crash triage and ranking
-│   │   └── corpus_manager.py       # Seed corpus generation
-│   │
-│   ├── binary_analysis/            # Binary crash analysis
-│   │   ├── __init__.py
-│   │   ├── crash_analyser.py       # Main: GDB crash analysis
-│   │   └── debugger.py             # GDB wrapper and automation
+│   ├── osv/                        # OSV.dev shared client, parser, oracle verdict types
 │   │
 │   ├── recon/                      # Reconnaissance
 │   │   ├── __init__.py
@@ -113,12 +157,26 @@ raptor/
 │   │   ├── __init__.py
 │   │   └── cli.py                  # Main: Dependency vulnerability scanning
 │   │
-│   └── web/                        # Web application testing
-│       ├── __init__.py
-│       ├── client.py               # HTTP client wrapper
-│       ├── crawler.py              # Web crawler
-│       ├── fuzzer.py               # Input fuzzing
-│       └── scanner.py              # Web vulnerability scanner
+│   ├── semgrep/                    # Semgrep integration: pattern-matching static analysis
+│   │
+│   ├── source_intel/               # Cocci-based structural evidence for memory-corruption CWEs
+│   │
+│   ├── static-analysis/            # Static code scanning
+│   │   ├── __init__.py
+│   │   ├── scanner.py              # Main: Semgrep orchestrator
+│   │   └── codeql/
+│   │       └── env.py              # CodeQL environment setup
+│   │
+│   ├── strategy_eval/              # Evaluation harness for cwe_strategies bug-class lenses
+│   │
+│   ├── web/                        # Web application testing
+│   │   ├── __init__.py
+│   │   ├── client.py               # HTTP client wrapper
+│   │   ├── crawler.py              # Web crawler
+│   │   ├── fuzzer.py               # Input fuzzing
+│   │   └── scanner.py              # Web vulnerability scanner
+│   │
+│   └── zkpox/                      # Zero-Knowledge Proof of Exploit (tiered proving)
 │
 ├── engine/                         # Analysis engines
 │   ├── codeql/
