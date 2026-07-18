@@ -165,7 +165,7 @@ def extract_envelope_metadata(envelope: dict, into: dict) -> None:
         # already provided a value. Honors caller intent when
         # they have richer attribution context than the envelope.
         into["analysed_by"] = "claude-code"
-    usage = envelope.get("usage", {})
+    usage = envelope.get("usage") or {}
     in_tokens = usage.get("input_tokens", 0) or 0
     out_tokens = usage.get("output_tokens", 0) or 0
     if "input_tokens" in usage or "output_tokens" in usage:

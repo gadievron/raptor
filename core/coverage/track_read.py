@@ -130,7 +130,7 @@ def main():
     except (json.JSONDecodeError, ValueError):
         return
 
-    file_path = payload.get("tool_input", {}).get("file_path", "")
+    file_path = (payload.get("tool_input") or {}).get("file_path", "")
     if not file_path:
         return
 

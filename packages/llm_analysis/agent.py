@@ -2167,7 +2167,12 @@ class AutonomousSecurityAgentV2:
                                     verdict=verdict, reason=reason,
                                 )
                             except Exception:  # noqa: BLE001
-                                pass
+                                logger.debug(
+                                    "record_suppression failed for %s",
+                                    finding.get("finding_id")
+                                    or finding.get("id"),
+                                    exc_info=True,
+                                )
                     except Exception as e:  # noqa: BLE001
                         logger.debug(
                             "reachability pre-flight failed on %s: %s",

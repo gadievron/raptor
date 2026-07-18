@@ -337,7 +337,7 @@ def _migrate(data: Dict, from_version) -> bool:
     Returns True on success, False for an unknown version (caller raises rather
     than silently corrupting). Currently: v1 -> v2 (flat -> bucketed events)."""
     if from_version == 1:
-        for by_dc in data.get("models", {}).values():
+        for by_dc in (data.get("models") or {}).values():
             if not isinstance(by_dc, dict):
                 continue
             for cell in by_dc.values():

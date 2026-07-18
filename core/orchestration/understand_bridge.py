@@ -1605,7 +1605,7 @@ def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, 
         path["attacker_control"] = attacker_control
 
     # If the trace summary has a verdict, record it as a note for Stage B
-    summary = trace.get("summary", {})
+    summary = trace.get("summary") or {}
     if summary.get("verdict"):
         path["trace_verdict"] = summary["verdict"]
 
