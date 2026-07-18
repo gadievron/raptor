@@ -645,7 +645,7 @@ def main():
     except Exception:
         output = f"{logo}\n\nraptor:~$ {quote}"
 
-    OUTPUT_FILE.write_text(output)
+    OUTPUT_FILE.write_text(output, encoding="utf-8")
     print(output)
 
 

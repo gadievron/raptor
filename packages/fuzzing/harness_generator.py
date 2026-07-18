@@ -262,7 +262,7 @@ class HarnessGenerator:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         target_path = out_dir / harness.suggested_filename
-        target_path.write_text(harness.source_code)
+        target_path.write_text(harness.source_code, encoding="utf-8")
 
         compile_script = out_dir / f"build_{harness.target_function}.sh"
         compile_script.write_text(

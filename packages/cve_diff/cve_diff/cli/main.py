@@ -472,9 +472,10 @@ def run(
         osv_path = output_dir / f"{cve_id}.osv.json"
         md_path = output_dir / f"{cve_id}.md"
         osv_path.write_text(
-            json.dumps(osv_schema.render(result.bundle, root_cause=rc), indent=2) + "\n"
+            json.dumps(osv_schema.render(result.bundle, root_cause=rc), indent=2) + "\n",
+            encoding="utf-8",
         )
-        md_path.write_text(markdown.render(result.bundle, root_cause=rc))
+        md_path.write_text(markdown.render(result.bundle, root_cause=rc), encoding="utf-8")
         if pipeline_slot[0] is not None:
             _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                 ok=True, error_class="PASS",

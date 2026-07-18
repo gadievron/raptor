@@ -698,7 +698,7 @@ class CrashAnalysisAgent:
                 # Save exploit with full response for debugging
                 exploit_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit.cpp"
                 exploit_file.parent.mkdir(exist_ok=True)
-                exploit_file.write_text(exploit_code)
+                exploit_file.write_text(exploit_code, encoding="utf-8")
 
                 # Save full response for analysis
                 response_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit_response.txt"
@@ -707,7 +707,7 @@ class CrashAnalysisAgent:
 
 FULL LLM RESPONSE:
 {full_response}"""
-                response_file.write_text(response_content)
+                response_file.write_text(response_content, encoding="utf-8")
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")

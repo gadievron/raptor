@@ -1339,7 +1339,7 @@ class AutonomousSecurityAgentV2:
                 # Save exploit
                 exploit_file = self.out_dir / "exploits" / f"{vuln.finding_id}_exploit.cpp"
                 exploit_file.parent.mkdir(exist_ok=True, parents=True)
-                exploit_file.write_text(exploit_code)
+                exploit_file.write_text(exploit_code, encoding="utf-8")
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
@@ -1678,7 +1678,7 @@ class AutonomousSecurityAgentV2:
 *Review and test before applying to production*
 """
 
-            patch_file.write_text(patch_content_formatted)
+            patch_file.write_text(patch_content_formatted, encoding="utf-8")
             vuln.patch_code = patch_content
 
             logger.info(f"   ✓ Patch generated: {len(patch_content)} bytes")
