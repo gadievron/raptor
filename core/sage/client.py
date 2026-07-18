@@ -199,7 +199,7 @@ class SageClient:
             # surfaces as an explicit "unknown memory_type ..." log
             # and the call falls back deliberately, not by accident.
             #
-            # SAGE 8.4.2 MemoryType enum = {fact, observation,
+            # SAGE MemoryType enum = {fact, observation,
             # inference, task} (docs/reference/python-sdk.md). The
             # 6.6.x extras RAPTOR used to reference (hypothesis,
             # evidence, decision, lesson) no longer exist on the
@@ -215,7 +215,7 @@ class SageClient:
                 "observation": _MemoryType.observation,
                 "inference": _MemoryType.inference,
                 "task": _MemoryType.task,
-                # Legacy 6.6.x aliases, mapped onto the 8.4.2 enum.
+                # Legacy 6.6.x aliases, mapped onto the current enum.
                 "hypothesis": _MemoryType.inference,
                 "evidence": _MemoryType.observation,
                 "decision": _MemoryType.observation,

@@ -68,19 +68,22 @@ class TestSageClientHealthCheck(unittest.TestCase):
 
 
 class TestSageClientNoSDK(unittest.TestCase):
-    """Test graceful degradation when the SDK isn't importable."""
+    """Test graceful degradation when SAGE is disabled."""
 
     def test_embed_no_client(self):
         from core.sage.client import SageClient
-        self.assertIsNone(SageClient().embed("test"))
+        from core.sage.config import SageConfig
+        self.assertIsNone(SageClient(SageConfig(enabled=False)).embed("test"))
 
     def test_query_no_client(self):
         from core.sage.client import SageClient
-        self.assertEqual(SageClient().query("test", "domain"), [])
+        from core.sage.config import SageConfig
+        self.assertEqual(SageClient(SageConfig(enabled=False)).query("test", "domain"), [])
 
     def test_propose_no_client(self):
         from core.sage.client import SageClient
-        self.assertFalse(SageClient().propose("test content"))
+        from core.sage.config import SageConfig
+        self.assertFalse(SageClient(SageConfig(enabled=False)).propose("test content"))
 
 
 def _install_mock_sdk(client_mod):
@@ -93,7 +96,7 @@ def _install_mock_sdk(client_mod):
     client_mod._SAGE_SDK_AVAILABLE = True
     client_mod._SyncSageClient = mock_cls
     client_mod._AgentIdentity = mock_identity_cls
-    # Mirror the SAGE 8.4.2 MemoryType enum: fact | observation |
+    # Mirror the SAGE MemoryType enum: fact | observation |
     # inference | task (docs/reference/python-sdk.md). client.propose's
     # allowlist references all four members directly, so the mock must
     # expose them all or the allowlist build raises AttributeError.
