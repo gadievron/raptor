@@ -217,7 +217,7 @@ def render_baseline_report() -> str:
         "telemetry machinery end-to-end and expose the value-bound "
         "gate's current coverage. The Phase 16 gate is decided on the "
         "real horizon window collected from `/agentic` runs via the "
-        "shadow log — see `docs/sanitizer-cut-parity/HORIZON.md`.\n"
+        "shadow log — see `docs/internals/sanitizer-cut-parity/HORIZON.md`.\n"
     )
     return body + note
 

@@ -423,7 +423,7 @@ def _attach_calibrated_aggregation(
     """Run Dawid–Skene calibrated aggregation over the multi-model panel
     and attach the additive ``calibrated_aggregation`` field to each
     finding in ``results_by_id`` (Phase 3 of the calibrated-aggregation
-    arc; see docs/design-aggregation-dominators-wp.md).
+    arc; see docs/internals/aggregation-dominators.md).
 
     Returns the run summary dict surfaced in
     ``orchestrated_report.json`` under

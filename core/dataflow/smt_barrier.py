@@ -793,7 +793,7 @@ def lexical_fallback_status() -> dict:
             "data."
         ),
         "mode": _sc_config.current().mode,
-        "horizon_doc": "docs/sanitizer-cut-parity/HORIZON.md",
+        "horizon_doc": "docs/internals/sanitizer-cut-parity/HORIZON.md",
     }
 
 

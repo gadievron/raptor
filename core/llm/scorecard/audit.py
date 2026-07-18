@@ -20,7 +20,7 @@ Verdict thresholds (configurable):
 * ``red``    — < 10 %% reach N=30. D–S reduces to prior almost
   everywhere; revisit prior design before proceeding to Phase 2.
 
-See ``docs/design-aggregation-dominators-wp.md`` Phase 1 for context.
+See ``docs/internals/aggregation-dominators.md`` Phase 1 for context.
 """
 from __future__ import annotations
 

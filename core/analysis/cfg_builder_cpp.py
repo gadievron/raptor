@@ -7,7 +7,7 @@ Phase 11) :func:`core.analysis.sanitizer_cut.evaluate_finding` can
 consume the C/C++ CFG with the same interface as the Python one.
 
 Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`). The
-Phase 8 decision doc at ``docs/phase-8-substrate-spike/DECISION.md``
+Phase 8 decision doc at ``docs/internals/phase-8-substrate-spike/DECISION.md``
 explains why.
 
 Scope — control-flow constructs handled:

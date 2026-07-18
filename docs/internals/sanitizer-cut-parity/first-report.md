@@ -30,5 +30,5 @@ Bug-hiding: fraction of real findings wrongly suppressed (lower is better).
 | charset_sub | 0 | 1 | 0 | 1 |
 | sanitizer_cut | 0 | 0 | 2 | 1 |
 
-> **Baseline, not the gating window.** This report is generated from a small synthetic fixture set (`core/dataflow/sanitizer_cut_parity_report.py`) to prove the telemetry machinery end-to-end and expose the value-bound gate's current coverage. The Phase 16 gate is decided on the real horizon window collected from `/agentic` runs via the shadow log — see `docs/sanitizer-cut-parity/HORIZON.md`.
+> **Baseline, not the gating window.** This report is generated from a small synthetic fixture set (`core/dataflow/sanitizer_cut_parity_report.py`) to prove the telemetry machinery end-to-end and expose the value-bound gate's current coverage. The Phase 16 gate is decided on the real horizon window collected from `/agentic` runs via the shadow log — see `docs/internals/sanitizer-cut-parity/HORIZON.md`.
 

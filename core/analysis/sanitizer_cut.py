@@ -10,7 +10,7 @@ suppressor answers one question:
 If yes → the taint cannot reach the sink in any execution; suppress
 the finding without an LLM call.
 
-Algorithm (per ``docs/design-aggregation-dominators-wp.md`` Phase 7,
+Algorithm (per ``docs/internals/aggregation-dominators.md`` Phase 7,
 algorithm correction): a **vertex cut**.
 
     Suppress iff ``sink`` is unreachable from ``source`` in

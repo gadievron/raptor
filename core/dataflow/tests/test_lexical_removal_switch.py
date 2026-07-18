@@ -221,7 +221,7 @@ class TestClosureTripwire:
         summary = build_baseline_summary()
         assert parity_criterion_met(summary) is False, (
             "Parity gate cleared on the baseline — re-read "
-            "docs/sanitizer-cut-parity/HORIZON.md before removing the "
+            "docs/internals/sanitizer-cut-parity/HORIZON.md before removing the "
             "lexical fallback; the gate still requires two real "
             "/agentic windows."
         )

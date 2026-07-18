@@ -83,10 +83,10 @@ class TestCommittedReportInSync:
         """The committed first-report.md must match the generator
         output. If this fails, regenerate:
             RAPTOR_SANITIZER_CUT=1 core/dataflow/scripts/sanitizer-cut-parity-report \\
-                > docs/sanitizer-cut-parity/first-report.md
+                > docs/internals/sanitizer-cut-parity/first-report.md
         """
         repo_root = Path(__file__).resolve().parents[3]
-        committed = repo_root / "docs" / "sanitizer-cut-parity" / "first-report.md"
+        committed = repo_root / "docs" / "internals" / "sanitizer-cut-parity" / "first-report.md"
         assert committed.exists(), "first-report.md missing"
         generated = render_baseline_report() + "\n"
         assert committed.read_text(encoding="utf-8") == generated, (
