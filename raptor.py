@@ -444,6 +444,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
 
     # SAGE: Pre-scan recall
     try:
+        from core.json import save_json
         from core.sage.hooks import recall_context_for_scan
         sage_context = recall_context_for_scan(target or "")
         if sage_context:
@@ -460,6 +461,13 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                     f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...",
                     flush=True,
                 )
+        try:
+            save_json(
+                out_dir / "sage_precall_scan.json",
+                {"memories": sage_context},
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 

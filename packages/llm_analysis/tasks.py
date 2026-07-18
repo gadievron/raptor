@@ -58,6 +58,39 @@ def _patch_system_text(profile: ModelDefenseProfile = CONSERVATIVE) -> str:
     )
 
 
+def _sage_precall_blocks(finding: Dict) -> tuple:
+    """Untrusted blocks derived from optional Phase-0 SAGE scan recall."""
+    from core.security.prompt_envelope import UntrustedBlock
+
+    ctx = finding.get("_sage_precall_scan_context")
+    if not ctx:
+        return ()
+    return (
+        UntrustedBlock(
+            content=str(ctx),
+            kind="sage-precall-scan-context",
+            origin="sage:precall",
+        ),
+    )
+
+
+def _merge_sage_precall(finding: Dict, *blocks) -> tuple:
+    return _sage_precall_blocks(finding) + tuple(blocks)
+
+
+def _group_sage_precall_blocks(
+    finding_ids: List[str],
+    results_by_id: Dict[str, Dict],
+) -> tuple:
+    """Reuse Phase-0 scan precall from any member finding (same text per run)."""
+    for fid in finding_ids:
+        r = results_by_id.get(fid) or {}
+        blocks = _sage_precall_blocks(r)
+        if blocks:
+            return blocks
+    return ()
+
+
 class AnalysisTask(DispatchTask):
     """Per-finding exploitability analysis."""
 
@@ -87,17 +120,13 @@ class AnalysisTask(DispatchTask):
         return [model] if model else []
 
     def build_prompt(self, finding):
-        # Phase D PR1: inject source_intel structural evidence for
-        # memory-corruption findings. ``evidence_blocks_for_finding``
-        # returns ``()`` for irrelevant rule_ids OR when the
-        # orchestrator's pre-seed wasn't called / failed for this
-        # target — no LLM-cost overhead on non-target findings.
         from packages.llm_analysis.source_intel_inject import (
             evidence_blocks_for_finding,
         )
         si_blocks = evidence_blocks_for_finding(finding)
+        extra = _merge_sage_precall(finding, *si_blocks)
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=si_blocks,
+            finding, profile=self.profile, extra_blocks=extra,
             allow_unreachable=self.allow_unreachable,
         )
         self._tls.nonce = bundle.nonce
@@ -452,17 +481,13 @@ class ConsensusTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        # Phase D PR1: inject source_intel structural evidence for
-        # memory-corruption findings. ``evidence_blocks_for_finding``
-        # returns ``()`` for irrelevant rule_ids OR when the
-        # orchestrator's pre-seed wasn't called / failed for this
-        # target — no LLM-cost overhead on non-target findings.
         from packages.llm_analysis.source_intel_inject import (
             evidence_blocks_for_finding,
         )
         si_blocks = evidence_blocks_for_finding(finding)
+        extra = _merge_sage_precall(finding, *si_blocks)
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=si_blocks,
+            finding, profile=self.profile, extra_blocks=extra,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -625,7 +650,9 @@ class JudgeTask(DispatchTask):
         ) + evidence_blocks_for_finding(finding)
 
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=extra_blocks,
+            finding,
+            profile=self.profile,
+            extra_blocks=_merge_sage_precall(finding, *extra_blocks),
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -931,10 +958,11 @@ class GroupAnalysisTask(DispatchTask):
 
         findings_text = "\n".join(summaries) if summaries else "(no prior results)"
 
+        precall = _group_sage_precall_blocks(finding_ids, self.results_by_id)
         bundle = _build_prompt(
             system=GroupAnalysisTask._SYSTEM_TEXT,
             profile=self.profile,
-            untrusted_blocks=(UntrustedBlock(
+            untrusted_blocks=precall + (UntrustedBlock(
                 content=findings_text,
                 kind="prior-finding-summaries",
                 origin=f"group:{criterion}={criterion_value}",
@@ -1073,7 +1101,8 @@ class RetryTask(AnalysisTask):
         extra_blocks = extra_blocks + evidence_blocks_for_finding(finding)
 
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=extra_blocks,
+            finding, profile=self.profile,
+            extra_blocks=_merge_sage_precall(finding, *extra_blocks),
             allow_unreachable=self.allow_unreachable,
         )
         self._tls.nonce = bundle.nonce

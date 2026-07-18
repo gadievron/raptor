@@ -52,6 +52,7 @@ class AFLRunner:
         deterministic: bool = False,
         custom_mutator: Optional[Path] = None,
         seed_profile: str = "default",
+        extra_afl_flags: Optional[List[str]] = None,
     ):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
@@ -93,6 +94,7 @@ class AFLRunner:
         self.check_sanitizers = check_sanitizers
         self.recompile_guide = recompile_guide
         self.use_showmap = use_showmap
+        self.extra_afl_flags = list(extra_afl_flags or [])
 
         # AFL++ advanced features
         self.cmplog_binary = Path(cmplog_binary).resolve() if cmplog_binary else None
@@ -816,6 +818,10 @@ class AFLRunner:
         # Dictionary if provided
         if self.dict_path and self.dict_path.exists():
             cmd.extend(["-x", str(self.dict_path)])
+
+        # Optional SAGE-derived or operator-supplied AFL++ flags (before ``--``).
+        if self.extra_afl_flags:
+            cmd.extend(self.extra_afl_flags)
 
         # Target binary
         cmd.append("--")

@@ -173,6 +173,7 @@ class SageClient:
         domain_tag: str = "general",
         confidence: float = 0.80,
         embedding: Optional[List[float]] = None,
+        tags: Optional[List[str]] = None,
     ) -> bool:
         """
         Propose a memory to SAGE. Auto-embeds if no embedding is provided.
@@ -182,6 +183,9 @@ class SageClient:
         if client is None:
             return False
         try:
+            # SAGE model usage: we intentionally delegate embedding generation
+            # to the SAGE sidecar/client. The configured embedding model is
+            # selected there, so RAPTOR stays model-agnostic at the hook layer.
             if embedding is None:
                 embedding = client.embed(content)
 
@@ -229,13 +233,16 @@ class SageClient:
                         "falling back to observation", memory_type,
                     )
                 mt = _MemoryType.observation
-            client.propose(
+            propose_kwargs: Dict[str, Any] = dict(
                 content=content,
                 memory_type=mt,
                 domain_tag=domain_tag,
                 confidence=confidence,
                 embedding=embedding,
             )
+            if tags is not None:
+                propose_kwargs["tags"] = tags
+            client.propose(**propose_kwargs)
             return True
         except Exception as e:
             logger.warning(f"SAGE propose failed: {e}")
@@ -246,6 +253,7 @@ class SageClient:
         text: str,
         domain_tag: str = "general",
         top_k: int = 5,
+        min_confidence: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Query SAGE for semantically similar memories.
@@ -255,12 +263,16 @@ class SageClient:
         if client is None:
             return []
         try:
+            # Query path uses the same SAGE-managed embedding model as propose().
             embedding = client.embed(text)
-            response = client.query(
+            query_kwargs: Dict[str, Any] = dict(
                 embedding=embedding,
                 domain_tag=domain_tag,
                 top_k=top_k,
             )
+            if min_confidence is not None:
+                query_kwargs["min_confidence"] = min_confidence
+            response = client.query(**query_kwargs)
             return [
                 {
                     "content": r.content,

@@ -660,6 +660,22 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     _print_summary(payload, output_path)
+
+    # SAGE store: persist results for cross-run learning.
+    try:
+        target = str(Path(args.target).resolve())
+        if payload["mode"] == "hunt":
+            from core.sage.hooks import store_hunt_results
+            store_hunt_results(target, payload)
+        elif payload["mode"] == "trace":
+            from core.sage.hooks import store_trace_result
+            store_trace_result(target, payload)
+        elif payload["mode"] == "map":
+            from core.sage.hooks import store_map_results
+            store_map_results(target, payload)
+    except Exception:
+        pass
+
     return 0
 
 
