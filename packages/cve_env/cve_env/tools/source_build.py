@@ -571,7 +571,12 @@ class SourceBuilder:
                     try:
                         tf.extract(m, target, set_attrs=False, filter="data")
                     except TypeError:
-                        # Python <3.12 does not support the filter parameter.
+                        if m.issym() or m.islnk():
+                            continue
+                        if m.isdev() or m.isblk() or m.ischr() or m.isfifo():
+                            continue
+                        if m.mode is not None:
+                            m.mode &= 0o777
                         tf.extract(m, target, set_attrs=False)
         except (tarfile.TarError, OSError):
             return False

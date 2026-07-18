@@ -2140,9 +2140,15 @@ async def build(
     # prompt without modifying source. Used for method-exploration runs
     # (e.g., "deny vulhub + docker.io, exercise alternate cascades").
     # Empty/unset == no-op.
+    _EXTRA_PREFIX_MAX_CHARS = 2000
     extra_prefix = os.environ.get("CVE_ENV_EXTRA_PROMPT_PREFIX", "").strip()
     if extra_prefix:
-        system_prompt_final = f"{extra_prefix}\n\n{system_prompt_final}"
+        if len(extra_prefix) > _EXTRA_PREFIX_MAX_CHARS:
+            extra_prefix = extra_prefix[:_EXTRA_PREFIX_MAX_CHARS]
+        if re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', extra_prefix):
+            extra_prefix = ""
+        if extra_prefix:
+            system_prompt_final = f"{extra_prefix}\n\n{system_prompt_final}"
     try:
         run = await run_agent(
             system_prompt=system_prompt_final,

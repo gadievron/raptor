@@ -51,6 +51,10 @@ _SECRET_TOKEN_RE = re.compile(
     r"|glpat-[A-Za-z0-9_-]{20,}"  # GitLab PAT
     r"|apiKey\s*[:=]\s*[A-Za-z0-9_-]{8,}"  # NVD API key header value
     r"|ya29\.[A-Za-z0-9_-]{20,}"  # GCP OAuth access token
+    r"|xox[bpras]-[A-Za-z0-9-]{10,}"  # Slack bot/user/app tokens
+    r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"  # JWT
+    r"|npm_[A-Za-z0-9]{36,}"  # npm publish tokens
+    r"|pypi-[A-Za-z0-9_-]{20,}"  # PyPI API tokens
 )
 # Credentials embedded in a URL userinfo (``https://user:pass@host``), e.g. a
 # git-over-https token URL — drop the userinfo, keep scheme + host.

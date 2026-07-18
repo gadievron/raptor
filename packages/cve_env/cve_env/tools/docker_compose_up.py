@@ -171,7 +171,7 @@ def rewrite_for_localhost(
     source_dir = compose_file.parent
     staging = Path(tempfile.mkdtemp(prefix="cveenv-compose-"))
     try:
-        shutil.copytree(source_dir, staging, dirs_exist_ok=True, symlinks=True)
+        shutil.copytree(source_dir, staging, dirs_exist_ok=True, symlinks=False)
     except OSError:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -206,7 +206,8 @@ def _mounts_docker_socket(volume: Any) -> bool:
     ):
         return True
     # Parent directory mounts that would expose the docker socket.
-    if source in ('/var/run', '/run', '/var/run/'):
+    source_norm = source.rstrip("/") or "/"
+    if source_norm in ('/', '/var', '/var/run', '/run'):
         return True
     return False
 
@@ -296,10 +297,9 @@ def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
             else:
                 spec.pop("volumes", None)
         # Security hardening: strip seccomp/apparmor-unconfined etc. (Docker's
-        # default profile then applies) and host IPC / user namespaces. No
-        # legitimate CVE build needs these; ``devices`` is intentionally kept
-        # (a rare hardware-class CVE may need a device mapping).
+        # default profiles then apply).
         spec.pop("security_opt", None)
+        spec.pop("devices", None)
         if str(spec.get("ipc")).strip().lower() == "host":
             spec.pop("ipc", None)
         if str(spec.get("userns_mode")).strip().lower() == "host":

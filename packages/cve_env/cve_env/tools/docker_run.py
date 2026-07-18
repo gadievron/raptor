@@ -42,8 +42,20 @@ _DOCKER_RETRY_MAX_ATTEMPTS: int = 2  # original + 1 retry
 # fast and the agent can pivot, instead of hanging until the wall-guard
 # SIGKILLs the worker. Large legit-pulls land in ~390s; 600s leaves time to
 # pivot before the wall-guard fires.
-_DOCKER_RUN_TIMEOUT_S: float = float(
-    os.environ.get("CVE_ENV_DOCKER_RUN_TIMEOUT_S", "600")
+def _parse_timeout_env(env_var: str, default: float, lo: float, hi: float) -> float:
+    raw = os.environ.get(env_var, "")
+    if not raw:
+        return default
+    try:
+        val = float(raw)
+    except ValueError:
+        return default
+    if not (lo <= val <= hi):
+        return default
+    return val
+
+_DOCKER_RUN_TIMEOUT_S: float = _parse_timeout_env(
+    "CVE_ENV_DOCKER_RUN_TIMEOUT_S", default=600.0, lo=10.0, hi=3600.0
 )
 
 # Bound the post-launch `docker inspect`/`docker logs` calls so a wedged daemon

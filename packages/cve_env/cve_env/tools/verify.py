@@ -230,6 +230,12 @@ _ALLOWED_METHODS = frozenset({"GET", "POST", "PUT", "DELETE", "HEAD"})
 # process, defeating the SSRF guards in web_fetch.
 _LOOPBACK_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
+_CLOUD_METADATA_IPS = frozenset({
+    "169.254.169.254",
+    "169.254.170.2",
+    "fd00:ec2::254",
+})
+
 
 def _assert_local_host_ip(host_ip: str) -> str | None:
     """Return None if ``host_ip`` is loopback/private/link-local; else a reason.
@@ -243,6 +249,11 @@ def _assert_local_host_ip(host_ip: str) -> str | None:
     lowered = host_ip.lower().strip()
     if lowered in _LOOPBACK_HOST_NAMES:
         return None
+    if lowered in _CLOUD_METADATA_IPS:
+        return (
+            f"host_ip {host_ip!r} is a cloud metadata endpoint; "
+            "verify probes must not reach instance metadata services"
+        )
     try:
         ip = ipaddress.ip_address(lowered)
     except ValueError:
@@ -250,7 +261,7 @@ def _assert_local_host_ip(host_ip: str) -> str | None:
             f"host_ip {host_ip!r} is not a valid IP literal; verify probes "
             "must target a published container port on loopback/private"
         )
-    if ip.is_loopback or ip.is_private or ip.is_link_local:
+    if ip.is_loopback or ip.is_private:
         return None
     return (
         f"host_ip {host_ip!r} is not loopback/private; verify probes only "
@@ -493,7 +504,11 @@ def check_logs(
 
     # ReDoS guard: reject patterns with nested quantifiers or excessive length
     # that could cause catastrophic backtracking on large log output.
-    _dangerous_re = re.compile(r"[+*]{2,}|\(\?[^)]*\+")
+    _dangerous_re = re.compile(
+        r"[+*]{2,}"
+        r"|\(\?[^)]*\+"
+        r"|\([^)]*[+*]\)[+*]"
+    )
     missing: list[str] = []
     for pattern in expected_patterns:
         try:

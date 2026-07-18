@@ -230,6 +230,49 @@ def _fetch_once(
             ok=False, url=url, reason=f"request error: {exc}", reason_class="transport"
         )
 
+    # DNS-rebinding post-connect check: verify the actual peer IP is safe.
+    # The pre-request _resolve_hostname_safe check can be bypassed via
+    # short-TTL DNS rebinding (requests.get resolves independently).
+    # This check catches rebinding by inspecting the actual connection.
+    _peer_ip_str = None
+    try:
+        _raw_sock = getattr(
+            getattr(
+                getattr(resp, "raw", None), "_connection", None
+            ),
+            "sock",
+            None,
+        )
+        if _raw_sock is None:
+            _raw_sock = getattr(
+                getattr(resp, "raw", None), "_fp", None
+            )
+            if _raw_sock is not None:
+                _raw_sock = getattr(_raw_sock, "raw", None)
+                if _raw_sock is not None:
+                    _raw_sock = getattr(_raw_sock, "_sock", None)
+        if _raw_sock is not None and hasattr(_raw_sock, "getpeername"):
+            _peer_addr = _raw_sock.getpeername()
+            if _peer_addr:
+                _peer_ip_str = _peer_addr[0]
+    except Exception:
+        pass
+    if _peer_ip_str is not None:
+        try:
+            if _ip_is_unsafe(ipaddress.ip_address(_peer_ip_str)):
+                resp.close()
+                return FetchResult(
+                    ok=False,
+                    url=url,
+                    reason=(
+                        f"DNS rebinding detected: pre-check passed but "
+                        f"connected to unsafe IP {_peer_ip_str}"
+                    ),
+                    reason_class="not_found",
+                )
+        except ValueError:
+            pass
+
     # Re-check the final URL after redirects for SSRF.
     final_url = resp.url
     final_parsed = urlparse(final_url)
