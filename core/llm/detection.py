@@ -465,7 +465,8 @@ def _read_config_models() -> list:
             return []
 
         return _apply_anthropic_resolution(model_list)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"detection: model list parse failed, returning []: {e}")
         return []
 
 

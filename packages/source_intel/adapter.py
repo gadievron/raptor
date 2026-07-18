@@ -487,7 +487,7 @@ def _function_referenced_as_pointer(
         files = [p for p in target.rglob("*") if p.suffix in EXTS]
     for path in files:
         try:
-            with open(path, "r", errors="replace") as f:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError:
             continue
@@ -511,7 +511,7 @@ def _function_is_static(file_path: str, function_name: str) -> bool:
     cross-TU-callable functions).
     """
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError:
         return False
@@ -632,7 +632,7 @@ def _has_interprocedural_check(
     if not file_path or sink_line <= alloc_line + 1:
         return False
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -918,7 +918,7 @@ def _line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     (function-name + memory-corruption rule_id + line proximity).
     """
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f, 1):
                 if i == line_no:
                     return any(c in line for c in _PRIVILEGED_CAP_CONSTANTS)
@@ -1065,7 +1065,7 @@ def _fortified_dest_is_variable_size(finding: Finding) -> bool:
         sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
 
     try:
-        with open(sink_path_abs, "r", errors="replace") as f:
+        with open(sink_path_abs, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -1142,7 +1142,7 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
         sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
 
     try:
-        with open(sink_path_abs, "r", errors="replace") as f:
+        with open(sink_path_abs, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -1518,7 +1518,7 @@ def _wur_annotation_trustworthy(file_path: str, function_name: str) -> bool:
     body_lines = _function_body_via_inventory(file_path, function_name)
     if body_lines is None:
         try:
-            with open(file_path, "r", errors="replace") as f:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             return True
@@ -1631,7 +1631,7 @@ def _function_body_via_inventory(
         if not isinstance(line_end, int) or line_end < line_start:
             continue
         try:
-            with open(file_path, "r", errors="replace") as f:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             return None
@@ -1850,7 +1850,7 @@ def _stack_protector_suppresses_finding(
     if not Path(sink_path).is_absolute():
         sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
     try:
-        with open(sink_path_abs, "r", errors="replace") as f:
+        with open(sink_path_abs, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False

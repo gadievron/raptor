@@ -75,7 +75,7 @@ def _find_claude_ancestor() -> Optional[int]:
         if pid <= 1:
             return None
         try:
-            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
         except OSError:
             return None
         if comm == "claude":
@@ -97,7 +97,7 @@ def _read_ppid(pid: int) -> int:
     one well-known exception type.
     """
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ProcessLookupError(
             f"_read_ppid: /proc/{pid}/stat vanished — process exited"
@@ -177,7 +177,7 @@ def _pid_alive(pid: int) -> bool:
         # Non-Linux or `/proc` not mounted — best-effort accept.
         return True
     try:
-        comm = proc_comm.read_text(errors="replace").strip().lower()
+        comm = proc_comm.read_text(encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return True
     return "claude" in comm
