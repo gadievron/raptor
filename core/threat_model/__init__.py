@@ -11,11 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
 # Range of schema versions ``from_dict`` will accept. Anything
@@ -1009,6 +1012,7 @@ def load_for_target(target: Path) -> Optional[ThreatModel]:
             return None
         return load_model(json_path)
     except Exception:
+        logger.warning("failed to load project threat model for %s", target, exc_info=True)
         return None
 
 

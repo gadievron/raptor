@@ -90,29 +90,24 @@ def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str
     if not code_flows:
         return None
 
-    try:
-        # `.get(k, default)` returns the value (None) when the key is
-        # present-but-null. SARIF emitters legitimately produce
-        # `"threadFlows": null` when no flow is available — guard with
-        # `or []` so iteration doesn't TypeError on None.
-        all_paths: List[Dict[str, Any]] = []
-        for flow in code_flows:
+    all_paths: List[Dict[str, Any]] = []
+    for flow in code_flows:
+        try:
             for tflow in (flow.get("threadFlows") or []):
                 locations = tflow.get("locations") or []
                 p = _path_from_locations(locations)
                 if p is not None:
                     all_paths.append(p)
+        except Exception as e:
+            logger.warning("SARIF parser: skipping malformed codeFlow: %s", e)
+            continue
 
-        if not all_paths:
-            return None
-
-        primary = all_paths[0]
-        primary["alternative_paths"] = all_paths[1:]
-        return primary
-
-    except Exception as e:
-        logger.warning(f"SARIF parser: failed to extract dataflow path: {e}")
+    if not all_paths:
         return None
+
+    primary = all_paths[0]
+    primary["alternative_paths"] = all_paths[1:]
+    return primary
 
 
 def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

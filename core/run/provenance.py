@@ -72,7 +72,7 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
     except Exception:
-        logger.debug("get_safe_env unavailable; using inherited env")
+        logger.warning("get_safe_env unavailable; using inherited env")
         env = os.environ.copy()
     if untrusted:
         from core.git.clone import safe_git_command
@@ -165,7 +165,7 @@ def tool_version(name: str) -> Optional[str]:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
     except Exception:
-        logger.debug("get_safe_env unavailable; using inherited env")
+        logger.warning("get_safe_env unavailable; using inherited env")
         env = os.environ.copy()
     try:
         result = subprocess.run(

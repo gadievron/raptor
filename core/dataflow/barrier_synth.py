@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -1210,8 +1211,12 @@ def main(argv: Optional[list] = None) -> int:
                    help="source the LLM reasons over (the function/path)")
     p.add_argument("--search-path", help="codeql query-pack search path (--additional-packs)")
     p.add_argument("--max-attempts", type=int, default=3)
-    p.add_argument("--work-dir", type=Path, default=Path("/tmp/trust-synth-work"))
+    p.add_argument("--work-dir", type=Path, default=None)
     args = p.parse_args(argv)
+
+    work_dir = args.work_dir
+    if work_dir is None:
+        work_dir = Path(tempfile.mkdtemp(prefix="trust-synth-work-"))
 
     proposal = BarrierProposal(
         sink_class=args.sink_class, finding_id=args.finding_id, language=args.language,
@@ -1220,7 +1225,7 @@ def main(argv: Optional[list] = None) -> int:
     res = run_synthesis_loop(
         proposal, args.after_db, args.before_db,
         proposer=make_llm_proposer(default_completer()),
-        work_dir=args.work_dir, search_path=args.search_path,
+        work_dir=work_dir, search_path=args.search_path,
         max_attempts=args.max_attempts,
     )
     if res is None:

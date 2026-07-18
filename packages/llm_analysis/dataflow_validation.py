@@ -813,7 +813,7 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
         if ve_block:
             untrusted_inner.append(ve_block)
     except Exception:
-        pass
+        logger.warning("exemplar lookup failed for %s", rule_id, exc_info=True)
 
     parts = list(trusted_parts)
     if untrusted_inner:
