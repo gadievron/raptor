@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.atomic_fs import write_text_atomically
+from core.hash import sha256_file as _sha256_file
 
 from .binary_oracle import read_build_id
 
@@ -72,15 +73,9 @@ class BinaryEdgeIndex:
 def _content_hash(binary_path: Path) -> Optional[str]:
     """sha256 of the binary's file content — cache key fallback when
     ``.note.gnu.build-id`` is absent (stripped Go, PGO-stripped vendor
-    binaries). Bounded I/O cost per extraction; cheaper than running
-    r2 a second time."""
+    binaries)."""
     try:
-        import hashlib
-        h = hashlib.sha256()
-        with binary_path.open("rb") as f:
-            for chunk in iter(lambda: f.read(1 << 16), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        return _sha256_file(binary_path)
     except OSError:
         return None
 
