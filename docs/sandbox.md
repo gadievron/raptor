@@ -126,6 +126,23 @@ interactively so the permission prompts are your human-in-the-loop, and review
 outputs before trusting them. Full threat model:
 [`internals/security/adversarial-repo-threat-model.md`](internals/security/adversarial-repo-threat-model.md).
 
+### Strict sandbox mode for autonomous runs
+
+For unattended `/agentic` work — no operator watching permission prompts —
+prefer `--sandbox strict` over the default `full`. `full` warns and quietly
+degrades if the host can't provide an isolation layer; `strict` fails closed
+instead (see the [Profiles](#profiles) table above), because a hostile repo
+silently continuing under weaker isolation than you asked for is worse than
+the run just stopping:
+
+```bash
+raptor agentic /path/to/code --sandbox strict
+```
+
+This matters most for project threat-modelled runs (`--threat-model`) on
+repos you haven't reviewed yet, where the whole point is letting the agent
+work autonomously.
+
 ## Configuration
 
 Kwargs accepted by `sandbox()` and `run()` (and most by the `run_untrusted*`

@@ -1,6 +1,6 @@
 # Threat Models in RAPTOR
 
-RAPTOR now treats the threat model as a proper project artefact, not a bit of
+RAPTOR treats the threat model as a proper project artefact, not a bit of
 vague chat that disappears once the model context rolls over. The idea is
 simple: before we ask agents to go hunting, we give them a crisp view of what
 matters, where trust changes hands, what noise to ignore, and how a finding
@@ -60,7 +60,8 @@ python3 raptor.py agentic --repo /path/to/code --threat-model-only
 That runs the map, creates or reuses the threat model, writes candidate SARIF,
 then exits.
 
-If you only want to manage the project artefact manually, initialise it with:
+If you only want to manage the project artefact manually, initialise it with
+`/threat-model init` (see below), which is equivalent to the raw CLI:
 
 ```bash
 raptor project threat-model init
@@ -78,17 +79,42 @@ hardcoded secrets, and turns them into starter focus areas. It is not meant to
 be perfect first time. It gives you a decent first pass so you can tidy it up
 without starting from a blank page.
 
-## Inspect It
+## The `/threat-model` Command
+
+`/threat-model` is the first-class command surface for managing the artefact
+day to day, once it exists. It dispatches to `libexec/raptor-threat-model
+<command> [args]`, which is deliberately a thin router and not a second
+implementation: `show`/`init`/`export`/`sync`/`lint`/`diff`/`report`/`add`/`remove`
+call through to the project-manager's threat-model path, and
+`build`/`refresh`/`use-stale` call through to `/agentic`'s
+`--threat-model-only` phase. With no command given, it defaults to `show`.
+
+| Command | Does |
+|---|---|
+| `show [project]` | Show the active/project threat model summary |
+| `init [project]` | Create a blank project threat model (or seed one via `--from-context-map <path>`) |
+| `export [project]` | Print `THREAT_MODEL.md` |
+| `sync [project]` | Re-render `THREAT_MODEL.md` from the JSON |
+| `lint [project]` | Run quality gates over the saved model |
+| `diff [project] --context-map <path>` | Compare the saved model against a fresh `/understand` map |
+| `report [project] [--context-map <path>]` | Write `threat-model-report.md` with threats, evidence, drift and quality gates |
+| `add --field <field> --value <text>` | Add a value to a string-list field (e.g. `focus_areas`, `assets`) |
+| `remove --field <field> --value <text>` | Remove a value from a string-list field |
+| `build [agentic args]` | Run the `/understand`-backed threat-model-only phase |
+| `refresh [agentic args]` | Rebuild and overwrite the project model |
+| `use-stale [agentic args]` | Build while explicitly allowing stale `/understand` fallback |
+| `help` | Show wrapper help |
 
 ```bash
-raptor project threat-model show
-raptor project threat-model show --json
-raptor project threat-model export
-raptor project status
+libexec/raptor-threat-model show
+libexec/raptor-threat-model show --json
+libexec/raptor-threat-model lint
+libexec/raptor-threat-model diff --context-map out/understand_20260605_090000/context-map.json
+libexec/raptor-threat-model report
 ```
 
-`project status` now shows whether a threat model exists and how many focus
-areas it has.
+`raptor project status` also shows whether a threat model exists and how many
+focus areas it has, as a quicker check than the full `show` output.
 
 ## What To Put In It
 
@@ -128,22 +154,6 @@ Good outcomes should come from things RAPTOR can actually stand behind:
 - web exploitation evidence
 - manual confirmation where that is the honest answer
 
-## Strict Sandbox Mode
-
-There is also a new `--sandbox strict` profile for the awkward agentic cases
-where degrading silently would be daft.
-
-```bash
-raptor agentic /path/to/code --sandbox strict
-```
-
-`full` is still the normal default and will warn if the host cannot provide a
-layer. `strict` fails closed if the platform isolation backend is unavailable.
-On Linux, if target/output isolation is requested, it also requires mount
-namespaces. That is deliberately less forgiving, because autonomous work on a
-hostile repo should not quietly continue with a weaker sandbox and a cheery
-shrug.
-
 ## Why This Helps
 
 Without a project threat model, agents are good at producing plausible queues
@@ -158,3 +168,7 @@ of possible bugs. With one, RAPTOR can be much more deliberate:
 That is the direction of travel: RAPTOR should not just find more things. It
 should get better at finding the right things, proving them, and knowing when a
 patch actually killed the bug rather than just moved the furniture around.
+
+For sandbox isolation levels available to threat-modelled agentic runs
+(including `--sandbox strict` for autonomous work on hostile repos), see
+[`sandbox.md`](sandbox.md).
