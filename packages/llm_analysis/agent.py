@@ -709,7 +709,7 @@ class AutonomousSecurityAgentV2:
             if availability.claude_code:
                 print("\n🤖 No external LLM configured — Claude Code will handle analysis")
             else:
-                print("\n⚠️  No LLM available — producing structured findings for manual review")
+                print("\n⚠️  No LLM available — producing structured findings for manual review", file=sys.stderr)
             print()
 
     def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
@@ -1112,7 +1112,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.")
+                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.", file=sys.stderr)
             else:
                 logger.warning("  Using fallback heuristic analysis")
             # Fallback to marking as potentially exploitable
@@ -1387,7 +1387,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     # File extensions that map to languages the gcc-based validator
@@ -1688,7 +1688,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"   ✗ Patch generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     # Match a markdown fenced code block. Captures the optional
@@ -2597,7 +2597,7 @@ def main() -> None:
                 )
                 if result:
                     return
-        print("\n  Orchestration skipped — check model/API key configuration")
+        print("\n  ✗ Orchestration skipped — check model/API key configuration", file=sys.stderr)
         return
 
     if report.get('mode') != 'prep_only':

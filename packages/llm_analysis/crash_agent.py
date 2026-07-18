@@ -6,6 +6,7 @@ LLM-powered analysis of crashes from fuzzing.
 """
 
 import json
+import sys
 from pathlib import Path
 
 from core.json import save_json
@@ -424,7 +425,7 @@ class CrashAnalysisAgent:
             if availability.claude_code:
                 print("\n🤖 No external LLM configured — Claude Code will handle analysis")
             else:
-                print("\n⚠️  No LLM available — producing structured findings for manual review")
+                print("\n⚠️  No LLM available — producing structured findings for manual review", file=sys.stderr)
             print()
 
     def analyse_crash(self, crash_context: CrashContext) -> bool:
@@ -611,7 +612,7 @@ class CrashAnalysisAgent:
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     def generate_exploit(self, crash_context: CrashContext) -> bool:
@@ -762,7 +763,7 @@ FULL LLM RESPONSE:
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     def _verify_exploit_compiles(

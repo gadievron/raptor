@@ -1518,13 +1518,13 @@ def main():
     build_system = detector.detect_build_system(args.language)
 
     if not build_system:
-        print(f"No build system detected for {args.language}")
+        print(f"✗ No build system detected for {args.language}", file=sys.stderr)
         return
 
     if args.validate:
         valid = detector.validate_build_command(build_system)
         if not valid:
-            print("WARNING: Build command validation failed")
+            print("⚠️  Build command validation failed", file=sys.stderr)
 
     if args.json:
         output = {

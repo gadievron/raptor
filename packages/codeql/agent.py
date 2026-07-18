@@ -885,7 +885,7 @@ Examples:
         sys.exit(0 if result.success else 1)
 
     except KeyboardInterrupt:
-        print("\n\nAnalysis interrupted by user")
+        print("\n\nAnalysis interrupted by user", file=sys.stderr)
         sys.exit(130)
     except SandboxSetupError as e:
         # Sandbox could not engage. Emit the dedicated exit code so a parent
