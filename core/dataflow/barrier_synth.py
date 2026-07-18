@@ -547,10 +547,11 @@ def adjudicate(
         raise ValueError(f"unknown language {language!r}; known: {sorted(_LANG_PACK)}")
     (pack / "qlpack.yml").write_text(
         'name: raptor/barrier-synth\nversion: 0.0.1\n'
-        f'dependencies:\n  {dep}: "*"\n'
+        f'dependencies:\n  {dep}: "*"\n',
+        encoding="utf-8",
     )
     ql = pack / "SynthBarrier.ql"
-    ql.write_text(query_ql)
+    ql.write_text(query_ql, encoding="utf-8")
     extra = ["--additional-packs", search_path] if search_path else []
     result = analyze(
         db_path, [str(ql)], pack / "out.sarif",

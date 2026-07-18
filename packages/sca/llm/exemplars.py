@@ -35,7 +35,7 @@ def popular_names_block(ecosystem: str) -> Optional[UntrustedBlock]:
     if not path.is_file():
         return None
     try:
-        names = json.loads(path.read_text())
+        names = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         logger.debug("exemplars: failed to load %s", path)
         return None
@@ -60,7 +60,7 @@ def exfil_destinations_block() -> Optional[UntrustedBlock]:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         entries = data.get("entries", [])
     except Exception:  # noqa: BLE001
         logger.debug("exemplars: failed to load %s", path)

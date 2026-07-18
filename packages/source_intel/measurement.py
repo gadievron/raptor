@@ -182,7 +182,7 @@ def _iter_memory_corruption_corpus(
         if prefix and not fp.name.startswith(prefix):
             continue
         try:
-            finding = Finding.from_json(fp.read_text())
+            finding = Finding.from_json(fp.read_text(encoding="utf-8"))
         except Exception:
             continue
         if not _is_memory_corruption(finding):
@@ -191,7 +191,7 @@ def _iter_memory_corruption_corpus(
         if not label_path.exists():
             continue
         try:
-            label = GroundTruth.from_json(label_path.read_text())
+            label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
         except Exception:
             continue
         if verdict and label.verdict != verdict:

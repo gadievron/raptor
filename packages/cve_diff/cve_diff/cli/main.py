@@ -83,7 +83,7 @@ def _echo_flow_md(output_dir: Path, cve_id: str, quiet: bool) -> None:
             return
     else:
         try:
-            body = flow_md_path.read_text()
+            body = flow_md_path.read_text(encoding="utf-8")
         except OSError:
             return
     typer.echo("")

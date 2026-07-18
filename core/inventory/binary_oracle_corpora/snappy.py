@@ -111,9 +111,9 @@ class _SnappyDriver:
         profdata = sha_dir / "merged.profdata"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_and_run(sha_dir, build_dir, profdata)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         binary = build_dir / "snappy_unittest"
         live, candidates = _liveness_from_llvm_cov(binary, profdata)

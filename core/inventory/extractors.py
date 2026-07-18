@@ -2232,8 +2232,8 @@ def extract_items(filepath: str, language: str, content: str,
             extractor = TreeSitterExtractor(language)
             tree = extractor.parser.parse(content.encode())
             ts_parsed = True
-        except (RuntimeError, Exception):
-            pass
+        except Exception:
+            logger.debug("tree-sitter parse failed, will use regex", exc_info=True)
 
     if tree is not None:
         # Cache tree for reuse by count_sloc
@@ -2712,7 +2712,7 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
                 comment_lines = _count_comment_lines_ts(tree.root_node)
                 return max(0, total - blank - comment_lines)
         except Exception:
-            pass
+            logger.debug("tree-sitter SLOC count failed, falling back to regex", exc_info=True)
 
     # Regex fallback
     comment_lines = _count_comment_lines_regex(content, language)

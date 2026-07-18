@@ -306,7 +306,7 @@ def _pack_rules_applicable_count(
     if not cache_file.is_file():
         return None
     try:
-        data = json.loads(cache_file.read_text())
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     rules = data.get("rules") or []
@@ -349,7 +349,7 @@ def _pack_applicable_rule_ids(
     if not cache_file.is_file():
         return None
     try:
-        data = json.loads(cache_file.read_text())
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     rules = data.get("rules") or []
@@ -1609,7 +1609,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
         # Read exit code BEFORE any deletion.
         exit_code: Optional[int]
         try:
-            exit_code = int(exit_file.read_text().strip())
+            exit_code = int(exit_file.read_text(encoding="utf-8").strip())
         except Exception:
             exit_code = None
 
@@ -1741,7 +1741,7 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
     if tool == "semgrep":
         exit_file = out_dir / f"{stem}.exit"
         try:
-            exit_code = int(exit_file.read_text().strip())
+            exit_code = int(exit_file.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             exit_code = -1
     else:

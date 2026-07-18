@@ -52,9 +52,9 @@ class _LibsodiumDriver:
         build_o2 = tag_dir / "build_o2"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_fresh(tag_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         live = _collect_gcov_liveness(build_o0)
         candidates = _enumerate_candidates(build_o0)

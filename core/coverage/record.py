@@ -47,7 +47,7 @@ def build_from_manifest(run_dir: Path, tool: str,
     # removing.
     if manifest.exists():
         try:
-            for line in manifest.read_text().splitlines():
+            for line in manifest.read_text(encoding="utf-8").splitlines():
                 line = line.rstrip("\r\n")
                 if line:
                     files.add(line)

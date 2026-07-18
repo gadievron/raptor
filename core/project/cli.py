@@ -825,7 +825,7 @@ def main():
                         f"(got {size}). Trim before passing."
                     )
                     return
-                mgr.update_notes(args.name, path.read_text().strip())
+                mgr.update_notes(args.name, path.read_text(encoding="utf-8").strip())
                 print("Notes updated.")
             elif getattr(args, "edit", False):
                 if not os.isatty(0):
@@ -897,7 +897,7 @@ def main():
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")
                         return
-                    new_notes = Path(tf_path).read_text().strip()
+                    new_notes = Path(tf_path).read_text(encoding="utf-8").strip()
                     mgr.update_notes(args.name, new_notes)
                     print("Notes updated.")
                 finally:

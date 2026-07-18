@@ -325,7 +325,7 @@ WEBGOAT: Tuple[SeedEntry, ...] = (
 
 def _load_lines(repo_root: Path, fixture_path: str) -> List[str]:
     full = repo_root / fixture_path
-    return full.read_text().splitlines() if full.exists() else []
+    return full.read_text(encoding="utf-8").splitlines() if full.exists() else []
 
 
 def _step(
@@ -393,10 +393,10 @@ def write_seed(out_dir: Path, repo_root: Path) -> int:
         for entry in entries:
             finding, label = _entry_to_pair(entry, source_label, repo_root)
             (out_dir / f"{finding.finding_id}.json").write_text(
-                finding.to_json(indent=2)
+                finding.to_json(indent=2), encoding="utf-8",
             )
             (out_dir / f"{finding.finding_id}.label.json").write_text(
-                label.to_json(indent=2)
+                label.to_json(indent=2), encoding="utf-8",
             )
             n += 1
     return n

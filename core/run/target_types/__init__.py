@@ -184,7 +184,7 @@ def _load_one(yml_path: Path) -> Optional[CatalogEntry]:
     best-effort so a single broken entry doesn't break the loader
     for all consumers."""
     try:
-        text = yml_path.read_text()
+        text = yml_path.read_text(encoding="utf-8")
         data = yaml.safe_load(text)
         if not isinstance(data, dict):
             return None
