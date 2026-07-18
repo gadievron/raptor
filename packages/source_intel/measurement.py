@@ -430,7 +430,7 @@ def main() -> int:
           f"(exit gate: ≥10%)")
 
     if args.output and results:
-        with args.output.open("w", newline="") as f:
+        with args.output.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=results[0].keys())
             writer.writeheader()
             writer.writerows(results)

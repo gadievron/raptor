@@ -318,7 +318,7 @@ class ProjectManager:
         """Load a project by name. Returns None if not found or name invalid."""
         # Reject traversal attempts — load is called with user input
         project_file = (self.projects_dir / f"{name}.json").resolve()
-        if not str(project_file).startswith(str(self.projects_dir.resolve()) + "/"):
+        if not project_file.is_relative_to(self.projects_dir.resolve()):
             return None
         data = load_json(project_file)
         if data is None:
@@ -360,7 +360,7 @@ class ProjectManager:
             home = Path.home().resolve()
             if (output == home or output == Path("/")
                     or len(output.parts) < 3
-                    or str(home).startswith(str(output) + "/")):
+                    or home.is_relative_to(output)):
                 raise ValueError(f"Refusing to delete suspicious path: {output}")
             expected_base = DEFAULT_OUTPUT_BASE.resolve()
             try:

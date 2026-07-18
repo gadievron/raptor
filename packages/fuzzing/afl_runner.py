@@ -450,7 +450,11 @@ class AFLRunner:
             stdout_path = log_dir / f"{instance_name}.stdout.log"
             stderr_path = log_dir / f"{instance_name}.stderr.log"
             stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
-            stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
+            try:
+                stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
+            except BaseException:
+                stdout_fp.close()
+                raise
             (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
 
             try:
@@ -463,7 +467,7 @@ class AFLRunner:
                     env=afl_env,
                     preexec_fn=set_pdeathsig(),
                 )
-            except Exception:
+            except BaseException:
                 stdout_fp.close()
                 stderr_fp.close()
                 raise

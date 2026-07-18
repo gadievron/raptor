@@ -841,7 +841,7 @@ class DataflowVisualizer:
 
         # Add instructions
         instructions_file = self.output_dir / f"{finding_id}_dataflow_instructions.txt"
-        with open(instructions_file, 'w') as f:
+        with open(instructions_file, 'w', encoding="utf-8") as f:
             f.write("To render the DOT file:\n\n")
             f.write("# Install Graphviz (if not already installed):\n")
             f.write("# macOS: brew install graphviz\n")

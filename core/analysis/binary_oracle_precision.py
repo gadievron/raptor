@@ -433,8 +433,8 @@ def write_report(reports: Sequence[CorpusReport], out_dir: Path) -> Path:
         # ONE source of truth.
         "aggregate": _aggregate(reports),
     }
-    json_path.write_text(json.dumps(payload, indent=2))
-    md_path.write_text(_format_markdown(reports))
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    md_path.write_text(_format_markdown(reports), encoding="utf-8")
     return json_path
 
 

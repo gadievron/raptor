@@ -127,7 +127,7 @@ def _load_cached_index(
     if not cache_file.is_file():
         return None
     try:
-        payload = json.loads(cache_file.read_text())
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(payload, dict):
