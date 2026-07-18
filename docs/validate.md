@@ -208,9 +208,11 @@ being counted, and reviewed, twice. Two dedup passes cooperate, both in
 
 1. **At SARIF conversion** (`convert_sarif_result`) — the rule ID is normalized to a
    canonical `vuln_type` (`normalize_rule_id()`), then a fingerprint is computed: the
-   SARIF tool's own `partialFingerprints.primaryLocationLineHash` if present, otherwise
-   `"{file}:{line}:{normalized_vuln_type}"`. A result whose fingerprint was already seen
-   is dropped.
+   SARIF tool's own `fingerprints.primaryLocationLineHash` if present (this is the
+   validation orchestrator's own key naming, distinct from the SARIF-spec
+   `partialFingerprints` key the upstream `/agentic`/`/scan` merge dedup uses below),
+   otherwise `"{file}:{line}:{normalized_vuln_type}"`. A result whose fingerprint was
+   already seen is dropped.
 2. **After ingestion** (`_deduplicate_findings`) — a second, coarser pass runs over the
    full findings list (whether it came from SARIF conversion or a pre-existing findings
    JSON) keyed on **`(file, line, vuln_type)`**. This catches duplicates that survive
