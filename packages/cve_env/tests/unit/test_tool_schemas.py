@@ -54,7 +54,7 @@ REQUIRED_PARAMS: dict[str, set[str]] = {
     "source_build": {"source_url", "product", "version"},
     "docker_build": {"context_dir", "dockerfile_text", "image_tag"},
     "docker_run": {"image", "container_port", "run_id", "cve_id", "platform"},
-    "docker_compose_up": {"compose_yaml_path", "cve_id", "platform"},
+    "docker_compose_up": {"compose_yaml_path", "cve_id", "platform", "allow_devices"},
     "run_in_container": {"container_id", "command", "timeout_seconds", "workdir"},
     "verify": {"container_id", "host_ip", "host_port", "plan"},
     "give_up": {"reason", "detail"},
