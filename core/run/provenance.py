@@ -88,7 +88,7 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None
     if result.returncode != 0:
         return None
@@ -176,7 +176,7 @@ def tool_version(name: str) -> Optional[str]:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None
     out = (result.stdout or result.stderr or "").strip()
     if not out:

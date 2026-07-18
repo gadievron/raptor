@@ -1751,8 +1751,8 @@ def run_sandboxed(
                     remaining = (deadline - time.monotonic()) if deadline else None
                     if remaining is not None and remaining <= 0:
                         _kill_and_reap(child_pid)
-                        out_str = stdout_buf.decode() if text else stdout_buf
-                        err_str = stderr_buf.decode() if text else stderr_buf
+                        out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
+                        err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str
                         )
@@ -1785,8 +1785,8 @@ def run_sandboxed(
                         break
                     if time.monotonic() > deadline:
                         _kill_and_reap(child_pid)
-                        out_str = (stdout_buf or b"").decode() if text else stdout_buf
-                        err_str = (stderr_buf or b"").decode() if text else stderr_buf
+                        out_str = (stdout_buf or b"").decode("utf-8", errors="replace") if text else stdout_buf
+                        err_str = (stderr_buf or b"").decode("utf-8", errors="replace") if text else stderr_buf
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str
                         )
@@ -1794,7 +1794,12 @@ def run_sandboxed(
             else:
                 _, status = os.waitpid(child_pid, 0)
         except ChildProcessError:
-            status = 0
+            # Child already reaped (ECHILD) — real exit status lost.
+            # Synthesise SIGKILL (raw wait-status 9) so downstream
+            # returncode is -9, not 0 (false success).
+            logger.warning("waitpid: child %d already reaped (ECHILD); "
+                           "exit status unknown", child_pid)
+            status = 9
     finally:
         # Drain + close the exec-status pipe FIRST so status_r is reclaimed
         # even if a cleanup step below raises — an unclosed status_r leaks
@@ -1836,8 +1841,8 @@ def run_sandboxed(
     # close-on-exec, gone before the target runs.
     stdout_out = stderr_out = None
     if capture_output:
-        stdout_out = stdout_buf.decode() if text else stdout_buf
-        stderr_out = stderr_buf.decode() if text else stderr_buf
+        stdout_out = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
+        stderr_out = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
 
     cp = subprocess.CompletedProcess(
         args=list(cmd),

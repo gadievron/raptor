@@ -48,6 +48,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -242,6 +243,7 @@ def _foundry_hosts() -> Optional[list[str]]:
 # to invalidate during normal operation — sha256 verification on
 # load handles binary self-update.
 _CALIBRATED_CACHE: dict[str, "object"] = {}
+_CALIBRATED_CACHE_LOCK = threading.Lock()
 
 
 def _resolve_claude_bin() -> Optional[str]:
@@ -276,37 +278,27 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
         claude_bin = _resolve_claude_bin()
     if claude_bin is None:
         return None
-    if claude_bin in _CALIBRATED_CACHE:
-        return _CALIBRATED_CACHE[claude_bin]
+    with _CALIBRATED_CACHE_LOCK:
+        if claude_bin in _CALIBRATED_CACHE:
+            return _CALIBRATED_CACHE[claude_bin]
 
     try:
         from core.sandbox.calibrate import load_or_calibrate
     except ImportError:
-        # Calibrate module isn't available on this build (older
-        # checkouts, minimal containers). Disable calibration
-        # gracefully — static layers carry the policy.
-        _CALIBRATED_CACHE[claude_bin] = None
+        # Calibrate module isn't available (older checkouts, minimal
+        # containers). Static layers carry the policy.
+        with _CALIBRATED_CACHE_LOCK:
+            _CALIBRATED_CACHE[claude_bin] = None
         return None
 
     try:
         # Probe args + cache-key env are derived together so the
         # cached profile invalidates cleanly when the operator
-        # toggles the network-probe opt-in. Without including the
-        # opt-in env var in the cache key, a profile calibrated
-        # under ``--version`` (empty proxy_hosts) would be served
-        # to a caller that just enabled network probing — and the
-        # caller would never see the discovered hosts.
+        # toggles the network-probe opt-in.
         probe_args = _cc_probe_args()
         env_keys = _PROVIDER_ENV_KEYS + (_NETWORK_PROBE_OPT_IN_ENV,)
-        # Network probe wall-time empirically: ~110s on Claude Code
-        # 2.1.138 with cold cache (auth + model-list + actual prompt
-        # + streaming response + MCP setup + telemetry). 150s gives
-        # headroom without unbounded hang risk; the AuditBudget cap
-        # bounds record volume independently. The probe runs ONCE
-        # per (binary-sha + env-sig) and the result is cached, so the
-        # one-time cost amortises across every cc_dispatch call until
-        # the binary self-updates.
-        # ``--version`` probe finishes in <1s; 20s is generous.
+        # ``--version`` finishes in <1s (20s generous); network probe
+        # runs full claude -p round-trip (~110s observed, 150s budget).
         timeout = 150 if _network_probe_enabled() else 20
         profile = load_or_calibrate(
             claude_bin,
@@ -316,21 +308,17 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
         )
     except (FileNotFoundError, RuntimeError, OSError,
             subprocess.TimeoutExpired) as exc:
-        # Probe failed: ptrace blocked (Yama scope 3),
-        # libseccomp absent on minimal containers, the binary was
-        # deleted between which() and probe, or the probe exceeded
-        # its per-mode timeout (20s for `--version`, 150s for
-        # `claude -p READY`). Log at debug — calibration is opt-in
-        # / advisory, the static fallback stays in place.
         logger.debug(
             "cc_proxy_hosts: calibration of %s failed (%s); "
             "falling back to static policy",
             claude_bin, exc,
         )
-        _CALIBRATED_CACHE[claude_bin] = None
+        with _CALIBRATED_CACHE_LOCK:
+            _CALIBRATED_CACHE[claude_bin] = None
         return None
 
-    _CALIBRATED_CACHE[claude_bin] = profile
+    with _CALIBRATED_CACHE_LOCK:
+        _CALIBRATED_CACHE[claude_bin] = profile
     return profile
 
 

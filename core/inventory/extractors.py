@@ -10,6 +10,7 @@ in FunctionMetadata. See docs/design-inventory-metadata.md for design rationale.
 import ast
 import re
 import logging
+import threading
 import warnings
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1158,14 +1159,13 @@ except ImportError:
     _TS_AVAILABLE = False
 
 
-# Per-language Parser cache. Pre-cache, ``TreeSitterExtractor(lang)``
-# constructed a fresh ``TSParser(ts_language)`` on every instance —
-# which is per-file in ``_extract_with_tree_sitter``. The grammar
-# is immutable across the program's lifetime so a single Parser
-# per language can be reused across every parse. Cache by the
-# language NAME (not Language object identity) because
-# ``_ts_language`` wraps a new Language per call.
-_TS_PARSER_BY_LANG: Dict[str, Any] = {}
+# Per-language Parser cache.  tree-sitter's Parser holds C-side
+# mutable state (internal parse stack) — NOT thread-safe for
+# concurrent ``.parse()`` calls.  The inventory builder fans out
+# via ThreadPoolExecutor, so a shared module-level dict would hand
+# the same Parser to multiple workers simultaneously.
+# ``threading.local`` gives every thread its own dict of parsers.
+_TS_PARSER_LOCAL = threading.local()
 
 
 def _ts_language(lang: str):
@@ -1221,20 +1221,21 @@ def _ts_language(lang: str):
 
 
 def _ts_parser_for(lang: str):
-    """Return a cached ``TSParser`` for ``lang``, or None if the
-    grammar isn't installed. Mirrors ``_get_ts_parser`` in
-    ``core/inventory/call_graph.py`` but keyed by language NAME so
-    repeated ``TreeSitterExtractor(lang)`` constructions across
-    many files share one Parser per grammar.
+    """Return a per-thread cached ``TSParser`` for ``lang``, or None
+    if the grammar isn't installed.
     """
-    cached = _TS_PARSER_BY_LANG.get(lang)
+    cache: Dict[str, Any] = getattr(_TS_PARSER_LOCAL, "parsers", None)  # type: ignore[assignment]
+    if cache is None:
+        cache = {}
+        _TS_PARSER_LOCAL.parsers = cache
+    cached = cache.get(lang)
     if cached is not None:
         return cached
     ts_lang = _ts_language(lang)
     if ts_lang is None:
         return None
     parser = TSParser(ts_lang)
-    _TS_PARSER_BY_LANG[lang] = parser
+    cache[lang] = parser
     return parser
 
 
