@@ -49,6 +49,53 @@ def check_seatbelt_available():
 logger = logging.getLogger(__name__)
 
 
+def _safe_run(cmd, **kwargs):
+    """subprocess.run that tolerates EBADF on Popen pipe cleanup.
+
+    When a child in a pid namespace is killed, Popen.__exit__ can raise
+    OSError(EBADF) closing stdout/stderr pipes whose fds the kernel
+    already invalidated during namespace teardown.  subprocess.run uses
+    Popen as a context manager, so the OSError escapes even though
+    communicate() already captured the output.  We use Popen directly
+    and guard the pipe close.
+    """
+    import errno
+    input_data = kwargs.pop("input", None)
+    timeout = kwargs.pop("timeout", None)
+    check = kwargs.pop("check", False)
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    proc = subprocess.Popen(cmd, **kwargs)
+    try:
+        stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise subprocess.TimeoutExpired(
+            proc.args, timeout, output=stdout, stderr=stderr)
+    except BaseException:
+        proc.kill()
+        try:
+            proc.wait()
+        except OSError:
+            pass
+        raise
+    finally:
+        for pipe in (proc.stdout, proc.stderr, proc.stdin):
+            if pipe:
+                try:
+                    pipe.close()
+                except OSError as e:
+                    if e.errno != errno.EBADF:
+                        raise
+    retcode = proc.poll()
+    if check and retcode:
+        raise subprocess.CalledProcessError(
+            retcode, proc.args, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(proc.args, retcode, stdout, stderr)
+
+
 def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
                           target, output, kwargs) -> tuple:
     """Return (reason, instructions) explaining why audit can't engage.
@@ -2214,7 +2261,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                             _denv = dict(_dk.get("env") if _dk.get("env") is not None else os.environ)
                             _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
                             _dk["env"] = _denv
-                            result = subprocess.run(full_cmd, **_dk)
+                            result = _safe_run(full_cmd, **_dk)
                         finally:
                             for _dfd in (_death_r, _death_w):
                                 try:
@@ -2222,7 +2269,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                 except OSError:
                                     pass
                     else:
-                        result = subprocess.run(
+                        result = _safe_run(
                             full_cmd,
                             start_new_session=_start_new_session,
                             **kwargs,
