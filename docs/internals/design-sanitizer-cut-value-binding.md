@@ -29,7 +29,7 @@ symbol-level layer that closes the gap, then extends value-bound
 suppression across function boundaries (Python inter-procedural) and
 into the second supported language (C/C++ intra-procedural).
 
-The lexical fallback at `core/dataflow/smt_barrier.py:746` / `:940`
+The lexical fallback at `core/dataflow/smt_barrier.py:936` / `:1183`
 stays until A/B parity is demonstrated; only Phase 16 removes it.
 
 ## Why one arc, not three branches
@@ -52,15 +52,15 @@ Phase 1 don't drift before Phase 16 lands.
 | 5 | A | Finding-normalisation adapter (SARIF / Semgrep / RAPTOR-native) | **done** (21 tests; SARIF + Semgrep + RAPTOR-native fixtures; end-to-end wrong-variable + safe straight-line; ruff clean) |
 | 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | **done** (9 new tests + binary-oracle back-compat preserved; ruff clean) |
 | 7 | A | `smt_barrier` wire-up behind `RAPTOR_SANITIZER_CUT` flag + E2E corpus + ablation | **done** (13 corpus/wire-up tests; 7-fixture corpus + CORPUS.md ablation table; smt_barrier extended with optional file_path/cwe/language kwargs; ruff clean) |
-| 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | **done — chose tree-sitter** (60-LOC C fixture parses in 1.73 ms, 6/6 canonical shapes recover defs/uses/call_sites; writeup at `docs/phase-8-substrate-spike/DECISION.md`) |
-| 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/inventory/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
+| 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | **done — chose tree-sitter** (60-LOC C fixture parses in 1.73 ms, 6/6 canonical shapes recover defs/uses/call_sites; writeup at `docs/internals/phase-8-substrate-spike/DECISION.md`) |
+| 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/analysis/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
 | 10 | B | Pointer / alias conservatism | **done** (27 tests pass; CPPCFGNode.may_escape stamped on `*p` / `&x` / `a[i]` / `obj->field` / bulk-copy calls (memcpy/strcpy family); evaluate_finding downgrades SUPPRESS → CANDIDATE_ONLY when any node on a source→sink path is may_escape; Python verdicts unchanged via getattr default; ruff clean) |
-| 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 4 GLib/SQLite sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
-| 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
-| 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
-| 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/inventory/interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
+| 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 3 GLib sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
+| 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/analysis/python_module_callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
+| 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/analysis/taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
+| 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/analysis/interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | **done** (33 tests; `core/dataflow/sanitizer_cut_parity.py` — ParityRecord, shadow-log via `RAPTOR_SANITIZER_CUT_PARITY_LOG`, Wilson-CI aggregation, removal-safe gate = rate-criterion AND zero per-finding regression; HORIZON.md + committed first-report.md show value-bound and lexical are complementary so the gate is correctly NOT-yet-cleared; ruff clean) |
-| 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | **done (honest closure)** — parity gate (phase 15) is NOT cleared, so the lexical bodies are RETAINED, not deleted; the end-state is reachable via `RAPTOR_SANITIZER_CUT_NO_LEXICAL`; a closure tripwire test pins the gate's not-cleared state; arc closed for its soundness goal, open for full lexical retirement (8 tests; ruff clean; `docs/sanitizer-cut-parity/CLOSURE.md`) |
+| 16 | D | Lexical fallback removal at `smt_barrier.py:936` / `:1183` | **done (honest closure)** — parity gate (phase 15) is NOT cleared, so the lexical bodies are RETAINED, not deleted; the end-state is reachable via `RAPTOR_SANITIZER_CUT_NO_LEXICAL`; a closure tripwire test pins the gate's not-cleared state; arc closed for its soundness goal, open for full lexical retirement (8 tests; ruff clean; `docs/internals/sanitizer-cut-parity/CLOSURE.md`) |
 
 Sub-arcs A → B → D and A → C → D are sequential. B and C are
 independent of each other; both must land before D starts (D
@@ -104,7 +104,7 @@ path).
   `With.items`, `Try` empty. Bodies stay attributed to their own
   CFG nodes.
 
-**Ships:** updated `core/inventory/cfg_builder.py`; new tests on
+**Ships:** updated `core/analysis/cfg_builder.py`; new tests on
 extraction correctness. No behaviour change in any consumer.
 
 **Gates:** Phase 2 (taint propagation reads `defs`/`uses`),
@@ -115,7 +115,7 @@ Phase 3 (recognizer reads `call_sites`).
 **Goal:** answer "at node N, which earlier nodes last defined
 symbol s?"
 
-- New `core/inventory/dataflow.py`. Uses the existing
+- New `core/analysis/dataflow.py`. Uses the existing
   `Graph[N]` Protocol and `DomTree` from Phase 5 of the
   shipped arc.
 - API: `reaching_defs(cfg) -> ReachingDefs` where
@@ -206,7 +206,7 @@ identically.
 **Goal:** take whatever shape the upstream tool emits and produce
 the inputs `evaluate_finding` needs.
 
-- `core/inventory/finding_resolver.py`. Single entry point:
+- `core/analysis/finding_resolver.py`. Single entry point:
   `resolve_finding(finding) -> ResolvedFinding | None` with fields
   `(file, enclosing_function, source_lineno, source_symbols,
   sink_lineno, sink_arg, cwe, language)`.
@@ -237,7 +237,7 @@ visible without it being a silent suppression.
   `verdict="sanitizer_candidate"` and `dropped: false` —
   greppable, but the finding survives to the LLM.
 - Schema bump documented in the JSONL header (one comment line on
-  first write) and in `core/inventory/reach_chokepoint.py`'s
+  first write) and in `core/analysis/reach_chokepoint.py`'s
   docstring.
 - Tests on record shape for both verdicts.
 
@@ -296,7 +296,7 @@ path's output).
 **Goal:** decide the platform before building on it.
 
 **Decision: tree-sitter** (`tree-sitter-c` + `tree-sitter-cpp`).
-Full writeup at `docs/phase-8-substrate-spike/DECISION.md`. Three
+Full writeup at `docs/internals/phase-8-substrate-spike/DECISION.md`. Three
 load-bearing reasons:
 
 1. **Already the substrate of every existing C/C++ inventory walk**
@@ -339,7 +339,7 @@ under any choice):
 - K&R-style definitions parse but only ANSI prototypes give
   parameter extraction. Vanishingly rare.
 
-**Ships:** `docs/phase-8-substrate-spike/DECISION.md` (the one-shot
+**Ships:** `docs/internals/phase-8-substrate-spike/DECISION.md` (the one-shot
 spike artifacts — `fixture.c`, `prototype_tree_sitter.py`, `.out` —
 were removed post-decision; recoverable from git history).
 
@@ -349,10 +349,10 @@ were removed post-decision; recoverable from git history).
 
 **Goal:** the C/C++ analogue of Phase 1.
 
-**Shipped:** `core/inventory/cfg_builder_cpp.py` exposes
+**Shipped:** `core/analysis/cfg_builder_cpp.py` exposes
 `build_cpp_intraproc_cfg(source, function_name, *, language="c") ->
 Optional[CPPCFG]`. `CPPCFG` is a frozen dataclass implementing
-`core.inventory.dominators.Graph` (same protocol the Python CFG
+`core.analysis.dominators.Graph` (same protocol the Python CFG
 satisfies). `CPPCFGNode` carries `kind`, `lineno`, `label`, `calls`,
 `defs`, `uses`, `call_sites` — same field set and same
 :class:`CallSite` type as `PyCFGNode` so downstream consumers
@@ -377,7 +377,7 @@ node — operand calls still appear in `call_sites`, and the
 conservative collapse over-suppresses rather than under-suppresses
 (no soundness loss for the value-bound gate).
 
-**Tests:** `core/inventory/tests/test_cfg_builder_cpp.py` — 32 tests
+**Tests:** `core/analysis/tests/test_cfg_builder_cpp.py` — 32 tests
 covering basic shape (entry/exit, params, function-not-found),
 symbol layer (init_declarator, assignment, compound assignment,
 nested call assigned_names, field-expr callable name, calls
@@ -427,7 +427,7 @@ field-sensitive aliasing.
   be honest about value flow without paying for a points-to
   engine.
 
-**Tests:** `core/inventory/tests/test_may_escape.py` — 27
+**Tests:** `core/analysis/tests/test_may_escape.py` — 27
 tests: stamping (plain assignment is not flagged; deref load /
 deref store / address-of / subscript load / subscript store /
 arrow field / dot field NOT flagged / 9 bulk-copy callees / if
@@ -447,7 +447,7 @@ intra-proc CFG is available.
 
 **Shipped:**
 
-* `core/inventory/finding_resolver.py` extended with
+* `core/analysis/finding_resolver.py` extended with
   `_resolve_from_parsed_cpp` — uses tree-sitter (via the Phase 9
   helpers) to find the smallest `function_definition` spanning
   [source_line, sink_line], builds a `CPPCFG` via
@@ -483,7 +483,7 @@ intra-proc CFG is available.
   syntactic outermost. The resolver's outermost pick now agrees
   across languages.
 
-**Tests:** `core/inventory/tests/test_sanitizer_cut_corpus_cpp.py`
+**Tests:** `core/analysis/tests/test_sanitizer_cut_corpus_cpp.py`
 — 10 tests parametrised over 5 C fixtures
 (`straight_line_safe.c`, `symmetric_sanitize.c`,
 `wrong_variable.c`, `bypass.c`, `may_escape.c`) under
@@ -510,7 +510,7 @@ output too).
 
 **Goal:** know which functions call which, within a module.
 
-**Shipped:** `core/inventory/callgraph.py` exposes
+**Shipped:** `core/analysis/python_module_callgraph.py` exposes
 `PyCallGraphNode` (frozen, hashable on `name`+`lineno`, carries
 `params` / `is_method` / `class_name`), `PyModuleCallGraph`
 (implements `Graph[N]`, plus `find(name)` for callee resolution
@@ -540,7 +540,7 @@ A synthetic `<module>` entry has edges to every top-level
 function and to every module-level call's resolvable callee — so
 dominator queries work over the whole module.
 
-**Tests:** `core/inventory/tests/test_callgraph.py` — 32
+**Tests:** `core/analysis/tests/test_python_module_callgraph.py` — 32
 tests covering basic shape (empty module, single fn, params,
 unparseable source, module-entry edges, line range, AST
 accessor), edges (caller→callee, module-level, recursion,
@@ -561,7 +561,7 @@ unknown node).
 reach a callee's tainted-sink arg — and which sanitizers did the
 taint pass through on the way?"
 
-**Shipped:** `core/inventory/taint_summaries.py` exposes
+**Shipped:** `core/analysis/taint_summaries.py` exposes
 `TaintSummary` (frozen, hashable) carrying:
 
 * `return_effects: FrozenSet[Tuple[int, str, int]]` — each triple
@@ -609,7 +609,7 @@ arg_idx)`.
   summary — the unknown-detector scopes to the immediate
   function's own body.
 
-**Tests:** `core/inventory/tests/test_taint_summaries.py`
+**Tests:** `core/analysis/tests/test_taint_summaries.py`
 — 23 tests covering primitives (identity, constant return,
 transform, branching, ordered params), call_arg_taint
 (external call, intermediate var, untainted arg), inter-procedural
@@ -637,7 +637,7 @@ condition 3 still enforces the wrong-variable check (a helper that
 sanitizes `other` doesn't suppress a finding whose sink reads
 `user`).
 
-* `core/inventory/interproc.py` —
+* `core/analysis/interproc.py` —
   `synthetic_sanitizer_bindings(cfg, fn_ast, summaries, cwe,
   language)`. A binding is emitted for helper-call parameter `i`
   only if: the callee has a known + converged summary; param `i`
@@ -665,7 +665,7 @@ intra-procedural `match_sanitizers_in_cfg` path. `self.method`
 callee resolution is best-effort (only when the dotted call name
 matches a summary key).
 
-**Tests:** `core/inventory/tests/test_interproc.py` — 16
+**Tests:** `core/analysis/tests/test_interproc.py` — 16
 tests: binding generation (helper sanitizer → binding; passthrough
 → none; some-branches → none; non-sanitizer-in-chain → none; wrong
 CWE → none; multi-arg positional mapping; transitive sanitization;
@@ -708,10 +708,10 @@ fixture unchanged.
   `_lexical_substitution_dominates` (the functions Phase 16 removes)
   so the hook records the pure lexical decision without re-entering
   the gate.
-* `docs/sanitizer-cut-parity/HORIZON.md` — collection method, the
+* `docs/internals/sanitizer-cut-parity/HORIZON.md` — collection method, the
   200-finding / 4-week window, the gate, the failure mode, and the
   two-in-a-row requirement.
-* `docs/sanitizer-cut-parity/first-report.md` — the committed
+* `docs/internals/sanitizer-cut-parity/first-report.md` — the committed
   baseline, regenerable via
   `core/dataflow/scripts/sanitizer-cut-parity-report`.
 
@@ -782,7 +782,7 @@ fallback on vibes" the parity phase exists to prevent.
 * The existing lexical tests are kept as-is — they remain the
   regression backstops for the retained fallback (no rewrite needed
   since the bodies stay).
-* `docs/sanitizer-cut-parity/CLOSURE.md` — the closure record:
+* `docs/internals/sanitizer-cut-parity/CLOSURE.md` — the closure record:
   soundness goal achieved, full lexical retirement deferred and
   gated.
 
@@ -823,6 +823,8 @@ so spawned scan/analysis/codeql subprocesses inherit it. `/validate`
 runs each stage as its own process, so stage 0 also persists the
 resolved config to `<run_dir>/sanitizer-cut-config.json` and later
 stages reload it.
+
+> ⚠ Superseded: the flag registers only on `/agentic` and `/codeql`; the `/validate` integration and `persist()/load_persisted()` were never wired.
 
 **Arc status:** **closed for its soundness goal** (the wrong-variable
 hole is closed across Python intra+inter and C/C++, behind the flag,

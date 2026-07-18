@@ -204,6 +204,7 @@ cost caps live in **[docs/configuration.md](docs/configuration.md)**.
 | Page | Contents |
 |------|----------|
 | [docs/getting-started-claude-code.md](docs/getting-started-claude-code.md) | Drive RAPTOR interactively through Claude Code |
+| [docs/python-cli.md](docs/python-cli.md) | Drive RAPTOR headless — `python3 raptor.py`, scripting, CI/CD (no Claude Code) |
 | [docs/install.md](docs/install.md) | Install (pip + devcontainer); which tool each command needs |
 | [docs/commands.md](docs/commands.md) | Every command, grouped by workflow stage — the reference hub (per-command guides link from here) |
 | [docs/configuration.md](docs/configuration.md) | LLM providers, `models.json`, env vars, cost cap, offline behaviour |
@@ -214,6 +215,8 @@ cost caps live in **[docs/configuration.md](docs/configuration.md)**.
 
 | Page | Command |
 |------|---------|
+| [docs/agentic.md](docs/agentic.md) | `/agentic` full autonomous workflow |
+| [docs/understand.md](docs/understand.md) | `/understand` code understanding |
 | [docs/validate.md](docs/validate.md) | `/validate` exploitability pipeline |
 | [docs/sca.md](docs/sca.md) | `/sca` software composition analysis |
 | [docs/fuzzing.md](docs/fuzzing.md) | `/fuzz` binary fuzzing |
@@ -223,9 +226,6 @@ cost caps live in **[docs/configuration.md](docs/configuration.md)**.
 | [docs/threat-model.md](docs/threat-model.md) | `/threat-model` project threat models |
 | [docs/frida/QUICKSTART.md](docs/frida/QUICKSTART.md) | `/frida` dynamic instrumentation |
 | [docs/sandbox.md](docs/sandbox.md) | Sandbox isolation and untrusted-repo safety |
-
-Guides for `/agentic` and `/understand` are linked from
-[docs/commands.md](docs/commands.md).
 
 ---
 

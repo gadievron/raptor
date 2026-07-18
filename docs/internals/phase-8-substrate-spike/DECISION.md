@@ -4,7 +4,7 @@
 
 This document is the spike's writeup. Numbers in the "tree-sitter"
 column come from running
-`docs/phase-8-substrate-spike/prototype_tree_sitter.py` against
+`docs/internals/phase-8-substrate-spike/prototype_tree_sitter.py` against
 `fixture.c` (60 lines, 6 canonical shapes — straight-line, if-branch,
 wrong-variable, sanitizer-in-helper, switch, plus declarations). The
 other two columns are paper-comparison; no prototype was built for
@@ -136,12 +136,12 @@ This `DECISION.md` records the choice. The one-shot spike artifacts
 referenced throughout this doc were research outputs that won't be
 re-run; they were removed once the decision landed (review #9 on PR
 \#794) and remain recoverable from git history. The production
-tree-sitter walker lives in `core/inventory/cfg_builder_cpp.py`.
+tree-sitter walker lives in `core/analysis/cfg_builder_cpp.py`.
 
-- `docs/design-sanitizer-cut-value-binding.md` Phase 8 row flipped
+- `docs/internals/design-sanitizer-cut-value-binding.md` Phase 8 row flipped
   to `done — chose tree-sitter`.
 
-Phase 9 starts here: build `core/inventory/cfg_builder_cpp.py` (the
+Phase 9 starts here: build `core/analysis/cfg_builder_cpp.py` (the
 C/C++ analog of `cfg_builder.py`) on top of `tree-sitter-c` and
 `tree-sitter-cpp`, returning `CPPCFGNode` matching the `Graph[N]`
 Protocol.

@@ -96,8 +96,10 @@ autonomous orchestrator that ties them together.
   (pre-map the codebase, add architectural priority markers); `--validate` (run the
   validation pipeline on exploitable findings afterwards); `--model <m>` (repeatable —
   multi-model correlation); `--consensus <m>`, `--judge <m>`, `--aggregate <m>`;
-  `--sequential` (bypass parallel orchestration); `--binary <path>` / `--binary-auto` /
-  `--no-binary-oracle` (reachability enrichment); `--max-findings <n>`.
+  `--sequential` (bypass parallel orchestration); `--binary <path>` / `--binary-auto`
+  (reachability enrichment); `--max-findings <n>`. Note: `--no-binary-oracle` is **not
+  currently accepted by `/agentic`** — it is wired only into `/codeql`; see the
+  [guide](agentic.md) for how to run `/agentic` without the oracle suppressing.
 - **Run:** `libexec/raptor-agentic --repo <path>` (flags pass straight through).
 - **Full flags:** `libexec/raptor-agentic --help`.
 
@@ -107,7 +109,7 @@ autonomous orchestrator that ties them together.
   deeper passes). SARIF findings, no LLM analysis by itself.
 - **Key params:** `--repo <path>`; `--policy-groups <groups>` (e.g. `secrets,owasp`).
 - **Run:** `python3 raptor.py scan --repo <path>`. Full flags: `raptor scan --help`.
-- **Alias:** `/raptor-scan` (deprecated).
+- **Alias:** `/raptor-scan` (back-compat alias).
 
 ### /codeql
 

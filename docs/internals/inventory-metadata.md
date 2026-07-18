@@ -18,6 +18,7 @@ class FunctionMetadata:
     attributes: List[str] = field(default_factory=list)
     return_type: Optional[str] = None
     parameters: List[Tuple[str, Optional[str]]] = field(default_factory=list)
+    class_attributes: List[str] = field(default_factory=list)
 ```
 
 | Field | What goes in it | Examples |
@@ -71,7 +72,7 @@ Consumer accesses f.metadata.attributes, f.metadata.visibility, etc.
 
 ## Fields
 
-5 metadata fields. Each has a named consumer and a concrete action.
+6 metadata fields. Each has a named consumer and a concrete action.
 
 | Field | Type | Consumer | Action |
 |-------|------|----------|--------|
@@ -80,6 +81,7 @@ Consumer accesses f.metadata.attributes, f.metadata.visibility, etc.
 | `visibility` | `Optional[str]` | Stage A, `--map` | public/private/static/exported/extern — reachability signal |
 | `return_type` | `Optional[str]` | `--trace` | Type at function output for data flow analysis |
 | `parameters` | `List[Tuple[str, Optional[str]]]` | `--trace` | Type at function input: source markers, taint tracking |
+| `class_attributes` | `List[str]` | reachability (Java) | Enclosing-class stereotype annotations (`@Service`/`@Component`) so public methods of container-managed beans count as framework entries (`extractors.py:84`) |
 
 ### Fields considered and rejected
 
@@ -197,7 +199,11 @@ This enables deferred integration work:
 
 ## Next Step: Agentic Pipeline Integration
 
-The analysis prompt accepts metadata (`build_analysis_prompt(metadata=...)`) but the agentic pipeline doesn't populate it yet. The agentic pipeline goes SARIF → prep → analysis without building a checklist.
+The analysis prompt accepts metadata (`build_analysis_prompt_bundle(metadata=...)`) but the agentic pipeline doesn't populate it yet. The agentic pipeline goes SARIF → prep → analysis without building a checklist.
+
+> ⚠ Superseded: shipped — forwarded into `build_analysis_prompt_bundle` (`packages/llm_analysis/agent.py:915,950`).
+>
+> ⚠ Superseded: shipped — `_build_checklist` (`core/orchestration/agentic_passes.py:659`); `checklist.json` at `raptor_agentic.py:1770`.
 
 To wire it up:
 1. Build checklist in agentic Phase 1 (alongside scanning) or Phase 3 (prep)

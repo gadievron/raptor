@@ -50,8 +50,11 @@ What this gets you:
 - `$HOME` redirected to an empty per-sandbox directory — no dotfiles, no
   credentials
 - dangerous syscalls blocked: io_uring, kcmp, pidfd_getfd, ptrace, keyctl,
-  bpf, userfaultfd, perf_event_open, and `socket()` for AF_UNIX / AF_PACKET /
-  AF_NETLINK / SOCK_RAW (docker.sock escape, raw-packet sniffing)
+  bpf, userfaultfd, perf_event_open, `open_by_handle_at` / `name_to_handle_at`
+  (open a file by opaque handle, bypassing path checks), the `ioctl` tty cmds
+  TIOCSTI / TIOCCONS (inject input into / redirect the controlling tty), and
+  `socket()` for AF_UNIX / AF_PACKET / AF_NETLINK / SOCK_RAW (docker.sock escape,
+  raw-packet sniffing)
 - `RLIMIT_CORE = 0` (no core-dump exfil), memory/CPU caps, and per-namespace
   `RLIMIT_NPROC` bounding fork bombs
 

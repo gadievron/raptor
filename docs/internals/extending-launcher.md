@@ -424,7 +424,7 @@ If you need help adding a new scanner:
 1. Check existing scanners in `packages/` for examples
 2. Review `raptor.py` to understand the routing pattern
 3. Open an issue on GitHub with questions
-4. Refer to `docs/ARCHITECTURE.md` for system design
+4. Refer to `docs/internals/architecture-internals.md` for system design
 
 ## Summary
 

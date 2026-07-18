@@ -161,6 +161,8 @@ disk; if they aren't, we add a JSONL log
 `{finding_id, model, verdict, confidence}`) before wiring the
 estimator. Without this log, phase 2 has no input.
 
+> ⚠ Superseded: never created; the estimator reads `orchestrated_report.json` (`core/llm/multi_model/panel_log.py:111`).
+
 - Add `core/llm/multi_model/dawid_skene.py`. Inputs:
   per-finding list of `(model, verdict)` tuples loaded from the panel
   log + Beta priors from phase 1b keyed on `decision_class`. Output:
@@ -206,6 +208,10 @@ the JSON shape downstream tools depend on.
   (`aggregator.aggregate(merged, correlation)`). Keep the current vote
   aggregator behind a `--consensus=vote` flag for ablation and emergency
   fallback.
+
+  > ⚠ Superseded: `dispatch.py:226` is the generic synthesis aggregator; calibration is attached in `packages/llm_analysis/orchestrator.py:420`.
+  >
+  > ⚠ Superseded: `--consensus` takes a MODEL name; vote is an automatic internal fallback, no flag.
 - Output schema extension (additive, backward-compatible):
     - Existing `verdict` field unchanged (boolean / categorical).
     - New `posterior_true_positive: float`, `credible_interval: [lo, hi]`,
@@ -214,7 +220,7 @@ the JSON shape downstream tools depend on.
 - Triage ordering: when `--rank-by=expected-cost` is passed,
   sort findings by `posterior × severity` (severity from CWE map).
   Default ranking unchanged.
-- Document the schema bump in `docs/ARCHITECTURE.md` (one paragraph) and
+- Document the schema bump in `docs/internals/architecture-internals.md` (one paragraph) and
   in `core/llm/multi_model/types.py` (dataclass + docstring).
 
 **Ships:** dispatch integration + schema + ablation flag + ordering
@@ -276,7 +282,7 @@ circularity closed — gated on replay-harness validation.
 
 ### Substrate today
 
-- `core/dataflow/smt_barrier.py:746,940,1189` already encodes the
+- `core/dataflow/smt_barrier.py:936,1183` already encodes the
   *concept* of "sanitizer dominates sink" via the functions
   `validator_dominates_sink`, `substitution_dominates_sink`. But the
   check is **lexical** — `line < sink_line and not
@@ -284,7 +290,7 @@ circularity closed — gated on replay-harness validation.
   a sibling branch that does not lexically precede the sink but post-
   dominates every path to it, nor about call-graph reachability through
   helper functions.
-- `core/analysis/binary_oracle_edges.py` (591 lines) extracts direct
+- `core/analysis/binary_oracle_edges.py` (684 lines) extracts direct
   call edges + vtable resolution via r2. These are the natural input to
   a real dominator tree.
 - `core/analysis/binary_oracle.py` already has the chokepoint that
@@ -375,6 +381,8 @@ the dominators-of-sink set with the sanitizer catalog gives the
 candidate sanitizers cheaply before the vertex-cut check runs. The
 dominator tree narrows; the vertex-cut decides.
 
+> ⚠ Superseded — actually shipped: no dominator pre-filter (unsound for symmetric sanitizers); candidates come from `match_sanitizers_in_cfg` over the full CFG — `core/analysis/sanitizer_cut.py:507`.
+
 - New pre-LLM suppressor: `core/analysis/sanitizer_cut.py`. For each
   finding:
     1. `dominators_of(sink) ∩ sanitizer_catalog_nodes` → candidates.
@@ -382,8 +390,8 @@ dominator tree narrows; the vertex-cut decides.
        emit `verdict: "sanitizer_dominated"` in `suppressions.jsonl`
        with the witnessing cut set logged.
     3. Otherwise let the finding fall through to the LLM.
-- Rewrite `smt_barrier.py:746` (`validator_dominates_sink`) and
-  `smt_barrier.py:940` (`substitution_dominates_sink`) to delegate to
+- Rewrite `smt_barrier.py:936` (`validator_dominates_sink`) and
+  `smt_barrier.py:1183` (`substitution_dominates_sink`) to delegate to
   the vertex-cut check. Keep the existing signatures; the lexical
   check (`line < sink_line`) becomes a fallback only when CFG
   construction failed (loud log with the failure reason).

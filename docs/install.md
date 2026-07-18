@@ -113,7 +113,7 @@ its own env var / SDK — are:
 | Anthropic (Claude) | `anthropic` | `ANTHROPIC_API_KEY` |
 | OpenAI | `openai` | `OPENAI_API_KEY` |
 | Google Gemini | `google-genai` (or `openai` shim) | `GEMINI_API_KEY` |
-| Mistral | `openai` (compatible endpoint) | provider key |
+| Mistral | `openai` (compatible endpoint) | `MISTRAL_API_KEY` |
 | Ollama (local) | `openai` (compatible endpoint) | none — set `OLLAMA_HOST` |
 | AWS Bedrock | stock `anthropic` SDK (`botocore` only for SigV4 signing) | `AWS_BEARER_TOKEN_BEDROCK` or AWS creds |
 
