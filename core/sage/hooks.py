@@ -976,7 +976,6 @@ def store_validation_verdicts(
 
     for finding in findings[:20]:
         try:
-            finding_id = finding.get("id", "unknown")
             vuln_type = finding.get("vuln_type", "unknown")
             cwe_id = finding.get("cwe_id", "")
             status = finding.get("final_status") or finding.get("status", "unknown")
@@ -1260,7 +1259,6 @@ def store_trace_result(
     try:
         repo_name = Path(repo_path).name
         trace_id = trace.get("id", "unknown")
-        trace_name = trace.get("name", "")
         meta = trace.get("meta", {})
         entry = meta.get("entry_point", "unknown")
         sink = meta.get("target_sink", "unknown")

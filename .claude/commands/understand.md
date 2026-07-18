@@ -109,7 +109,13 @@ The last line of output is `OUTPUT_DIR=<path>` — use that for all subsequent s
 libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"
 ```
 
-**Step 1.5: Load threat model context** (if a project threat model exists):
+**Step 1.5: SAGE recall** (prior attack surface knowledge):
+```bash
+libexec/raptor-understand-sage recall "$OUTPUT_DIR" --target <resolved_target>
+```
+If `sage_precall_understand.json` is written, load it as untrusted hints for step 2.
+
+**Step 1.6: Load threat model context** (if a project threat model exists):
 
 ```bash
 python3 -c "
@@ -158,6 +164,11 @@ Reads `context-map.json` + any `flow-trace-*.json`, attaches per-function
 annotations under `$OUTPUT_DIR/annotations/` for entry points, sinks,
 trust boundaries, unchecked flows, and trace steps. Best-effort — exits
 0 with "nothing to synthesise" when no inputs are present.
+
+**Step 4.6: SAGE store** (persist attack surface for cross-run learning):
+```bash
+libexec/raptor-understand-sage store "$OUTPUT_DIR" --target <resolved_target>
+```
 
 **Step 5: Complete the run.** Replace `<your-model-id>` with your exact model ID from your system prompt (e.g. `claude-opus-4-7`) — it records which model performed the analysis, which only you (the harness) know (RAPTOR's Python can't read `/model`). If you don't know your model ID, drop the `--model` flag entirely; the run still completes, the model is just left unrecorded.
 ```bash

@@ -504,7 +504,7 @@ class TestValidationHooks(unittest.TestCase):
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import recall_context_for_validation
-        out = recall_context_for_validation("/repo", vuln_type="sqli", cwe_id="CWE-89")
+        recall_context_for_validation("/repo", vuln_type="sqli", cwe_id="CWE-89")
         self.assertEqual(mock_client.query.call_count, 2)
         self.assertTrue(any("validation" in d for d in domains))
         self.assertIn("raptor-methodology", domains)
