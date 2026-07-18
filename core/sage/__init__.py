@@ -32,6 +32,9 @@ from .hooks import (
     store_map_results,
     store_trace_result,
     store_hunt_results,
+    # Exploit
+    recall_context_for_exploit,
+    store_exploit_outcomes,
 )
 
 __all__ = [
@@ -58,4 +61,6 @@ __all__ = [
     "store_map_results",
     "store_trace_result",
     "store_hunt_results",
+    "recall_context_for_exploit",
+    "store_exploit_outcomes",
 ]

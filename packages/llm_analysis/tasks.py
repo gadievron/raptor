@@ -337,11 +337,52 @@ class ExploitTask(DispatchTask):
             evidence_blocks_for_finding,
         )
         si_blocks = evidence_blocks_for_finding(finding)
+        sage_blocks = self._sage_exploit_blocks(finding)
         bundle = build_exploit_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=si_blocks,
+            finding, profile=self.profile, extra_blocks=si_blocks + sage_blocks,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
+
+    @staticmethod
+    def _sage_exploit_blocks(finding: Dict[str, Any]) -> tuple:
+        try:
+            from core.sage.hooks import (
+                recall_context_for_exploit,
+                format_sage_memories_for_prompt,
+            )
+            from core.security.prompt_envelope import UntrustedBlock
+
+            repo_path = finding.get("repo_path", "")
+            if not repo_path:
+                return ()
+            vuln_type = finding.get("rule_id", "")
+            cwe_id = finding.get("cwe_id", "")
+            mitigations = []
+            feasibility = finding.get("feasibility") or {}
+            for path_info in (feasibility.get("exploitation_paths") or {}).values():
+                mitigations.extend(path_info.get("chain_breaks", []))
+
+            rows = recall_context_for_exploit(
+                repo_path=repo_path,
+                vuln_type=vuln_type or None,
+                cwe_id=cwe_id or None,
+                mitigations=mitigations[:5] or None,
+            )
+            if not rows:
+                return ()
+            text = format_sage_memories_for_prompt(rows)
+            if not text:
+                return ()
+            return (
+                UntrustedBlock(
+                    content=text,
+                    kind="sage-exploit-prior",
+                    origin="sage:exploits",
+                ),
+            )
+        except Exception:
+            return ()
 
     def get_last_nonce(self) -> str:
         return getattr(self._tls, "nonce", "")

@@ -2931,6 +2931,29 @@ Examples:
 
         if sage_stored > 0:
             print(f"\n📚 SAGE: Stored {sage_stored} findings for cross-run learning")
+
+        # Store exploit outcomes when exploit generation was attempted
+        if orchestration_result and not getattr(args, "no_exploits", True):
+            from core.sage.hooks import store_exploit_outcomes
+
+            exploit_outcomes = []
+            for f in orchestration_result.get("results", []):
+                if f.get("exploitable") or f.get("has_exploit"):
+                    exploit_outcomes.append({
+                        "finding_id": f.get("finding_id", ""),
+                        "vuln_type": f.get("rule_id", ""),
+                        "cwe_id": f.get("cwe_id", ""),
+                        "file_path": f.get("file_path", ""),
+                        "has_exploit": f.get("has_exploit", False),
+                        "result": "success" if f.get("has_exploit") else "blocked",
+                    })
+            if exploit_outcomes:
+                sage_exploits = store_exploit_outcomes(
+                    repo_path=str(repo_path),
+                    outcomes=exploit_outcomes,
+                )
+                if sage_exploits > 0:
+                    print(f"📚 SAGE: Stored {sage_exploits} exploit outcomes")
     except Exception as e:
         logger.debug(f"SAGE post-scan storage skipped: {e}")
 

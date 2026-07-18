@@ -727,6 +727,125 @@ class TestUnderstandHooks(unittest.TestCase):
         self.assertIn("root_cause", group_tags)
 
 
+class TestExploitHooks(unittest.TestCase):
+    """Test exploit recall and store hooks."""
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_recall_returns_empty_when_unavailable(self, _):
+        from core.sage.hooks import recall_context_for_exploit
+        self.assertEqual(recall_context_for_exploit("/repo"), [])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_queries_exploits_and_methodology(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "ROP chain succeeded", "confidence": 0.9}
+        ]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_exploit
+        results = recall_context_for_exploit(
+            "/repo", vuln_type="buffer_overflow", cwe_id="CWE-120",
+            mitigations=["NX", "ASLR"],
+        )
+        self.assertGreater(len(results), 0)
+        self.assertEqual(mock_client.query.call_count, 2)
+        exploit_call = mock_client.query.call_args_list[0]
+        self.assertIn("buffer_overflow", exploit_call.kwargs["text"])
+        self.assertIn("NX", exploit_call.kwargs["text"])
+        self.assertIn("raptor-exploits-", exploit_call.kwargs["domain_tag"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_handles_error_gracefully(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.side_effect = ConnectionError("down")
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_exploit
+        self.assertEqual(recall_context_for_exploit("/repo"), [])
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_store_returns_zero_when_unavailable(self, _):
+        from core.sage.hooks import store_exploit_outcomes
+        self.assertEqual(store_exploit_outcomes("/repo", [{"result": "success"}]), 0)
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_writes_outcomes(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_exploit_outcomes
+        outcomes = [
+            {
+                "finding_id": "F1",
+                "vuln_type": "heap_overflow",
+                "result": "success",
+                "technique": "ROP",
+                "mitigations_encountered": ["NX", "ASLR"],
+                "cwe_id": "CWE-122",
+                "file_path": "src/parse.c",
+            },
+            {
+                "finding_id": "F2",
+                "vuln_type": "format_string",
+                "result": "blocked",
+                "file_path": "src/log.c",
+            },
+        ]
+        stored = store_exploit_outcomes("/repo", outcomes)
+        self.assertEqual(stored, 2)
+        self.assertEqual(mock_client.propose.call_count, 2)
+
+        first_call = mock_client.propose.call_args_list[0]
+        self.assertIn("ROP", first_call.kwargs["content"])
+        self.assertIn("NX", first_call.kwargs["content"])
+        self.assertEqual(first_call.kwargs["memory_type"], "fact")
+        self.assertEqual(first_call.kwargs["confidence"], 0.95)
+        self.assertIn("success", first_call.kwargs["tags"])
+        self.assertIn("ROP", first_call.kwargs["tags"])
+
+        second_call = mock_client.propose.call_args_list[1]
+        self.assertEqual(second_call.kwargs["memory_type"], "observation")
+        self.assertEqual(second_call.kwargs["confidence"], 0.80)
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_infers_success_from_has_exploit(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_exploit_outcomes
+        outcomes = [{"finding_id": "F1", "has_exploit": True, "vuln_type": "sqli"}]
+        store_exploit_outcomes("/repo", outcomes)
+        call = mock_client.propose.call_args_list[0]
+        self.assertIn("success", call.kwargs["content"])
+        self.assertEqual(call.kwargs["memory_type"], "fact")
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_tags_include_exploit_and_result(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_exploit_outcomes
+        store_exploit_outcomes("/repo", [{"result": "partial", "technique": "heap_spray"}])
+        tags = mock_client.propose.call_args_list[0].kwargs["tags"]
+        self.assertEqual(tags, ["exploit", "partial", "heap_spray"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_caps_at_20(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_exploit_outcomes
+        outcomes = [{"finding_id": f"F{i}", "result": "success"} for i in range(30)]
+        stored = store_exploit_outcomes("/repo", outcomes)
+        self.assertEqual(stored, 20)
+        self.assertEqual(mock_client.propose.call_count, 20)
+
+
 class TestFormatSageMemoriesForPrompt(unittest.TestCase):
     def test_empty(self):
         from core.sage.hooks import format_sage_memories_for_prompt

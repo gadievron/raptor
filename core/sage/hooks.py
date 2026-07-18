@@ -1352,3 +1352,127 @@ def store_hunt_results(
             _throttle()
     except Exception as e:
         logger.debug(f"SAGE hunt store failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exploit hooks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def recall_context_for_exploit(
+    repo_path: str,
+    vuln_type: Optional[str] = None,
+    cwe_id: Optional[str] = None,
+    mitigations: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Recall past exploit techniques and outcomes for this repo/vuln class."""
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query_parts = ["Prior exploit attempts, successful techniques, and mitigation bypasses"]
+        if vuln_type:
+            query_parts.append(f"for {vuln_type}")
+        if cwe_id:
+            query_parts.append(f"({cwe_id})")
+        if mitigations:
+            query_parts.append(f"against mitigations: {', '.join(mitigations)}")
+        results = client.query(
+            text=" ".join(query_parts) + ".",
+            domain_tag=_exploits_domain(repo_path),
+            top_k=5,
+            min_confidence=0.5,
+        )
+        methodology = client.query(
+            text=(
+                "Exploit development methodology: technique selection, "
+                "mitigation bypass, and PoC construction patterns."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=3,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
+    except Exception as e:
+        logger.debug(f"SAGE exploit recall failed: {e}")
+        return []
+
+
+def store_exploit_outcomes(
+    repo_path: str,
+    outcomes: List[Dict[str, Any]],
+) -> int:
+    """Store exploit attempt outcomes for cross-run learning.
+
+    Each outcome dict may contain:
+        finding_id, vuln_type, cwe_id, technique, result
+        (success/blocked/partial/not_attempted), mitigations_encountered,
+        has_exploit (bool), file_path.
+
+    Returns number of outcomes stored.
+    """
+    client = _get_client()
+    if client is None or not outcomes:
+        return 0
+
+    repo_name = Path(repo_path).name
+    stored = 0
+
+    for outcome in outcomes[:20]:
+        try:
+            vuln_type = outcome.get("vuln_type", outcome.get("rule_id", "unknown"))
+            result = outcome.get("result", "")
+            technique = outcome.get("technique", "")
+            mitigations = outcome.get("mitigations_encountered", [])
+            cwe_id = outcome.get("cwe_id", "")
+            file_path = outcome.get("file_path", outcome.get("file", ""))
+            has_exploit = outcome.get("has_exploit", False)
+
+            if not result and has_exploit:
+                result = "success"
+            elif not result:
+                result = "not_attempted"
+
+            parts = [
+                f"Exploit attempt for {vuln_type} in {repo_name}",
+            ]
+            if file_path:
+                parts.append(f"({file_path})")
+            parts.append(f"— result: {result}.")
+            if technique:
+                parts.append(f"Technique: {technique}.")
+            if mitigations:
+                parts.append(f"Mitigations encountered: {', '.join(mitigations)}.")
+            if cwe_id:
+                parts.append(f"CWE: {cwe_id}.")
+
+            content = " ".join(parts)
+
+            confidence = {
+                "success": 0.95,
+                "partial": 0.85,
+                "blocked": 0.80,
+            }.get(result, 0.70)
+
+            tags = ["exploit", result]
+            if technique:
+                tags.append(technique)
+
+            _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="fact" if result == "success" else "observation",
+                domain_tag=_exploits_domain(repo_path),
+                confidence=confidence,
+                tags=tags,
+            )
+            stored += 1
+            _throttle()
+        except Exception as e:
+            logger.debug(f"SAGE exploit outcome store failed for {outcome.get('finding_id', '?')}: {e}")
+
+    if stored:
+        logger.info(f"SAGE: stored {stored} exploit outcomes for {repo_name}")
+    return stored
