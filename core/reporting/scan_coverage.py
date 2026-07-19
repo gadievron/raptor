@@ -69,10 +69,7 @@ def _findings_for_tool(metrics: Dict, tool: str) -> int:
             continue
         rule_lower = rule_id.lower()
         if tool == "semgrep":
-            if (rule_lower.startswith("engine.semgrep.")
-                    or rule_lower.startswith("c.lang.")
-                    or rule_lower.startswith("python.lang.")
-                    or "semgrep" in rule_lower):
+            if (rule_lower.startswith(("engine.semgrep.", "c.lang.", "python.lang.")) or "semgrep" in rule_lower):
                 total += count
         elif tool == "codeql":
             # CodeQL convention: ``<lang>/<rule-id>``. The cpp/, py/,

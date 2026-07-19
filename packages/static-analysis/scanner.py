@@ -129,7 +129,7 @@ def _drop_unreachable_registry_packs(
     """
     needs_network = [
         (n, c) for n, c in configs
-        if c.startswith("p/") or c.startswith("category/")
+        if c.startswith(("p/", "category/"))
     ]
     if not needs_network:
         return configs
@@ -883,7 +883,7 @@ def run_single_semgrep(
     # cost with a tighter ceiling so a stuck fetch drops that pack and the
     # remaining packs still run. Local rule directories keep the longer
     # timeout because they do real scan work without network.
-    is_registry_pack = config.startswith("p/") or config.startswith("category/")
+    is_registry_pack = config.startswith(("p/", "category/"))
     effective_timeout = min(timeout, RaptorConfig.SEMGREP_PACK_TIMEOUT) if is_registry_pack else timeout
 
     try:

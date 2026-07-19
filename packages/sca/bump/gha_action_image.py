@@ -184,7 +184,7 @@ def _parse_docker_action_image(text: str) -> Optional[str]:
     lowered = image.lower()
     if lowered == "dockerfile" or lowered.endswith(".dockerfile"):
         return None
-    if image.startswith("./") or image.startswith("../"):
+    if image.startswith(("./", "../")):
         return None
     # Bare ``Dockerfile`` with a directory prefix (e.g.
     # ``app/Dockerfile``) also signals build-time.

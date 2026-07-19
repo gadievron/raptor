@@ -1318,7 +1318,7 @@ class TestMountScriptSeparator(unittest.TestCase):
                 command_lines = []
                 for line in content.splitlines():
                     s = line.strip()
-                    if not s or s.startswith("#") or s.startswith("#!"):
+                    if not s or s.startswith(("#", "#!")):
                         continue
                     if any(s.startswith(k) for k in SHELL_KEYWORDS):
                         continue

@@ -227,8 +227,7 @@ def _liveness_from_llvm_cov(
         # and miscellaneous C runtime functions inflate the candidate
         # set with methodology noise. Anonymous-namespace helpers are
         # admitted (adversarial review E P1-4: ICF/DCE-prime category).
-        is_leveldb_surface = (qualified.startswith("leveldb::")
-                              or qualified.startswith("leveldb_"))
+        is_leveldb_surface = (qualified.startswith(("leveldb::", "leveldb_")))
         is_anon = "(anonymous namespace)" in qualified
         if not (is_leveldb_surface or is_anon):
             continue

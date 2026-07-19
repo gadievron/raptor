@@ -161,7 +161,7 @@ def _default_categorise(action: str) -> str:
     write → file-write, etc.). Unrecognised actions return their
     own name (sharing only the global cap, no category sub-cap).
     """
-    if action.startswith("file-write") or action.startswith("file-mknod"):
+    if action.startswith(("file-write", "file-mknod")):
         return "file-write"
     if action == "file-read-metadata":
         return "file-read-metadata"

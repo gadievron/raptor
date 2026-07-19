@@ -105,9 +105,7 @@ def extract_nosemgrep(
                 if offset == -1:
                     stripped = _lines[idx].lstrip()
                     if not (
-                        stripped.startswith("#")
-                        or stripped.startswith("//")
-                        or stripped.startswith("/*")
+                        stripped.startswith(("#", "//", "/*"))
                     ):
                         continue
                 raw_ids = m.group(1) or ""

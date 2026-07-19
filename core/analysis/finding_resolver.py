@@ -337,9 +337,9 @@ def _detect_language(file_path: str) -> str:
         return "python"
     if p.endswith(".java"):
         return "java"
-    if p.endswith(".jsx") or p.endswith(".js"):
+    if p.endswith((".jsx", ".js")):
         return "javascript"
-    if p.endswith(".tsx") or p.endswith(".ts"):
+    if p.endswith((".tsx", ".ts")):
         return "typescript"
     if p.endswith((".c", ".h")):
         return "c"

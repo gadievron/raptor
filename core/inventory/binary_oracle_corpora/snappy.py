@@ -268,8 +268,7 @@ def _liveness_from_llvm_cov(
         # precision measurement. The qualified-name extractor flags
         # them by the literal ``(anonymous namespace)`` prefix; admit
         # those AND the snappy-prefixed ones.
-        is_snappy_surface = (qualified.startswith("snappy::")
-                             or qualified.startswith("snappy_"))
+        is_snappy_surface = (qualified.startswith(("snappy::", "snappy_")))
         is_anon = "(anonymous namespace)" in qualified
         if not (is_snappy_surface or is_anon):
             continue

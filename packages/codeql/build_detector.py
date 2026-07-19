@@ -579,7 +579,7 @@ class BuildDetector:
             return False
         for raw in head.splitlines():
             line = raw.lstrip().lower()
-            if line.startswith("cmake_minimum_required") or line.startswith("project("):
+            if line.startswith(("cmake_minimum_required", "project(")):
                 return True
         return False
 

@@ -94,7 +94,7 @@ def wheel_matrix_for_version(
         filename = f.get("filename") if isinstance(f, dict) else None
         if not isinstance(filename, str):
             continue
-        if filename.endswith(".tar.gz") or filename.endswith(".zip"):
+        if filename.endswith((".tar.gz", ".zip")):
             has_sdist = True
             continue
         if filename.endswith(".whl"):

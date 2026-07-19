@@ -1647,7 +1647,7 @@ def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
     needle = file_path.lstrip("/")
     # Step 1: full-path suffix match (preferred — unambiguous)
     for entry in indexed:
-        if entry.endswith(needle) or entry.endswith("/" + needle):
+        if entry.endswith((needle, "/" + needle)):
             return entry
     # Step 2: basename fallback
     basename = Path(needle).name
@@ -1873,7 +1873,7 @@ def _function_in_codeql_inventory(
     for entry_file, entry_fn in inventory:
         if entry_fn != fn:
             continue
-        if entry_file.endswith(needle) or entry_file.endswith("/" + needle):
+        if entry_file.endswith((needle, "/" + needle)):
             return True
     # Basename fallback — same trade-off as Layer 1
     basename = Path(needle).name

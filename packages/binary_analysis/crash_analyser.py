@@ -881,7 +881,7 @@ class CrashAnalyser:
             # Frame lines: `frame #N: ...` or `* frame #N` (current
             # frame marker). Reject the bare `*` header that also
             # starts with `*` but isn't a frame.
-            if stripped.startswith("frame #") or stripped.startswith("* frame #"):
+            if stripped.startswith(("frame #", "* frame #")):
                 backtrace_lines.append(stripped)
 
         context.stack_trace = "\n".join(backtrace_lines)

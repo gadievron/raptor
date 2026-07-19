@@ -136,7 +136,7 @@ def _is_k8s_manifest(path: Path) -> bool:
     name = path.name.lower()
     # Compose / GitLab CI / Helm Chart / pre-commit handled by their
     # own parsers; skip those filenames here.
-    if name.startswith("docker-compose") or name.startswith("compose."):
+    if name.startswith(("docker-compose", "compose.")):
         return False
     if name in ("compose.yml", "compose.yaml"):
         return False

@@ -284,7 +284,7 @@ def _config_to_name(config: str) -> str:
     if not config:
         return "semgrep"
     # Pack identifiers like "p/security-audit"
-    if config.startswith("p/") or config.startswith("category/"):
+    if config.startswith(("p/", "category/")):
         return config
     # Directory path — use the basename
     return Path(config).name or config

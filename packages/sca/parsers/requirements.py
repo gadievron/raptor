@@ -187,7 +187,7 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
             continue
 
         editable = False
-        if line.startswith("-e ") or line.startswith("--editable "):
+        if line.startswith(("-e ", "--editable ")):
             editable = True
             line = line.split(maxsplit=1)[1].strip()
 

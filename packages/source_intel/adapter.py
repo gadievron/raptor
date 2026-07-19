@@ -1767,8 +1767,7 @@ def _double_free_supports_finding(
     or second kfree (CodeQL typically reports the second).
     """
     rid = finding.rule_id or ""
-    if not (rid.startswith("cpp/double-free")
-            or rid.startswith("c/double-free")):
+    if not (rid.startswith(("cpp/double-free", "c/double-free"))):
         return False
     if not result.double_frees:
         return False

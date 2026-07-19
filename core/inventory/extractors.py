@@ -394,7 +394,7 @@ class JavaScriptExtractor:
             if len(line) > self._MAX_JS_LINE:
                 continue
             stripped = line.lstrip()
-            if stripped.startswith('//') or stripped.startswith('/*'):
+            if stripped.startswith(('//', '/*')):
                 continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
@@ -554,7 +554,7 @@ class CExtractor:
             line = lines[i]
 
             stripped = line.strip()
-            if stripped.startswith('#') or stripped.startswith('//'):
+            if stripped.startswith(('#', '//')):
                 i += 1
                 continue
 
@@ -591,7 +591,7 @@ class CExtractor:
                             ))
                             seen.add(name)
                             break
-                        if fwd.startswith('#') or fwd.startswith('//'):
+                        if fwd.startswith(('#', '//')):
                             continue
                         if not fwd:
                             continue
@@ -2800,8 +2800,6 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
                     i = j + 2
             # Count the line iff it starts inside a block, starts
             # with `//`, or starts with `/*`.
-            if (entered_in_block
-                or stripped.startswith("//")
-                or stripped.startswith("/*")):
+            if (entered_in_block or stripped.startswith(("//", "/*"))):
                 count += 1
     return count

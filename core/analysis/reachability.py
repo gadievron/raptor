@@ -2063,7 +2063,7 @@ def _candidate_qualified_names(
             candidates.append(f"{package_name}.{fn_name}")
 
     # Python path-based heuristic.
-    if file_path.endswith(".py") or file_path.endswith(".pyi"):
+    if file_path.endswith((".py", ".pyi")):
         base = file_path
         for suffix in (".pyi", ".py"):
             if base.endswith(suffix):

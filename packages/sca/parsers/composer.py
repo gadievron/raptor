@@ -168,7 +168,7 @@ def _is_platform_req(name: str) -> bool:
     """``php``, ``ext-*``, ``lib-*``, ``hhvm`` — environment requirements."""
     if name == "php" or name == "hhvm":
         return True
-    if name.startswith("ext-") or name.startswith("lib-"):
+    if name.startswith(("ext-", "lib-")):
         return True
     return False
 

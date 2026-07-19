@@ -163,7 +163,7 @@ def _advisory_priority(a: Advisory) -> int:
         return 0
     if p.startswith("CVE-"):
         return 1
-    if p.startswith("PYSEC-") or p.startswith("OSV-"):
+    if p.startswith(("PYSEC-", "OSV-")):
         return 2
     return 3
 
