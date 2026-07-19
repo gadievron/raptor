@@ -336,7 +336,7 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
         if name:
             from core.json import load_json as _load
             data = _load(PROJECTS_DIR / f"{name}.json")
-            if data:
+            if isinstance(data, dict):
                 candidate_str = data.get("output_dir") or ""
                 candidate = Path(candidate_str) if candidate_str else None
                 if candidate and candidate.is_dir():
@@ -836,6 +836,8 @@ def _update_status(output_dir: Path, status: str,
     metadata = load_json(path)
     if metadata is None:
         raise FileNotFoundError(f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Malformed {RUN_METADATA_FILE} in {output_dir} — expected JSON object")
     current = metadata.get("status")
     if current in _TERMINAL_STATUSES and current != status:
         logger.warning(

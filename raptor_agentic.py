@@ -2120,6 +2120,8 @@ Examples:
             scan_metrics_file = actual_scan_dir / "scan_metrics.json"
             if scan_metrics_file.exists():
                 semgrep_metrics = load_json(scan_metrics_file)
+                if not isinstance(semgrep_metrics, dict):
+                    semgrep_metrics = {}
 
                 print("\n✓ Semgrep scan complete:")
                 print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
@@ -2203,6 +2205,8 @@ Examples:
 
             if codeql_report.exists():
                 codeql_metrics = load_json(codeql_report)
+                if not isinstance(codeql_metrics, dict):
+                    codeql_metrics = {}
 
                 total_findings = codeql_metrics.get('total_findings', 0)
                 sarif_files = codeql_metrics.get('sarif_files', [])
@@ -2607,6 +2611,8 @@ Examples:
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
         if analysis_report.exists():
             analysis = load_json(analysis_report)
+            if not isinstance(analysis, dict):
+                analysis = {}
 
             if analysis.get('mode') == 'prep_only':
                 print(f"\n✓ {analysis.get('processed', 0)} findings prepared for analysis")
@@ -3436,7 +3442,7 @@ Examples:
 
     md_report = render_report(spec)
     md_path = out_dir / "agentic-report.md"
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_report)
     print(f"   Report: {md_path}")
 

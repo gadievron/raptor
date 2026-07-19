@@ -1085,12 +1085,12 @@ class AutonomousSecurityAgentV2:
                     if validation:
                         # Update exploitability based on validation
                         if validation.get('false_positive'):
-                            logger.info("⚠️  Validation marked as FALSE POSITIVE:")
+                            logger.info("⚠️  Validation marked as False Positive:")
                             logger.info(f"    Reason: {validation.get('false_positive_reason')}")
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
                         elif not validation.get('is_exploitable'):
-                            logger.info("⚠️  Validation determined NOT EXPLOITABLE:")
+                            logger.info("⚠️  Validation determined Not Exploitable:")
                             logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
                             vuln.exploitable = False
                             # Same null-vs-missing distinction as the
@@ -1102,7 +1102,7 @@ class AutonomousSecurityAgentV2:
                             vuln.exploitability_score = _conf * 0.5
                         else:
                             # Validation confirms exploitability
-                            logger.info("✓ Validation confirms EXPLOITABLE")
+                            logger.info("✓ Validation confirms Exploitable")
                             # Use validation confidence to refine score —
                             # fall back to existing score if missing OR
                             # explicit null (max(float, None) → TypeError).
