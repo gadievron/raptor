@@ -35,6 +35,9 @@ from .hooks import (
     # Exploit
     recall_context_for_exploit,
     store_exploit_outcomes,
+    # SCA
+    recall_context_for_sca,
+    store_sca_outcomes,
 )
 
 __all__ = [
@@ -63,4 +66,6 @@ __all__ = [
     "store_hunt_results",
     "recall_context_for_exploit",
     "store_exploit_outcomes",
+    "recall_context_for_sca",
+    "store_sca_outcomes",
 ]

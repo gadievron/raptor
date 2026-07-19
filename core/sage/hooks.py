@@ -1476,3 +1476,158 @@ def store_exploit_outcomes(
     if stored:
         logger.info(f"SAGE: stored {stored} exploit outcomes for {repo_name}")
     return stored
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCA (Software Composition Analysis) hooks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sca_domain(repo_path: str) -> str:
+    return f"raptor-sca-{_repo_key(repo_path)}"
+
+
+def recall_context_for_sca(
+    repo_path: str,
+    ecosystems: Optional[List[str]] = None,
+    dep_names: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Recall prior SCA verdicts and confirmed-bad packages.
+
+    Queries the repo-scoped SCA domain for past dependency findings
+    (malicious packages, FP rulings, vulnerability patterns) and
+    global methodology for supply-chain analysis.
+
+    Returns recalled memories (content, confidence, domain).
+    Empty list if SAGE unavailable.
+    """
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query_parts = [
+            "Prior SCA findings: confirmed malicious packages,"
+            " false-positive rulings, supply-chain attack patterns"
+        ]
+        if ecosystems:
+            query_parts.append(f"for ecosystems: {', '.join(ecosystems)}")
+        if dep_names:
+            query_parts.append(
+                f"involving packages: {', '.join(dep_names[:10])}"
+            )
+
+        results = client.query(
+            text=" ".join(query_parts) + ".",
+            domain_tag=_sca_domain(repo_path),
+            top_k=8,
+            min_confidence=0.5,
+        )
+        methodology = client.query(
+            text=(
+                "Supply-chain security methodology: typosquat detection,"
+                " slopsquat identification, malicious package indicators,"
+                " dependency confusion patterns."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=3,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=10)
+        _sage_metrics["recall_hits"] += len(merged)
+        if merged:
+            logger.info(
+                f"SAGE: Recalled {len(merged)} SCA memories for context"
+            )
+        return merged
+    except Exception as e:
+        logger.debug(f"SAGE SCA recall failed: {e}")
+        return []
+
+
+def store_sca_outcomes(
+    repo_path: str,
+    outcomes: List[Dict[str, Any]],
+) -> int:
+    """Store SCA finding outcomes for cross-run learning.
+
+    Each outcome dict may contain:
+        package_name, ecosystem, kind (SupplyChainKind or "vuln"),
+        verdict (malicious_confirmed/false_positive/vulnerable/
+                 not_applicable/suspect),
+        version, detail, severity, cve_ids (list), llm_summary.
+
+    Returns number of outcomes stored.
+    """
+    client = _get_client()
+    if client is None or not outcomes:
+        return 0
+
+    repo_name = Path(repo_path).name
+    stored = 0
+
+    for outcome in outcomes[:30]:
+        try:
+            pkg = outcome.get("package_name", "unknown")
+            eco = outcome.get("ecosystem", "")
+            kind = outcome.get("kind", "")
+            verdict = outcome.get("verdict", "suspect")
+            version = outcome.get("version", "")
+            detail = outcome.get("detail", "")
+            severity = outcome.get("severity", "")
+            cve_ids = outcome.get("cve_ids") or []
+            llm_summary = outcome.get("llm_summary", "")
+
+            parts = [f"SCA: {pkg}"]
+            if eco:
+                parts.append(f"({eco})")
+            if version:
+                parts.append(f"v{version}")
+            parts.append(f"in {repo_name} — verdict: {verdict}.")
+            if kind:
+                parts.append(f"Kind: {kind}.")
+            if cve_ids:
+                parts.append(f"CVEs: {', '.join(cve_ids[:5])}.")
+            if severity:
+                parts.append(f"Severity: {severity}.")
+            if detail:
+                parts.append(detail[:200])
+            if llm_summary:
+                parts.append(f"LLM: {llm_summary[:150]}")
+
+            content = " ".join(parts)
+
+            confidence = {
+                "malicious_confirmed": 0.98,
+                "false_positive": 0.92,
+                "vulnerable": 0.88,
+                "not_applicable": 0.85,
+                "suspect": 0.75,
+            }.get(verdict, 0.70)
+
+            memory_type = "fact" if verdict in (
+                "malicious_confirmed", "false_positive"
+            ) else "observation"
+
+            tags = ["sca", kind] if kind else ["sca"]
+            if eco:
+                tags.append(eco)
+            tags.append(verdict)
+
+            if _propose_redacted(
+                client=client,
+                content=content,
+                memory_type=memory_type,
+                domain_tag=_sca_domain(repo_path),
+                confidence=confidence,
+                tags=tags,
+            ):
+                stored += 1
+            _throttle()
+        except Exception as e:
+            logger.debug(
+                f"SAGE SCA store failed for {outcome.get('package_name', '?')}: {e}"
+            )
+
+    if stored:
+        logger.info(f"SAGE: stored {stored} SCA outcomes for {repo_name}")
+    return stored

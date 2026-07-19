@@ -2267,6 +2267,43 @@ Examples:
                 print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
                 print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
                 print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
+
+                # SAGE: store SCA vulnerability findings for cross-run learning
+                try:
+                    from core.sage.hooks import store_sca_outcomes
+                    sca_findings_path = sca_out / "findings.json"
+                    if sca_findings_path.exists():
+                        import json as _sca_json
+                        sca_data = _sca_json.loads(
+                            sca_findings_path.read_text(encoding="utf-8")
+                        )
+                        sca_sage_outcomes = []
+                        for row in (sca_data if isinstance(sca_data, list) else []):
+                            sca_info = row.get("sca") or {}
+                            if not sca_info.get("name"):
+                                continue
+                            cve_ids = []
+                            if row.get("cve_id"):
+                                cve_ids.append(row["cve_id"])
+                            sca_sage_outcomes.append({
+                                "package_name": sca_info["name"],
+                                "ecosystem": sca_info.get("ecosystem", ""),
+                                "version": sca_info.get("installed_version", ""),
+                                "kind": "vuln",
+                                "verdict": "vulnerable",
+                                "severity": row.get("severity", ""),
+                                "cve_ids": cve_ids,
+                                "detail": row.get("message", "")[:200],
+                            })
+                        if sca_sage_outcomes:
+                            stored = store_sca_outcomes(
+                                repo_path=str(original_repo_path),
+                                outcomes=sca_sage_outcomes[:30],
+                            )
+                            if stored:
+                                print(f"📚 SAGE: Stored {stored} SCA outcomes")
+                except Exception:
+                    logger.debug("SAGE SCA store skipped", exc_info=True)
             else:
                 logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
                 sca_findings_count = 0

@@ -846,6 +846,134 @@ class TestExploitHooks(unittest.TestCase):
         self.assertEqual(mock_client.propose.call_count, 20)
 
 
+class TestSCAHooks(unittest.TestCase):
+    """Test SCA recall and store hooks."""
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_recall_returns_empty_when_unavailable(self, _):
+        from core.sage.hooks import recall_context_for_sca
+        self.assertEqual(recall_context_for_sca("/repo"), [])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_queries_sca_and_methodology(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "SCA: evil-pkg (PyPI) — malicious_confirmed", "confidence": 0.98}
+        ]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_sca
+        results = recall_context_for_sca(
+            "/repo",
+            ecosystems=["PyPI", "npm"],
+            dep_names=["evil-pkg", "suspect-lib"],
+        )
+        self.assertGreater(len(results), 0)
+        self.assertEqual(mock_client.query.call_count, 2)
+        sca_call = mock_client.query.call_args_list[0]
+        self.assertIn("PyPI", sca_call.kwargs["text"])
+        self.assertIn("evil-pkg", sca_call.kwargs["text"])
+        self.assertIn("raptor-sca-", sca_call.kwargs["domain_tag"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_handles_error_gracefully(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.side_effect = ConnectionError("down")
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_sca
+        self.assertEqual(recall_context_for_sca("/repo"), [])
+
+    @patch("core.sage.hooks._get_client", return_value=None)
+    def test_store_returns_zero_when_unavailable(self, _):
+        from core.sage.hooks import store_sca_outcomes
+        self.assertEqual(
+            store_sca_outcomes("/repo", [{"package_name": "evil"}]), 0
+        )
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_writes_outcomes(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_sca_outcomes
+        outcomes = [
+            {
+                "package_name": "evil-pkg",
+                "ecosystem": "PyPI",
+                "version": "0.1.0",
+                "kind": "slopsquat_suspect",
+                "verdict": "malicious_confirmed",
+                "detail": "AI-hallucinated package name",
+                "llm_summary": "Package is a slopsquat of real-pkg.",
+            },
+            {
+                "package_name": "legit-dep",
+                "ecosystem": "npm",
+                "kind": "typosquat_candidate",
+                "verdict": "false_positive",
+                "detail": "Name collision with unrelated project",
+            },
+        ]
+        stored = store_sca_outcomes("/repo", outcomes)
+        self.assertEqual(stored, 2)
+        self.assertEqual(mock_client.propose.call_count, 2)
+
+        first_call = mock_client.propose.call_args_list[0]
+        self.assertIn("evil-pkg", first_call.kwargs["content"])
+        self.assertIn("PyPI", first_call.kwargs["content"])
+        self.assertIn("malicious_confirmed", first_call.kwargs["content"])
+        self.assertEqual(first_call.kwargs["memory_type"], "fact")
+        self.assertEqual(first_call.kwargs["confidence"], 0.98)
+        self.assertIn("sca", first_call.kwargs["tags"])
+        self.assertIn("PyPI", first_call.kwargs["tags"])
+
+        second_call = mock_client.propose.call_args_list[1]
+        self.assertEqual(second_call.kwargs["memory_type"], "fact")
+        self.assertEqual(second_call.kwargs["confidence"], 0.92)
+        self.assertIn("false_positive", second_call.kwargs["tags"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_caps_at_30(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_sca_outcomes
+        outcomes = [
+            {"package_name": f"pkg-{i}", "verdict": "suspect"}
+            for i in range(50)
+        ]
+        stored = store_sca_outcomes("/repo", outcomes)
+        self.assertEqual(stored, 30)
+        self.assertEqual(mock_client.propose.call_count, 30)
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_includes_cve_ids(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_sca_outcomes
+        store_sca_outcomes("/repo", [{
+            "package_name": "vuln-lib",
+            "verdict": "vulnerable",
+            "cve_ids": ["CVE-2024-1234", "CVE-2024-5678"],
+        }])
+        call = mock_client.propose.call_args_list[0]
+        self.assertIn("CVE-2024-1234", call.kwargs["content"])
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_empty_outcomes_returns_zero(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_sca_outcomes
+        self.assertEqual(store_sca_outcomes("/repo", []), 0)
+        mock_client.propose.assert_not_called()
+
+
 class TestFormatSageMemoriesForPrompt(unittest.TestCase):
     def test_empty(self):
         from core.sage.hooks import format_sage_memories_for_prompt

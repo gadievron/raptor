@@ -1038,6 +1038,7 @@ def _run_llm_stages(
         try:
             _run_slopsquat_review(
                 client, supply_chain_findings, canonical, http, options,
+                target=target,
             )
         except Exception:  # noqa: BLE001
             reviews_failed += 1
@@ -1082,6 +1083,33 @@ def _run_llm_stages(
         cost = client.total_cost
     except Exception:  # noqa: BLE001
         pass
+
+    # SAGE: store supply-chain outcomes for cross-run learning
+    try:
+        from core.sage.hooks import store_sca_outcomes
+
+        sca_outcomes = []
+        for f in supply_chain_findings:
+            if not f.evidence.get("llm_verdict"):
+                continue
+            sca_outcomes.append({
+                "package_name": f.dependency.name,
+                "ecosystem": f.dependency.ecosystem,
+                "version": f.dependency.version or "",
+                "kind": f.kind,
+                "verdict": (
+                    "malicious_confirmed"
+                    if f.evidence.get("llm_verdict") == "malicious"
+                    else "suspect"
+                ),
+                "severity": str(getattr(f.severity, "value", f.severity)),
+                "detail": f.detail[:200],
+                "llm_summary": f.evidence.get("llm_summary", ""),
+            })
+        if sca_outcomes:
+            store_sca_outcomes(repo_path=str(target), outcomes=sca_outcomes)
+    except Exception:  # noqa: BLE001
+        logger.debug("sca.pipeline: SAGE store skipped", exc_info=True)
 
     return (reviews_run, reviews_failed, cost)
 
@@ -1158,7 +1186,7 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
 
 
 def _run_slopsquat_review(
-    client, supply_chain_findings, canonical, http, options,
+    client, supply_chain_findings, canonical, http, options, target=None,
 ):
     """Run LLM slopsquat verdict on every ``slopsquat_suspect``
     finding. Attaches the verdict to the finding's evidence;
@@ -1172,6 +1200,28 @@ def _run_slopsquat_review(
     ]
     if not suspect_findings:
         return
+
+    # SAGE: recall prior SCA verdicts — short-circuit confirmed packages
+    sage_confirmed = set()
+    if target:
+        try:
+            from core.sage.hooks import recall_context_for_sca
+            dep_names = [f.dependency.name for f in suspect_findings[:10]]
+            ecosystems = list({f.dependency.ecosystem for f in suspect_findings
+                              if f.dependency.ecosystem})
+            prior = recall_context_for_sca(
+                repo_path=str(target),
+                ecosystems=ecosystems,
+                dep_names=dep_names,
+            )
+            for row in prior:
+                content = str(row.get("content") or "")
+                if "malicious_confirmed" in content:
+                    for f in suspect_findings:
+                        if f.dependency.name in content:
+                            sage_confirmed.add(f.dependency.name)
+        except Exception:  # noqa: BLE001
+            pass
 
     # Build registry-client lookups for the deps we want to
     # review. Same offline-honouring pattern as
@@ -1192,8 +1242,25 @@ def _run_slopsquat_review(
     # slopsquat suspects has bigger problems than getting the
     # LLM verdict on the trailing rows.
     reviewed = 0
+    sage_short_circuited = 0
     for f in suspect_findings[:20]:
         dep = f.dependency
+
+        # SAGE short-circuit: skip LLM if this package is already
+        # confirmed malicious from a prior run.
+        if dep.name in sage_confirmed:
+            existing_evidence = dict(f.evidence)
+            existing_evidence["llm_verdict"] = "malicious"
+            existing_evidence["llm_confidence"] = 0.98
+            existing_evidence["llm_summary"] = (
+                "Previously confirmed malicious (recalled from SAGE memory)."
+            )
+            existing_evidence["sage_short_circuit"] = True
+            f.evidence = existing_evidence
+            reviewed += 1
+            sage_short_circuited += 1
+            continue
+
         meta: Dict[str, Any] = {}
         try:
             if dep.ecosystem == "PyPI":
@@ -1230,6 +1297,11 @@ def _run_slopsquat_review(
         f.evidence = existing_evidence
         reviewed += 1
 
+    if sage_short_circuited:
+        logger.info(
+            "sca.pipeline: SAGE short-circuited %d suspect(s) from prior memory",
+            sage_short_circuited,
+        )
     logger.info(
         "sca.pipeline: LLM slopsquat-verdict reviewed %d suspect(s)",
         reviewed,
