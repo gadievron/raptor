@@ -248,6 +248,18 @@ Two mechanisms keep workflows running:
   per binary fires one INFO log; subsequent calls hit a per-cmd cache and skip
   the doomed mount-ns attempt. Worst case: same isolation as no `tool_paths`.
 
+**When to use what:**
+
+- **Standalone binary in a system dir** (`/usr/local/bin/`) — nothing needed;
+  mount-ns engages cleanly.
+- **Standalone binary outside system dirs** (`/opt/foo/bin/foo`, deps in
+  `/opt/foo/`) — pass `tool_paths=["/opt/foo"]`.
+- **Self-contained distribution** (CodeQL at `~/.local/share/codeql/` with
+  `java/`, `lib/`, `packs/` siblings) — pass `tool_paths=[<install_dir>]`.
+- **Python tools** (semgrep, etc.) — pass `tool_paths=` covering the bin dir +
+  Python stdlib dir; if the tool also exec's native binaries elsewhere the
+  speculative retry catches it (worst case: Landlock-only).
+
 The cache is per-process, so operators changing their install layout don't see
 stale hits. `python_paths.py` discovers Python runtime paths for the `tool_paths`
 allowlist when a sandbox call spawns an interpreter.

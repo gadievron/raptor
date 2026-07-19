@@ -116,8 +116,8 @@ Phase 3 (recognizer reads `call_sites`).
 symbol s?"
 
 - New `core/analysis/dataflow.py`. Uses the existing
-  `Graph[N]` Protocol and `DomTree` from Phase 5 of the
-  shipped arc.
+  `Graph[N]` Protocol from the shipped arc (no dominator tree — the
+  reaching-defs worklist needs none).
 - API: `reaching_defs(cfg) -> ReachingDefs` where
   `ReachingDefs.at(node, symbol)` returns the frozenset of nodes
   that last defined `symbol` on some path from entry to `node`.

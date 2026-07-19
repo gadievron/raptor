@@ -89,7 +89,7 @@ The single most important meta-result of 2025: Anthropic, OpenAI and DeepMind's 
 
 **Empirical strength.** Self-reflection improves refusal on harmful generation but is the *primary target* of "Attacker Moves Second" adaptive attacks — a single-shot prompt that survives the producer often survives the critic too. Two-model variants (different families) are stronger but double cost.
 
-**Applicability to RAPTOR.** Already partially have this: `/validate` Stage E is a checker pass on Stage D output. The lever is to **make the checker model different from the producer model** (e.g., producer Claude → checker Gemini) and to feed the checker only the *output JSON*, not the original prompt. That changes the attack surface: an injection that hijacks Claude's output schema must independently survive Gemini's parser.
+**Applicability to RAPTOR.** Already partially have this: `/validate` Stage F (Self-Review) is a checker pass over the reasoning stages' output. The lever is to **make the checker model different from the producer model** (e.g., producer Claude → checker Gemini) and to feed the checker only the *output JSON*, not the original prompt. That changes the attack surface: an injection that hijacks Claude's output schema must independently survive Gemini's parser.
 
 **Verdict.** **Adopt (cheap form).** Document a "cross-family checker" recommendation in PR-2 output validation. No new code; just an option to dispatch the validator to a different provider.
 

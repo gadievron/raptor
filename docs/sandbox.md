@@ -238,9 +238,14 @@ run(
   `AF_INET`/`AF_INET6` `SOCK_DGRAM`, closing DNS-exfil.
 - The proxy rejects any `CONNECT` to a host not on the allowlist, and screens
   resolved IPs (loopback/private/link-local/reserved rejected even if the
-  hostname was allowlisted — DNS-rebinding defence).
+  hostname was allowlisted — DNS-rebinding defence). IP screening is skipped
+  when an upstream HTTPS proxy is configured (the upstream resolves DNS).
 - If `HTTPS_PROXY` is set in the parent env (corporate proxy), the RAPTOR proxy
   forwards its tunnels through that upstream; `NO_PROXY`/`no_proxy` honoured.
+- The proxy is a process-wide **singleton**: concurrent callers share it and
+  their hostname allowlists are **union'd** (no per-caller host isolation) — if
+  sandbox A allows `api.anthropic.com` and sandbox B allows `ghcr.io`, both can
+  reach both. Event observability, however, stays per-run.
 
 **GHCR allowlist for CodeQL.** CodeQL pack downloads need the full GHCR host
 set:
@@ -317,8 +322,9 @@ Commands driven through the run lifecycle (`/scan`, `/agentic`, `/codeql`,
 `/validate`, `/understand`, `/fuzz`) aggregate every sandbox enforcement event
 into `{run_dir}/sandbox-summary.json` at run-end, with a `suggested_fix` per
 denial that references only operator-facing CLI flags (`--sandbox
-{full,debug,network-only,none}`). Generated regardless of profile, so even
-clean `--sandbox full` runs produce one.
+{full,debug,network-only,none}`). It is written **only when at least one
+enforcement denial was recorded** — a clean run (nothing blocked) produces no
+summary file.
 
 If a run dies before its lifecycle hook fires (hard kill, SIGKILL, OOM), the
 intermediate `.sandbox-denials.jsonl` is left on disk and no summary is
@@ -359,7 +365,36 @@ with sandbox(target=repo, output=out, use_egress_proxy=True,
 When `use_egress_proxy=True`, every CONNECT attempt is recorded (result is one
 of `allowed`, `denied_host`, `denied_resolved_ip`, `dns_failed`,
 `upstream_failed`, `timed_out`, `bad_request`, `handler_error`) and persisted
-to `{output}/proxy-events.jsonl` when `output` is set.
+to `{output}/proxy-events.jsonl` when `output` is set. Each record:
+
+```json
+{
+  "t": 12345.678,
+  "caller": "claude-sub-agent",
+  "host": "api.anthropic.com",
+  "port": 443,
+  "result": "allowed",
+  "reason": null,
+  "resolved_ip": "160.79.104.10",
+  "bytes_c2u": 1234,
+  "bytes_u2c": 5678,
+  "duration": 0.412
+}
+```
+
+`t` is `time.monotonic()` seconds (monotonic across clock jumps, **not** wall
+time); `caller` comes from `caller_label=` when set.
+
+For a `with sandbox(...)` block with multiple `run()` calls, each
+`result.sandbox_info["proxy_events"]` holds that subprocess's own slice; the
+**cumulative** list across every run in the block is exposed as `run.events`:
+
+```python
+with sandbox(use_egress_proxy=True, proxy_hosts=["api.example.com"]) as run:
+    run(["curl", "https://api.example.com/a"])
+    run(["curl", "https://api.example.com/b"])
+    print(run.events)  # combined list covering both calls
+```
 
 ## Troubleshooting
 
@@ -399,7 +434,7 @@ Landlock read-restriction even under `fake_home=True`. Either:
 
 `/dev/null` writes are permitted by a narrow Landlock rule. If you see EACCES on
 `/dev/null`, you're likely on a kernel without Landlock ABI v3 (TRUNCATE) — the
-probe warns. Upgrade to 5.19+.
+probe warns. Upgrade to 6.2+.
 
 ### Rust `cargo build` fails at the linker stage
 

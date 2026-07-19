@@ -328,11 +328,11 @@ export RAPTOR_OUT_DIR="/custom/output/path"   # override the output directory
 export RAPTOR_DIR="/path/to/raptor"           # installation root (libexec scripts derive paths from it)
 ```
 
-Only the two vars above (plus the API-key vars) are read by the code — there
-is no separate provider-selector variable or installation-root override
-variable; provider selection is inferred from which API-key env var / SDK is
-present (see `core/llm/detection.py`), and the installation root is
-`RAPTOR_DIR` itself.
+Beyond the two vars above and the API-key vars, RAPTOR also reads `RAPTOR_CONFIG`
+(path to a `models.json` that explicitly selects the provider/model), `OLLAMA_HOST`,
+and a couple of resolution helpers (`RAPTOR_TARGET_KIND`, `RAPTOR_CALLER_DIR`). With
+no `models.json`, provider selection is inferred from which API-key env var / SDK is
+present (see `core/llm/detection.py`); the installation root is `RAPTOR_DIR` itself.
 
 ---
 

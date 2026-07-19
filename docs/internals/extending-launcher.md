@@ -45,8 +45,8 @@ from pathlib import Path
 # libexec wrappers). Hard lookup via os.environ — KeyError if
 # unset. Never fall back to relative __file__-derived paths
 # (CLAUDE.md sys.path safety rule: "no fallbacks, no '.', no
-# os.getcwd(), no hardcoded paths"). This pattern matches every
-# existing entry-point script (raptor.py, raptor_agentic.py, etc.).
+# os.getcwd(), no hardcoded paths"). Prefer this for new scripts; most
+# current entry-points (raptor.py, raptor_agentic.py) are still __file__-derived.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
@@ -346,7 +346,7 @@ Import and use RAPTOR's core utilities:
 ```python
 from core.config import RaptorConfig  # For paths
 from core.logging import get_logger   # For logging
-from core.sarif.parser import parse_sarif  # For SARIF handling (if needed)
+from core.sarif.parser import parse_sarif_findings  # For SARIF handling (if needed)
 ```
 
 ### 5. Follow Output Conventions

@@ -179,7 +179,8 @@ needs the repository to be git-initialised. Other causes: wrong policy groups, o
 a language the ruleset does not cover. Ask Claude "why no findings?" and it will
 help diagnose.
 
-**LLM errors.** RAPTOR falls back automatically (cloud → local Ollama), but if
+**LLM errors.** RAPTOR falls back automatically between models of the same tier
+(cloud→cloud or local→local; it will not switch a cloud run to local Ollama), but if
 analysis is failing outright, check:
 
 - API key is set: `echo $ANTHROPIC_API_KEY`

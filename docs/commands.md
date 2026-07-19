@@ -117,8 +117,8 @@ autonomous orchestrator that ties them together.
   Semgrep but finds tainted flows, use-after-free, and injection chains it misses.
   Optional Z3 SMT dataflow pre-check prunes provably-unreachable paths before the LLM.
 - **Key params:** `--repo <path>` (required); `--languages <list>` (auto-detected if
-  omitted); `--scan-only` (SARIF only, default) vs `--analyze` (LLM analysis + exploit
-  gen); `--build-command <cmd>`; `--extended` (more rules, slower); `--force` (rebuild
+  omitted); `--scan-only` (SARIF only — the default; for LLM analysis of the SARIF, run
+  `/analyze` or `/agentic`); `--build-command <cmd>`; `--extended` (more rules, slower); `--force` (rebuild
   DB); `--max-findings <n>`.
 - **Run:** `python3 raptor.py codeql --repo <path>`. Full flags: `raptor codeql --help`.
 
@@ -284,11 +284,11 @@ Observe the target executing.
   load a JS hook script, and capture `send(...)` events into a lifecycle-managed run
   directory. Local, USB-attached, and remote `frida-server` targets.
 - **Key params:** `--target <pid|name|bundle-id|binary>`; one of `--template <name>`
-  (bundled: `api-trace`, `ssl-unpin`) or `--script <path>` (your JS); `--host
+  (bundled: `api-trace`, `ssl-unpin`, `bb-coverage`, `binary-flow-trace`) or `--script <path>` (your JS); `--host
   HOST[:PORT]`; `--usb`; `--duration <n>` (default 60); `--spawn` (hooks in place
-  before `main()`); `--unsafe-attach` (forward-looking, logged only).
+  before `main()`); `--unsafe-attach` (run frida WITHOUT the sandbox wrapper).
 - **Run:** `libexec/raptor-frida --target ... (--template ... | --script ...)`.
-- **Maturity:** alpha — two templates ship, sandbox envelope not yet wrapped.
+- **Maturity:** alpha — four templates ship; frida runs inside the sandbox by default (`--unsafe-attach` opts out).
 - **Alias:** `/raptor-frida`.
 
 ---
@@ -327,8 +327,8 @@ version, and command discovery.
   feedback). Powers fast-tier short-circuit routing. Ask natural-language questions
   about which model is good at what.
 - **Key subcommands:** bare `/scorecard` (list all cells); `list [flags]`
-  (`--by-savings`, `--by-miss-rate`, `--untrusted`, `--learning`, `--consumer <prefix>`,
-  `--since`, `--recency`); `compare <model-a> <model-b>`; `samples <decision_class>`;
+  (`--by-savings`, `--by-miss-rate`, `--untrusted`, `--learning`, `--prefix <PREFIX>`,
+  `--since`, `--freshness <DAYS>`); `compare <model-a> <model-b>`; `samples <decision_class>`;
   `pin` / `unpin`; `reset`.
 - **Run:** `libexec/raptor-llm-scorecard [args]`. Output is markdown.
 

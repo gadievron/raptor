@@ -74,8 +74,8 @@ not bundled — installed and managed by pip:
 
 Optional LLM provider SDKs (install only the ones you use — see
 [`configuration.md`](configuration.md)): `anthropic` (MIT), `openai` (Apache
-2.0), `google-genai` (Apache 2.0), `mistralai` (Apache 2.0). Ollama is used
-via the OpenAI-compatible endpoint, so no separate SDK license applies.
+2.0), `google-genai` (Apache 2.0). Mistral and Ollama both go through the
+`openai` SDK via the OpenAI-compatible endpoint, so they need no separate SDK.
 
 ---
 

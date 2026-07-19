@@ -59,8 +59,10 @@ Every package under `packages/` follows the same four rules:
 
 1. **One responsibility per package.** A package does one thing (Semgrep
    scanning, CodeQL, fuzzing, SCA, …) and does it in isolation.
-2. **No cross-package imports.** Packages import only from `core/`, never from
-   each other. That keeps capabilities swappable and independently testable.
+2. **Cross-package imports are the exception.** Packages import from `core/` by
+   default; a handful reach directly into a sibling package (e.g.
+   `fuzzing`→`binary_analysis`, `sca`→`osv`). Keeping that the exception rather
+   than the rule keeps capabilities swappable and independently testable.
 3. **Standalone executability.** Each package's entry point can run on its own,
    outside the full workflow.
 4. **A clear CLI.** Every entry point ships argparse help text with required

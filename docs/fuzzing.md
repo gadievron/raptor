@@ -465,7 +465,7 @@ out/fuzz_<binary>_<timestamp>/
 │   ├── analysis/            # LLM crash analysis
 │   │   └── crash_*.json
 │   └── exploits/            # Generated exploits
-│       └── crash_*_exploit.c
+│       └── crash_*_exploit.cpp
 └── fuzzing_report.json      # Summary report
 ```
 
@@ -572,7 +572,7 @@ make clean && make
 ### "Exploit code won't compile"
 **Common issue with Ollama models:**
 ```bash
-gcc -o exploit 000000_exploit.c -fno-stack-protector -z execstack
+g++ -o exploit 000000_exploit.cpp -fno-stack-protector -z execstack
 # Error: macro name must be an identifier
 # Error: unknown escape sequence
 ```

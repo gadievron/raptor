@@ -229,8 +229,9 @@ raptor/
 ### `core/config/` — RaptorConfig
 
 Centralised configuration; the single source of truth for all paths. Environment
-variable support (`RAPTOR_ROOT`) with graceful fallback to auto-detection.
-Provides `get_raptor_root()`, `get_out_dir()`, `get_logs_dir()`.
+variable support (`RAPTOR_DIR`, `RAPTOR_OUT_DIR`) with graceful fallback to
+auto-detection. Exposes the `REPO_ROOT`/`LOG_DIR` class attributes and
+`get_out_dir()`.
 
 > **Import contract:** packages reach `core/` via the interpreter's normal
 > package resolution. Per the repo's `CLAUDE.md`, the only permitted `sys.path`

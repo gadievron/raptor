@@ -138,7 +138,8 @@ chat.
 
 | Feasibility verdict | `final_status` (JSON) | Means |
 |---------------------|-----------------------|-------|
-| `likely` / `likely_exploitable` | `exploitable` | Exploitable — standard techniques should work. |
+| `exploitable` | `exploitable` | Exploitable — standard techniques should work. |
+| `likely_exploitable` | `likely_exploitable` | Likely exploitable — usable primitives, some uncertainty remains. |
 | `difficult` | `confirmed_constrained` | Confirmed (Constrained) — primitives exist but are hard to chain. |
 | `unlikely` | `confirmed_blocked` | Confirmed (Blocked) — no viable path under current mitigations. |
 | `not_applicable` | `confirmed` | Confirmed — real and reachable; feasibility not applicable (e.g. a web vuln). |
@@ -235,7 +236,7 @@ A run writes to a timestamped directory (or the project directory, or the `--out
 directory you passed). The layout:
 
 ```
-out/exploitability-validation-<timestamp>/
+out/validate_<target>_<timestamp>_pidNNNNN/
 ├── checklist.json          # Stage 0: ground truth — every function/line to check
 ├── findings.json           # Cumulative findings; each stage merges into it
 ├── attack-surface.json     # Stage B: sources, sinks, trust boundaries

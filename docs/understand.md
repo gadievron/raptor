@@ -168,7 +168,7 @@ validation stage:
 |--------------------------|-------------------------|
 | `checklist.json`         | Stage 0 — shared source inventory |
 | `context-map.json`       | Stage B — pre-populates `attack-surface.json` |
-| `flow-trace-<id>.json`   | Stage C — confirms reachability |
+| `flow-trace-<id>.json`   | Stage B — imported as starting attack paths |
 | `variants.json`          | Stage 0 — expands checklist scope for validation |
 
 **No manual wiring needed.** `/validate` Stage 0 automatically finds and imports
