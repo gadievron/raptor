@@ -65,6 +65,44 @@ def _last_message_path(cmd: list[str]) -> Path:
     return Path(cmd[cmd.index("--output-last-message") + 1])
 
 
+def test_compact_schema_types_follow_leading_declaration():
+    from packages.llm_analysis.codex_dispatch import _codex_output_schema
+
+    # The leading declaration is authoritative. Type-like words in the
+    # explanatory prose describe domain values and must not change the schema.
+    compact_descriptions = {
+        "boolean_value": "boolean - true when the associated list is complete",
+        "number_value": "float or null - derived from an integer measurement",
+        "integer_value": "integer - index into a string table",
+        "string_value": "string or null - supported profiles include int32 and int64",
+        "array_value": "list of strings or null - entries are Boolean predicates",
+        "object_array": "list of dicts - each value may contain strings",
+        "object_value": "object - contains a list of named fields",
+    }
+
+    properties = _codex_output_schema(compact_descriptions)["properties"]
+
+    assert properties["boolean_value"]["type"] == "boolean"
+    assert properties["number_value"]["type"] == ["number", "null"]
+    assert properties["integer_value"]["type"] == "integer"
+    assert properties["string_value"]["type"] == ["string", "null"]
+    assert properties["array_value"]["type"] == ["array", "null"]
+    assert properties["array_value"]["items"] == {"type": "string"}
+    assert properties["object_array"]["items"]["type"] == "object"
+    assert properties["object_value"]["type"] == "object"
+
+
+def test_production_analysis_schema_preserves_path_field_types():
+    from packages.llm_analysis.codex_dispatch import _codex_output_schema
+    from packages.llm_analysis.prompts.schemas import ANALYSIS_SCHEMA
+
+    properties = _codex_output_schema(ANALYSIS_SCHEMA)["properties"]
+
+    assert properties["path_conditions"]["type"] == ["array", "null"]
+    assert properties["path_conditions"]["items"] == {"type": "string"}
+    assert properties["path_profile"]["type"] == ["string", "null"]
+
+
 def test_codex_exec_uses_arg_list_read_only_ephemeral_and_stdin(monkeypatch, tmp_path):
     from packages.llm_analysis import codex_dispatch
 
