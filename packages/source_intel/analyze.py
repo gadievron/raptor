@@ -1083,7 +1083,7 @@ def _classify_size_source(
     if not file_path or not line_no:
         return None
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return None
@@ -1257,7 +1257,7 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
     if not file_path or not call_line:
         return GRADE_SAME_FUNCTION
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return GRADE_SAME_FUNCTION
@@ -1911,7 +1911,7 @@ def _enclosing_function(file_path: str, line: int) -> Optional[str]:
         return via_inv
     # 2. Regex fallback (only path when no inventory is cached).
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except (OSError, IOError):
         return None
@@ -2135,7 +2135,7 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
     seen: set[Tuple[str, int, str, str]] = set()
     for path in files:
         try:
-            lines = path.read_text(errors="replace").splitlines()
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         in_block_comment = False
@@ -2312,7 +2312,7 @@ def _scan_project_alias_observations(
             continue
         seen_files += 1
         try:
-            text = entry.read_text(errors="replace")
+            text = entry.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         file_lines = text.split("\n")
@@ -2377,7 +2377,7 @@ def _scan_alias_in_file(path: Path) -> List[AttributeEvidence]:
     renders the file-level observation either way).
     """
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
 
@@ -2694,7 +2694,7 @@ def _local_line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     constant. Functionally equivalent to adapter's helper but
     duplicated here to break the import cycle in minimal installs."""
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False

@@ -1448,7 +1448,7 @@ def try_tier0(
             spec=spec,
         )
     try:
-        source_text = src_path.read_text(errors="replace")
+        source_text = src_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

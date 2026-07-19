@@ -65,7 +65,7 @@ class _FileCache:
             # Evict oldest entry (insertion-order dict).
             self._store.pop(next(iter(self._store)))
         try:
-            text = Path(path).read_text(errors="replace")
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
             result = text.splitlines()
         except OSError:
             result = None

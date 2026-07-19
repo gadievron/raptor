@@ -172,7 +172,7 @@ class CorpusGenerator:
 
         for path in files:
             try:
-                text = path.read_text(errors="replace")[:65536]
+                text = path.read_text(encoding="utf-8", errors="replace")[:65536]
             except OSError:
                 continue
 

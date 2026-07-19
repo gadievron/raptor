@@ -327,7 +327,7 @@ def _extract_proposal(
                 src = repo_root / _norm_uri(raw_uri)
                 if not src.is_file():
                     continue
-                lines = src.read_text(errors="replace").splitlines()
+                lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
                 snippet = lines[line - 1].strip() if 0 < line <= len(lines) else raw_uri
                 if len(lines) <= _SMALL_FILE:
                     body = "\n".join(lines)

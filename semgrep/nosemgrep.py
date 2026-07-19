@@ -65,7 +65,7 @@ class _FileCache:
             # Evict oldest entry (insertion-order dict).
             self._store.pop(next(iter(self._store)))
         try:
-            text = Path(path).read_text(errors="replace")
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
             result = text.splitlines()
         except OSError:
             result = None
@@ -89,7 +89,7 @@ def extract_nosemgrep(
     """
     if _lines is None:
         try:
-            _lines = Path(file_path).read_text(errors="replace").splitlines()
+            _lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return None
 

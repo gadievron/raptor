@@ -139,7 +139,7 @@ def _scan_tokens(tokens: List[str], defined: Dict[str, str],
 
 
 def _from_compile_commands(path: Path) -> MacroConfig:
-    raw = path.read_text(errors="replace")
+    raw = path.read_text(encoding="utf-8", errors="replace")
     try:
         entries = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
@@ -165,7 +165,7 @@ def _from_compile_commands(path: Path) -> MacroConfig:
 
 
 def _from_kconfig(path: Path) -> MacroConfig:
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
     defined: Dict[str, str] = {}
     undefined: set = set()
     for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$", text, re.MULTILINE):

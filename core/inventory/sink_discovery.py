@@ -444,7 +444,7 @@ def discover_sinks_for_target(
         if not extractor:
             continue
         try:
-            content = source_file.read_text(errors="replace")
+            content = source_file.read_text(encoding="utf-8", errors="replace")
             graph = extractor(content)
             if graph.calls:
                 call_graphs[rel] = graph

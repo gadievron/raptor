@@ -132,7 +132,7 @@ class HarnessGenerator:
 
     def generate(self, spec: HarnessSpec) -> GeneratedHarness:
         """Produce a libFuzzer harness for the given specification."""
-        header_text = spec.header_path.read_text(errors="replace")
+        header_text = spec.header_path.read_text(encoding="utf-8", errors="replace")
         signature = _extract_target_signature(header_text, spec.target_function)
 
         if self.llm is None:
