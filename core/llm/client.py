@@ -210,13 +210,13 @@ def _is_quota_error(error: Exception) -> bool:
             pass
 
     error_str = str(error).lower()
-    return any([
+    return any((
         "429" in error_str,
         "quota exceeded" in error_str,
         "quota" in error_str and "exceeded" in error_str,
         "rate limit" in error_str,
         "generate_content_free_tier" in error_str,  # Gemini-specific
-    ])
+    ))
 
 
 def _is_daily_quota_error(error: Exception) -> bool:

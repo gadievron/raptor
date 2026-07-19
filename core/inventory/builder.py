@@ -505,8 +505,10 @@ def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) ->
     extension, bounded at ``cap`` (we only need "holds source? roughly how
     many" for an operator warning — not an exact census of a huge tree).
     """
+    _skip = {"node_modules", "vendor", ".git", "__pycache__", ".tox", ".venv"}
     n = 0
-    for _root, _dirs, files in os.walk(dirpath):
+    for _root, dirs, files in os.walk(dirpath):
+        dirs[:] = [d for d in dirs if d not in _skip]
         for f in files:
             if Path(f).suffix.lower() in extensions:
                 n += 1

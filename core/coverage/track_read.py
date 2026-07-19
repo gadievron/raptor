@@ -12,9 +12,8 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure repo root is on path regardless of cwd
-# core/coverage/track_read.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 MANIFEST_NAME = ".reads-manifest"
 

@@ -356,8 +356,8 @@ def extract_direct_call_edges(
         )
         return BinaryEdgeIndex(binary_path=str(binary_path))
     try:
-        fns = json.loads(fns_proc.stdout)
-    except json.JSONDecodeError:
+        fns = json.loads(fns_proc.stdout or "[]")
+    except (json.JSONDecodeError, TypeError):
         logger.warning("binary_oracle_edges: aflj parse failed for %s",
                        binary_path)
         return BinaryEdgeIndex(binary_path=str(binary_path))
@@ -404,8 +404,8 @@ def extract_direct_call_edges(
             mode="w", suffix=".r2", delete=False,
             dir=str(binary_path.parent),
     ) as script_file:
-        script_file.write("\n".join(script_lines) + "\n")
         script_path = script_file.name
+        script_file.write("\n".join(script_lines) + "\n")
     try:
         proc = _sandbox_run(
             ["r2", "-q", "-i", script_path, str(binary_path)],
@@ -498,7 +498,7 @@ def _extract_vtable_edges(
         return []
     edges: List[BinaryCallEdge] = []
     current_vtable: Optional[str] = None
-    for line in proc.stdout.splitlines():
+    for line in (proc.stdout or "").splitlines():
         # Strip ANSI escapes r2 emits in interactive-style output.
         plain = re.sub(r"\x1b\[[\d;]*m", "", line)
         m_hdr = _VTABLE_HEADER_RE.search(plain)

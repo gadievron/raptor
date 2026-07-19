@@ -57,6 +57,10 @@ def _raptor_root_console_handlers() -> list[logging.Handler]:
 class JSONFormatter(logging.Formatter):
     """Format log records as JSON for structured logging."""
 
+    _STANDARD_ATTRS = frozenset(logging.LogRecord(
+        "", 0, "", 0, "", (), None,
+    ).__dict__)
+
     def format(self, record: logging.LogRecord) -> str:
         """
         Format a log record as JSON.
@@ -91,11 +95,8 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
 
-        _STANDARD_ATTRS = frozenset(logging.LogRecord(
-            "", 0, "", 0, "", (), None,
-        ).__dict__)
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_ATTRS and key not in log_obj:
+            if key not in self._STANDARD_ATTRS and key not in log_obj:
                 log_obj[key] = value
 
         # `default=str` so non-JSON-native types in `extra` (Path,

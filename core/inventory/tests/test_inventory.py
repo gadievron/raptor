@@ -19,7 +19,7 @@ from core.inventory import (
     extract_functions,
     extract_items,
     count_sloc,
-    _get_items as get_items,
+    get_items,
     should_exclude,
     is_binary_file,
     is_generated_file,

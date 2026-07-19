@@ -487,13 +487,19 @@ def _get_call_graph_extractors():
 
 
 def _iter_source_files(target: Path):
-    """Yield source files under target, respecting common exclusions."""
+    """Yield source files under target, respecting common exclusions.
+
+    Uses os.walk with walk-time pruning so excluded subtrees are never
+    traversed (avoids hundreds of thousands of stat() calls on repos
+    with large node_modules/ or vendor/ trees).
+    """
+    import os as _os
     skip_dirs = {
         ".git", "node_modules", "__pycache__", ".tox", ".venv",
         "venv", "vendor", "third_party", "build", "dist",
     }
-    for child in target.rglob("*"):
-        if child.is_file() and not any(
-            p in skip_dirs for p in child.relative_to(target).parts
-        ):
-            yield child
+    for root, dirs, files in _os.walk(target):
+        dirs[:] = [d for d in dirs if d not in skip_dirs
+                   and not (Path(root) / d).is_symlink()]
+        for fname in files:
+            yield Path(root) / fname

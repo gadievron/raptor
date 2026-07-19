@@ -108,7 +108,7 @@ def _run(argv: List[str], timeout: int = 60) -> str:
         return ""
     if proc.returncode != 0:
         logger.debug("binary_oracle: %s rc=%s stderr=%s",
-                     argv[0], proc.returncode, proc.stderr[:200])
+                     argv[0], proc.returncode, (proc.stderr or "")[:200])
     return proc.stdout or ""
 
 

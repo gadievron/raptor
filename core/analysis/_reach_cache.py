@@ -96,7 +96,7 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # the same name. Also doubles as a cheap "is this a raptor cache
 # file" check before handing bytes to ``pickle.load``. The numeric
 # suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V5\n"
+_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V9\n"
 
 # Hard cap on cache-file size. A genuine reachability index for a
 # kernel-scale target weighs in the low MB; anything past this is

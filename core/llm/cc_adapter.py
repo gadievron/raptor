@@ -212,13 +212,19 @@ def parse_cc_structured(
     if "```" in content:
         try:
             parts = content.split("```")
+            last_valid = None
             for part in parts[1::2]:
                 lines = part.strip().split("\n", 1)
                 json_str = lines[1] if len(lines) > 1 and not lines[0].startswith("{") else part
-                result = json.loads(json_str.strip())
-                if isinstance(result, dict):
-                    result.setdefault("finding_id", finding_id)
-                    return result
+                try:
+                    candidate = json.loads(json_str.strip())
+                    if isinstance(candidate, dict):
+                        last_valid = candidate
+                except (json.JSONDecodeError, IndexError):
+                    continue
+            if last_valid is not None:
+                last_valid.setdefault("finding_id", finding_id)
+                return last_valid
         except (json.JSONDecodeError, IndexError):
             pass
 

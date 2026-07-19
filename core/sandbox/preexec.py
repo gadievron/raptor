@@ -190,10 +190,7 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
     """
     landlock_fn = None
     if (writable_paths or allowed_tcp_ports) and check_landlock_available():
-        # Ensure at least /tmp is writable — processes need temp files
-        effective_paths = list(writable_paths) if writable_paths else ["/tmp"]
-        if "/tmp" not in effective_paths:
-            effective_paths.append("/tmp")
+        effective_paths = list(writable_paths) if writable_paths else []
         landlock_fn = _make_landlock_preexec(effective_paths, allowed_tcp_ports,
                                              readable_paths=readable_paths)
 

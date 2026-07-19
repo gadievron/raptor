@@ -24,7 +24,6 @@ Available Modes:
     describe    - Pre-flight inspection: target type, tool readiness, cost estimate
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
-    help        - Show detailed help for a specific mode
 
 Examples:
     # Full autonomous workflow
@@ -625,11 +624,10 @@ _active_dispatcher = None
 def _get_or_start_dispatcher():
     """Lazy single dispatcher per ``raptor.py`` invocation.
 
-    Phase B credential-isolation: when this is called, the spawned
-    analysis script gets ``RAPTOR_LLM_SOCKET`` + a per-spawn token
-    via ``spawn_worker``, and ``core/llm/providers.py`` routes its
-    SDK calls through the dispatcher. API keys are still in env (for
-    fallback) until Phase C drops the passthrough.
+    Credential-isolation: the spawned analysis script gets
+    ``RAPTOR_LLM_SOCKET`` + a per-spawn token via ``spawn_worker``,
+    and ``core/llm/providers.py`` routes its SDK calls through the
+    dispatcher. API keys remain in env as fallback.
     """
     global _active_dispatcher
     if _active_dispatcher is not None:
@@ -670,13 +668,10 @@ def _get_or_start_dispatcher():
         # channel stays open in this case but is no worse than today.
         # Surface the failure on stderr (in addition to the logger
         # warning) so operators see it regardless of log-level
-        # config. After Phase C activation strips API keys from
-        # ``get_llm_env``, this fallback's "no worse than today"
-        # guarantee no longer holds — the fallback path will produce
-        # workers without auth, and the symptom will be a confusing
-        # "first LLM call fails" 30 seconds later. Step 1 of the
-        # phased Phase C rollout: make this failure mode loud at the
-        # moment it happens, before activation depends on it.
+        # config. Once API keys are stripped from ``get_llm_env``,
+        # this fallback produces workers without auth — the symptom
+        # is a confusing "first LLM call fails" 30 seconds later.
+        # Surface it loudly now so operators see it immediately.
         import logging
         import sys as _sys
         msg = (
@@ -723,11 +718,6 @@ def _run_script(script_path: Path, args: list) -> int:
 
     try:
         from core.config import RaptorConfig
-        # Phase B: opt the spawn into the credential-isolation
-        # dispatcher. Worker env still has API keys (fallback path
-        # exists until Phase C); ``RAPTOR_LLM_SOCKET`` and
-        # ``RAPTOR_LLM_TOKEN_FD`` direct the worker's SDK calls
-        # through the dispatcher when present.
         dispatcher = _get_or_start_dispatcher()
         if dispatcher is not None:
             from core.llm.dispatcher.spawn import spawn_worker
@@ -735,22 +725,13 @@ def _run_script(script_path: Path, args: list) -> int:
                 dispatcher,
                 cmd=cmd,
                 label=script_path.name,
-                # F102b: preserve PYTHONUSERBASE for the child
-                # ``raptor_<mode>.py`` subprocess so its own opt-in
-                # at ``get_safe_env(include_python_user_base=True)``
-                # (e.g. ``raptor_agentic.py:757`` semgrep spawn)
-                # has the value to restore. Without this flag the
-                # parent strips PYTHONUSERBASE here, leaving the
-                # child's restoration a no-op for the canonical
-                # operator path. See W14-E3 §F102b.
                 env=RaptorConfig.get_llm_env(include_python_user_base=True),
             )
             return proc.wait()
-        # Fallback: pre-Phase-B behaviour, env-direct.
-        # F102b: same opt-in as the dispatcher path above — the
-        # canonical operator entry point must preserve
-        # PYTHONUSERBASE for the spawned ``raptor_<mode>.py``
-        # subprocess. See comment at the spawn_worker call site.
+        # Fallback: env-direct (no dispatcher available).
+        # Same opt-in as the dispatcher path above — the canonical
+        # operator entry point must preserve PYTHONUSERBASE for the
+        # spawned ``raptor_<mode>.py`` subprocess.
         result = subprocess.run(
             cmd,
             env=RaptorConfig.get_llm_env(include_python_user_base=True),
@@ -1025,8 +1006,7 @@ def mode_describe(args: list) -> int:
     (.tar.gz / .zip / …) extracted on the fly via
     ``core.archive`` and described.
     """
-    import argparse as _ap
-    parser = _ap.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="raptor describe",
         description=(
             "Pre-flight inspection: target type, tool readiness, "
@@ -1088,7 +1068,6 @@ def mode_frida(args: list) -> int:
     operator runs ``bin/raptor frida ...`` or invokes the wrapper
     directly from a /frida skill.
     """
-    import subprocess
     from core.config import RaptorConfig
     script_root = Path(__file__).parent
     wrapper = script_root / "libexec" / "raptor-frida"

@@ -11,6 +11,7 @@ Availability detection (SDK flags, Ollama, Claude Code) lives in detection.py.
 """
 
 import os
+import threading as _threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -79,6 +80,7 @@ def _get_configured_models() -> List[Dict]:
 
 _cached_thinking_model: Optional['ModelConfig'] = None
 _thinking_model_checked: bool = False
+_thinking_model_lock = _threading.Lock()
 
 
 def _get_best_thinking_model() -> Optional['ModelConfig']:
@@ -106,10 +108,12 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     if _thinking_model_checked and _cached_thinking_model is not None:
         return _cached_thinking_model
 
+    with _thinking_model_lock:
+        if _thinking_model_checked and _cached_thinking_model is not None:
+            return _cached_thinking_model
+
     models = _get_configured_models()
     if not models:
-        _cached_thinking_model = None
-        _thinking_model_checked = False  # don't latch on negative result
         return None
 
     # Define priority order for thinking models (best first)
@@ -247,9 +251,9 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     if best_model:
         logger.info(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
 
-    _cached_thinking_model = best_model
-    # Latch the cache only on positive results (see header comment).
-    _thinking_model_checked = best_model is not None
+    with _thinking_model_lock:
+        _cached_thinking_model = best_model
+        _thinking_model_checked = best_model is not None
     return best_model
 
 

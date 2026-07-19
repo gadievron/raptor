@@ -842,7 +842,7 @@ class DatabaseManager:
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
                 logger.error(f"✗ Database creation failed for {language}")
-                logger.error(result.stderr[:500])
+                logger.error((result.stderr or "")[:500])
                 # Cleanup partial staging on build failure — no point keeping
                 # broken DBs around to confuse future cache lookups (they
                 # never reach canonical anyway since promote is gated on

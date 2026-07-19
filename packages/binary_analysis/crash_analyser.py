@@ -135,7 +135,7 @@ class CrashAnalyser:
             logger.info(f"Detected macOS/Mach-O binary, trying LLDB. Binary type: {binary_type[:100]}...")
             try:
                 result = _run_trusted(["lldb", "--version"], capture_output=True, text=True, timeout=5)
-                logger.info(f"LLDB version check result: {result.returncode}, stdout: {result.stdout[:100]}, stderr: {result.stderr[:100]}")
+                logger.info(f"LLDB version check result: {result.returncode}, stdout: {(result.stdout or '')[:100]}, stderr: {(result.stderr or '')[:100]}")
                 if result.returncode == 0:
                     logger.info("Using LLDB debugger for macOS/Mach-O binary")
                     return "lldb"

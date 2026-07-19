@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -246,13 +247,15 @@ class PipResolver:
         rather than the sandbox's ``fake_home`` bind-mount, which is
         read-only on some configurations.
         """
+        qvenv = shlex.quote(str(venv_dir))
+        qpython = shlex.quote(_real_python())
         return (
             f"set -e; "
-            f"export HOME={venv_dir}/.fake-home; "
-            f"export XDG_CACHE_HOME={venv_dir}/.fake-home/.cache; "
+            f"export HOME={qvenv}/.fake-home; "
+            f"export XDG_CACHE_HOME={qvenv}/.fake-home/.cache; "
             f"mkdir -p $HOME $XDG_CACHE_HOME; "
-            f"{_real_python()} -m venv --without-pip {venv_dir} && "
-            f"{venv_dir}/bin/python -m ensurepip --upgrade >/dev/null && "
+            f"{qpython} -m venv --without-pip {qvenv} && "
+            f"{qvenv}/bin/python -m ensurepip --upgrade >/dev/null && "
         )
 
     def _cleanup_venv(self, venv_dir: Path) -> None:
@@ -529,11 +532,12 @@ class PipResolver:
         venv_dir, _ = self._create_venv(project_dir, timeout)
         # ``set -e`` short-circuits on any step's non-zero exit so the
         # whole call returns the first failing step's stderr.
+        qvenv = shlex.quote(str(venv_dir))
         script = (
             self._venv_setup_script(venv_dir)
-            + f"{venv_dir}/bin/python -m pip install --quiet pip-tools && "
-            + f"{venv_dir}/bin/pip-compile --quiet "
-            + f"--output-file - {rel_manifest}"
+            + f"{qvenv}/bin/python -m pip install --quiet pip-tools && "
+            + f"{qvenv}/bin/pip-compile --quiet "
+            + f"--output-file - {shlex.quote(str(rel_manifest))}"
         )
         try:
             proc = _run(

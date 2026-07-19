@@ -869,7 +869,8 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # verified the sandboxed program doesn't need /tmp to start —
         # ``python3 -S`` exploits don't write pyc cache, but a normal
         # ``python3`` import will.
-        writable_paths = [] if exclude_tmp_baseline else ["/tmp"]
+        import tempfile as _tempfile
+        writable_paths = [] if exclude_tmp_baseline else [_tempfile.gettempdir()]
         if output:
             # Absolutize: a relative path like "out/foo" fails Landlock
             # open in the mount-ns child after pivot_root (the new

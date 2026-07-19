@@ -110,7 +110,6 @@ def _build_audit_config(
     _writable: list = []
     for p in (writable_paths or ()):
         _writable.append(_osp.abspath(p))
-    _writable.append("/tmp")
     if output:
         _writable.append(_osp.abspath(output))
 

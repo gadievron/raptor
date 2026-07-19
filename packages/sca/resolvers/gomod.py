@@ -79,7 +79,18 @@ class GoResolver:
                 src = project_dir / fname
                 if src.exists():
                     shutil.copy2(src, tmp_path / fname)
+            _SKIP_DIRS = {"vendor", "node_modules", ".git", "testdata"}
+            _MAX_FILES = 10_000
+            _copied = 0
             for go_file in project_dir.rglob("*.go"):
+                if go_file.is_symlink():
+                    continue
+                parts = go_file.relative_to(project_dir).parts
+                if _SKIP_DIRS.intersection(parts):
+                    continue
+                _copied += 1
+                if _copied > _MAX_FILES:
+                    break
                 rel = go_file.relative_to(project_dir)
                 dest = tmp_path / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)

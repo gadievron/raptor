@@ -2412,9 +2412,10 @@ def binary_call_edge_present(
     for item in candidates:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
-            return False
+            continue
         edges = meta.get("binary_oracle_edges")
-        return bool(edges)
+        if edges:
+            return True
     return False
 
 
@@ -2541,10 +2542,10 @@ def binary_oracle_absent(
     for item in candidates:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
-            return False
+            continue
         bo = meta.get("binary_oracle")
         if not isinstance(bo, dict):
-            return False
+            continue
         if bo.get("classification") != "absent":
             return False
         # Soundness gate (E1 stripped-binary fallback + adversarial
