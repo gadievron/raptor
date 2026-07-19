@@ -1,6 +1,6 @@
 # Black-box binary understanding
 
-RAPTOR can already do a lot with source, web targets and SCA. Compiled
+Compiled
 applications were the awkward gap: radare2 existed inside fuzzing, but it was
 mostly a handy pre-pass rather than a proper evidence layer.
 
@@ -83,7 +83,7 @@ It uses the parts RAPTOR already has:
 - Z3 only for explicit path conditions
 - byte/import/runtime-marker diffs for version comparison
 
-The same evidence model now distinguishes:
+The same evidence model distinguishes:
 
 | Artefact | External ingress RAPTOR looks for | Normal fuzz follow-on |
 |---|---|---|
@@ -99,14 +99,14 @@ ARM64 driver are not all quietly flattened into the same bucket. The driver
 paths are still conservative: seeing an IOCTL dispatcher is a boundary
 candidate, not proof that any request reaches a bug.
 
-Managed artefacts are deliberately conservative in this first pass. JAR/APK,
+Managed artefacts are deliberately conservative. JAR/APK,
 .NET, Go and Rust markers are recorded as runtime signals so later adapters
 can pick the right decompiler or metadata reader. RAPTOR does not claim
 managed-language reachability just because a marker is present.
 
 ## The evidence rule
 
-This is the important bit: binary analysis is full of ways to blag it. Too many ways to lie and cheat and do stuff that it shouldn't. 
+Binary analysis is full of ways to blag it. Too many ways to lie and cheat and do stuff that it shouldn't. 
 RAPTOR does not turn “I saw `strcpy`” into “this is exploitable”.
 
 Every record says where it came from. Proof or GTFO:
@@ -237,7 +237,7 @@ reached a later sink.
 ## Parser boundary extraction
 
 For GUI apps, XPC listeners, URL handlers and protocol callbacks, the useful
-fuzz target is rarely the framework callback itself. RAPTOR now retains
+fuzz target is rarely the framework callback itself. RAPTOR retains
 radare2's direct call graph and looks for a bounded path from a recovered
 external ingress to an internal function that directly calls a known parser
 surface.
@@ -261,13 +261,13 @@ specific internal function appears to be the parser boundary behind it”.
 RAPTOR still does not emit a harness from that alone. It needs a callable ABI,
 object schema or stronger runtime contract first.
 
-When Swift/ObjC dynamic dispatch hides the static edge, the Frida trace now
+When Swift/ObjC dynamic dispatch hides the static edge, the Frida trace
 retains target-module backtrace frames for parser calls. If the backtrace
 contains both the recovered ingress and the parser caller, RAPTOR can recover
 an `observed_runtime` parser boundary even when the static call graph cannot
 join the two.
 
-That is why the investigation priority queue now points at
+That is why the investigation priority queue points at
 `/binary trace-parser <run-dir>` rather than leaving the operator to manually
 join a Frida run back to a map.
 
@@ -321,8 +321,7 @@ harness pass normally stops at `needs_runtime_trace`. Once RAPTOR recovers a
 bounded ingress-to-parser path it moves to `parser_boundary_candidate` and
 shows the narrowed function in the harness report. That is intentional. The
 framework callback is real, but the useful fuzz boundary is usually the parser
-or protocol helper behind it, and RAPTOR still needs a callable contract before
-it can emit source honestly.
+or protocol helper behind it.
 
 ## Add fuzz witnesses
 
@@ -411,7 +410,7 @@ different question from “is AFL installed?”:
 - `snapshot_or_ioctl_harness` means a driver needs kernel-aware infrastructure
 - `campaign_plan_required` means RAPTOR can ask the fuzzer planner, but still has not claimed the target is a good campaign
 
-`/binary investigate --active` now maps first and uses that strategy before it
+`/binary investigate --active` maps first and uses that strategy before it
 launches anything. It will run a real fuzz campaign only for a concrete direct
 harness. For app, DLL and driver-shaped targets it records the harness step
 instead of pretending a whole-process fuzz run is useful.

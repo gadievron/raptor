@@ -1,8 +1,8 @@
 # How RAPTOR Works
 
-A conceptual tour of RAPTOR for operators: the analysis modes, how the code is
-organised, and the reasoning behind the model and cost trade-offs. If you want
-the file-by-file map or the internals of specific subsystems, see
+The analysis modes, how the code is organised, and the reasoning behind the
+model and cost trade-offs. If you want the file-by-file map or the internals of
+specific subsystems, see
 [`internals/architecture-internals.md`](internals/architecture-internals.md).
 
 RAPTOR (Recursive Autonomous Penetration Testing and Observation Robot) is a
@@ -41,9 +41,8 @@ in a single run:
 | Source code (`--repo`) | Source / CodeQL modes | Static analysis finds design flaws and logic bugs |
 | A compiled binary (`--binary`) | Binary fuzzing mode | AFL++ + crash analysis surface memory corruption and runtime faults |
 
-Pick the mode from what you actually have in hand. If you have source, prefer the
-static modes; reach for binary fuzzing when you only have (or specifically care
-about) the compiled artifact.
+If you have source, prefer the static modes; reach for binary fuzzing when you
+only have (or specifically care about) the compiled artifact.
 
 ---
 
@@ -69,8 +68,7 @@ Every package under `packages/` follows the same four rules:
 
 ### Where things live
 
-A conceptual map — enough to know which layer owns what. The exhaustive
-file-by-file inventory is in
+The exhaustive file-by-file inventory is in
 [`internals/architecture-internals.md`](internals/architecture-internals.md).
 
 | Path | What lives here |

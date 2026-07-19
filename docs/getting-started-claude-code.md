@@ -5,15 +5,15 @@ in plain English. You describe what you want to test; Claude picks the right
 slash command, runs it, reads the results, and explains what it found. This is
 the first stop for new users — clone, set up an LLM, and run your first scan.
 
-For the full command catalog, see [commands.md](commands.md) — the single source
-of truth for every slash command. This page teaches the setup and the workflow;
+For the full command catalog, see [commands.md](commands.md) — the full reference
+for every slash command. This page teaches the setup and the workflow;
 `commands.md` is the reference you keep open beside it.
 
 ---
 
 ## Setup (through Claude Code)
 
-Four steps. Let Claude Code do the installs — just tell it what you want.
+Four steps. Let Claude Code do the installs — tell it what you want.
 
 ```bash
 # 1. Clone and open in Claude Code
@@ -46,7 +46,7 @@ claude
 
 ## How you talk to it
 
-Just talk naturally. You do not need to memorise flags — describe the goal and
+Talk naturally. You do not need to memorise flags — describe the goal and
 Claude maps it to a command:
 
 ```
@@ -86,7 +86,7 @@ params, examples, and the in-depth guides.
 | **Report & Manage** | Diagrams, annotations, scorecards | `/diagram`, `/annotate`, `/scorecard` |
 | **Forensics** | GitHub forensic investigation | `/oss-forensics` |
 
-A few entries worth calling out for newcomers:
+A few entries:
 
 - **`/agentic`** is the flagship. It runs the whole autonomous workflow — scan →
   dedup → prep → per-finding validate+analyse → self-review → optional
@@ -98,8 +98,6 @@ A few entries worth calling out for newcomers:
   itself — the LLM validation/analysis layer is what `/agentic` adds on top.
 - **`/codeql`** is CodeQL-only deep dataflow analysis — slower than Semgrep, but
   finds tainted flows, use-after-free, and injection chains Semgrep misses.
-
-See [commands.md](commands.md) for the complete catalog and every flag.
 
 ---
 
@@ -118,7 +116,7 @@ them — **0 tokens until invoked** — and live in `tiers/personas/`.
 "Use patch engineer persona to write a production-ready fix"
 ```
 
-**Persona → purpose** (10 personas; source files live in `tiers/personas/`):
+**Persona → purpose** (10 personas):
 
 | Persona | Purpose |
 |---------|---------|

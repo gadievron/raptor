@@ -52,7 +52,7 @@ From the RAPTOR host:
 raptor frida --target some-process --host 10.10.20.1 --template api-trace
 ```
 
-Treat the network channel as **unauthenticated**. Frida-server has no auth in front of it. Bind to a trusted-only network, or SSH-forward 27042 instead of exposing it.
+Treat the network channel as **unauthenticated**. Bind to a trusted-only network, or SSH-forward 27042 instead of exposing it.
 
 ## Hardening notes
 

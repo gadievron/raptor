@@ -56,8 +56,8 @@ Example:
 │  │ Analysis Loop        │                                    │  │
 │  │  9. crash-analyzer ──┼──> Generate hypothesis             │  │
 │  │ 10. checker ─────────┼──> Validate hypothesis             │  │
-│  │     │ REJECT ────────┼──> Loop back to step 9             │  │
-│  │     │ ACCEPT ────────┼──> Write confirmed hypothesis      │  │
+│  │     │ Reject ────────┼──> Loop back to step 9             │  │
+│  │     │ Accept ────────┼──> Write confirmed hypothesis      │  │
 │  └──────────────────────┼────────────────────────────────────┘  │
 │                         │                                        │
 │ 11. Human Review ───────┼──> Wait for approval                  │

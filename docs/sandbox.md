@@ -2,9 +2,7 @@
 
 RAPTOR sandboxes any subprocess that handles untrusted content — LLM-generated
 PoCs, target build scripts, CodeQL queries, semgrep, fuzz targets, anything
-whose arguments or input came from a repo under analysis. This page covers what
-the sandbox protects against, how to invoke it, and how to read the diagnostics
-it emits.
+whose arguments or input came from a repo under analysis.
 
 For the mechanics behind these guarantees — the ptrace tracer, the pid-1 shim,
 the token-bucket audit budget, host-fingerprint spoofing, and the full module
@@ -136,7 +134,7 @@ prefer `--sandbox strict` over the default `full`. `full` warns and quietly
 degrades if the host can't provide an isolation layer; `strict` fails closed
 instead (see the [Profiles](#profiles) table above), because a hostile repo
 silently continuing under weaker isolation than you asked for is worse than
-the run just stopping:
+the run stopping:
 
 ```bash
 raptor agentic /path/to/code --sandbox strict
@@ -159,7 +157,7 @@ detail.
 | `block_network` | `False` (`True` in `run_untrusted`) | Unshare the network namespace — no interfaces inside. |
 | `allowed_tcp_ports` | `None` | Landlock TCP-connect allowlist (ABI v4+, kernel 6.7+). Mutually exclusive with `block_network=True`. |
 | `limits` | built-in defaults | Resource caps: `memory_mb`, `max_file_mb`, `cpu_seconds`. |
-| `profile` | `None` | Named profile (see table above). Overrides individual layer flags. |
+| `profile` | `None` | Named profile (see [Profiles](#profiles)). Overrides individual layer flags. |
 | `disabled` | `False` | Shortcut for `profile='none'`. |
 | `map_root` | `False` | Map caller UID to root inside the namespace (for tools that check `getuid()==0`). |
 | `use_egress_proxy` | `False` | Route outbound HTTPS through the RAPTOR proxy with a hostname allowlist. |
@@ -312,9 +310,6 @@ distinguishable at a glance:
    the tracer needs to attach. Network audit still works; syscall + filesystem
    audit silently degrade to enforcement. Follow the `instructions` field
    (set the sysctl to 0, install `uidmap`) and rerun.
-
-Without the degraded marker, an empty result genuinely means "audit ran,
-nothing would be blocked" — distinguishable from "audit didn't run".
 
 ## Recovering `sandbox-summary.json`
 

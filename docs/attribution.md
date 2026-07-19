@@ -21,11 +21,11 @@ retains its own upstream license.
 
 ## External Tools (User-Installed)
 
-RAPTOR **requires users to install** these tools; none are bundled. Without
-bundling, RAPTOR auto-downloads tools as needed at runtime.
+RAPTOR **requires users to install** these tools; none are bundled. RAPTOR
+does not auto-download tools — you install each one yourself.
 
 **Note on licensing:** examine each tool's license before using it in your
-context. **CodeQL does not allow commercial use** — see the caveat below.
+context. **CodeQL does not allow commercial use** — see [Compliance Notes](#compliance-notes).
 
 ### Required
 
@@ -91,11 +91,10 @@ via the OpenAI-compatible endpoint, so no separate SDK license applies.
 - Semgrep (LGPL 2.1)
 - AFL++ (Apache 2.0)
 - CodeQL (GitHub CodeQL Terms — **non-commercial**)
-- Python packages (various open source, see table above) — via pip
+- Python packages (various open source, see [Python Package Licenses](#python-package-licenses)) — via pip
 - System tools (GPL v3, Apache 2.0) — pre-installed on OS
 
-**RAPTOR does not bundle external tools.** Users install them separately
-according to each tool's own license terms. The devcontainer bundles them for
+**RAPTOR does not bundle external tools.** The devcontainer bundles them for
 convenience only — it does not change their license terms.
 
 ---

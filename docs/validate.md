@@ -8,9 +8,9 @@ kill three categories of waste:
 2. **Findings that aren't reachable** — dead code, test-only paths, unrealistic preconditions.
 3. **Findings that can't be exploited** — the bug is real, but system mitigations block every viable technique.
 
-This guide covers what the command does and how to read its output. The step-by-step
-methodology lives in the skill (`.claude/skills/exploitability-validation/`) and stays
-there — this page is the operator's-eye view.
+The step-by-step methodology lives in the skill
+(`.claude/skills/exploitability-validation/`) and stays there; this page is the
+operator's-eye view — what the command does and how to read its output.
 
 ---
 
@@ -41,7 +41,7 @@ The letters and numbers mean different things:
 | **F** | LLM | Self-review — "what did I get wrong?" Catches misclassifications and weak evidence. |
 | **1** | Mechanical | Outputs — CVSS scoring, schema validation, report generation. Never changes verdicts. |
 
-Two rules are worth committing to memory:
+Two rules:
 
 - **Stage E only runs for memory-corruption vulnerabilities** (buffer overflow, format
   string, use-after-free, heap overflow). Web and injection findings skip it.
@@ -49,9 +49,9 @@ Two rules are worth committing to memory:
   whatever the reasoning stages already decided.
 
 For the full methodology — prep scripts, per-stage gates, working-doc formats — read
-`.claude/skills/exploitability-validation/PIPELINE.md` and `SKILL.md`. Do not expect a
-"no flags needed, it just runs" experience: the value comes from the staged sequence,
-and every stage is mandatory (except E for non-memory-corruption findings).
+`.claude/skills/exploitability-validation/PIPELINE.md` and `SKILL.md`. The value comes
+from the staged sequence, and every stage is mandatory (except E for
+non-memory-corruption findings).
 
 ### Running it
 

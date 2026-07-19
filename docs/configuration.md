@@ -1,8 +1,7 @@
 # LLM & Configuration
 
-The single source of truth for how RAPTOR selects and talks to LLM providers.
-This page owns env-var and config-file truth; every variable below is confirmed
-against the code (`core/llm/`, `core/config/`).
+RAPTOR picks an LLM provider from env vars or `~/.config/raptor/models.json`; this page documents every variable and config field.
+Every variable below is confirmed against the code (`core/llm/`, `core/config/`).
 
 For *installing* RAPTOR and its API-key basics, see
 [`install.md`](install.md) — this page does not repeat install steps.
@@ -37,8 +36,10 @@ With no config file, RAPTOR picks the first available provider in this order:
 
 Notes:
 
-- **`MISTRAL_API_KEY`** is the correct Mistral variable (some older docs said
-  only "provider key").
+- **`MISTRAL_API_KEY`** is the correct Mistral variable.
+
+  > Note: there is no generic "provider key" variable — Mistral reads
+  > `MISTRAL_API_KEY` specifically.
 - **OpenAI / Gemini / Mistral all route through the OpenAI SDK.** If a key is
   present but the `openai` package is not installed, that provider is skipped
   and autodetect falls through to the next candidate.
@@ -216,17 +217,13 @@ RAPTOR caps LLM spend two ways:
 - **Default budget:** `LLMConfig.max_cost_per_scan` defaults to **$10 USD** per
   scan when no explicit cap is given.
 
-> **Correction — `RAPTOR_MAX_COST` is not a real variable.** Older docs
-> (`README.md`, the archived README) show `export RAPTOR_MAX_COST=5.00`. No code
-> in RAPTOR reads that environment variable — setting it has no effect. Use the
-> `--max-cost-usd` flag (or `--max-cost`) instead.
+> **`RAPTOR_MAX_COST` has no effect.** No code reads it — use `--max-cost-usd`/`--max-cost`.
 
 ---
 
-## Offline behaviour (corrected)
+## Offline behaviour
 
-RAPTOR does **not** ship a populated offline Semgrep registry cache. Earlier docs
-claimed an offline rule cache exists — that is false.
+RAPTOR does **not** ship a populated offline Semgrep registry cache.
 
 What actually ships and how it behaves:
 

@@ -1,6 +1,6 @@
 # RAPTOR Command Reference
 
-The single source of truth for every RAPTOR slash command. Commands are grouped by
+Commands are grouped by
 where they sit in a security workflow, not alphabetically. Start at the top
 (**Plan & Setup**) and move down as you go from "what is this target" to
 "here are the exploitable findings".
@@ -151,7 +151,6 @@ autonomous orchestrator that ties them together.
 - **Key params:** `--url <url>`. Authenticated scanning is not currently supported —
   scan only unauthenticated endpoints you own.
 - **Run:** `python3 raptor.py web --url <url>`. Full flags: `raptor web --help`.
-- **Maturity:** alpha — expect false positives and incomplete coverage.
 - **Alias:** `/raptor-web`.
 
 ---
@@ -405,5 +404,5 @@ The eight highest-surface commands have dedicated guides:
 | `/crash-analysis` | [crash-analysis.md](crash-analysis.md) |
 | `/frida` | [frida/QUICKSTART.md](frida/QUICKSTART.md) |
 
-Everything else is documented in full above. For any command's complete flag list,
+For any command's complete flag list,
 run `<command> --help`.

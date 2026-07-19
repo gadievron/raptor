@@ -1,8 +1,8 @@
 # Threat Models in RAPTOR
 
 RAPTOR treats the threat model as a proper project artefact, not a bit of
-vague chat that disappears once the model context rolls over. The idea is
-simple: before we ask agents to go hunting, we give them a crisp view of what
+vague chat that disappears once the model context rolls over. Before we ask
+agents to go hunting, we give them a crisp view of what
 matters, where trust changes hands, what noise to ignore, and how a finding
 must be proved before anyone gets excited.
 
@@ -18,8 +18,7 @@ For each project RAPTOR can keep:
 - `threat-model.json` - canonical machine-readable model used by RAPTOR
 - `THREAT_MODEL.md` - readable Markdown version for humans
 
-The JSON is the source of truth. The Markdown is there so the team can read it
-without needing to squint at a blob of JSON.
+The JSON is the source of truth.
 
 ## Create One
 
@@ -61,7 +60,7 @@ That runs the map, creates or reuses the threat model, writes candidate SARIF,
 then exits.
 
 If you only want to manage the project artefact manually, initialise it with
-`/threat-model init` (see below), which is equivalent to the raw CLI:
+`/threat-model init` (see [The /threat-model Command](#the-threat-model-command)), which is equivalent to the raw CLI:
 
 ```bash
 raptor project threat-model init

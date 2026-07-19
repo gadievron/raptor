@@ -1,12 +1,11 @@
 # Installing RAPTOR
 
-The single source of truth for what RAPTOR needs. RAPTOR runs **inside Claude
-Code** and orchestrates external security tools; it bundles none of them. This
-page tells you the minimum to get a `/scan` working and what to add per feature.
+RAPTOR runs **inside Claude Code** and orchestrates external security tools; it
+bundles none of them. The tables below list the minimum to get a `/scan` working
+and what to add per feature.
 
 > Deep LLM/provider configuration (models.json, Bedrock, model selection) lives
-> in [`configuration.md`](configuration.md). This page only covers *what to
-> install* and *how to authenticate*.
+> in [`configuration.md`](configuration.md).
 
 ---
 
@@ -28,7 +27,7 @@ page tells you the minimum to get a `/scan` working and what to add per feature.
 |------|-----------|-------|
 | AFL++ | `/fuzz` | `apt install afl++` (or `brew install afl++`) |
 | CodeQL CLI | `/codeql`, `/scan` deep analysis | **Non-commercial only** — free for security research; review GitHub's CodeQL terms before commercial use |
-| rr + gcov + AddressSanitizer | `/crash-analysis` | Linux x86_64 only; needs `--privileged` (see below). gcov ships with gcc; ASan is a compiler flag (`-fsanitize=address`) |
+| rr + gcov + AddressSanitizer | `/crash-analysis` | Linux x86_64 only; needs `--privileged` (see [Devcontainer](#option-2-devcontainer-recommended)). gcov ships with gcc; ASan is a compiler flag (`-fsanitize=address`) |
 | gdb + binutils (`nm`, `objdump`, `addr2line`, `file`) | binary analysis (`/binary`, `/fuzz` crash triage) | pre-installed on most Linux; `brew install gdb` on macOS |
 | Frida | `/frida` (dynamic instrumentation) | `pip install frida frida-tools` |
 | BigQuery credentials (`GOOGLE_APPLICATION_CREDENTIALS`) | `/oss-forensics` (GH Archive queries) | Google Cloud project + service-account key |

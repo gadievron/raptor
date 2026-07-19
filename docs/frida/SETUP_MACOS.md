@@ -19,7 +19,7 @@ No SIP changes required. `task_for_pid` works for processes you own when you're 
 raptor frida --target Safari --template api-trace --duration 30
 ```
 
-If you don't see the process under `frida-ps`, the target's owning UID is probably different (root daemons, helper processes signed by Apple). See below.
+If you don't see the process under `frida-ps`, the target's owning UID is probably different (root daemons, helper processes signed by Apple). See [Attaching to system / Apple-signed processes](#attaching-to-system--apple-signed-processes).
 
 ## Attaching to system / Apple-signed processes
 
@@ -51,7 +51,7 @@ Hardened-runtime binaries with `com.apple.security.get-task-allow=false` (most d
 
 ## Remote frida-server (e.g., from a macOS host to a Linux target)
 
-Same as Linux - see `SETUP_LINUX.md`. macOS-side just needs `frida-tools` and a route to the target's port 27042.
+Same as Linux - see `SETUP_LINUX.md`. macOS-side needs `frida-tools` and a route to the target's port 27042.
 
 ## Apple Silicon notes
 

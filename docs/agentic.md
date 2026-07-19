@@ -15,9 +15,8 @@ written to the run's output directory under `out/`. Patches are generated, never
 /agentic --understand --validate  # recommended for a thorough review
 ```
 
-This page is the operator's-eye view: what the pipeline does, the flags that matter, and
-when to reach for each. The exhaustive flag list lives in `libexec/raptor-agentic --help`
-— run that when you want the full surface.
+The operator's-eye view: what the pipeline does, the flags that matter, and
+when to reach for each. The exhaustive flag list lives in `libexec/raptor-agentic --help`.
 
 ---
 
@@ -62,8 +61,7 @@ After scan/dedup/prep, the dispatch pipeline runs these tasks in order. Steps ma
 7. **Aggregation** *(`--aggregate`)* — LLM synthesis into `aggregation.json`, consumed by
    the final report.
 8. **Exploit PoCs** — for findings with a final exploitable verdict (skip: `--no-exploits`).
-9. **Patches** — secure fixes for exploitable findings, generated not applied
-   (skip: `--no-patches`).
+9. **Patches** — secure fixes for exploitable findings (skip: `--no-patches`).
 10. **Cross-finding analysis** — structural grouping, shared root causes, attack chaining.
 
 Cost is tracked in real time with an adaptive budget cutoff.

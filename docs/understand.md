@@ -9,7 +9,7 @@ where do dangerous operations live, and is a specific flow or pattern actually
 exploitable? It answers those questions by reading code, not by pattern-matching file
 names.
 
-This guide covers **which mode to pick and when**. For gates, config, and per-stage
+**Which mode to pick and when.** For gates, config, and per-stage
 detail, see `.claude/skills/code-understanding/` (`SKILL.md`, `map.md`, `trace.md`,
 `hunt.md`, `teach.md`).
 
@@ -174,7 +174,7 @@ validation stage:
 **No manual wiring needed.** `/validate` Stage 0 automatically finds and imports
 `/understand` output via the understand-bridge: it searches co-located files, project
 siblings, and the global `out/` directory (matched by target path + SHA-256
-freshness). Just run both commands:
+freshness). Run both commands:
 
 ```
 /understand ./src --map

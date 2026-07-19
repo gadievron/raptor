@@ -63,8 +63,7 @@ python3 raptor.py help scan
   `google-genai`), then set one of: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `GEMINI_API_KEY`, `MISTRAL_API_KEY` (a longer list of aggregator/alternate
   provider keys is also recognised — see `core/config/__init__.py`
-  `LLM_API_KEY_VARS`). Without any key set, RAPTOR falls back to the `claude`
-  CLI on PATH if present.
+  `LLM_API_KEY_VARS`).
 
 **Optional tools (only needed for the corresponding mode):**
 - AFL++ (`apt install afl++` / `brew install afl++`) — `/fuzz`
@@ -367,7 +366,3 @@ python3 raptor.py scan --help
 Sandbox flags (`--sandbox`, `--no-sandbox`, `--audit`, `--audit-verbose`) are
 added by `core.sandbox.add_cli_args` after the mode name and only show up in
 the mode's own `--help`, not the top-level one.
-
----
-
-See main README and `docs/commands.md` for Claude Code interactive usage.

@@ -25,7 +25,7 @@ which afl-fuzz
 ```
 
 macOS is supported but not the primary target of this environment — expect to
-also run `sudo afl-system-config` there (see Troubleshooting).
+also run `sudo afl-system-config` there (see [Troubleshooting](#troubleshooting)).
 
 ### Install GDB
 
@@ -55,7 +55,7 @@ export OPENAI_API_KEY=your_key_here
 **Local Models (Ollama):**
 - **Crash analysis and triage**: Works well
 - **Exploitability assessment**: Acceptable(ish). YMMV here
-- **Exploit generation**: Often produces non-compilable C code or just doesnt work at all.
+- **Exploit generation**: Often produces non-compilable C code or doesnt work at all.
 - **Use case**: Testing, learning, offline analysis, inspiration?
 
 **Quality Comparison:**
@@ -199,7 +199,7 @@ Instead of requiring hand-crafted seed inputs, autonomous mode:
 
 #### How to Use
 
-Simply add `--autonomous` flag (no corpus needed):
+Add `--autonomous` flag (no corpus needed):
 
 ```bash
 python3 raptor.py fuzz \
@@ -594,8 +594,6 @@ python3 raptor.py fuzz --binary ./target --duration 300
 - Valid ROP chain construction
 - Proper stack alignment
 - This aint point and click at all
-
-Local models (Ollama) struggle with these complex requirements and often generate syntactically invalid C code. Frontier models (Claude/GPT-4) produce compilable, working exploits.
 
 ## Tips for Best Results
 
