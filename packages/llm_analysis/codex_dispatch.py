@@ -86,6 +86,12 @@ def _safe_id(value: str) -> str:
 JsonSchemaType = Union[str, list[str]]
 
 
+def _compact_type_declaration(description: Any) -> str:
+    """Return the leading type clause from a compact schema description."""
+
+    return str(description).split(" - ", 1)[0].strip().lower()
+
+
 def _json_type_from_description(description: Any) -> JsonSchemaType:
     """Convert RAPTOR's compact schema descriptions to JSON Schema types."""
 
@@ -94,25 +100,27 @@ def _json_type_from_description(description: Any) -> JsonSchemaType:
         if isinstance(field_type, list):
             return [str(item) for item in field_type]
         return str(field_type)
-    lowered = str(description).lower()
-    if "bool" in lowered:
+    declaration = _compact_type_declaration(description)
+    leading_type = declaration.split(maxsplit=1)[0] if declaration else ""
+    if leading_type in {"bool", "boolean"}:
         base = "boolean"
-    elif "float" in lowered or "number" in lowered or "score" in lowered:
+    elif leading_type in {"float", "number", "score"}:
         base = "number"
-    elif "int" in lowered:
+    elif leading_type in {"int", "integer"}:
         base = "integer"
-    elif "list" in lowered or "array" in lowered:
+    elif leading_type in {"list", "array"}:
         base = "array"
-    elif "object" in lowered or "dict" in lowered:
+    elif leading_type in {"object", "dict"}:
         base = "object"
     else:
         base = "string"
-    return [base, "null"] if "null" in lowered else base
+    return [base, "null"] if "null" in declaration.split() else base
 
 
 def _json_property_from_description(description: Any) -> Dict[str, Any]:
     """Convert a compact RAPTOR field description into JSON Schema."""
 
+    field_schema: Dict[str, Any]
     if isinstance(description, Mapping):
         field_schema = dict(description)
     else:
@@ -125,8 +133,11 @@ def _json_property_from_description(description: Any) -> Dict[str, Any]:
     field_type = field_schema.get("type")
     field_types = field_type if isinstance(field_type, list) else [field_type]
     if "array" in field_types and "items" not in field_schema:
-        description_text = str(description).lower()
-        if "dict" in description_text or "object" in description_text:
+        declaration = _compact_type_declaration(description)
+        if any(
+            token.startswith(("dict", "object"))
+            for token in declaration.split()
+        ):
             field_schema["items"] = {"type": "object", "additionalProperties": True}
         else:
             field_schema["items"] = {"type": "string"}

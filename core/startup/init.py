@@ -622,6 +622,9 @@ def check_llm() -> tuple[list, list]:
         if shutil.which("claude"):
             lines.append("        claude code ✓")
 
+        if shutil.which("codex"):
+            lines.append("        codex cli \u2713")
+
     except Exception as e:  # noqa: BLE001
         lines.append("   llm: detection error")
         warnings.append(f"LLM detection: {e}")
