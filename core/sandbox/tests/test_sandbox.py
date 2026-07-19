@@ -379,7 +379,7 @@ class TestSandboxNetworkIsolation(unittest.TestCase):
                 result = run(["echo", "sandboxed"], capture_output=True, text=True)
             except OSError:
                 result = run(["echo", "sandboxed"], capture_output=True, text=True)
-            if result.returncode == 137:
+            if result.returncode in (137, -9):
                 result = run(["echo", "sandboxed"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("sandboxed", result.stdout)
@@ -393,7 +393,7 @@ class TestSandboxRun(unittest.TestCase):
             result = sandbox_run(["echo", "test"], capture_output=True, text=True)
         except OSError:
             result = sandbox_run(["echo", "test"], capture_output=True, text=True)
-        if result.returncode == 137:
+        if result.returncode in (137, -9):
             result = sandbox_run(["echo", "test"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("test", result.stdout)
@@ -423,7 +423,7 @@ class TestSandboxProfiles(unittest.TestCase):
                 result = run(["echo", "net-only"], capture_output=True, text=True)
             except OSError:
                 result = run(["echo", "net-only"], capture_output=True, text=True)
-            if result.returncode == 137:
+            if result.returncode in (137, -9):
                 result = run(["echo", "net-only"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("net-only", result.stdout)
@@ -437,7 +437,7 @@ class TestSandboxProfiles(unittest.TestCase):
                 result = run(["echo", "full"], capture_output=True, text=True)
             except OSError:
                 result = run(["echo", "full"], capture_output=True, text=True)
-            if result.returncode == 137:
+            if result.returncode in (137, -9):
                 result = run(["echo", "full"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("full", result.stdout)
@@ -455,7 +455,7 @@ class TestSandboxProfiles(unittest.TestCase):
         except OSError:
             result = sandbox_run(["echo", "profiled"], profile="none",
                                  capture_output=True, text=True)
-        if result.returncode == 137:
+        if result.returncode in (137, -9):
             result = sandbox_run(["echo", "profiled"], profile="none",
                                  capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
