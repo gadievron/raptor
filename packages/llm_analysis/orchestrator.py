@@ -1100,6 +1100,18 @@ def orchestrate(
             )
             analysis_results = _external_failures + analysis_results
 
+    # A non-empty dispatch batch with no usable response is materially
+    # different from an empty scan or a partial failure. Keep the report so
+    # scanner evidence and diagnostics survive, but make the failed analysis
+    # state explicit to both operators and downstream consumers.
+    analysis_all_errored = bool(analysis_results) and all(
+        "error" in result for result in analysis_results
+    )
+    if dispatch_mode == "codex_exec" and analysis_all_errored:
+        print("\n  All Codex exec calls failed — no findings were analysed.")
+        print("  Check Codex authentication with:")
+        print("  python3 raptor.py doctor --codex-login")
+
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
     # attach all per-model analyses for correlation.
@@ -1678,6 +1690,7 @@ def orchestrate(
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
+        "analysis_all_errored": analysis_all_errored,
         "failed_by_model": _per_model_failure_summary(analysis_results),
         "structural_groups": len(groups),
         "cross_family_checked": cross_family_checked,

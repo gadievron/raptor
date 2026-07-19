@@ -394,10 +394,54 @@ class TestOrchestrate:
         assert result["orchestration"]["analysis_models"] == ["codex-exec"]
         assert result["orchestration"]["cost_usd_unknown"] is True
         assert result["orchestration"]["billing_source"] == "codex_subscription"
+        assert result["orchestration"]["analysis_all_errored"] is False
         assert len(prompts) == 1
         assert "Stage A:" in prompts[0]
         assert "Generate a proof-of-concept exploit" not in prompts[0]
         assert result["orchestration"]["group_analyses"] == 0
+
+    def test_codex_exec_all_errors_are_operator_visible(self, tmp_path, capsys):
+        """A failed Codex batch remains reportable but cannot look successful."""
+        findings = [
+            _make_finding("f-001", "py/sql-injection", "db.py", 42),
+            _make_finding("f-002", "js/xss", "template.js", 18),
+        ]
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_make_prep_report(findings=findings)))
+
+        def failed_codex(*args, **kwargs):
+            return DispatchResult(
+                result={"error": "codex exec exited 1"},
+                model="codex-exec",
+            )
+
+        with patch(
+            "core.startup.codex.check_codex_auth",
+            return_value=CodexAuthStatus(
+                executable="/usr/bin/codex",
+                authenticated=True,
+                available=True,
+                detail="authenticated",
+            ),
+        ), patch(
+            "packages.llm_analysis.orchestrator.invoke_codex_exec",
+            side_effect=failed_codex,
+        ):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                use_codex_exec=True,
+                max_parallel=1,
+            )
+
+        assert result is not None
+        assert result["orchestration"]["analysis_all_errored"] is True
+        assert result["orchestration"]["findings_analysed"] == 0
+        assert result["orchestration"]["findings_failed"] == 2
+        output = capsys.readouterr().out
+        assert "All Codex exec calls failed" in output
+        assert "doctor --codex-login" in output
 
     def test_codex_exec_auth_failure_stops_before_dispatch(self, tmp_path, capsys):
         """Codex exec gives one operator-facing auth error before dispatch."""

@@ -3354,13 +3354,20 @@ Examples:
         print(f"   ✓ Analysed {sca_metrics.get('deps_analysed', 0)} dependencies (SCA)")
     if validation_result:
         print("   ✓ Deduplicated findings")
-    print("   ✓ Analysed vulnerabilities")
+    orch = orchestration_result.get("orchestration", {}) if orchestration_result else {}
+    analysis_all_errored = bool(orch.get("analysis_all_errored"))
+    if analysis_all_errored:
+        if orch.get("mode") == "codex_exec":
+            print("   Analysis failed: all Codex exec calls failed")
+        else:
+            print("   Analysis failed: all analysis calls failed")
+    else:
+        print("   ✓ Analysed vulnerabilities")
     if exploits_count > 0:
         print(f"   ✓ Generated {exploits_count} exploit{'s' if exploits_count != 1 else ''}")
     if patches_count > 0:
         print(f"   ✓ Created {patches_count} patch{'es' if patches_count != 1 else ''}")
     if orchestration_result:
-        orch = orchestration_result.get("orchestration", {})
         mode = orch.get("mode", "unknown")
         if mode == "cc_dispatch":
             via = "Claude Code"
@@ -3373,7 +3380,8 @@ Examples:
         else:
             via = mode
         n = orch.get('findings_analysed', 0)
-        print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
+        if not analysis_all_errored:
+            print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
         if orch.get("aggregated"):
             print("   ✓ Aggregated multi-model findings")
     print("\nReview the outputs and apply patches as needed.")
