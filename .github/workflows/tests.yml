@@ -314,6 +314,7 @@ jobs:
   # max(group1, group2) wallclock is still well below the unsplit total
   # even when unbalanced, so the saving is meaningful from day one.
   python-unit-tests-fast:
+    name: python-unit-tests-fast (${{ matrix.batch }})
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
@@ -323,8 +324,8 @@ jobs:
     strategy:
       fail-fast: false
       # Dynamic batching: test_scope.py partitions affected test files
-      # into 1-4 balanced batches based on count. A single-file PR
-      # gets 1 runner; a broad refactor gets 4.
+      # into 1-8 balanced batches based on count. A single-file PR
+      # gets 1 runner; a broad refactor gets up to 8.
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.python_matrix) }}
     steps:
