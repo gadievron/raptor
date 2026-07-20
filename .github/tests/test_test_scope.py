@@ -114,6 +114,7 @@ class TestTierConsistency:
                 )
 
 
+@pytest.mark.slow
 class TestOnRealRepo:
     """Integration tests against the actual RAPTOR codebase."""
 

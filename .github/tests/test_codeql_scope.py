@@ -241,6 +241,7 @@ class TestWriteScopedConfig:
         assert "paths-ignore:" in text
 
 
+@pytest.mark.slow
 class TestOnRealRepo:
     """Integration tests against the actual RAPTOR codebase."""
 
