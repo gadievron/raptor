@@ -128,28 +128,27 @@ jobs:
           fi
           echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
 
-  # Path-filter equivalent of dorny/paths-filter, implemented with the
-  # GitHub API for changed-file enumeration and a small in-tree Python
-  # script (``.github/scripts/compute_filters.py``) for glob matching.
-  # The script's FILTERS dict is the single source of truth, also
-  # imported by ``.github/tests/test_filter_coverage.py``.
+  # Changed-file enumeration via GitHub API, then import-graph-based
+  # test dispatch via test_scope.py.  CodeQL per-language filters
+  # (codeql_python, codeql_cpp, codeql_actions) live in codeql.yml's
+  # own changes job — this job handles test tiers only.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
-      python: ${{ steps.filter.outputs.python }}
-      sandbox: ${{ steps.filter.outputs.sandbox }}
-      exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
-      prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
-      ci_lint: ${{ steps.filter.outputs.ci_lint }}
-      codeql: ${{ steps.filter.outputs.codeql }}
-      llm_analysis: ${{ steps.filter.outputs.llm_analysis }}
-      cve_diff: ${{ steps.filter.outputs.cve_diff }}
-      fuzzing: ${{ steps.filter.outputs.fuzzing }}
-      sage: ${{ steps.filter.outputs.sage }}
-      orchestration: ${{ steps.filter.outputs.orchestration }}
-      sca: ${{ steps.filter.outputs.sca }}
-      source_intel: ${{ steps.filter.outputs.source_intel }}
+      python: ${{ steps.scope.outputs.python }}
+      sandbox: ${{ steps.scope.outputs.sandbox }}
+      exploit_feasibility: ${{ steps.scope.outputs.exploit_feasibility }}
+      prompt_audit: ${{ steps.scope.outputs.prompt_audit }}
+      ci_lint: ${{ steps.scope.outputs.ci_lint }}
+      codeql: ${{ steps.scope.outputs.codeql }}
+      llm_analysis: ${{ steps.scope.outputs.llm_analysis }}
+      cve_diff: ${{ steps.scope.outputs.cve_diff }}
+      fuzzing: ${{ steps.scope.outputs.fuzzing }}
+      sage: ${{ steps.scope.outputs.sage }}
+      orchestration: ${{ steps.scope.outputs.orchestration }}
+      sca: ${{ steps.scope.outputs.sca }}
+      source_intel: ${{ steps.scope.outputs.source_intel }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
@@ -219,11 +218,18 @@ jobs:
             cat "$out"
           fi
 
-      - id: filter
+      # Import-graph-based test dispatch. Builds the reverse import
+      # graph with stdlib ast, walks outward from changed files, and
+      # maps affected test files to their CI tier. Falls back to full
+      # dispatch when no changed-file list is available.
+      - id: scope
+        if: steps.force.outputs.force_full == 'false'
+        run: |
+          python3 .github/scripts/test_scope.py \
+            ${CHANGED_FILES_LIST:+--changed-files "$CHANGED_FILES_LIST"} \
+            --repo .
         env:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
-        run: |
-          python3 .github/scripts/compute_filters.py
 
   deps:
     needs: [pre_check, changes]
