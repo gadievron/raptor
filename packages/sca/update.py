@@ -1120,8 +1120,14 @@ def _rewrite_requirements_txt(
             out_lines.append(raw)
             continue
         if comment_prefix and not plan.installed:
-            # Defensive: shouldn't happen — every plan has an installed
-            # version. If somehow it doesn't, leave the line alone.
+            out_lines.append(raw)
+            continue
+        if (comment_prefix and not m.group(2)
+                and line_value[m.end():].strip()):
+            # No version specifier AND trailing text after the name →
+            # prose ("# pytest pinned exactly: ..."), not a pin. A bare
+            # "# pytest" (nothing after the name) IS a commented-out dep
+            # and gets pinned so uncommenting yields the safe version.
             out_lines.append(raw)
             continue
         # Preserve any range bounds (floor/ceiling) around the new exact
