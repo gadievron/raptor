@@ -57,6 +57,19 @@ if _existing and _existing != _conftest_dir:
     )
 os.environ["RAPTOR_DIR"] = _conftest_dir
 
+# Put the repo root on sys.path so ``from core.X import Y`` and
+# ``from packages.Y.Z import W`` resolve during pytest collection.
+# pytest.ini's ``pythonpath`` only lists a handful of package-standalone
+# roots; ``--import-mode=importlib`` deliberately declines to auto-insert
+# rootdir. Without this, parent-package ``__init__.py`` files that import
+# from ``core.*`` fail collection whenever an xdist worker's batch starts
+# with a test that hasn't already transitively imported something from
+# ``core.*``. Insert at position 0 to shadow any environment-inherited
+# ``core``/``packages`` on PYTHONPATH — the worktree conftest.py lives in
+# is the source of truth per the RAPTOR_DIR block above.
+if _conftest_dir not in sys.path:
+    sys.path.insert(0, _conftest_dir)
+
 
 # ---------------------------------------------------------------------------
 # Default-tier slow-test guard

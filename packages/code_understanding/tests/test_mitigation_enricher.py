@@ -27,20 +27,9 @@ Adversarial cases:
   with the fields present.
 """
 
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
-# Self-sufficient sys.path shim: xdist workers under `pytest --splits`
-# can land this file first in a worker, before any sibling test has
-# forced the repo root onto sys.path via its own imports. Match the
-# pattern used by test_context_map_sites.py.
-#   parents[0]=tests  [1]=code_understanding  [2]=packages  [3]=repo
-_REPO = Path(__file__).resolve().parents[3]
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
-
-from packages.code_understanding.mitigation_enricher import (  # noqa: E402
+from packages.code_understanding.mitigation_enricher import (
     SCHEMA_VERSION,
     build_mitigation_context,
     enrich_context_map,
