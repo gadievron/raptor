@@ -248,10 +248,9 @@ def _resolve_expansion(
             return token
         if token not in macros:
             return token
-        # Recurse, marking this token as visited so cycles bottom out.
-        visited.add(token)
         return _resolve_expansion(
-            macros[token], macros, depth=depth + 1, visited=visited,
+            macros[token], macros, depth=depth + 1,
+            visited=visited | {token},
         )
 
     return _TOKEN_NAME_RE.sub(_replace_token, expansion)

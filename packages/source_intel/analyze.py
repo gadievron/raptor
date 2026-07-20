@@ -1979,6 +1979,7 @@ def _enclosing_function(file_path: str, line: int) -> Optional[str]:
 
 def _strip_trailing_comments(s: str) -> str:
     """Trim ``// …`` and ``/* … */`` trailing comments + whitespace."""
+    s = re.sub(r"/\*.*?\*/", "", s)
     s = re.sub(r"/\*.*$", "", s)
     s = re.sub(r"//.*$", "", s)
     return s.rstrip()

@@ -627,15 +627,15 @@ def main():
     quote = read_random_quote()
 
     try:
-        logging.disable(logging.WARNING)
-
-        tool_results, tool_warnings, unavailable = check_tools()
-        llm_lines, llm_warnings = check_llm()
-        env_parts, env_warnings = check_env(unavailable)
-        lang_line = check_lang()
-        project_line = check_active_project()
-
-        logging.disable(logging.NOTSET)
+        try:
+            logging.disable(logging.WARNING)
+            tool_results, tool_warnings, unavailable = check_tools()
+            llm_lines, llm_warnings = check_llm()
+            env_parts, env_warnings = check_env(unavailable)
+            lang_line = check_lang()
+            project_line = check_active_project()
+        finally:
+            logging.disable(logging.NOTSET)
 
         output = format_banner(
             logo, quote, tool_results, tool_warnings,

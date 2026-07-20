@@ -246,7 +246,7 @@ def main() -> int:
             # trust marker authorizes RAPTOR's OWN dispatch scripts (this shim
             # included) and has no business being visible to the sandboxed
             # target. Strip both so nothing _RAPTOR_* crosses into the target.
-            for _m in ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED"):
+            for _m in ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED", "CLAUDECODE"):
                 os.environ.pop(_m, None)
             try:
                 os.execvp(target_argv[0], target_argv)
@@ -254,6 +254,8 @@ def main() -> int:
                 os._exit(127)
             except PermissionError:
                 os._exit(126)
+            except OSError:
+                os._exit(125)
             os._exit(125)  # unreachable
 
         # Intermediate — forward termination signals to the grandchild

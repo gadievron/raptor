@@ -4,6 +4,7 @@ Exports a project output directory as a zip archive and imports
 zip archives back, with path traversal and symlink validation.
 """
 
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -234,11 +235,13 @@ def export_project(project_output_dir: Path, dest_path: Path,
     # plus per-process / transient artefacts that shouldn't ship in a
     # portable archive (POSIX advisory lock files, tempfile leftovers).
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for item in project_output_dir.rglob("*"):
-            if item.is_symlink():
-                logger.debug(f"Skipping symlink in export: {item}")
-                continue
-            if item.is_file():
+        for dirpath, dirnames, filenames in os.walk(project_output_dir, followlinks=False):
+            dirnames[:] = [d for d in dirnames if not Path(dirpath, d).is_symlink()]
+            for fname in filenames:
+                item = Path(dirpath, fname)
+                if item.is_symlink():
+                    logger.debug(f"Skipping symlink in export: {item}")
+                    continue
                 if _is_transient_artefact(item):
                     logger.debug(f"Skipping transient artefact: {item}")
                     continue

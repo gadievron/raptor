@@ -98,7 +98,7 @@ def main():
             print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock", file=sys.stderr)
 
         findings_data = load_json(findings_path)
-        if not findings_data:
+        if findings_data is None:
             print("✗ Cannot load findings", file=sys.stderr)
             sys.exit(1)
 

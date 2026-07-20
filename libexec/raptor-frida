@@ -173,7 +173,7 @@ _cleanup() {
     fi
     # Kill child process group if we started one
     if [ -n "${CHILD_PID:-}" ]; then
-        kill -- -"$CHILD_PID" 2>/dev/null || true
+        kill "$CHILD_PID" 2>/dev/null || true
     fi
 }
 trap '_cleanup INT'  INT

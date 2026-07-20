@@ -488,7 +488,8 @@ def prepare_B(workdir, target=None):
             if f1.get("status") == "disproven" or f2.get("status") == "disproven":
                 continue
             same_func = (f1.get("file") == f2.get("file")
-                         and f1.get("function") == f2.get("function"))
+                         and f1.get("function") == f2.get("function")
+                         and f1.get("vuln_type") == f2.get("vuln_type"))
             nearby = (f1.get("file") == f2.get("file")
                       and f1.get("vuln_type") == f2.get("vuln_type")
                       and abs(f1.get("line", 0) - f2.get("line", 0)) <= 5)
@@ -1484,6 +1485,9 @@ def prepare_1(workdir, target=None, model=None):
     try:
         entry = harness_model_entry(model)
         manifest = {"models": [entry]} if entry else None
+    except Exception:
+        manifest = None
+    try:
         complete_run(Path(workdir), manifest=manifest)
     except Exception as e:
         print(f"⚠️  Lifecycle error: {e}", file=sys.stderr)

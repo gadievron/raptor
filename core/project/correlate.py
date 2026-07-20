@@ -271,7 +271,7 @@ def _find_new_and_resolved(
     Only compares runs of the same command type — a finding in scan-001
     but absent from validate-001 is expected, not "resolved."
     """
-    run_order = [d.name for d in run_dirs]
+    run_order = sorted(d.name for d in run_dirs)
 
     key_to_runs_by_type: Dict[tuple, Dict[str, List[str]]] = defaultdict(
         lambda: defaultdict(list),
@@ -533,7 +533,7 @@ def _build_trends(
 
     Returns {finding_label: [{run, status, score, model}]} ordered by run time.
     """
-    run_order = [d.name for d in run_dirs]
+    run_order = sorted(d.name for d in run_dirs)
 
     key_to_history: Dict[tuple, List[Dict]] = defaultdict(list)
     for run_name, findings in findings_by_run.items():
