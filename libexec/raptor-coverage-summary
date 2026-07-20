@@ -364,15 +364,15 @@ def main():
 
     if mark_targets or unmark_targets:
         run_dir = None
+        project = None
         if args:
-            _, run_dir = _resolve_dir(args[0])
+            project, run_dir = _resolve_dir(args[0])
             if not run_dir:
                 d = Path(args[0])
                 if d.exists() and _is_run_dir(d):
                     run_dir = d
         if not run_dir:
-            # Use most recent run from active project
-            p = _resolve_active_project()
+            p = project or _resolve_active_project()
             if p:
                 try:
                     dirs = p.get_run_dirs(sweep=False)

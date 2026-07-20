@@ -965,6 +965,11 @@ class UrllibClient:
             # on the 401 response). When opting out we still bound
             # the body read by max_bytes — a 4xx response can carry
             # an arbitrary body.
+            if resp.status >= 500 and not raise_on_status:
+                raise HttpError(
+                    f"HTTP {resp.status} from {_safe_url_for_log(url)}",
+                    status=resp.status,
+                )
             if resp.status >= 400 and raise_on_status:
                 # Drain enough body for the error message — bounded.
                 snippet = resp.read(512, decode_content=True) or b""

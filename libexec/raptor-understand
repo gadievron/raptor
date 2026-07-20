@@ -666,10 +666,20 @@ def main() -> int:
         target = str(Path(args.target).resolve())
         if payload["mode"] == "hunt":
             from core.sage.hooks import store_hunt_results
-            store_hunt_results(target, payload)
+            items = payload.get("items") or []
+            hunt_data = {
+                "meta": {
+                    "pattern": payload.get("pattern", "unknown"),
+                    "total_matches": len(items),
+                },
+                "root_cause_groups": [],
+            }
+            store_hunt_results(target, hunt_data)
         elif payload["mode"] == "trace":
             from core.sage.hooks import store_trace_result
-            store_trace_result(target, payload)
+            for item in (payload.get("items") or []):
+                if isinstance(item, dict):
+                    store_trace_result(target, item)
         elif payload["mode"] == "map":
             from core.sage.hooks import store_map_results
             store_map_results(target, payload)
