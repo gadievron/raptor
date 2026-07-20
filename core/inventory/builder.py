@@ -277,7 +277,7 @@ def build_inventory(
     old_inventory = load_json(checklist_file)
 
     old_files_by_path = {}
-    if old_inventory:
+    if isinstance(old_inventory, dict):
         for f in old_inventory.get('files', []):
             if f.get('path') and f.get('sha256'):
                 old_files_by_path[f['path']] = f
@@ -477,7 +477,7 @@ def _carry_forward_coverage(
         modified = set()
 
     def _get_items(fi):
-        return fi.get("items", fi.get("functions", []))
+        return fi.get("items", fi.get("functions", [])) or []
 
     # Build lookup: (path, name, kind) -> checked_by from old inventory
     old_coverage = {}
@@ -505,8 +505,10 @@ def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) ->
     extension, bounded at ``cap`` (we only need "holds source? roughly how
     many" for an operator warning — not an exact census of a huge tree).
     """
+    _skip = {"node_modules", "vendor", ".git", "__pycache__", ".tox", ".venv"}
     n = 0
-    for _root, _dirs, files in os.walk(dirpath):
+    for _root, dirs, files in os.walk(dirpath):
+        dirs[:] = [d for d in dirs if d not in _skip]
         for f in files:
             if Path(f).suffix.lower() in extensions:
                 n += 1
@@ -919,6 +921,6 @@ def _process_single_file(
                 }
         return record
 
-    except Exception as e:
-        logger.warning(f"Failed to process {filepath}: {e}")
+    except Exception:
+        logger.warning("Failed to process %s", filepath, exc_info=True)
         return None

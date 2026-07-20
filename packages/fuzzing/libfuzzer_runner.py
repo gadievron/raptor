@@ -182,8 +182,8 @@ class LibFuzzerRunner:
                 self._parse_progress_line(line, telemetry)
 
         # Persist raw output for debugging
-        (self.output_dir / "stderr.log").write_text(stderr)
-        (self.output_dir / "stdout.log").write_text(stdout)
+        (self.output_dir / "stderr.log").write_text(stderr, encoding="utf-8")
+        (self.output_dir / "stdout.log").write_text(stdout, encoding="utf-8")
 
         result = self._parse_result(stderr, stdout, elapsed)
         logger.info(
@@ -242,12 +242,13 @@ class LibFuzzerRunner:
             parts = line.split("Test unit written to", 1)
             if len(parts) == 2:
                 path = parts[1].strip()
-                if "crash" in path.lower():
-                    telemetry.record_crash(path, signal="libfuzzer")
-                elif "timeout" in path.lower():
+                basename = path.rsplit("/", 1)[-1].lower()
+                if "timeout" in basename:
                     telemetry.record_timeout(path)
-                elif "oom" in path.lower():
+                elif "oom" in basename:
                     telemetry.record_oom(path)
+                elif "crash" in basename:
+                    telemetry.record_crash(path, signal="libfuzzer")
 
     def _build_command(self) -> List[str]:
         cmd = [str(self.harness)]

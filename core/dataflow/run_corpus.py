@@ -48,9 +48,9 @@ def iter_corpus(corpus_dir: Path) -> Iterable[Tuple[Finding, GroundTruth]]:
     for fp in sorted(corpus_dir.glob("*.json")):
         if fp.name.endswith(".label.json"):
             continue
-        finding = Finding.from_json(fp.read_text())
+        finding = Finding.from_json(fp.read_text(encoding="utf-8"))
         label_path = fp.with_suffix(".label.json")
-        label = GroundTruth.from_json(label_path.read_text())
+        label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
         yield finding, label
 
 
@@ -75,7 +75,7 @@ def run(corpus_dir: Path, validator: Validator, output: Path) -> int:
     Returns the number of findings processed.
     """
     rows = 0
-    with output.open("w", newline="") as f:
+    with output.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
         for finding, label in iter_corpus(corpus_dir):

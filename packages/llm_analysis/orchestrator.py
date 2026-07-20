@@ -17,6 +17,7 @@ import copy
 import logging
 import os
 import shutil
+import sys
 import threading
 import time
 from collections import Counter
@@ -330,11 +331,11 @@ def build_llm_config_from_flags(
                 # name — fail loudly with the recognizable-id hint rather
                 # than the unhelpful "Set ??? env var" path below.
                 from core.security.llm_family import unknown_model_message
-                print(f"\n  Error: {unknown_model_message(name)}")
+                print(f"\n  ✗ {unknown_model_message(name)}", file=sys.stderr)
                 return None
             env_key = PROVIDER_ENV_KEYS.get(provider, "???")
-            print(f"\n  Error: no API key for --model {name}")
-            print(f"  Set {env_key} or add the key to models.json")
+            print(f"\n  ✗ No API key for --model {name}", file=sys.stderr)
+            print(f"  Set {env_key} or add the key to models.json", file=sys.stderr)
             return None
         return mc
 
@@ -393,8 +394,8 @@ def build_llm_config_from_flags(
     ]
     has_role_flags = any(m for _, m in role_flags)
     if has_role_flags and not llm_config:
-        print("\n  Warning: --consensus/--judge/--aggregate require a primary analysis model")
-        print("  Use --model MODEL, configure models.json, or set an API key env var")
+        print("\n  ⚠️  --consensus/--judge/--aggregate require a primary analysis model", file=sys.stderr)
+        print("  Use --model MODEL, configure models.json, or set an API key env var", file=sys.stderr)
     if llm_config and has_role_flags:
         # Explicit operator role-flag overrides any auto-loaded model
         # for the same role. Without this strip, models.json /
@@ -553,11 +554,11 @@ def orchestrate(
         report = load_json(prep_report_path, strict=True)
     except Exception as e:
         logger.error(f"Failed to read Phase 3 report: {e}")
-        print(f"\n  Failed to read analysis report: {e}")
+        print(f"\n  ✗ Failed to read analysis report: {e}", file=sys.stderr)
         return None
     if report is None:
         logger.error(f"Phase 3 report not found: {prep_report_path}")
-        print(f"\n  Phase 3 report not found: {prep_report_path}")
+        print(f"\n  ✗ Phase 3 report not found: {prep_report_path}", file=sys.stderr)
         return None
 
     if report.get("mode") != "prep_only":
@@ -600,6 +601,19 @@ def orchestrate(
         prepare_source_intel(repo_path)
     except Exception as e:  # noqa: BLE001
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
+
+    precall_path = Path(out_dir) / "sage_precall_scan.json"
+    if precall_path.is_file():
+        try:
+            precall_raw = load_json(precall_path)
+            mems = (precall_raw or {}).get("memories") or []
+            from core.sage.hooks import format_sage_memories_for_prompt
+            precall_txt = format_sage_memories_for_prompt(mems)
+            if precall_txt:
+                for f in findings:
+                    f.setdefault("_sage_precall_scan_context", precall_txt)
+        except Exception as e:
+            logger.debug("SAGE precall for orchestration skipped: %s", e)
 
     if max_findings > 0 and len(findings) > max_findings:
         logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
@@ -725,14 +739,14 @@ def orchestrate(
     else:
         # CC: dispatch via claude -p subprocess
         if block_cc_dispatch:
-            print("\n  CC dispatch blocked — target repo contains credential helpers in .claude/settings.json")
-            print("  Use an external LLM (GEMINI_API_KEY, OPENAI_API_KEY) or remove the helpers to enable CC dispatch")
+            print("\n  ✗ CC dispatch blocked — target repo contains credential helpers in .claude/settings.json", file=sys.stderr)
+            print("  Use an external LLM (GEMINI_API_KEY, OPENAI_API_KEY) or remove the helpers to enable CC dispatch", file=sys.stderr)
             return None
 
         claude_bin = shutil.which("claude")
         if not claude_bin:
-            print("\n  claude not found on PATH — cannot dispatch sub-agents")
-            print("  Install Claude Code: npm install -g @anthropic-ai/claude-code")
+            print("\n  ✗ claude not found on PATH — cannot dispatch sub-agents", file=sys.stderr)
+            print("  Install Claude Code: npm install -g @anthropic-ai/claude-code", file=sys.stderr)
             return None
 
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
@@ -836,9 +850,9 @@ def orchestrate(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
             )
             if not accept_weakened_defenses:
-                print(f"\n  Envelope probe failed for {model_label}: {_fail_summary}")
-                print("  The model cannot honour the defense envelope — aborting.")
-                print("  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
+                print(f"\n  ✗ Envelope probe failed for {model_label}: {_fail_summary}", file=sys.stderr)
+                print("  The model cannot honour the defence envelope — aborting.", file=sys.stderr)
+                print("  To proceed with weakened defences, re-run with --accept-weakened-defenses", file=sys.stderr)
                 return None
             from core.security.rule_of_two import (
                 NonInteractiveError, require_interactive_for_weakened_defenses,
@@ -846,7 +860,7 @@ def orchestrate(
             try:
                 require_interactive_for_weakened_defenses()
             except NonInteractiveError as e:
-                print(f"\n  {e}")
+                print(f"\n  ✗ {e}", file=sys.stderr)
                 return None
             profile = PASSTHROUGH
             # Record the override against EACH failing model with
@@ -860,11 +874,11 @@ def orchestrate(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
                     _fmname, _ferr,
                 )
-            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
-            print("  Running with reduced defences (--accept-weakened-defenses)")
-            print(f"  Reason: {_fail_summary}")
+            print(f"\n  ⚠️  Defence warning: envelope probe failed for {model_label}", file=sys.stderr)
+            print("  Running with reduced defences (--accept-weakened-defenses)", file=sys.stderr)
+            print(f"  Reason: {_fail_summary}", file=sys.stderr)
             print("  Model-independent floor still applies (autofetch redaction,"
-                  " control-char sanitisation, role separation)\n")
+                  " control-char sanitisation, role separation)\n", file=sys.stderr)
 
     # --- Per-finding analysis ---
     results_by_id = {}
@@ -894,7 +908,7 @@ def orchestrate(
             and all("error" in r for r in analysis_results)):
         claude_bin = shutil.which("claude")
         if claude_bin:
-            print("\n  All external LLM calls failed — falling back to Claude Code")
+            print("\n  ⚠️  All external LLM calls failed — falling back to Claude Code", file=sys.stderr)
             dispatch_mode = "cc_fallback"
 
             def dispatch_fn(prompt, schema, system_prompt, temperature, model):

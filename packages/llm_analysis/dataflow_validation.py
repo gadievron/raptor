@@ -101,7 +101,9 @@ def discover_codeql_databases(out_dir: Path) -> Dict[str, Path]:
     if report_path.is_file():
         try:
             import json
-            data = json.loads(report_path.read_text())
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
             for lang, info in (data.get("databases_created") or {}).items():
                 if not isinstance(info, dict) or not info.get("success"):
                     continue
@@ -813,7 +815,7 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
         if ve_block:
             untrusted_inner.append(ve_block)
     except Exception:
-        pass
+        logger.warning("exemplar lookup failed for %s", rule_id, exc_info=True)
 
     parts = list(trusted_parts)
     if untrusted_inner:
@@ -1645,7 +1647,7 @@ def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
     needle = file_path.lstrip("/")
     # Step 1: full-path suffix match (preferred — unambiguous)
     for entry in indexed:
-        if entry.endswith(needle) or entry.endswith("/" + needle):
+        if entry.endswith((needle, "/" + needle)):
             return entry
     # Step 2: basename fallback
     basename = Path(needle).name
@@ -1871,7 +1873,7 @@ def _function_in_codeql_inventory(
     for entry_file, entry_fn in inventory:
         if entry_fn != fn:
             continue
-        if entry_file.endswith(needle) or entry_file.endswith("/" + needle):
+        if entry_file.endswith((needle, "/" + needle)):
             return True
     # Basename fallback — same trade-off as Layer 1
     basename = Path(needle).name
@@ -1945,10 +1947,12 @@ def _any_match_at_finding_location(
     that's on the line above).
     """
     target_file = (finding.get("file_path") or finding.get("file") or "")
-    target_line = int(finding.get("start_line") or finding.get("line") or 0)
+    try:
+        target_line = int(finding.get("start_line") or finding.get("line") or 0)
+    except (ValueError, TypeError):
+        target_line = 0
     if not target_file:
-        # Without a target line we can't location-match; assume any
-        # match supports the finding (same file at minimum).
+        # No file to location-match; assume any match supports the finding.
         return bool(matches)
 
     target_basename = Path(target_file).name
@@ -1958,7 +1962,10 @@ def _any_match_at_finding_location(
             continue
         if Path(m_file).name != target_basename:
             continue
-        m_line = int(m.get("line") or 0)
+        try:
+            m_line = int(m.get("line") or 0)
+        except (ValueError, TypeError):
+            m_line = 0
         if target_line == 0 or abs(m_line - target_line) <= 5:
             return True
     return False

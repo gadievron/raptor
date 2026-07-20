@@ -210,7 +210,7 @@ def _emit_json(payload, out_path: Optional[str]) -> int:
         print(text)
         return 0
     try:
-        Path(out_path).write_text(text + "\n")
+        Path(out_path).write_text(text + "\n", encoding="utf-8")
     except OSError as e:
         print(
             f"raptor-sca fingerprint: --out write failed "

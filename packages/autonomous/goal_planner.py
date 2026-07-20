@@ -195,7 +195,7 @@ class GoalPlanner:
         # Apply strategy hints
         if hints.get("focus_on_memory"):
             logger.info("Goal: Focusing on memory operations")
-            adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-m", "none"]
+            adapted["extra_flags"] = (adapted.get("extra_flags") or []) + ["-m", "none"]
 
         if hints.get("enable_asan"):
             logger.info("Goal: Recommending ASAN for memory bugs")
@@ -203,11 +203,11 @@ class GoalPlanner:
 
         if hints.get("mutation_strategy") == "aggressive":
             logger.info("Goal: Using aggressive mutations")
-            adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-L", "0"]
+            adapted["extra_flags"] = (adapted.get("extra_flags") or []) + ["-L", "0"]
 
         if hints.get("mutation_strategy") == "diverse":
             logger.info("Goal: Using diverse mutations")
-            adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-D"]
+            adapted["extra_flags"] = (adapted.get("extra_flags") or []) + ["-D"]
 
         if hints.get("parallel_instances"):
             from core.tuning import get_tuning

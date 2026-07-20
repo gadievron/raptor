@@ -68,19 +68,22 @@ class TestSageClientHealthCheck(unittest.TestCase):
 
 
 class TestSageClientNoSDK(unittest.TestCase):
-    """Test graceful degradation when the SDK isn't importable."""
+    """Test graceful degradation when SAGE is disabled."""
 
     def test_embed_no_client(self):
         from core.sage.client import SageClient
-        self.assertIsNone(SageClient().embed("test"))
+        from core.sage.config import SageConfig
+        self.assertIsNone(SageClient(SageConfig(enabled=False)).embed("test"))
 
     def test_query_no_client(self):
         from core.sage.client import SageClient
-        self.assertEqual(SageClient().query("test", "domain"), [])
+        from core.sage.config import SageConfig
+        self.assertEqual(SageClient(SageConfig(enabled=False)).query("test", "domain"), [])
 
     def test_propose_no_client(self):
         from core.sage.client import SageClient
-        self.assertFalse(SageClient().propose("test content"))
+        from core.sage.config import SageConfig
+        self.assertFalse(SageClient(SageConfig(enabled=False)).propose("test content"))
 
 
 def _install_mock_sdk(client_mod):
@@ -93,7 +96,7 @@ def _install_mock_sdk(client_mod):
     client_mod._SAGE_SDK_AVAILABLE = True
     client_mod._SyncSageClient = mock_cls
     client_mod._AgentIdentity = mock_identity_cls
-    # Mirror the SAGE 8.4.2 MemoryType enum: fact | observation |
+    # Mirror the SAGE MemoryType enum: fact | observation |
     # inference | task (docs/reference/python-sdk.md). client.propose's
     # allowlist references all four members directly, so the mock must
     # expose them all or the allowlist build raises AttributeError.
@@ -205,6 +208,88 @@ class TestSageClientWithMock(unittest.TestCase):
             _restore_sdk(client_mod, snapshot)
 
 
+class TestSageClientTagsAndMinConfidence(unittest.TestCase):
+    """SAGE 11.9.2 features: tags on propose, min_confidence on query."""
+
+    def test_propose_passes_tags_when_provided(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1, 0.2]
+
+            sc.propose("hello", tags=["scan", "finding", "xss"])
+            kwargs = mock_instance.propose.call_args.kwargs
+            self.assertEqual(kwargs["tags"], ["scan", "finding", "xss"])
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_propose_omits_tags_when_none(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1, 0.2]
+
+            sc.propose("hello")
+            kwargs = mock_instance.propose.call_args.kwargs
+            self.assertNotIn("tags", kwargs)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_query_passes_min_confidence_when_provided(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1]
+            mock_instance.query.return_value = SimpleNamespace(results=[])
+
+            sc.query("test", min_confidence=0.5)
+            kwargs = mock_instance.query.call_args.kwargs
+            self.assertEqual(kwargs["min_confidence"], 0.5)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_query_omits_min_confidence_when_none(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1]
+            mock_instance.query.return_value = SimpleNamespace(results=[])
+
+            sc.query("test")
+            kwargs = mock_instance.query.call_args.kwargs
+            self.assertNotIn("min_confidence", kwargs)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+
 class TestSageClientEgressProxyRegistration(unittest.TestCase):
     """SAGE registers its host with the in-process egress proxy when
     LLM egress is active so its httpx calls aren't refused by the
@@ -305,6 +390,65 @@ class TestSageClientEgressProxyRegistration(unittest.TestCase):
             with patch("core.sandbox.proxy.get_proxy") as mock_get:
                 SageClient(SageConfig(enabled=True, url="http://sage.example.com:9090"))
                 mock_get.assert_not_called()
+
+
+class TestSageClientWithFakeSdk(unittest.TestCase):
+    """Coverage without mock objects: deterministic fake SDK."""
+
+    def test_propose_and_query_with_fake_sdk(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            class _FakeIdentity:
+                @staticmethod
+                def default():
+                    return object()
+
+            class _FakeRecord:
+                def __init__(self, content, confidence_score, domain_tag):
+                    self.content = content
+                    self.confidence_score = confidence_score
+                    self.domain_tag = domain_tag
+
+            class _FakeClient:
+                def __init__(self, **_kwargs):
+                    self.last_proposed = None
+
+                def embed(self, text):
+                    # Deterministic pseudo-embedding for testability.
+                    return [float(len(text) % 7), 0.5, 1.0]
+
+                def propose(self, **kwargs):
+                    self.last_proposed = kwargs
+
+                def query(self, embedding, domain_tag, top_k, **kwargs):
+                    content = f"embedded={embedding[0]} domain={domain_tag} top_k={top_k}"
+                    return SimpleNamespace(
+                        results=[_FakeRecord(content, 0.88, domain_tag)]
+                    )
+
+            client_mod._SAGE_SDK_AVAILABLE = True
+            client_mod._SyncSageClient = _FakeClient
+            client_mod._AgentIdentity = _FakeIdentity
+            client_mod._MemoryType = SimpleNamespace(
+                observation="observation", fact="fact", inference="inference",
+                task="task",
+            )
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            self.assertTrue(
+                sc.propose("seed content", memory_type="observation", domain_tag="raptor-findings")
+            )
+            rows = sc.query("seed content", "raptor-findings", top_k=2)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["domain"], "raptor-findings")
+            self.assertGreater(rows[0]["confidence"], 0.8)
+        finally:
+            _restore_sdk(client_mod, snapshot)
 
 
 if __name__ == "__main__":

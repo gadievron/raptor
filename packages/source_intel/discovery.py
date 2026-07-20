@@ -167,7 +167,7 @@ def discover_aliases(target: Path) -> DiscoveryResult:
                 continue
             headers_seen += 1
             try:
-                text = _join_continuations(entry.read_text(errors="replace"))
+                text = _join_continuations(entry.read_text(encoding="utf-8", errors="replace"))
             except OSError:
                 continue
             for m in _DEFINE_RE.finditer(text):
@@ -305,7 +305,7 @@ def _count_usage(target: Path, names: Set[str]) -> Dict[str, int]:
 
     for entry in _iter_source_files(target):
         try:
-            text = entry.read_text(errors="replace")
+            text = entry.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for line in text.split("\n"):

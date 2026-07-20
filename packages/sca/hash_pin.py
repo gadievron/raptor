@@ -202,9 +202,13 @@ def _resolve_sha(
     cmd += ["ls-remote", url, ref,
             f"refs/tags/{ref}", f"refs/heads/{ref}"]
     try:
+        from core.config import RaptorConfig
+        from core.sandbox.preexec import set_pdeathsig
         proc = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=20,
+            env=RaptorConfig.get_safe_env(),
+            preexec_fn=set_pdeathsig(),
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning("sca.hash_pin: git ls-remote failed for %s/%s@%s: %s",

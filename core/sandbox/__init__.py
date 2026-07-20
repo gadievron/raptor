@@ -593,7 +593,7 @@ from .observe import _BLOCKED_PATTERNS, _check_blocked, _interpret_result, _path
 from .observe_profile import (
     OBSERVE_FILENAME, ConnectTarget, ObserveProfile, parse_observe_log,
 )
-from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
+from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn, set_pdeathsig
 from .mount import _build_mount_script
 from .errors import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from .probes import (
@@ -657,6 +657,6 @@ __all__ = [
     "_get_landlock_abi",
     "_BLOCKED_PATTERNS", "_check_blocked", "_interpret_result", "_path_within",
     "OBSERVE_FILENAME", "ConnectTarget", "ObserveProfile", "parse_observe_log",
-    "_DEFAULT_LIMITS", "_load_user_limits", "_make_preexec_fn",
+    "_DEFAULT_LIMITS", "_load_user_limits", "_make_preexec_fn", "set_pdeathsig",
     "_build_mount_script",
 ]

@@ -8,9 +8,8 @@ name: Nightly (slow + integration)
 #   * slow        — perf baselines + sandbox-setup-heavy resolver tests
 #                   (deterministic; a failure is a real regression).
 #   * integration — live-network contract tests against OSV / NVD /
-#                    GitHub (flaky by nature; an external outage must
-#                    not red-fail the run, so that step is
-#                    continue-on-error).
+#                    GitHub (may flake on external outages; failures
+#                    red-fail the run so they are investigated).
 #
 # Deliberately a standalone workflow, NOT a job in tests.yml: it must
 # never ride tests.yml's `merge_group` force_full path — the merge queue
@@ -106,13 +105,35 @@ jobs:
           # CLI -m overrides pytest.ini's default deselect.
           python -m pytest -m slow core packages --durations=25
 
-      - name: Run integration tests (live network — informational)
+      - name: Run integration tests (live network — retry once on failure)
         # External-service outages (OSV/NVD/GitHub down or rate-limited)
-        # must not red-fail the nightly. A genuine contract break still
-        # shows as a failed step for a human to inspect.
-        continue-on-error: true
+        # cause transient failures. Retry once after 60s — a genuine
+        # contract break fails both attempts; a transient outage
+        # recovers on the second. The job red-fails only on persistent
+        # failure, so a red nightly is always worth investigating.
         env:
           GITHUB_TOKEN: ${{ github.token }}  # higher rate limits for the live GitHub tests
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -m integration core packages --durations=25
+          rc=0
+          python -m pytest -m integration core packages --durations=25 \
+            --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-1.xml" \
+            || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          fi
+          echo ""
+          echo "::warning::Integration tests failed (exit $rc) — retrying in 60s"
+          echo ""
+          sleep 60
+          python -m pytest -m integration core packages --durations=25 \
+            --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: integration-test-results
+          path: ${{ runner.temp }}/integration-attempt-*.xml
+          retention-days: 14
+          if-no-files-found: ignore

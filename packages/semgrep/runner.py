@@ -196,7 +196,7 @@ def run_rule(
         json_text = ""
         if json_path.exists():
             try:
-                json_text = json_path.read_text()
+                json_text = json_path.read_text(encoding="utf-8")
             except OSError:
                 json_text = ""
     finally:
@@ -284,7 +284,7 @@ def _config_to_name(config: str) -> str:
     if not config:
         return "semgrep"
     # Pack identifiers like "p/security-audit"
-    if config.startswith("p/") or config.startswith("category/"):
+    if config.startswith(("p/", "category/")):
         return config
     # Directory path — use the basename
     return Path(config).name or config

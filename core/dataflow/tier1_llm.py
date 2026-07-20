@@ -386,7 +386,7 @@ def try_tier1b(
             f"Tier 1B: post-fix source not readable at {sink_uri!r}",
         )
     try:
-        source_text = src_path.read_text(errors="replace")
+        source_text = src_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

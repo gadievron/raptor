@@ -349,7 +349,7 @@ def recover_external_ingress(
             matches = sorted({
                 name
                 for name in [*exports, *functions]
-                if name.endswith(symbol) or name.endswith(symbol.lower())
+                if name.endswith((symbol, symbol.lower()))
             })
             for name in matches:
                 function_id, function_name, address = bind_function(name)
@@ -392,7 +392,7 @@ def recover_external_ingress(
             matches = sorted({
                 name
                 for name in [*exports, *functions]
-                if name.endswith(symbol) or name.endswith(symbol.lower())
+                if name.endswith((symbol, symbol.lower()))
             })
             for name in matches:
                 function_id, function_name, address = bind_function(name)

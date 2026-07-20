@@ -39,6 +39,7 @@ FILTERS: dict[str, list[str]] = {
         "core/sandbox/**",
         "core/atomic_fs/**",
         "core/config/**",
+        "core/hash/**",
         "core/run/**",
         "core/security/**",
         "libexec/raptor-pid1-shim",
@@ -103,6 +104,7 @@ FILTERS: dict[str, list[str]] = {
         "core/orchestration/**",
         "core/reporting/**",
         "core/run/**",
+        "core/sage/**",
         "core/sandbox/**",
         "core/sarif/**",
         "core/security/**",
@@ -175,6 +177,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/fuzzing/**",
         "packages/autonomous/**",
         "packages/binary_analysis/**",
+        "core/atomic_fs/**",
         "core/config/**",
         "core/hash/**",
         "core/json/**",
@@ -216,6 +219,7 @@ FILTERS: dict[str, list[str]] = {
         "core/coverage/**",
         "core/cve/**",
         "core/dockerfile/**",
+        "core/git/**",
         "core/http/**",
         "core/inventory/**",
         "core/json/**",
@@ -223,6 +227,7 @@ FILTERS: dict[str, list[str]] = {
         "core/llm/**",
         "core/oci/**",
         "core/progress/**",
+        "core/sage/**",
         "core/sandbox/**",
         "core/security/**",
         "core/tar/**",
@@ -423,7 +428,7 @@ def _read_changed_files() -> list[str] | None:
     if not p.is_file():
         return None
     files = [
-        line.strip() for line in p.read_text().splitlines() if line.strip()
+        line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     if not files:
         return None

@@ -128,7 +128,7 @@ def _extract_direct_keys(scope_holder: Dict[str, Any]) -> Set[str]:
     ):
         block = scope_holder.get(bucket)
         if isinstance(block, dict):
-            keys.update(k for k in block.keys() if isinstance(k, str))
+            keys.update(k for k in block if isinstance(k, str))
     return keys
 
 

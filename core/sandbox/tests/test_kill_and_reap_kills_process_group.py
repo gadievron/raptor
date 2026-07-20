@@ -30,9 +30,13 @@ import sys
 import time
 from pathlib import Path
 
-import pytest  # noqa: F401  (kept for pytest.fail in error paths below)
+import pytest
 
 from core.sandbox._spawn import _kill_and_reap
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="/proc required for process liveness check",
+)
 
 
 _GRANDCHILD_SCRIPT = """

@@ -140,7 +140,7 @@ def _finding_to_dataflow_path(finding: Finding) -> DataflowPath:
     def _step(s, label):
         return DataflowStep(
             file_path=s.file_path, line=int(s.line),
-            column=int(s.column or 1),
+            column=int(s.column) if s.column is not None else 1,
             snippet=s.snippet or "", label=label,
         )
     return DataflowPath(
@@ -182,7 +182,7 @@ def _iter_memory_corruption_corpus(
         if prefix and not fp.name.startswith(prefix):
             continue
         try:
-            finding = Finding.from_json(fp.read_text())
+            finding = Finding.from_json(fp.read_text(encoding="utf-8"))
         except Exception:
             continue
         if not _is_memory_corruption(finding):
@@ -191,7 +191,7 @@ def _iter_memory_corruption_corpus(
         if not label_path.exists():
             continue
         try:
-            label = GroundTruth.from_json(label_path.read_text())
+            label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
         except Exception:
             continue
         if verdict and label.verdict != verdict:
@@ -429,8 +429,8 @@ def main() -> int:
     print(f"  error reduction:     {stats['err_reduction']:.1f}%  "
           f"(exit gate: ≥10%)")
 
-    if args.output:
-        with args.output.open("w", newline="") as f:
+    if args.output and results:
+        with args.output.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=results[0].keys())
             writer.writeheader()
             writer.writerows(results)

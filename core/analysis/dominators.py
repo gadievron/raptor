@@ -239,16 +239,10 @@ class _UnionFind(Generic[N]):
             if (parent_u in self._label
                     and self._semi[self._label[parent_u]]
                     < self._semi[self._label[u]]):
-                # The parent's label has a smaller semidominator —
-                # propagate it down so the deeper node also sees the
-                # minimum.
-                pass  # handled by below walk on `u`
+                self._label[u] = self._label[parent_u]
             up = path[i - 1]
-            # Path-compress: rewrite up's ancestor to point past u.
-            if (self._ancestor.get(u) is not None
-                    and self._semi[self._label[self._ancestor[u]]]
-                    < self._semi[self._label[up]]):
-                self._label[up] = self._label[self._ancestor[u]]
+            if self._semi[self._label[u]] < self._semi[self._label[up]]:
+                self._label[up] = self._label[u]
             self._ancestor[up] = self._ancestor[u]
 
     def eval(self, v: N) -> N:

@@ -203,11 +203,15 @@ def safe_member_reason(
         # reject on legacy Python than ship a known gap.
         if member.name.startswith("/"):
             return UnsafeMemberReason.ABSOLUTE_PATH
-        if "../" in member.name or member.name.startswith("../"):
+        name_parts = [p for p in member.name.split("/") if p]
+        if ".." in name_parts:
             return UnsafeMemberReason.PATH_TRAVERSAL
         if member.issym():
             target = member.linkname
-            if target.startswith("/") or "../" in target:
+            if target.startswith("/"):
+                return UnsafeMemberReason.SYMLINK_UNSAFE
+            link_parts = [p for p in target.split("/") if p]
+            if ".." in link_parts:
                 return UnsafeMemberReason.SYMLINK_UNSAFE
 
     return UnsafeMemberReason.SAFE

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -449,7 +450,7 @@ def _try_cascade_batch(
         results = _dry_run_batch(
             resolver, project_dirs, common_root=common_root,
         )
-    for (pd, host), result in zip(work_items, results):
+    for (pd, host), result in zip(work_items, results, strict=True):
         if not result.success:
             out.append((
                 pd, host, None,
@@ -999,15 +1000,19 @@ def _import_lockfile_parser(ecosystem: str) -> Optional[Callable]:
 # Initialised lazily on first orchestrator call to avoid import-time
 # parser imports leaking into modules that don't need them.
 _LOCKFILE_PARSERS: Dict[str, Callable] = {}
+_LOCKFILE_PARSERS_LOCK = threading.Lock()
 
 
 def _ensure_lockfile_parsers_loaded() -> None:
     if _LOCKFILE_PARSERS:
         return
-    for eco in _CASCADE_LOCKFILE_NAMES:
-        p = _import_lockfile_parser(eco)
-        if p is not None:
-            _LOCKFILE_PARSERS[eco] = p
+    with _LOCKFILE_PARSERS_LOCK:
+        if _LOCKFILE_PARSERS:
+            return
+        for eco in _CASCADE_LOCKFILE_NAMES:
+            p = _import_lockfile_parser(eco)
+            if p is not None:
+                _LOCKFILE_PARSERS[eco] = p
 
 
 __all__ = [

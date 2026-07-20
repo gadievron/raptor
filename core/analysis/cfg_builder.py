@@ -317,6 +317,7 @@ def _statement_assigned_map(stmt: ast.stmt) -> Dict[int, FrozenSet[str]]:
             if tuple_targets and len(tuple_targets[0].elts) == len(stmt.value.elts):
                 for lhs_elt, rhs_elt in zip(
                     tuple_targets[0].elts, stmt.value.elts,
+                    strict=True,
                 ):
                     if isinstance(rhs_elt, ast.Call):
                         result[id(rhs_elt)] = _assign_target_names(lhs_elt)

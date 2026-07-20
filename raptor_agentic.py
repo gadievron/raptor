@@ -602,6 +602,11 @@ def run_command_streaming(
         return -1, "", "Timeout"
     except Exception as e:
         logger.error(f"Command failed: {e}")
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
         return -1, "", str(e)
 
 
@@ -934,7 +939,8 @@ def _build_fuzz_phase_summary(fuzzing_result: dict | None, fuzz_out: Path | None
     telemetry = {}
     telemetry_path = fuzzing_result.get("telemetry")
     if telemetry_path:
-        telemetry = load_json(telemetry_path) or {}
+        _raw = load_json(telemetry_path)
+        telemetry = _raw if isinstance(_raw, dict) else {}
     crashes_dir = fuzzing_result.get("crashes_dir")
     crash_paths = []
     if crashes_dir:
@@ -1516,7 +1522,7 @@ Examples:
     script_root = Path(__file__).parent.resolve()  # RAPTOR-daniel-modular directory
     repo_path = Path(args.repo).resolve()
     if not repo_path.exists():
-        print(f"Error: Repository not found: {repo_path}")
+        print(f"✗ Repository not found: {repo_path}", file=sys.stderr)
         sys.exit(1)
 
     # Track temp git copy for cleanup
@@ -1603,7 +1609,7 @@ Examples:
                 print(f"  Temporary git repo created at {temp_repo}")
                 logger.info(f"Using temp git repo: {temp_repo}")
             else:
-                print(f"  Failed to initialize git repository: {result.stderr}")
+                print(f"  ✗ Failed to initialize git repository: {result.stderr}", file=sys.stderr)
                 logger.error(f"Git init failed: {result.stderr}")
                 sys.exit(1)
 
@@ -1612,15 +1618,15 @@ Examples:
             # top-level handler so the operator gets the actionable message.
             raise
         except subprocess.TimeoutExpired:
-            print("  Git initialization timed out")
+            print("  ✗ Git initialisation timed out", file=sys.stderr)
             logger.error("Git init timeout")
             sys.exit(1)
         except FileNotFoundError:
-            print("  Git is not installed. Please install git and try again.")
+            print("  ✗ Git is not installed. Please install git and try again.", file=sys.stderr)
             logger.error("Git not found in PATH")
             sys.exit(1)
         except Exception as e:
-            print(f"  Error initializing git: {e}")
+            print(f"  ✗ Error initializing git: {e}", file=sys.stderr)
             logger.error(f"Git init error: {e}")
             sys.exit(1)
 
@@ -1681,6 +1687,10 @@ Examples:
             print(f"\n📚 SAGE: Recalled {len(sage_context)} historical memories for context")
             for mem in sage_context[:3]:
                 print(f"   [{mem['confidence']:.0%}] {mem['content'][:100]}...")
+        try:
+            save_json(out_dir / "sage_precall_scan.json", {"memories": sage_context})
+        except Exception:
+            pass
     except Exception as e:
         logger.debug(f"SAGE pre-scan recall skipped: {e}")
 
@@ -1749,7 +1759,7 @@ Examples:
         except ImportError:
             print("Mitigation analysis module not available")
         except Exception as e:
-            print(f"Mitigation check failed: {e}")
+            print(f"⚠️  Mitigation check failed: {e}", file=sys.stderr)
             logger.error(f"Mitigation check error: {e}")
 
     # ========================================================================
@@ -2062,7 +2072,7 @@ Examples:
                     "abandoning communicate (FDs may leak)"
                 )
             rc = -1
-            print("❌ Semgrep scan timed out (30m)")
+            print("✗ Semgrep scan timed out (30m)", file=sys.stderr)
             logger.error("Semgrep scan timed out")
             # Surface the timeout in the agentic-run summary even when
             # CodeQL also runs. Pre-fix the `if not run_codeql:
@@ -2094,6 +2104,10 @@ Examples:
             # "0 findings". Kill the sibling codeql child first.
             if codeql_proc and codeql_proc.poll() is None:
                 codeql_proc.kill()
+                try:
+                    codeql_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             raise SandboxSetupError(
                 "the semgrep scan subprocess reported the sandbox could not "
                 f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above",
@@ -2112,6 +2126,8 @@ Examples:
             scan_metrics_file = actual_scan_dir / "scan_metrics.json"
             if scan_metrics_file.exists():
                 semgrep_metrics = load_json(scan_metrics_file)
+                if not isinstance(semgrep_metrics, dict):
+                    semgrep_metrics = {}
 
                 print("\n✓ Semgrep scan complete:")
                 print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
@@ -2126,7 +2142,7 @@ Examples:
                 semgrep_sarifs = list(actual_scan_dir.glob("semgrep_*.sarif"))
                 all_sarif_files.extend(semgrep_sarifs)
         elif rc != -1:  # -1 is timeout, already reported
-            print(f"❌ Semgrep scan failed (exit code {rc})")
+            print(f"✗ Semgrep scan failed (exit code {rc})", file=sys.stderr)
             if not run_codeql:
                 sys.exit(1)
 
@@ -2148,7 +2164,7 @@ Examples:
                     "abandoning communicate (FDs may leak)"
                 )
             rc = -1
-            print("❌ CodeQL scan timed out (30m)")
+            print("✗ CodeQL scan timed out (30m)", file=sys.stderr)
             logger.error("CodeQL scan timed out")
 
         if rc == SANDBOX_ENGAGE_EXIT_CODE:
@@ -2163,9 +2179,9 @@ Examples:
 
         if rc != 0:
             if all_sarif_files:
-                print("⚠️  CodeQL scan failed — continuing with existing findings")
+                print("⚠️  CodeQL scan failed — continuing with existing findings", file=sys.stderr)
             else:
-                print("⚠️  CodeQL scan failed — no findings from any scanner")
+                print("⚠️  CodeQL scan failed — no findings from any scanner", file=sys.stderr)
             # Surface the captured stderr so the operator can see WHY codeql
             # exited non-zero. Pre-fix the agentic wrapper threw away
             # codeql_stderr and only logged "rc={rc}", leaving the operator
@@ -2187,7 +2203,7 @@ Examples:
                 )
             logger.warning(f"CodeQL scan failed - rc={rc}")
             if args.codeql_only:
-                print("❌ CodeQL-only mode failed")
+                print("✗ CodeQL-only mode failed", file=sys.stderr)
                 sys.exit(1)
         else:
             codeql_out_dir = out_dir / "codeql"
@@ -2195,6 +2211,8 @@ Examples:
 
             if codeql_report.exists():
                 codeql_metrics = load_json(codeql_report)
+                if not isinstance(codeql_metrics, dict):
+                    codeql_metrics = {}
 
                 total_findings = codeql_metrics.get('total_findings', 0)
                 sarif_files = codeql_metrics.get('sarif_files', [])
@@ -2259,11 +2277,48 @@ Examples:
                 print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
                 print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
                 print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
+
+                # SAGE: store SCA vulnerability findings for cross-run learning
+                try:
+                    from core.sage.hooks import store_sca_outcomes
+                    sca_findings_path = sca_out / "findings.json"
+                    if sca_findings_path.exists():
+                        import json as _sca_json
+                        sca_data = _sca_json.loads(
+                            sca_findings_path.read_text(encoding="utf-8")
+                        )
+                        sca_sage_outcomes = []
+                        for row in (sca_data if isinstance(sca_data, list) else []):
+                            sca_info = row.get("sca") or {}
+                            if not sca_info.get("name"):
+                                continue
+                            cve_ids = []
+                            if row.get("cve_id"):
+                                cve_ids.append(row["cve_id"])
+                            sca_sage_outcomes.append({
+                                "package_name": sca_info["name"],
+                                "ecosystem": sca_info.get("ecosystem", ""),
+                                "version": sca_info.get("installed_version", ""),
+                                "kind": "vuln",
+                                "verdict": "vulnerable",
+                                "severity": row.get("severity", ""),
+                                "cve_ids": cve_ids,
+                                "detail": row.get("message", "")[:200],
+                            })
+                        if sca_sage_outcomes:
+                            stored = store_sca_outcomes(
+                                repo_path=str(original_repo_path),
+                                outcomes=sca_sage_outcomes[:30],
+                            )
+                            if stored:
+                                print(f"📚 SAGE: Stored {stored} SCA outcomes")
+                except Exception:
+                    logger.debug("SAGE SCA store skipped", exc_info=True)
             else:
                 logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
                 sca_findings_count = 0
         except Exception as e:
-            print(f"⚠️  SCA failed: {e}")
+            print(f"⚠️  SCA failed: {e}", file=sys.stderr)
             logger.warning(f"SCA failed — continuing without dep findings: {e}")
             sca_findings_count = 0
     else:
@@ -2307,14 +2362,14 @@ Examples:
             normalized_sarif = findings_to_sarif(import_result.findings)
             normalized_path = out_dir / "imported-normalized.sarif"
             import json as _json
-            normalized_path.write_text(_json.dumps(normalized_sarif, indent=2))
+            normalized_path.write_text(_json.dumps(normalized_sarif, indent=2), encoding="utf-8")
             all_sarif_files.append(normalized_path)
         elif not all_sarif_files:
-            print("\n✗ No findings in imported SARIF and no scan results")
+            print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
             sys.exit(1)
 
     if not all_sarif_files:
-        print("\n❌ No SARIF files generated from scanning")
+        print("\n✗ No SARIF files generated from scanning", file=sys.stderr)
         sys.exit(1)
 
     # Combine metrics
@@ -2322,14 +2377,11 @@ Examples:
         threat_model_phase.get("generated_candidates", 0)
         if threat_model_phase.get("completed") else 0
     )
-    total_findings = (semgrep_metrics.get('total_findings', 0)
-                      + codeql_metrics.get('total_findings', 0)
-                      + sca_findings_count
-                      + threat_model_findings_count)
     imported_findings_count = import_result.stats.total_imported if import_result else 0
     total_findings = (semgrep_metrics.get('total_findings', 0)
                       + codeql_metrics.get('total_findings', 0)
                       + sca_findings_count
+                      + threat_model_findings_count
                       + imported_findings_count)
     scan_metrics = {
         'total_findings': total_findings,
@@ -2401,10 +2453,10 @@ Examples:
                         sca_result.vuln_findings, sca_result.hygiene_findings,
                         sca_result.supply_chain_findings)
         except ImportError:
-            print("⚠️  SCA package not available — skipping dependency analysis")
+            print("⚠️  SCA package not available — skipping dependency analysis", file=sys.stderr)
             logger.warning("SCA import failed — packages/sca not installed")
         except Exception as e:
-            print(f"⚠️  SCA failed: {e}")
+            print(f"⚠️  SCA failed: {e}", file=sys.stderr)
             logger.error("SCA phase failed: %s", e, exc_info=True)
 
     # ========================================================================
@@ -2534,6 +2586,9 @@ Examples:
         # want annotation side effects (CI / scratch runs) can suppress.
         if args.no_annotations:
             analysis_cmd.append("--no-annotations")
+        precall_path = out_dir / "sage_precall_scan.json"
+        if precall_path.exists():
+            analysis_cmd.extend(["--sage-precall", str(precall_path)])
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
@@ -2559,6 +2614,8 @@ Examples:
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
         if analysis_report.exists():
             analysis = load_json(analysis_report)
+            if not isinstance(analysis, dict):
+                analysis = {}
 
             if analysis.get('mode') == 'prep_only':
                 print(f"\n✓ {analysis.get('processed', 0)} findings prepared for analysis")
@@ -2598,9 +2655,9 @@ Examples:
                     for line in elig_block.splitlines():
                         print(f"  {line}")
         else:
-            print("⚠️  Analysis failed or produced no output")
+            print("⚠️  Analysis failed or produced no output", file=sys.stderr)
             if stderr:
-                print(f"    Error: {stderr[:500]}")
+                print(f"    Error: {stderr[:500]}", file=sys.stderr)
             logger.warning(f"Phase 3 failed - rc={rc}, stderr={stderr[:200]}")
             analysis = {}
 
@@ -2875,7 +2932,7 @@ Examples:
                             if args.validate:
                                 validation_smoke = _run_fuzz_validation_smoke(
                                     crash_outputs["findings"],
-                                    Path(args.binary),
+                                    Path(args.binary[0]),
                                     fuzz_out,
                                 )
                                 final_report["outputs"]["fuzzing_validation_run"] = validation_smoke.get("dir")
@@ -2890,7 +2947,7 @@ Examples:
                             logger.debug(f"Crash → validate handoff failed: {e}")
             except Exception as e:
                 logger.error(f"Fuzz phase failed: {e}", exc_info=True)
-                print(f"\n  Fuzz phase error: {e}")
+                print(f"\n  ✗ Fuzz phase error: {e}", file=sys.stderr)
 
     # ========================================================================
     # SAGE: Post-scan storage — store findings for cross-run learning
@@ -2920,6 +2977,29 @@ Examples:
 
         if sage_stored > 0:
             print(f"\n📚 SAGE: Stored {sage_stored} findings for cross-run learning")
+
+        # Store exploit outcomes when exploit generation was attempted
+        if orchestration_result and not getattr(args, "no_exploits", True):
+            from core.sage.hooks import store_exploit_outcomes
+
+            exploit_outcomes = []
+            for f in orchestration_result.get("results", []):
+                if f.get("exploitable") or f.get("has_exploit"):
+                    exploit_outcomes.append({
+                        "finding_id": f.get("finding_id", ""),
+                        "vuln_type": f.get("rule_id", ""),
+                        "cwe_id": f.get("cwe_id", ""),
+                        "file_path": f.get("file_path", ""),
+                        "has_exploit": f.get("has_exploit", False),
+                        "result": "success" if f.get("has_exploit") else "blocked",
+                    })
+            if exploit_outcomes:
+                sage_exploits = store_exploit_outcomes(
+                    repo_path=str(repo_path),
+                    outcomes=exploit_outcomes,
+                )
+                if sage_exploits > 0:
+                    print(f"📚 SAGE: Stored {sage_exploits} exploit outcomes")
     except Exception as e:
         logger.debug(f"SAGE post-scan storage skipped: {e}")
 
@@ -3058,7 +3138,7 @@ Examples:
     if _suppr_path.is_file():
         try:
             _suppr_count = sum(
-                1 for _ in _suppr_path.read_text().splitlines() if _.strip()
+                1 for _ in _suppr_path.read_text(encoding="utf-8").splitlines() if _.strip()
             )
         except OSError:
             _suppr_count = 0
@@ -3365,7 +3445,7 @@ Examples:
 
     md_report = render_report(spec)
     md_path = out_dir / "agentic-report.md"
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_report)
     print(f"   Report: {md_path}")
 

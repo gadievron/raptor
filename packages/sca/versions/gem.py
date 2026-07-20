@@ -36,7 +36,7 @@ def compare(a: str, b: str) -> int:
         sa.append(0)
     while len(sb) < max_len:
         sb.append(0)
-    for x, y in zip(sa, sb):
+    for x, y in zip(sa, sb, strict=True):
         c = _cmp_segment(x, y)
         if c != 0:
             return c

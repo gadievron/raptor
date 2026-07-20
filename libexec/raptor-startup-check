@@ -176,7 +176,7 @@ def main():
         if not active and caller_dir:
             auto_name = _find_project_for(caller_dir)
             if auto_name and _activate(auto_name):
-                (PROJECTS_DIR / ".auto").write_text(auto_name)
+                (PROJECTS_DIR / ".auto").write_text(auto_name, encoding="utf-8")
                 print(f"  Auto-activated project: {auto_name}")
                 return
 

@@ -232,7 +232,7 @@ class Pipeline:
                     "new_slug": ref.repository_url,
                     "new_sha": ref.fix_commit[:12],
                 })
-        # unreachable — the loop either returns or re-raises on the cap
+        raise AssertionError("unreachable — loop must return or re-raise")
 
     def _acquire_to_render(
         self, cve_id: str, ref: RepoRef, agent_result: AgentResult,

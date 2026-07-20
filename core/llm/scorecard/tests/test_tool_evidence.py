@@ -225,7 +225,7 @@ class TestCLIToolEvidence:
         # first; either way the command returns non-zero.
         rc, _, err = _capture(cli_mod.cmd_tool_evidence, args)
         assert rc == 2
-        assert "cannot read" in err
+        assert "cannot read" in err.lower()
 
     def test_malformed_json_returns_error(self, tmp_path):
         analysis_path = tmp_path / "orchestrated.json"

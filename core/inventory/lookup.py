@@ -56,7 +56,7 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
         ValueError: if ``file_path`` is absolute (or a file:// URI) but
             ``repo_root`` is empty.
     """
-    if not checklist or not file_path or not line:
+    if not checklist or not file_path or line is None:
         return None
 
     after_scheme = file_path[7:] if file_path.startswith("file://") else file_path
@@ -84,7 +84,7 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
         if entry_path != norm_path:
             continue
 
-        for func in file_entry.get("items", file_entry.get("functions", [])):
+        for func in (file_entry.get("items", file_entry.get("functions", [])) or []):
             # Only FUNCTION items enclose a "function" — globals, macros,
             # classes, top_level and interstitial are not callable units, so a
             # sink landing in one has no enclosing function (callers expect

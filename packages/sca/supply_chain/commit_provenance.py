@@ -373,19 +373,23 @@ def _git_log_provenance(
     # Use NUL between fields + form-feed between records so embedded
     # ``|`` in subjects doesn't break parsing.
     fmt = "%x0c%H%x00%G?%x00%an%x00%ae%x00%aI%x00%cI%x00%s%x00"
-    cmd = [
-        "git", "-C", str(target), "log",
+    from core.git.clone import safe_git_command
+    cmd = safe_git_command(
+        "-C", str(target), "log",
         f"--max-count={max_commits}",
         "--no-merges",
         f"--format={fmt}",
         "--name-only",
         "--",
-    ]
+    )
     cmd.extend(paths)
     try:
+        from core.config import RaptorConfig
+        from core.sandbox.preexec import set_pdeathsig
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=60,
-            check=False,
+            check=False, env=RaptorConfig.get_safe_env(),
+            preexec_fn=set_pdeathsig(),
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug(

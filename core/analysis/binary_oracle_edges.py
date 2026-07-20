@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.atomic_fs import write_text_atomically
+from core.hash import sha256_file as _sha256_file
 
 from .binary_oracle import read_build_id
 
@@ -72,15 +73,9 @@ class BinaryEdgeIndex:
 def _content_hash(binary_path: Path) -> Optional[str]:
     """sha256 of the binary's file content — cache key fallback when
     ``.note.gnu.build-id`` is absent (stripped Go, PGO-stripped vendor
-    binaries). Bounded I/O cost per extraction; cheaper than running
-    r2 a second time."""
+    binaries)."""
     try:
-        import hashlib
-        h = hashlib.sha256()
-        with binary_path.open("rb") as f:
-            for chunk in iter(lambda: f.read(1 << 16), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        return _sha256_file(binary_path)
     except OSError:
         return None
 
@@ -132,7 +127,7 @@ def _load_cached_index(
     if not cache_file.is_file():
         return None
     try:
-        payload = json.loads(cache_file.read_text())
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(payload, dict):
@@ -214,9 +209,10 @@ def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
     requested_sha256 = _content_hash(binary_path)
     if not requested_sha256:
         return None
-    raptor_dir = Path(os.environ.get("RAPTOR_DIR", ""))
+    raptor_dir_str = os.environ.get("RAPTOR_DIR", "")
     search_dirs = [binary_path.parent]
-    if raptor_dir.is_dir():
+    raptor_dir = Path(raptor_dir_str) if raptor_dir_str else None
+    if raptor_dir and raptor_dir.is_dir():
         out_dir = raptor_dir / "out"
         if out_dir.is_dir():
             search_dirs.append(out_dir)
@@ -360,8 +356,8 @@ def extract_direct_call_edges(
         )
         return BinaryEdgeIndex(binary_path=str(binary_path))
     try:
-        fns = json.loads(fns_proc.stdout)
-    except json.JSONDecodeError:
+        fns = json.loads(fns_proc.stdout or "[]")
+    except (json.JSONDecodeError, TypeError):
         logger.warning("binary_oracle_edges: aflj parse failed for %s",
                        binary_path)
         return BinaryEdgeIndex(binary_path=str(binary_path))
@@ -408,8 +404,8 @@ def extract_direct_call_edges(
             mode="w", suffix=".r2", delete=False,
             dir=str(binary_path.parent),
     ) as script_file:
-        script_file.write("\n".join(script_lines) + "\n")
         script_path = script_file.name
+        script_file.write("\n".join(script_lines) + "\n")
     try:
         proc = _sandbox_run(
             ["r2", "-q", "-i", script_path, str(binary_path)],
@@ -502,7 +498,7 @@ def _extract_vtable_edges(
         return []
     edges: List[BinaryCallEdge] = []
     current_vtable: Optional[str] = None
-    for line in proc.stdout.splitlines():
+    for line in (proc.stdout or "").splitlines():
         # Strip ANSI escapes r2 emits in interactive-style output.
         plain = re.sub(r"\x1b\[[\d;]*m", "", line)
         m_hdr = _VTABLE_HEADER_RE.search(plain)

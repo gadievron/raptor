@@ -12,9 +12,8 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure repo root is on path regardless of cwd
-# core/coverage/track_read.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 MANIFEST_NAME = ".reads-manifest"
 
@@ -42,7 +41,9 @@ def _find_active_run():
         if not project_file.exists():
             return None, None
 
-        data = json.loads(project_file.read_text())
+        data = json.loads(project_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None, None
         project_dir = data.get("output_dir", "")
         target = data.get("target", "")
         if not project_dir or not Path(project_dir).is_dir():
@@ -77,7 +78,7 @@ def _find_active_run():
                 # disappeared between the `entries` build above and
                 # this read; treat it as "no longer running" rather
                 # than aborting.
-                meta_text = meta_file.read_text()
+                meta_text = meta_file.read_text(encoding="utf-8")
             except OSError:
                 continue
             try:
@@ -130,7 +131,7 @@ def main():
     except (json.JSONDecodeError, ValueError):
         return
 
-    file_path = payload.get("tool_input", {}).get("file_path", "")
+    file_path = (payload.get("tool_input") or {}).get("file_path", "")
     if not file_path:
         return
 

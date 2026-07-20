@@ -1,7 +1,7 @@
 # RAPTOR Modular Architecture
 
-**Version**: 2.0 (Modular)
-**Date**: 2025-11-21
+**Version**: 3.0
+**Date**: 2026-07-19
 
 
 
@@ -30,14 +30,42 @@ RAPTOR (Recursive Autonomous Penetration Testing and Observation Robot) is a sec
 1. **Source Code Analysis Mode**: Static analysis of source code using Semgrep (`raptor_agentic.py`)
 2. **Deep CodeQL Analysis Mode**: Advanced static analysis with dataflow validation (`raptor_codeql.py`)
 3. **Binary Fuzzing Mode**: Coverage-guided fuzzing of compiled binaries using AFL++ (`raptor_fuzzing.py`)
+4. **Software Composition Analysis**: Dependency scanning, advisory matching, SBOM generation (`packages/sca/`)
+5. **Exploitability Validation**: Multi-stage pipeline proving findings are real, reachable, and exploitable
+6. **Code Understanding**: Adversarial code comprehension — attack surface mapping, data flow tracing
 
-Additionally, an interactive mode is available via `raptor.py` (Claude Code integration) that provides conversational access to all capabilities with progressive loading of expert personas.
+All modes are accessible via the unified `raptor.py` launcher or via Claude Code slash commands (`/scan`, `/agentic`, `/codeql`, `/fuzz`, `/web`, `/sca`, `/validate`, `/understand`, etc.).
 
 The modular architecture refactors the original monolithic structure into a clean, hierarchical design:
 
 ```
 raptor/
-├── core/                  # Shared utilities (config, logging, progress, git, hash, SARIF)
+├── core/                  # Shared infrastructure
+│   ├── analysis/          # Reasoning about code (reachability, CFG, taint, binary oracle)
+│   ├── annotations/       # Per-function prose annotations (manual + LLM-emitted)
+│   ├── ast/               # AST enrichment helpers
+│   ├── build/             # Build-system detection + toolchain probes
+│   ├── config/            # RaptorConfig (paths, settings)
+│   ├── coverage/          # Read-coverage tracking + summary
+│   ├── dockerfile/        # Dockerfile parsing helpers
+│   ├── git/               # Sandbox-routed clone + URL allowlist
+│   ├── hash/              # SHA-256 helpers
+│   ├── http/              # EgressClient + per-host allowlists
+│   ├── inventory/         # Source inventory (file enumeration, extractors, call graph)
+│   ├── json/              # BOM-tolerant JSON utils + cache helpers
+│   ├── llm/               # LLM substrate (clients, providers, scorecard, tool-use loop)
+│   ├── logging/           # Structured logging with JSONL audit trail
+│   ├── oci/               # OCI image-ref parsing + canonicalisation
+│   ├── orchestration/     # Pipeline orchestration helpers
+│   ├── project/           # Project workspace management
+│   ├── run/               # Per-run lifecycle (output dir, metadata)
+│   ├── sage/              # SAGE inception client + hooks (memory layer)
+│   ├── sandbox/           # Subprocess isolation (Landlock + seccomp + namespaces)
+│   ├── sarif/             # SARIF 2.1.0 parsing
+│   ├── security/          # Prompt envelope, secret redaction, env sanitisation
+│   ├── smt_solver/        # Z3-based path feasibility
+│   ├── startup/           # CLI startup banner + env validation
+│   └── witness/           # Witness collection + sandbox outcome tracking
 ├── packages/              # Independent security capabilities
 │   ├── static-analysis/   # Semgrep scanning
 │   ├── codeql/            # CodeQL deep analysis and dataflow validation
@@ -45,14 +73,25 @@ raptor/
 │   ├── autonomous/        # Autonomous planning, memory, and dialogue
 │   ├── fuzzing/           # AFL++ fuzzing orchestration
 │   ├── binary_analysis/   # GDB crash analysis and triage
+│   ├── code_understanding/# Code comprehension (/understand)
+│   ├── cve_diff/          # CVE patch diffing
+│   ├── describe/          # Pre-flight target inspection (/describe)
+│   ├── diagram/           # Mermaid diagram generation (/diagram)
+│   ├── exploit_feasibility/# Binary exploit feasibility analysis
+│   ├── exploitability_validation/# Multi-stage exploitability validation
+│   ├── exploitation/      # Exploit generation engine
+│   ├── hypothesis_validation/# Hypothesis-driven validation
 │   ├── recon/             # Reconnaissance and enumeration
 │   ├── sca/               # Software Composition Analysis
-│   └── web/               # Web application testing
+│   ├── semgrep/           # Semgrep rule management
+│   ├── source_intel/      # Source-level intelligence gathering
+│   ├── web/               # Web application testing
+│   └── zkpox/             # Zero-knowledge proof of exploitation
 ├── engine/                # Analysis engines (CodeQL suites, Semgrep rules)
 ├── tiers/                 # Expert personas and recovery protocols
 ├── docs/                  # Documentation
 ├── out/                   # All outputs (scans, logs, reports)
-├── raptor.py              # Main launcher (Claude Code integration)
+├── raptor.py              # Main launcher (unified CLI)
 ├── raptor_agentic.py      # Source code analysis workflow
 ├── raptor_codeql.py       # CodeQL workflow
 └── raptor_fuzzing.py      # Binary fuzzing workflow
@@ -63,166 +102,17 @@ raptor/
 
 ## Directory Structure
 
-```
-raptor/
-│
-├── core/                           # Shared utilities layer
-│   ├── __init__.py
-│   ├── build/                      # Build-system detection + toolchain probes
-│   ├── config/                     # RaptorConfig (paths, settings)
-│   ├── coverage/                   # Read-coverage tracking + summary
-│   ├── dockerfile/                 # Dockerfile parsing helpers (FROM/ENV)
-│   ├── git/                        # Sandbox-routed clone + URL allowlist
-│   ├── hash/                       # SHA-256 helpers (tree/file/bytes/string)
-│   ├── http/                       # EgressClient + per-host allowlists
-│   ├── inventory/                  # Shared source inventory
-│   │   ├── builder.py              # build_inventory() — file enumeration + checksums
-│   │   ├── extractors.py           # Language-aware function extraction
-│   │   ├── languages.py            # LANGUAGE_MAP, detect_language
-│   │   ├── exclusions.py           # File exclusion + generated-file detection
-│   │   ├── lookup.py               # lookup_function() — file:line → function
-│   │   ├── diff.py                 # compare_inventories() — SHA-256 diffing
-│   │   ├── reachability.py         # Function-call reachability (substrate)
-│   │   └── coverage.py             # checked_by tracking + coverage stats
-│   ├── json/                       # BOM-tolerant JSON utils + cache helpers
-│   ├── llm/                        # LLM substrate (clients, providers, scorecard, tool-use loop)
-│   ├── logging/                    # Structured logging with JSONL audit trail
-│   ├── oci/                        # OCI image-ref parsing + canonicalisation
-│   ├── orchestration/              # Pipeline orchestration helpers (understand_bridge, agentic_passes)
-│   ├── progress/                   # Progress tracking utilities
-│   ├── project/                    # Project workspace mgmt (CLI, merge, clean, export, diff)
-│   ├── reporting/                  # Findings/report formatting (markdown, summary lines)
-│   ├── run/                        # Per-run lifecycle (output dir, suffixes)
-│   ├── sage/                       # SAGE inception client + hooks (memory layer)
-│   ├── sandbox/                    # subprocess isolation (Landlock + seccomp + namespaces)
-│   ├── sarif/
-│   │   └── parser.py               # SARIF 2.1.0 parsing utilities
-│   ├── schema_constants/           # Shared schema field-name constants
-│   ├── security/                   # Prompt envelope, secret redaction, env sanitisation, cc_trust
-│   ├── smt_solver/                 # Z3-based path-feasibility (rejection, witness, csem)
-│   └── startup/                    # CLI startup banner + env validation
-│
-├── packages/                       # Security capabilities layer
-│   ├── __init__.py
-│   │
-│   ├── static-analysis/            # Static code scanning
-│   │   ├── __init__.py
-│   │   ├── scanner.py              # Main: Semgrep orchestrator
-│   │   └── codeql/
-│   │       └── env.py              # CodeQL environment setup
-│   │
-│   ├── codeql/                     # CodeQL deep analysis
-│   │   ├── __init__.py
-│   │   ├── agent.py                # Main: CodeQL workflow orchestration
-│   │   ├── autonomous_analyzer.py  # Autonomous CodeQL analysis
-│   │   ├── build_detector.py       # Build system detection
-│   │   ├── database_manager.py     # CodeQL database creation/management
-│   │   ├── dataflow_validator.py   # Dataflow path validation
-│   │   ├── dataflow_visualizer.py  # Dataflow visualization
-│   │   ├── language_detector.py    # Programming language detection
-│   │   └── query_runner.py         # CodeQL query execution
-│   │
-│   ├── llm_analysis/               # LLM-powered analysis
-│   │   ├── __init__.py
-│   │   ├── agent.py                # Main: Source code analysis
-│   │   ├── crash_agent.py          # Main: Binary crash analysis
-│   │   ├── orchestrator.py         # Multi-agent coordination (requires Claude Code)
-│   │   └── llm/
-│   │       ├── __init__.py
-│   │       ├── client.py           # LLM client abstraction
-│   │       ├── config.py           # LLM configuration
-│   │       ├── detection.py        # LLM availability detection
-│   │       ├── model_data.py       # Model costs, limits, provider endpoints
-│   │       └── providers.py        # Provider implementations (Anthropic, OpenAI, etc.)
-│   │
-│   ├── autonomous/                 # Autonomous agent capabilities
-│   │   ├── __init__.py
-│   │   ├── corpus_generator.py     # Fuzzing corpus generation
-│   │   ├── dialogue.py             # Agent dialogue management
-│   │   ├── exploit_validator.py    # Exploit code validation
-│   │   ├── goal_planner.py         # Goal-oriented planning
-│   │   ├── memory.py               # Agent memory and context
-│   │   └── planner.py              # Task planning and decomposition
-│   │
-│   ├── fuzzing/                    # Binary fuzzing
-│   │   ├── __init__.py
-│   │   ├── afl_runner.py           # AFL++ orchestration
-│   │   ├── crash_collector.py      # Crash triage and ranking
-│   │   └── corpus_manager.py       # Seed corpus generation
-│   │
-│   ├── binary_analysis/            # Binary crash analysis
-│   │   ├── __init__.py
-│   │   ├── crash_analyser.py       # Main: GDB crash analysis
-│   │   └── debugger.py             # GDB wrapper and automation
-│   │
-│   ├── recon/                      # Reconnaissance
-│   │   ├── __init__.py
-│   │   └── agent.py                # Main: Tech stack enumeration
-│   │
-│   ├── sca/                        # Software Composition Analysis
-│   │   ├── __init__.py
-│   │   └── agent.py                # Main: Dependency vulnerability scanning
-│   │
-│   └── web/                        # Web application testing
-│       ├── __init__.py
-│       ├── client.py               # HTTP client wrapper
-│       ├── crawler.py              # Web crawler
-│       ├── fuzzer.py               # Input fuzzing
-│       └── scanner.py              # Web vulnerability scanner
-│
-├── engine/                         # Analysis engines
-│   ├── codeql/
-│   │   └── suites/                 # CodeQL query suites
-│   └── semgrep/
-│       ├── rules/                  # Semgrep custom rules
-│       ├── semgrep.yaml            # Semgrep configuration
-│       └── tools/                  # Semgrep utilities
-│
-├── tiers/                          # Tiered expertise system
-│   ├── analysis-guidance.md        # Adversarial analysis guidance
-│   ├── recovery.md                 # Error recovery protocols
-│   ├── personas/                   # Expert personas
-│   │   ├── binary_exploitation_specialist.md
-│   │   ├── codeql_analyst.md
-│   │   ├── codeql_finding_analyst.md
-│   │   ├── crash_analyst.md
-│   │   ├── exploit_developer.md
-│   │   ├── fuzzing_strategist.md
-│   │   ├── patch_engineer.md
-│   │   ├── penetration_tester.md
-│   │   └── security_researcher.md
-│   └── specialists/
-│       └── README.md               # Specialist documentation
-│
-├── docs/                           # Documentation
-│   ├── ARCHITECTURE.md             # This file
-│   ├── CLAUDE_CODE_USAGE.md        # Claude Code integration guide
-│   ├── DATAFLOW_VALIDATION_SUMMARY.md  # Dataflow validation docs
-│   ├── EXTENDING_LAUNCHER.md       # Launcher extension guide
-│   ├── FUZZING_QUICKSTART.md       # Fuzzing quick start
-│   ├── PYTHON_CLI.md               # Python CLI documentation
-│   ├── VISUAL_DESIGN.md            # Visual design guidelines
-│   └── README.md                   # Documentation index
-│
-├── out/                            # Output directory (all artifacts)
-│   ├── logs/                       # JSONL structured logs
-│   │   └── raptor_<timestamp>.jsonl
-│   └── scan_<repo>_<timestamp>/    # Scan outputs
-│       ├── semgrep_*.sarif         # SARIF findings
-│       ├── scan_metrics.json       # Scan statistics
-│       └── verification.json       # Verification results
-│
-├── test/                           # Test files and fixtures
-│
-├── raptor.py                       # Main launcher (Claude Code integration)
-├── raptor_agentic.py               # Source code analysis workflow
-├── raptor_codeql.py                # CodeQL workflow orchestrator
-├── raptor_fuzzing.py               # Binary fuzzing workflow
-├── requirements.txt                # Python dependencies
-├── CLAUDE.md                       # Claude Code instructions
-├── LICENSE                         # License file
-└── README.md                       # Main README
-```
+The detailed tree is in the overview above. Key structural notes:
+
+- **`core/inventory/`** captures structural facts: file enumeration, function extraction,
+  call-graph building, language detection, exclusions.
+- **`core/analysis/`** reasons about code properties: reachability, CFG construction,
+  taint summaries, dataflow, dominators, binary oracle, sanitizer identification.
+  Split from `core/inventory/` in the analysis refactor (#880).
+- **`core/llm/`** is the LLM substrate — client abstraction, provider implementations,
+  scorecard (per-model reliability tracking), tool-use loop.
+- **`packages/`** contains independent security capabilities. Each package owns its
+  CLI, tests, and domain logic. Run `ls packages/` for the full list.
 
 
 

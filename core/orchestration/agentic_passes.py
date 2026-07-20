@@ -1060,7 +1060,7 @@ def run_reachability_prepass(
         if marked or enriched_caller_ctx:
             save_json(checklist_path, checklist)
     except Exception:                               # noqa: BLE001
-        logger.debug(
+        logger.warning(
             "reachability prepass: enrichment failed",
             exc_info=True,
         )
@@ -1247,4 +1247,5 @@ def _threat_model_prompt_block(target: Path) -> str:
         from core.threat_model import threat_model_prompt_block
         return threat_model_prompt_block(target)
     except Exception:
+        logger.warning("threat model context unavailable for %s", target, exc_info=True)
         return ""

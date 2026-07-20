@@ -10,6 +10,7 @@ in FunctionMetadata. See docs/design-inventory-metadata.md for design rationale.
 import ast
 import re
 import logging
+import threading
 import warnings
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -393,7 +394,7 @@ class JavaScriptExtractor:
             if len(line) > self._MAX_JS_LINE:
                 continue
             stripped = line.lstrip()
-            if stripped.startswith('//') or stripped.startswith('/*'):
+            if stripped.startswith(('//', '/*')):
                 continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
@@ -553,7 +554,7 @@ class CExtractor:
             line = lines[i]
 
             stripped = line.strip()
-            if stripped.startswith('#') or stripped.startswith('//'):
+            if stripped.startswith(('#', '//')):
                 i += 1
                 continue
 
@@ -590,7 +591,7 @@ class CExtractor:
                             ))
                             seen.add(name)
                             break
-                        if fwd.startswith('#') or fwd.startswith('//'):
+                        if fwd.startswith(('#', '//')):
                             continue
                         if not fwd:
                             continue
@@ -1158,14 +1159,13 @@ except ImportError:
     _TS_AVAILABLE = False
 
 
-# Per-language Parser cache. Pre-cache, ``TreeSitterExtractor(lang)``
-# constructed a fresh ``TSParser(ts_language)`` on every instance —
-# which is per-file in ``_extract_with_tree_sitter``. The grammar
-# is immutable across the program's lifetime so a single Parser
-# per language can be reused across every parse. Cache by the
-# language NAME (not Language object identity) because
-# ``_ts_language`` wraps a new Language per call.
-_TS_PARSER_BY_LANG: Dict[str, Any] = {}
+# Per-language Parser cache.  tree-sitter's Parser holds C-side
+# mutable state (internal parse stack) — NOT thread-safe for
+# concurrent ``.parse()`` calls.  The inventory builder fans out
+# via ThreadPoolExecutor, so a shared module-level dict would hand
+# the same Parser to multiple workers simultaneously.
+# ``threading.local`` gives every thread its own dict of parsers.
+_TS_PARSER_LOCAL = threading.local()
 
 
 def _ts_language(lang: str):
@@ -1221,20 +1221,21 @@ def _ts_language(lang: str):
 
 
 def _ts_parser_for(lang: str):
-    """Return a cached ``TSParser`` for ``lang``, or None if the
-    grammar isn't installed. Mirrors ``_get_ts_parser`` in
-    ``core/inventory/call_graph.py`` but keyed by language NAME so
-    repeated ``TreeSitterExtractor(lang)`` constructions across
-    many files share one Parser per grammar.
+    """Return a per-thread cached ``TSParser`` for ``lang``, or None
+    if the grammar isn't installed.
     """
-    cached = _TS_PARSER_BY_LANG.get(lang)
+    cache: Dict[str, Any] = getattr(_TS_PARSER_LOCAL, "parsers", None)  # type: ignore[assignment]
+    if cache is None:
+        cache = {}
+        _TS_PARSER_LOCAL.parsers = cache
+    cached = cache.get(lang)
     if cached is not None:
         return cached
     ts_lang = _ts_language(lang)
     if ts_lang is None:
         return None
     parser = TSParser(ts_lang)
-    _TS_PARSER_BY_LANG[lang] = parser
+    cache[lang] = parser
     return parser
 
 
@@ -2232,8 +2233,8 @@ def extract_items(filepath: str, language: str, content: str,
             extractor = TreeSitterExtractor(language)
             tree = extractor.parser.parse(content.encode())
             ts_parsed = True
-        except (RuntimeError, Exception):
-            pass
+        except Exception:
+            logger.debug("tree-sitter parse failed, will use regex", exc_info=True)
 
     if tree is not None:
         # Cache tree for reuse by count_sloc
@@ -2246,21 +2247,21 @@ def extract_items(filepath: str, language: str, content: str,
             if functions:
                 items.extend(functions)
         except Exception:
-            pass  # Fall through to AST/regex fallback
+            logger.debug("tree-sitter function extraction failed for %s", filepath, exc_info=True)
 
         # Globals + module-scope executable code from the same parse tree
         try:
             items.extend(_extract_globals_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter globals extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_top_level_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter top-level extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_c_types_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter c-types extraction failed for %s", filepath, exc_info=True)
 
     # Fallback: functions from AST/regex if tree-sitter didn't produce any
     if not ts_parsed or not any(i.kind == KIND_FUNCTION for i in items):
@@ -2712,7 +2713,7 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
                 comment_lines = _count_comment_lines_ts(tree.root_node)
                 return max(0, total - blank - comment_lines)
         except Exception:
-            pass
+            logger.debug("tree-sitter SLOC count failed, falling back to regex", exc_info=True)
 
     # Regex fallback
     comment_lines = _count_comment_lines_regex(content, language)
@@ -2799,8 +2800,6 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
                     i = j + 2
             # Count the line iff it starts inside a block, starts
             # with `//`, or starts with `/*`.
-            if (entered_in_block
-                or stripped.startswith("//")
-                or stripped.startswith("/*")):
+            if (entered_in_block or stripped.startswith(("//", "/*"))):
                 count += 1
     return count

@@ -70,7 +70,7 @@ _VERSION_SPEC_RE = re.compile(
 def parse_manifest(path: Path) -> List[Dependency]:
     """Parse a ``Gemfile`` and emit one Dependency per ``gem`` line."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gemfile: cannot read %s: %s", path, e)
         return []
@@ -133,7 +133,7 @@ def parse_lockfile(path: Path) -> List[Dependency]:
     own top-level rows in the GEM section anyway).
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gemfile: cannot read %s: %s", path, e)
         return []

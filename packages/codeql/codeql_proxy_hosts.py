@@ -37,6 +37,7 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -83,6 +84,7 @@ _DEFAULT_PACK_DOWNLOAD_HOSTS: tuple[str, ...] = (
 # back-to-back ``pack download`` invocations); re-loading the
 # calibrated profile from disk on each is wasted effort.
 _CALIBRATED_CACHE: dict[str, "object"] = {}
+_CALIBRATED_CACHE_LOCK = threading.Lock()
 
 
 def _resolve_codeql_bin() -> Optional[str]:
@@ -114,13 +116,15 @@ def _calibrated_profile(codeql_bin: Optional[str] = None):
         codeql_bin = _resolve_codeql_bin()
     if codeql_bin is None:
         return None
-    if codeql_bin in _CALIBRATED_CACHE:
-        return _CALIBRATED_CACHE[codeql_bin]
+    with _CALIBRATED_CACHE_LOCK:
+        if codeql_bin in _CALIBRATED_CACHE:
+            return _CALIBRATED_CACHE[codeql_bin]
 
     try:
         from core.sandbox.calibrate import load_or_calibrate
     except ImportError:
-        _CALIBRATED_CACHE[codeql_bin] = None
+        with _CALIBRATED_CACHE_LOCK:
+            _CALIBRATED_CACHE[codeql_bin] = None
         return None
 
     try:
@@ -132,19 +136,19 @@ def _calibrated_profile(codeql_bin: Optional[str] = None):
         )
     except (FileNotFoundError, RuntimeError, OSError,
             subprocess.TimeoutExpired) as exc:
-        # TimeoutExpired: a sandboxed `codeql --version` exceeding
-        # 20s (rare but observable on cold systems / large CodeQL
-        # bundles) shouldn't break the resolver — fall through to
-        # the static default like every other failure mode.
+        # TimeoutExpired: sandboxed `codeql --version` exceeding 20s
+        # shouldn't break the resolver — fall through to static default.
         logger.debug(
             "codeql_proxy_hosts: calibration of %s failed (%s); "
             "falling back to static policy",
             codeql_bin, exc,
         )
-        _CALIBRATED_CACHE[codeql_bin] = None
+        with _CALIBRATED_CACHE_LOCK:
+            _CALIBRATED_CACHE[codeql_bin] = None
         return None
 
-    _CALIBRATED_CACHE[codeql_bin] = profile
+    with _CALIBRATED_CACHE_LOCK:
+        _CALIBRATED_CACHE[codeql_bin] = profile
     return profile
 
 

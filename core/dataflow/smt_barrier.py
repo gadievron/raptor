@@ -342,7 +342,9 @@ def _unescape_charclass(chars: str) -> str:
     (e.g. Gerapy's
     ``'[\\!\\@\\#\\$\\;\\&\\*\\~\\"\\'\\{\\}\\]\\[\\-\\+\\%\\^]+'``).
     """
-    return _re.sub(r"\\(.)", r"\1", chars)
+    # Preserve \- : stripping it produces a bare hyphen that
+    # _expand_charset_body / _charclass_to_re misread as a range operator.
+    return _re.sub(r"\\([^-])", r"\1", chars)
 
 
 def _try_charset_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
@@ -1260,7 +1262,11 @@ def _charclass_to_re(chars: str):
     alts = []
     i, n = 0, len(chars)
     while i < n:
-        if i + 2 < n and chars[i + 1] == "-":
+        if chars[i] == "\\" and i + 1 < n:
+            alts.append(z3.Re(z3.StringVal(chars[i + 1])))
+            i += 2
+        elif (i + 2 < n and chars[i + 1] == "-"
+              and chars[i + 2] != "\\"):
             alts.append(z3.Range(chars[i], chars[i + 2]))
             i += 3
         else:
@@ -1299,7 +1305,11 @@ def _expand_charset_body(body: str) -> set:
     out: set = set()
     i, n = 0, len(body)
     while i < n:
-        if (i + 2 < n and body[i + 1] == "-"
+        if body[i] == "\\" and i + 1 < n:
+            out.add(body[i + 1])
+            i += 2
+        elif (i + 2 < n and body[i + 1] == "-"
+                and body[i + 2] != "\\"
                 and ord(body[i]) <= ord(body[i + 2])):
             for cp in range(ord(body[i]), ord(body[i + 2]) + 1):
                 out.add(chr(cp))
@@ -1448,7 +1458,7 @@ def try_tier0(
             spec=spec,
         )
     try:
-        source_text = src_path.read_text(errors="replace")
+        source_text = src_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

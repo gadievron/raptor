@@ -287,7 +287,7 @@ def check_net_available() -> bool:
             # /proc, exotic init systems).
             sysctl = Path("/proc/sys/kernel/unprivileged_userns_clone")
             try:
-                value = sysctl.read_text().strip()
+                value = sysctl.read_text(encoding="utf-8").strip()
             except FileNotFoundError:
                 value = ""  # No sysctl on this kernel — defaults to enabled.
             if value == "0":
@@ -389,7 +389,7 @@ def check_mount_available() -> bool:
             # warning needed (the fallback is the safe path).
             sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
             try:
-                _restrict_value = sysctl.read_text().strip()
+                _restrict_value = sysctl.read_text(encoding="utf-8").strip()
             except FileNotFoundError:
                 _restrict_value = ""
             except OSError:
@@ -468,7 +468,7 @@ def _selinux_enforcing() -> bool:
     the caller wants a string-routing decision, not exception flow.
     """
     try:
-        return Path("/sys/fs/selinux/enforce").read_text().strip() == "1"
+        return Path("/sys/fs/selinux/enforce").read_text(encoding="utf-8").strip() == "1"
     except (FileNotFoundError, OSError):
         return False
 
@@ -493,7 +493,7 @@ def mount_unavailable_reason() -> tuple[str, str]:
     try:
         v = Path(
             "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
-        ).read_text().strip()
+        ).read_text(encoding="utf-8").strip()
         if v == "1":
             return (
                 "mount-ns blocked by host "

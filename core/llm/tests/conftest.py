@@ -34,6 +34,21 @@ _DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 
 @pytest.fixture(autouse=True)
+def _isolate_scorecard(monkeypatch):
+    """Prevent tests from writing to the production scorecard.
+
+    Tests that construct LLMClient with bare model names (``"pro"``,
+    ``"haiku"``) register an atexit flush that writes mock data into
+    ``out/llm_scorecard.json``. Disabling here keeps the scorecard
+    clean without touching every test's LLMConfig constructor.
+    """
+    from core.llm.client import LLMClient
+    monkeypatch.setattr(
+        LLMClient, "flush_usage_to_scorecard", lambda self: None,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_llm_egress_state():
     """Reset egress module flag, clear proxy env vars, and pin
     OLLAMA_HOST before AND after every test in this directory."""

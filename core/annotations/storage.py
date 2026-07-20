@@ -33,7 +33,6 @@ adding manual notes shouldn't conflict with an LLM run).
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 from collections.abc import Iterator
@@ -99,8 +98,10 @@ _META_RE = re.compile(
     re.MULTILINE,
 )
 _META_KV_RE = re.compile(
-    # ``key="quoted value"`` or ``key=bareword`` (no spaces, no quotes)
-    r'(\w[-\w]*)=(?:"([^"]*)"|(\S+))'
+    # ``key="quoted value"`` or ``key=bareword`` (no spaces, no quotes).
+    # Quoted values handle ``\"`` escapes so round-tripping values
+    # containing double-quote characters works correctly.
+    r'(\w[-\w]*)=(?:"((?:[^"\\]|\\.)*)"|(\S+))'
 )
 
 
@@ -245,11 +246,14 @@ def _file_lock(path: Path):
 
 def _parse_meta(comment_body: str) -> Dict[str, str]:
     """Parse ``key=value`` pairs from the inside of a meta comment.
-    Quoted values keep spaces; bare values are whitespace-delimited."""
+    Quoted values keep spaces; bare values are whitespace-delimited.
+    Escaped double-quotes (``\\"``) inside quoted values are unescaped."""
     out: Dict[str, str] = {}
     for m in _META_KV_RE.finditer(comment_body):
         key = m.group(1)
         value = m.group(2) if m.group(2) is not None else m.group(3)
+        if m.group(2) is not None:
+            value = value.replace('\\"', '"')
         out[key] = value
     return out
 
@@ -475,32 +479,12 @@ def compute_function_hash(
     """Compute a stable short hash of a function's source lines for
     staleness detection.
 
-    Returns the first 12 hex chars of sha256 over the slice. 12 chars
-    keeps the metadata line short while still being collision-resistant
-    for the use case (a few thousand annotations per project).
-
-    ``start_line`` and ``end_line`` are 1-indexed and inclusive on
-    both ends. If the file is unreadable or the range is empty,
-    returns ``""`` so callers can detect "no hash available" and
-    skip the staleness check.
-
-    Lines are read with ``errors="replace"`` so a stray non-UTF-8
-    byte in source doesn't crash the hash computation — the hash
-    is for change-detection, not cryptographic integrity.
+    Delegates to ``core.staleness.hash_span`` — the shared span-level
+    hashing primitive.  This wrapper is kept for backward compatibility
+    with callers that import from ``core.annotations.storage``.
     """
-    if start_line <= 0 or end_line < start_line:
-        return ""
-    try:
-        text = source_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    lines = text.splitlines()
-    s = max(0, start_line - 1)
-    e = min(len(lines), end_line)
-    if s >= e:
-        return ""
-    snippet = "\n".join(lines[s:e])
-    return hashlib.sha256(snippet.encode("utf-8")).hexdigest()[:12]
+    from core.staleness import hash_span
+    return hash_span(source_path, start_line, end_line)
 
 
 def _render_file(source_file: str, anns) -> str:

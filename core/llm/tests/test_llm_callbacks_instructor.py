@@ -288,21 +288,19 @@ class TestStructuredFallback:
         assert result_dict["confidence"] == 0.5
 
     def test_validates_with_pydantic(self):
-        """Pydantic validation catches type mismatches."""
-        # Return a string where a boolean is expected
+        """Schema coercion normalises LLM type mismatches before Pydantic."""
         content = '{"is_exploitable": "not_a_bool"}'
         provider = self._make_provider(content)
 
         class StrictSchema(BaseModel):
             is_exploitable: bool
 
-        # Pydantic v2 may coerce some values, but "not_a_bool" should fail
-        with pytest.raises(Exception):
-            provider._structured_fallback(
-                prompt="test",
-                schema={"is_exploitable": "boolean"},
-                pydantic_model=StrictSchema,
-            )
+        result_dict, _ = provider._structured_fallback(
+            prompt="test",
+            schema={"is_exploitable": "boolean"},
+            pydantic_model=StrictSchema,
+        )
+        assert result_dict["is_exploitable"] is False
 
     def test_invalid_json_raises(self):
         """Invalid JSON in response raises json.JSONDecodeError."""

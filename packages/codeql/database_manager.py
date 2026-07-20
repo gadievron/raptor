@@ -778,7 +778,7 @@ class DatabaseManager:
                 os.close(fd)
                 build_script = Path(script_name)
                 try:
-                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
+                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n", encoding="utf-8")
                     # 0o500 (read+execute, no write) for parity with
                     # `build_detector.py:871`'s synthesised-script mode
                     # — TOCTOU mitigation: a separate process can't
@@ -842,7 +842,7 @@ class DatabaseManager:
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
                 logger.error(f"✗ Database creation failed for {language}")
-                logger.error(result.stderr[:500])
+                logger.error((result.stderr or "")[:500])
                 # Cleanup partial staging on build failure — no point keeping
                 # broken DBs around to confuse future cache lookups (they
                 # never reach canonical anyway since promote is gated on
@@ -1319,9 +1319,9 @@ def main():
         if result.cached:
             print("(from cache)")
     else:
-        print("\n✗ Database creation failed")
+        print("\n✗ Database creation failed", file=sys.stderr)
         for error in result.errors:
-            print(f"  {error}")
+            print(f"  {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":

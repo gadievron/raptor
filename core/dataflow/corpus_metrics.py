@@ -67,7 +67,7 @@ class Metrics:
 
 def compute(csv_path: Path) -> Metrics:
     m = Metrics()
-    with csv_path.open() as f:
+    with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             m.total += 1
@@ -127,7 +127,7 @@ def render(m: Metrics) -> str:
     else:
         total_fps = sum(m.fp_categories.values())
         for cat, count in m.fp_categories.most_common():
-            pct = count / total_fps * 100
+            pct = count / total_fps * 100 if total_fps else 0.0
             lines.append(f"  {cat}: {count} ({pct:.1f}%)")
     return "\n".join(lines)
 

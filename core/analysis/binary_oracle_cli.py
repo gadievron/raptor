@@ -151,14 +151,21 @@ def _filter_locally_built(
             try:
                 rel = c.resolve().relative_to(repo.resolve())
             except ValueError:
-                # Candidate escapes the repo (symlink target outside);
-                # autodetect already filters these but defend in depth.
                 continue
-            proc = subprocess.run(
-                ["git", "-C", str(repo), "ls-files",
-                 "--error-unmatch", "--", str(rel)],
-                capture_output=True, text=True, check=False,
-            )
+            try:
+                from core.config import RaptorConfig
+                from core.git import safe_git_command
+                from core.sandbox.preexec import set_pdeathsig
+                proc = subprocess.run(
+                    safe_git_command("-C", str(repo), "ls-files",
+                                    "--error-unmatch", "--", str(rel)),
+                    capture_output=True, text=True, check=False,
+                    timeout=10, env=RaptorConfig.get_safe_env(),
+                    preexec_fn=set_pdeathsig(),
+                )
+            except subprocess.TimeoutExpired:
+                repo_committed.append(c)
+                continue
             if proc.returncode == 0:
                 repo_committed.append(c)
             elif proc.returncode == 1:

@@ -96,7 +96,7 @@ def _merge_discovered_sinks(
     existing: Set[tuple] = set()
     for sd in sink_details:
         f = sd.get("file", "")
-        line = sd.get("line", 0)
+        line = sd.get("line") or 0
         existing.add((f, line))
 
     added = 0

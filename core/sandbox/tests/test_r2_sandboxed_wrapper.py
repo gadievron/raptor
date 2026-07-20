@@ -363,45 +363,45 @@ class TestAdversarialIsolation:
         )
 
     def test_network_is_blocked(self):
-        """block_network=True → no interfaces → outbound connect fails.
-        Use r2's `!` shell escape to try a connection."""
-        # `getent hosts localhost` is a local-only resolution; doesn't
-        # touch DNS. We want something that EXPECTS network. Use python
-        # to attempt a TCP connect to a non-routable IP — sandbox should
-        # cause it to fail fast.
-        # If /usr/bin/python3 isn't in the sandbox (it should be — bind-
-        # mounted RO via /usr/bin), use sh to read /sys/class/net entries.
-        # Simpler check: count network interfaces. block_network removes
-        # all of them (lo only, sometimes none).
-        r = self._r2_check("!ls /sys/class/net")
-        # In a block_network sandbox, /sys/class/net is typically empty
-        # OR contains only `lo`. Real hosts have many interfaces (eth0,
-        # wlan0, docker0, etc.). Assert at most "lo".
-        net_iface_listing = r.stdout
-        # Strip r2 prompts and noise; look at the lines that look like
-        # interface names.
-        candidate_lines = [
-            line.strip() for line in net_iface_listing.splitlines()
-            if line.strip() and not line.startswith("[")
-            and ":" not in line
-            and " " not in line.strip()
-            and len(line.strip()) < 20
-        ]
-        # Filter out r2 prompts (e.g. "[0x00000000]>")
-        candidate_lines = [
-            line for line in candidate_lines
-            if not line.startswith(">") and not line.startswith("0x")
-        ]
-        # We should see at most {lo} in a properly isolated sandbox.
-        # Don't be too strict — r2's output is noisy. Just assert that
-        # known non-loopback interface names from the host (eth0, wlan0)
-        # don't appear.
-        for known_host_iface in ("eth0", "wlan0", "docker0", "enp"):
-            assert known_host_iface not in net_iface_listing, (
-                f"network isolation failed — sandbox sees host "
-                f"interface {known_host_iface!r}. "
-                f"stdout={net_iface_listing!r}"
+        """block_network=True → outbound TCP connect fails.
+
+        unshare --net creates a new network namespace, but sysfs is NOT
+        remounted — /sys/class/net still reflects the host's interfaces.
+        So we test actual connectivity: attempt a TCP connect to a
+        non-routable IP from inside r2's shell escape.
+        """
+        # 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed non-routable.
+        # In a new net-ns only loopback exists (unconfigured), so connect
+        # fails with "Network is unreachable" rather than a slow timeout.
+        r = self._r2_check(
+            "!python3 -c \""
+            "import socket,sys; s=socket.socket(); s.settimeout(3); "
+            "r=1; "
+            "try:\n s.connect(('192.0.2.1',80))\n"
+            "except Exception:\n r=0\n"
+            "finally:\n s.close()\n"
+            "print('CONNECT_OK' if r else 'CONNECT_BLOCKED'); "
+            "sys.exit(r)\""
+        )
+        stdout = r.stdout
+        # If python3 isn't available in the sandbox, fall back to
+        # bash /dev/tcp probe (bash built-in, no binary needed).
+        if "CONNECT_BLOCKED" in stdout:
+            return  # pass — network is blocked
+        if "CONNECT_OK" in stdout:
+            raise AssertionError(
+                "network isolation failed — TCP connect to 192.0.2.1:80 "
+                f"succeeded inside sandbox. stdout={stdout!r}"
             )
+        # python3 call didn't produce expected output — try bash probe
+        r2 = self._r2_check(
+            "!bash -c 'echo > /dev/tcp/192.0.2.1/80 2>/dev/null "
+            "&& echo CONNECT_OK || echo CONNECT_BLOCKED'"
+        )
+        assert "CONNECT_OK" not in r2.stdout, (
+            "network isolation failed — /dev/tcp connect succeeded "
+            f"inside sandbox. stdout={r2.stdout!r}"
+        )
 
     def test_fake_home_blocks_radare2rc(self, tmp_path):
         """A malicious ~/.radare2rc that runs `?e SANDBOX_PWNED` must

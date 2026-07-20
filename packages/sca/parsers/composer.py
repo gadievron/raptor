@@ -39,7 +39,7 @@ _PURL_TYPE = "composer"
 def parse_manifest(path: Path) -> List[Dependency]:
     """Parse a ``composer.json`` and emit one Dependency per declared dep."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("sca.parsers.composer: %s: %s", path, e)
         return []
@@ -110,7 +110,7 @@ def parse_lockfile(path: Path) -> List[Dependency]:
     flat; the join layer flips ``direct`` based on the manifest.
     """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("sca.parsers.composer: %s: %s", path, e)
         return []
@@ -168,7 +168,7 @@ def _is_platform_req(name: str) -> bool:
     """``php``, ``ext-*``, ``lib-*``, ``hhvm`` — environment requirements."""
     if name == "php" or name == "hhvm":
         return True
-    if name.startswith("ext-") or name.startswith("lib-"):
+    if name.startswith(("ext-", "lib-")):
         return True
     return False
 

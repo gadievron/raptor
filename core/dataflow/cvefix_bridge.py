@@ -280,14 +280,15 @@ def _format_path(result: dict) -> str:
     cfs = result.get("codeFlows", [])
     if not cfs:
         return ""
-    steps = cfs[0].get("threadFlows", [{}])[0].get("locations", [])
+    tflows = cfs[0].get("threadFlows") or []
+    steps = tflows[0].get("locations", []) if tflows else []
     rows = []
     for loc in steps:
-        node = loc.get("location", {})
-        phys = node.get("physicalLocation", {})
-        uri = phys.get("artifactLocation", {}).get("uri", "?")
-        line = phys.get("region", {}).get("startLine", "?")
-        msg = node.get("message", {}).get("text", "")
+        node = loc.get("location") or {}
+        phys = node.get("physicalLocation") or {}
+        uri = (phys.get("artifactLocation") or {}).get("uri", "?")
+        line = (phys.get("region") or {}).get("startLine", "?")
+        msg = (node.get("message") or {}).get("text", "")
         rows.append(f"  {Path(uri).name}:{line}  {msg}")
     if not rows:
         return ""
@@ -312,7 +313,7 @@ def _extract_proposal(
     if sink_class is None:
         return None
     try:
-        data = json.loads(Path(sarif_path).read_text())
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     for run in data.get("runs", []):
@@ -326,7 +327,7 @@ def _extract_proposal(
                 src = repo_root / _norm_uri(raw_uri)
                 if not src.is_file():
                     continue
-                lines = src.read_text(errors="replace").splitlines()
+                lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
                 snippet = lines[line - 1].strip() if 0 < line <= len(lines) else raw_uri
                 if len(lines) <= _SMALL_FILE:
                     body = "\n".join(lines)
@@ -568,50 +569,54 @@ def synthesize_from_results(
     if search_path is None:
         search_path = _default_search_path()
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
-    sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
-           "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
-    params: tuple = ()
-    if languages:
-        sql += f" AND repo_language IN ({','.join('?' * len(languages))})"
-        params = tuple(languages)
-    sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
-    rows = con.execute(sql, params).fetchall()
-    con.close()
+    try:
+        sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
+               "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
+        params: tuple = ()
+        if languages:
+            sql += f" AND repo_language IN ({','.join('?' * len(languages))})"
+            params = tuple(languages)
+        sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
+        rows = con.execute(sql, params).fetchall()
+    finally:
+        con.close()
 
     syn = sqlite3.connect(str(synth_db))
-    syn.execute(_SCHEMA)
-    done = {(r[0], r[1]) for r in syn.execute("SELECT fix_hash, cwe FROM synth_results")}
-    todo = [r for r in rows if (r[0], r[2]) not in done]
-    log(f"bridge: {len(rows)} FP-candidates, {len(done)} already done, {len(todo)} to do")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for fix_hash, cve_id, cwe, lang, repo_url, parent_hash, row_status in todo:
-        if limit is not None and n >= limit:
-            break
-        n += 1
-        pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
-        try:
-            status, fid, backend, barrier_q, detail = synthesize_one(
-                pair, work_dir=work_dir / "item", proposer=proposer, status=row_status,
-                codeql_bin=codeql_bin, search_path=search_path,
-                max_attempts=max_attempts,
-                max_refine_attempts=max_refine_attempts,
-                tier1b_complete=tier1b_completer)
-        except Exception as exc:  # one bad candidate must not abort the whole run
-            status, fid, backend, barrier_q, detail = (
-                "error", None, _BACKEND_NONE, None,
-                f"{type(exc).__name__}: {exc}"[:400])
-            log(f"  [{n}/{len(todo)}] {cve_id} {cwe}: ERROR {type(exc).__name__}: {exc}")
-        syn.execute("INSERT OR REPLACE INTO synth_results VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (fix_hash, cwe, cve_id, lang, fid, status, backend, barrier_q,
-                     detail, time.time()))
-        syn.commit()
-        if status not in ("error",):
-            suffix = f"  [{detail}]" if detail else ""
-            tag = f"({backend})" if backend else ""
-            log(f"  [{n}/{len(todo)}] {cve_id} {cwe} {lang}: {status}{tag}{suffix}")
-    report, errors = _aggregate(syn)
-    syn.close()
+    try:
+        syn.execute(_SCHEMA)
+        done = {(r[0], r[1]) for r in syn.execute("SELECT fix_hash, cwe FROM synth_results")}
+        todo = [r for r in rows if (r[0], r[2]) not in done]
+        log(f"bridge: {len(rows)} FP-candidates, {len(done)} already done, {len(todo)} to do")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for fix_hash, cve_id, cwe, lang, repo_url, parent_hash, row_status in todo:
+            if limit is not None and n >= limit:
+                break
+            n += 1
+            pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
+            try:
+                status, fid, backend, barrier_q, detail = synthesize_one(
+                    pair, work_dir=work_dir / "item", proposer=proposer, status=row_status,
+                    codeql_bin=codeql_bin, search_path=search_path,
+                    max_attempts=max_attempts,
+                    max_refine_attempts=max_refine_attempts,
+                    tier1b_complete=tier1b_completer)
+            except Exception as exc:  # one bad candidate must not abort the whole run
+                status, fid, backend, barrier_q, detail = (
+                    "error", None, _BACKEND_NONE, None,
+                    f"{type(exc).__name__}: {exc}"[:400])
+                log(f"  [{n}/{len(todo)}] {cve_id} {cwe}: ERROR {type(exc).__name__}: {exc}")
+            syn.execute("INSERT OR REPLACE INTO synth_results VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (fix_hash, cwe, cve_id, lang, fid, status, backend, barrier_q,
+                         detail, time.time()))
+            syn.commit()
+            if status not in ("error",):
+                suffix = f"  [{detail}]" if detail else ""
+                tag = f"({backend})" if backend else ""
+                log(f"  [{n}/{len(todo)}] {cve_id} {cwe} {lang}: {status}{tag}{suffix}")
+        report, errors = _aggregate(syn)
+    finally:
+        syn.close()
     if errors:
         log(f"pipeline errors (excluded from rate): {errors}")
     return report

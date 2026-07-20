@@ -170,6 +170,7 @@ def enrich_with_ast_view(
         try:
             fv = view(abs_path, host.name, at_line=line)
         except Exception:                                   # noqa: BLE001
+            logger.debug("ast view failed for %s:%s", abs_path, line, exc_info=True)
             continue
         if fv is None:
             continue

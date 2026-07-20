@@ -130,6 +130,7 @@ def enrich_with_forward_reachable(
                 inventory, [host], max_depth=max_depth,
             )
         except Exception:                              # noqa: BLE001
+            logger.debug("callgraph enrichment failed for %s", host, exc_info=True)
             continue
 
         internal_names: list = []

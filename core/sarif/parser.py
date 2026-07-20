@@ -90,29 +90,24 @@ def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str
     if not code_flows:
         return None
 
-    try:
-        # `.get(k, default)` returns the value (None) when the key is
-        # present-but-null. SARIF emitters legitimately produce
-        # `"threadFlows": null` when no flow is available — guard with
-        # `or []` so iteration doesn't TypeError on None.
-        all_paths: List[Dict[str, Any]] = []
-        for flow in code_flows:
+    all_paths: List[Dict[str, Any]] = []
+    for flow in code_flows:
+        try:
             for tflow in (flow.get("threadFlows") or []):
                 locations = tflow.get("locations") or []
                 p = _path_from_locations(locations)
                 if p is not None:
                     all_paths.append(p)
+        except Exception as e:
+            logger.warning("SARIF parser: skipping malformed codeFlow: %s", e)
+            continue
 
-        if not all_paths:
-            return None
-
-        primary = all_paths[0]
-        primary["alternative_paths"] = all_paths[1:]
-        return primary
-
-    except Exception as e:
-        logger.warning(f"SARIF parser: failed to extract dataflow path: {e}")
+    if not all_paths:
         return None
+
+    primary = all_paths[0]
+    primary["alternative_paths"] = all_paths[1:]
+    return primary
 
 
 def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -491,7 +486,9 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
         # Resolve via the run's `originalUriBaseIds` table.
         uri_bases = run.get("originalUriBaseIds") or {}
 
-        def _resolve_uri(art: Dict[str, Any]) -> Optional[str]:
+        def _resolve_uri(
+            art: Dict[str, Any], _uri_bases=uri_bases,
+        ) -> Optional[str]:
             """Resolve `art.uri` against the run's `originalUriBaseIds`,
             following nested `uriBaseId` references up to a small depth
             cap. Returns the final URI string, or None if the input
@@ -505,7 +502,7 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
             while base_id and base_id not in seen and depth < 16:
                 seen.add(base_id)
                 depth += 1
-                base = uri_bases.get(base_id)
+                base = _uri_bases.get(base_id)
                 if not isinstance(base, dict):
                     break
                 base_uri = base.get("uri")

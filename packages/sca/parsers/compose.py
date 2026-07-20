@@ -174,7 +174,7 @@ def _build_dep(
         return None
     image = image.strip()
 
-    if image.startswith("./") or image.startswith("../"):
+    if image.startswith(("./", "../")):
         return None
 
     name, version = _split_image_ref(image)

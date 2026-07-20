@@ -13,7 +13,7 @@ Usage:
     raptor.py <mode> [options]
 
 Available Modes:
-    scan        - Static code analysis (Semgrep + CodeQL)
+    scan        - Static code analysis with Semgrep
     sca         - Software Composition Analysis (deps + advisories + SBOM)
     binary      - Black-box binary investigation and evidence collection
     fuzz        - Binary fuzzing with AFL++
@@ -21,7 +21,7 @@ Available Modes:
     agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
     codeql      - CodeQL-only analysis
     analyze     - LLM-powered vulnerability analysis (requires SARIF input)
-    describe    - Describe target structure and entry points
+    describe    - Pre-flight inspection: target type, tool readiness, cost estimate
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
     zkpox       - ZKPoX disclosure bundles + proofs (beta).
@@ -453,6 +453,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
 
     # SAGE: Pre-scan recall
     try:
+        from core.json import save_json
         from core.sage.hooks import recall_context_for_scan
         sage_context = recall_context_for_scan(target or "")
         if sage_context:
@@ -469,6 +470,13 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                     f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...",
                     flush=True,
                 )
+        try:
+            save_json(
+                out_dir / "sage_precall_scan.json",
+                {"memories": sage_context},
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -585,7 +593,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                                               .get("artifactLocation", {})
                                               .get("uri", "unknown")),
                             })
-                except Exception:
+                except (OSError, KeyError, TypeError, json.JSONDecodeError):
                     continue
             if findings:
                 stored = store_scan_results(target or "", findings, {"total_findings": len(findings)})
@@ -626,11 +634,10 @@ _active_dispatcher = None
 def _get_or_start_dispatcher():
     """Lazy single dispatcher per ``raptor.py`` invocation.
 
-    Phase B credential-isolation: when this is called, the spawned
-    analysis script gets ``RAPTOR_LLM_SOCKET`` + a per-spawn token
-    via ``spawn_worker``, and ``core/llm/providers.py`` routes its
-    SDK calls through the dispatcher. API keys are still in env (for
-    fallback) until Phase C drops the passthrough.
+    Credential-isolation: the spawned analysis script gets
+    ``RAPTOR_LLM_SOCKET`` + a per-spawn token via ``spawn_worker``,
+    and ``core/llm/providers.py`` routes its SDK calls through the
+    dispatcher. API keys remain in env as fallback.
     """
     global _active_dispatcher
     if _active_dispatcher is not None:
@@ -671,22 +678,16 @@ def _get_or_start_dispatcher():
         # channel stays open in this case but is no worse than today.
         # Surface the failure on stderr (in addition to the logger
         # warning) so operators see it regardless of log-level
-        # config. After Phase C activation strips API keys from
-        # ``get_llm_env``, this fallback's "no worse than today"
-        # guarantee no longer holds — the fallback path will produce
-        # workers without auth, and the symptom will be a confusing
-        # "first LLM call fails" 30 seconds later. Step 1 of the
-        # phased Phase C rollout: make this failure mode loud at the
-        # moment it happens, before activation depends on it.
+        # config. Once API keys are stripped from ``get_llm_env``,
+        # this fallback produces workers without auth — the symptom
+        # is a confusing "first LLM call fails" 30 seconds later.
+        # Surface it loudly now so operators see it immediately.
         import logging
         import sys as _sys
         msg = (
             f"raptor.py: credential-isolation dispatcher failed to "
             f"start ({type(exc).__name__}: {exc}). Falling back to "
-            f"env-direct credential propagation. Once Phase C "
-            f"activation lands, this fallback will produce workers "
-            f"without LLM auth — fix the dispatcher startup failure "
-            f"or expect script-level auth errors."
+            f"env-direct credential propagation."
         )
         _sys.stderr.write(msg + "\n")
         _sys.stderr.flush()
@@ -727,11 +728,6 @@ def _run_script(script_path: Path, args: list) -> int:
 
     try:
         from core.config import RaptorConfig
-        # Phase B: opt the spawn into the credential-isolation
-        # dispatcher. Worker env still has API keys (fallback path
-        # exists until Phase C); ``RAPTOR_LLM_SOCKET`` and
-        # ``RAPTOR_LLM_TOKEN_FD`` direct the worker's SDK calls
-        # through the dispatcher when present.
         dispatcher = _get_or_start_dispatcher()
         if dispatcher is not None:
             from core.llm.dispatcher.spawn import spawn_worker
@@ -739,29 +735,20 @@ def _run_script(script_path: Path, args: list) -> int:
                 dispatcher,
                 cmd=cmd,
                 label=script_path.name,
-                # F102b: preserve PYTHONUSERBASE for the child
-                # ``raptor_<mode>.py`` subprocess so its own opt-in
-                # at ``get_safe_env(include_python_user_base=True)``
-                # (e.g. ``raptor_agentic.py:757`` semgrep spawn)
-                # has the value to restore. Without this flag the
-                # parent strips PYTHONUSERBASE here, leaving the
-                # child's restoration a no-op for the canonical
-                # operator path. See W14-E3 §F102b.
                 env=RaptorConfig.get_llm_env(include_python_user_base=True),
             )
             return proc.wait()
-        # Fallback: pre-Phase-B behaviour, env-direct.
-        # F102b: same opt-in as the dispatcher path above — the
-        # canonical operator entry point must preserve
-        # PYTHONUSERBASE for the spawned ``raptor_<mode>.py``
-        # subprocess. See comment at the spawn_worker call site.
+        # Fallback: env-direct (no dispatcher available).
+        # Same opt-in as the dispatcher path above — the canonical
+        # operator entry point must preserve PYTHONUSERBASE for the
+        # spawned ``raptor_<mode>.py`` subprocess.
         result = subprocess.run(
             cmd,
             env=RaptorConfig.get_llm_env(include_python_user_base=True),
         )
         return result.returncode
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         # Mark any active run as cancelled. Pre-fix Ctrl-C
         # left runs in `status="in_progress"` forever — the
         # next /scan or /agentic invocation saw a stale
@@ -795,7 +782,7 @@ def _run_script(script_path: Path, args: list) -> int:
         # alongside the message so logs show the failure shape
         # without needing a traceback.
         print(f"\n✗ Error running {script_path.name}: "
-              f"{type(e).__name__}: {e}")
+              f"{type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
 
@@ -822,7 +809,7 @@ def mode_sca(args: list) -> int:
     script_root = Path(__file__).parent
     sca_shim = script_root / "libexec" / "raptor-sca-run"
     if not sca_shim.exists():
-        print(f"✗ SCA shim not found: {sca_shim}")
+        print(f"✗ SCA module not found: {sca_shim}", file=sys.stderr)
         return 1
 
     # Translate ``--repo <p>`` into the positional target the shim
@@ -877,10 +864,10 @@ def mode_sca(args: list) -> int:
         result = subprocess.run(cmd, env=env)
         return result.returncode
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         return 130
     except Exception as e:
-        print(f"\n✗ Error running raptor-sca: {e}")
+        print(f"\n✗ Error running raptor-sca: {e}", file=sys.stderr)
         return 1
 
 
@@ -914,7 +901,7 @@ def mode_binary(args: list) -> int:
     try:
         return subprocess.call([str(wrapper), *args], env=env)
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         return 130
     except Exception as exc:
         print(f"\n✗ Error running raptor-binary: {exc}", file=sys.stderr)
@@ -1029,8 +1016,7 @@ def mode_describe(args: list) -> int:
     (.tar.gz / .zip / …) extracted on the fly via
     ``core.archive`` and described.
     """
-    import argparse as _ap
-    parser = _ap.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="raptor describe",
         description=(
             "Pre-flight inspection: target type, tool readiness, "
@@ -1130,12 +1116,11 @@ def mode_frida(args: list) -> int:
     operator runs ``bin/raptor frida ...`` or invokes the wrapper
     directly from a /frida skill.
     """
-    import subprocess
     from core.config import RaptorConfig
     script_root = Path(__file__).parent
     wrapper = script_root / "libexec" / "raptor-frida"
     if not wrapper.exists():
-        print(f"✗ Frida wrapper not found: {wrapper}")
+        print(f"✗ Frida wrapper not found: {wrapper}", file=sys.stderr)
         return 1
     env = RaptorConfig.get_safe_env()
     env.setdefault("_RAPTOR_TRUSTED", "1")
@@ -1179,8 +1164,19 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     mode_scripts = _mode_help_scripts()
 
     if mode not in mode_scripts:
-        print(f"✗ Unknown mode: {mode}", file=sys.stderr)
-        print(f"Available modes: {', '.join(mode_scripts.keys())}")
+        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida'}
+        if mode not in all_modes:
+            print(f"✗ Unknown mode: {mode}", file=sys.stderr)
+            print(f"Available modes: {', '.join(sorted(all_modes))}", file=sys.stderr)
+            return
+        print(f"\n[*] Help for mode: {mode}\n", flush=True)
+        mode_handlers = {
+            'describe': mode_describe,
+            'doctor': mode_doctor,
+            'sca': mode_sca,
+            'frida': mode_frida,
+        }
+        mode_handlers[mode](["--help"])
         return
 
     script_path = mode_scripts[mode]
@@ -1230,6 +1226,7 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  describe    - Pre-flight inspection: target type, tool readiness, cost estimate
   doctor      - Status report for local setup (no claude needed)
   frida       - Dynamic instrumentation via Frida (alpha)
   zkpox       - ZKPoX disclosure bundles + proofs (beta).
@@ -1428,10 +1425,10 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
+        print("\n\nInterrupted by user", file=sys.stderr)
         sys.exit(130)
     except Exception as e:
-        print(f"\n✗ Fatal error: {e}")
+        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         import traceback
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)

@@ -154,7 +154,7 @@ def check_llm() -> tuple[list, list]:
             if notice:
                 warnings.append(notice)
             try:
-                data = json.loads(config_path.read_text())
+                data = json.loads(config_path.read_text(encoding="utf-8"))
                 models = data.get("models", []) if isinstance(data, dict) else data
             except (json.JSONDecodeError, OSError):
                 pass
@@ -645,7 +645,7 @@ def main():
     except Exception:
         output = f"{logo}\n\nraptor:~$ {quote}"
 
-    OUTPUT_FILE.write_text(output)
+    OUTPUT_FILE.write_text(output, encoding="utf-8")
     print(output)
 
 

@@ -1212,5 +1212,5 @@ def test_target_kind_cli_flag_sets_env(monkeypatch) -> None:
     import os
     from core.config import RaptorConfig
     if args.target_kind != "auto":
-        os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
+        monkeypatch.setenv(RaptorConfig.ENV_TARGET_KIND, args.target_kind)
     assert os.environ.get(RaptorConfig.ENV_TARGET_KIND) == "library"

@@ -60,8 +60,14 @@ def generate_corpus_for_pair(
         after_db, queries, sarif_dir / "after.sarif",
         codeql_bin=codeql_bin, runner=runner,
     )
-    before_sarif = json.loads(Path(a_before.sarif_path).read_text())
-    after_sarif = json.loads(Path(a_after.sarif_path).read_text())
+    try:
+        before_sarif = json.loads(Path(a_before.sarif_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"before-SARIF read/parse failed: {e}") from e
+    try:
+        after_sarif = json.loads(Path(a_after.sarif_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"after-SARIF read/parse failed: {e}") from e
 
     pairs = generate_from_sarif(
         before_sarif, after_sarif,

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import threading
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -57,37 +58,35 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
-# Tree-sitter Parser cache. Each ``Parser(Language(ts_X.language()))``
-# construction holds C-side state (libtree-sitter allocates the
-# parser's internal stack); building per-call across thousands of
-# files in an inventory walk amplifies native allocator work +
-# accumulates RSS. The grammar is immutable across the program's
-# lifetime, so a single Parser per language can be reused for every
-# parse against that grammar.
+# Tree-sitter Parser cache.  Each ``Parser(Language(ts_X.language()))``
+# holds C-side mutable state (libtree-sitter's internal parse stack) —
+# NOT thread-safe for concurrent ``.parse()`` calls.  The inventory
+# builder fans out via ThreadPoolExecutor, so a shared module-level
+# dict would hand the same Parser to multiple workers simultaneously.
 #
-# Keyed by ``id(language_fn)`` — each ``tree_sitter_X.language``
-# attribute is a stable module-level callable, so identity-keying
-# is sufficient. Cache populated lazily so importing this module
-# doesn't pay tree-sitter init cost if no parse happens.
-_TS_PARSER_CACHE: Dict[int, Any] = {}
+# ``threading.local`` gives every thread its own dict of parsers,
+# avoiding both the cache-mutation race and the concurrent-parse
+# unsafety.  The grammar is immutable, so each thread still gets
+# exactly one Parser per language for its lifetime.
+_TS_PARSER_LOCAL = threading.local()
 
 
 def _get_ts_parser(language_fn: Any) -> Any:
-    """Return a cached tree-sitter Parser for ``language_fn`` (a
-    grammar module's ``.language`` callable, e.g. ``ts_js.language``).
+    """Return a per-thread cached tree-sitter Parser for *language_fn*.
 
-    Raises ``ImportError`` if ``tree_sitter`` itself isn't installed
-    — callers already wrap the parse-site in try/except around the
-    grammar module import + ``Parser(Language(...))`` construction
-    so the additional ImportError fits the existing error path.
+    Raises ``ImportError`` if ``tree_sitter`` itself isn't installed.
     """
+    cache: Dict[int, Any] = getattr(_TS_PARSER_LOCAL, "parsers", None)  # type: ignore[assignment]
+    if cache is None:
+        cache = {}
+        _TS_PARSER_LOCAL.parsers = cache
     key = id(language_fn)
-    cached = _TS_PARSER_CACHE.get(key)
+    cached = cache.get(key)
     if cached is not None:
         return cached
     from tree_sitter import Language, Parser
     parser = Parser(Language(language_fn()))
-    _TS_PARSER_CACHE[key] = parser
+    cache[key] = parser
     return parser
 
 
@@ -341,7 +340,7 @@ class FileCallGraph:
             imports=dict(d.get("imports") or {}),
             calls=[
                 CallSite(
-                    line=int(c.get("line", 0)),
+                    line=int(c.get("line") or 0),
                     chain=list(c.get("chain") or []),
                     caller=c.get("caller"),
                     receiver_class=c.get("receiver_class"),
@@ -359,10 +358,10 @@ class FileCallGraph:
             classes=[
                 ClassDef(
                     name=str(k.get("name", "")),
-                    line=int(k.get("line", 0)),
+                    line=int(k.get("line") or 0),
                     bases=list(k.get("bases") or []),
                     methods=[
-                        (str(m[0]), int(m[1]))
+                        (str(m[0]), int(m[1] or 0))
                         for m in (k.get("methods") or [])
                         if isinstance(m, (list, tuple)) and len(m) >= 2
                     ],
@@ -373,7 +372,7 @@ class FileCallGraph:
             decorated_functions=[
                 DecoratedFunction(
                     name=str(df.get("name", "")),
-                    line=int(df.get("line", 0)),
+                    line=int(df.get("line") or 0),
                     decorators=[
                         list(ch) for ch in (df.get("decorators") or [])
                         if isinstance(ch, (list, tuple))
@@ -383,7 +382,7 @@ class FileCallGraph:
             ],
             package_name=d.get("package_name"),
             relative_imports=[
-                (int(r[0]), str(r[1] or ""), str(r[2] or ""),
+                (int(r[0] or 0), str(r[1] or ""), str(r[2] or ""),
                  r[3] if len(r) > 3 else None)
                 for r in rel if isinstance(r, (list, tuple)) and len(r) >= 3
             ],

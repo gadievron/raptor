@@ -248,7 +248,7 @@ class OsvClient:
                 ]
 
             for chunk, results in chunk_results:
-                for dep, ids in zip(chunk, results):
+                for dep, ids in zip(chunk, results, strict=True):
                     self._cache.put(
                         self._query_key(dep), ids,
                         ttl_seconds=self._query_ttl,
@@ -426,7 +426,7 @@ class OsvClient:
                 for dep, candidate in chunk
             ]
             results = self._inner.query_batch(queries)
-            for (dep, candidate), ids in zip(chunk, results):
+            for (dep, candidate), ids in zip(chunk, results, strict=True):
                 self._cache.put(
                     self._osssfuzz_query_key(dep, candidate), ids,
                     ttl_seconds=self._query_ttl,

@@ -128,7 +128,7 @@ def parse(path: Path) -> List[Dependency]:
     """Parse a Gradle build script and emit one Dependency per
     recognised dependency declaration."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gradle_dsl: %s: %s", path, e)
         return []
@@ -373,7 +373,7 @@ def _classify_version(version: Optional[str]) -> PinStyle:
         # ``$version`` / ``${libs.versions.foo}`` — interpolation;
         # we can't resolve it.
         return PinStyle.UNKNOWN
-    if version.startswith("[") or version.startswith("("):
+    if version.startswith(("[", "(")):
         # Maven-style range: ``[1.0,2.0)``
         return PinStyle.RANGE
     if "+" in version and version.endswith("+"):

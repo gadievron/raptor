@@ -209,7 +209,7 @@ def _fetch_debian(cve_id: str) -> dict[str, Any]:
     body = resp.body.decode("utf-8", errors="replace")[:_MAX_BYTES]
     refs: list[str] = []
     for href in _HREF_RE.findall(body):
-        if (href.startswith("http://") or href.startswith("https://")) and href not in refs:
+        if (href.startswith(("http://", "https://"))) and href not in refs:
             refs.append(href)
     status = "fixed" if "fixed" in body.lower() else None
     return {"status": status, "fix_version": None, "references": refs[:50]}

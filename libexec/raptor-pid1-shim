@@ -256,7 +256,24 @@ def main() -> int:
                 os._exit(126)
             os._exit(125)  # unreachable
 
-        # Intermediate — waitpid grandchild, mirror status.
+        # Intermediate — forward termination signals to the grandchild
+        # (which called setsid, so os.kill by pid is the only path).
+        # The pre-fork SIG_IGN is still in effect here; replace it with
+        # a forwarder so the shim's os.kill(child, sig) reaches the
+        # actual target.
+        def _fwd_to_grandchild(sig: int, _frame) -> None:
+            try:
+                os.kill(intermediate_grandchild, sig)
+            except ProcessLookupError:
+                pass
+
+        for _s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+            try:
+                signal.signal(_s, _fwd_to_grandchild)
+            except (OSError, ValueError):
+                pass
+
+        # waitpid grandchild, mirror status.
         while True:
             try:
                 _, g_status = os.waitpid(intermediate_grandchild, 0)

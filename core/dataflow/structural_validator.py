@@ -145,10 +145,11 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
     if ".." in raw:
         return None
     p = Path(raw)
+    repo_resolved = repo_path.resolve()
     if p.is_absolute():
         try:
             resolved = p.resolve()
-            if not str(resolved).startswith(str(repo_path.resolve())):
+            if not resolved.is_relative_to(repo_resolved):
                 return None
         except (OSError, ValueError):
             return None
@@ -156,7 +157,7 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
             return resolved
         return None
     candidate = (repo_path / p).resolve()
-    if not str(candidate).startswith(str(repo_path.resolve())):
+    if not candidate.is_relative_to(repo_resolved):
         return None
     if candidate.exists():
         return candidate
@@ -205,7 +206,7 @@ def _find_enclosing_function(
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
                 return f.name
     except Exception:
-        pass
+        logger.debug("function-at-line lookup failed", exc_info=True)
     return None
 
 

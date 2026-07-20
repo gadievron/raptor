@@ -58,6 +58,13 @@ VERDICT_NO_SUPPRESS = "no_suppress"
 VERDICT_UNRESOLVED = "unresolved"
 
 
+def _safe_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Record
 # ---------------------------------------------------------------------------
@@ -116,8 +123,8 @@ class ParityRecord:
             file=d.get("file", ""),
             cwe=d.get("cwe", ""),
             language=d.get("language", ""),
-            source_line=int(d.get("source_line", 0)),
-            sink_line=int(d.get("sink_line", 0)),
+            source_line=_safe_int(d.get("source_line", 0)),
+            sink_line=_safe_int(d.get("sink_line", 0)),
             kind=d.get("kind", ""),
             lexical_suppressed=bool(d["lexical_suppressed"]),
             value_bound_verdict=d.get("value_bound_verdict", VERDICT_UNRESOLVED),

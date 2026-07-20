@@ -301,7 +301,7 @@ def clone_repository(
         raise RuntimeError(
             "core.sandbox unavailable - git clone refuses to run "
             "without sandbox isolation"
-        )
+        ) from None
 
     target.parent.mkdir(parents=True, exist_ok=True)
     proc = run_untrusted_networked(
@@ -377,7 +377,7 @@ def fetch_commit(
         raise RuntimeError(
             "core.sandbox unavailable - git fetch refuses to run "
             "without sandbox isolation"
-        )
+        ) from None
 
     repo_dir.mkdir(parents=True, exist_ok=True)
     env = get_safe_git_env()
@@ -586,7 +586,7 @@ def ls_remote(
         raise RuntimeError(
             "core.sandbox unavailable - git ls-remote refuses to run "
             "without sandbox isolation"
-        )
+        ) from None
 
     # ``ls-remote`` doesn't write to the host filesystem, but
     # ``run_untrusted_networked`` requires a non-empty ``output`` so

@@ -196,26 +196,25 @@ def test_run_attach_pid_writes_outputs(tmp_path: Path):
         out_dir=tmp_path,
         script_source="send({hi: 1});",
         script_origin="file:test.js",
-        duration_sec=0.05,        # tiny - test stays fast
+        duration_sec=0.3,
     )
 
-    # Fire one message during the sleep window.
     events: list[dict] = []
     def on_event(rec: dict):
         events.append(rec)
 
-    # Patch threading.Event-wait pattern by firing inside a thread
-    # once the script's loaded.
     original_load = FakeScript.load
+    fired = threading.Event()
     def load_and_fire(self):
         original_load(self)
-        threading.Timer(0.01, lambda: self.fire(
-            {"type": "send", "payload": {"hi": 1}})).start()
+        self.fire({"type": "send", "payload": {"hi": 1}})
+        fired.set()
     FakeScript.load = load_and_fire
     try:
         result = runner.run(cfg, on_event=on_event, frida_mod_override=fake)
     finally:
         FakeScript.load = original_load
+    assert fired.is_set()
 
     assert result.ok is True
     assert result.resolved_pid == 1234
@@ -324,19 +323,19 @@ def test_run_script_error_persisted(tmp_path: Path):
         out_dir=tmp_path,
         script_source="// crash",
         script_origin="file:crash.js",
-        duration_sec=0.05,
+        duration_sec=0.3,
     )
 
     original_load = FakeScript.load
     def load_and_error(self):
         original_load(self)
-        threading.Timer(0.005, lambda: self.fire({
+        self.fire({
             "type": "error",
             "description": "ReferenceError: blah is not defined",
             "stack": "...",
             "fileName": "/agent/script1.js",
             "lineNumber": 3,
-        })).start()
+        })
     FakeScript.load = load_and_error
     try:
         result = runner.run(cfg, frida_mod_override=fake)

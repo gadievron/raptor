@@ -426,7 +426,8 @@ def load_understand_context(
     #     would survive a stale-files set containing the canonical
     #     `foo.py` and leak through. The validate dir's checklist is the
     #     ground truth for normalisation. ---
-    validate_checklist = load_json(validate_dir / "checklist.json") or {}
+    _raw_cl = load_json(validate_dir / "checklist.json")
+    validate_checklist = _raw_cl if isinstance(_raw_cl, dict) else {}
     normalize_context_map(context_map, validate_checklist,
                           target_path=validate_checklist.get("target_path"))
 
@@ -1201,7 +1202,7 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
         items = context_map.get(key)
         if not isinstance(items, list):
             continue
-        clean = [e for e in items if not _references_file(e, stale_files)]
+        clean = [e for e in items if isinstance(e, dict) and not _references_file(e, stale_files)]
         removed += len(items) - len(clean)
         context_map[key] = clean
 
@@ -1324,7 +1325,8 @@ def _merge_attack_surface(
 
     changed = False
     if surface_path.exists():
-        existing = load_json(surface_path) or {}
+        _raw_surf = load_json(surface_path)
+        existing = _raw_surf if isinstance(_raw_surf, dict) else {}
         merged_sources = _merge_list_by_key(
             existing.get("sources", []), new_sources, key="entry"
         )
@@ -1335,9 +1337,9 @@ def _merge_attack_surface(
             existing.get("trust_boundaries", []), new_boundaries, key="boundary"
         )
         # Only rewrite if the merge added something
-        changed = (len(merged_sources) != len(existing.get("sources", []))
-                   or len(merged_sinks) != len(existing.get("sinks", []))
-                   or len(merged_boundaries) != len(existing.get("trust_boundaries", [])))
+        changed = (len(merged_sources) != len(existing.get("sources") or [])
+                   or len(merged_sinks) != len(existing.get("sinks") or [])
+                   or len(merged_boundaries) != len(existing.get("trust_boundaries") or []))
     else:
         merged_sources = new_sources
         merged_sinks = new_sinks
@@ -1358,7 +1360,7 @@ def _merge_attack_surface(
         # spot map for any sibling process.
         save_json(surface_path, attack_surface, mode=0o600)
 
-    unchecked_count = len(context_map.get("unchecked_flows", []))
+    unchecked_count = len(context_map.get("unchecked_flows") or [])
     return {
         "sources": len(merged_sources),
         "sinks": len(merged_sinks),
@@ -1605,7 +1607,7 @@ def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, 
         path["attacker_control"] = attacker_control
 
     # If the trace summary has a verdict, record it as a note for Stage B
-    summary = trace.get("summary", {})
+    summary = trace.get("summary") or {}
     if summary.get("verdict"):
         path["trace_verdict"] = summary["verdict"]
 

@@ -92,7 +92,8 @@ def main() -> int:
         print(
             "raptor-enrich-context-map-ast-view: no entries enriched "
             "(no entry_points/sinks fields, all hosts unresolvable, or "
-            "inventory build skipped)"
+            "inventory build skipped)",
+            file=sys.stderr,
         )
     return 0
 

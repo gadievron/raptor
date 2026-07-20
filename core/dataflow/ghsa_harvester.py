@@ -98,14 +98,16 @@ def _iter_advisories(
             continue
         for jp in ydir.rglob("*.json"):
             try:
-                adv = json.loads(jp.read_text())
-            except Exception:
+                adv = json.loads(jp.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 continue
-            adv_cwes = set(adv.get("database_specific", {}).get("cwe_ids", []))
+            adv_cwes = set(
+                (adv.get("database_specific") or {}).get("cwe_ids") or []
+            )
             if not (adv_cwes & cwes):
                 continue
-            ecos = {a.get("package", {}).get("ecosystem")
-                    for a in adv.get("affected", [])}
+            ecos = {(a.get("package") or {}).get("ecosystem")
+                    for a in adv.get("affected") or []}
             if not (ecos & ecosystems):
                 continue
             yield jp, adv
@@ -128,9 +130,13 @@ def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> Tuple[str, str]:
     deliberately recorded under a single CWE for the trust-witness walk;
     if the same fix is interesting under multiple CWEs, a future
     extension can iterate ``cwes & adv_cwes``."""
-    adv_cwes = sorted(set(adv.get("database_specific", {}).get("cwe_ids", [])) & cwes)
-    adv_ecos = sorted({a.get("package", {}).get("ecosystem")
-                       for a in adv.get("affected", [])} & ecosystems)
+    adv_cwes = sorted(
+        set((adv.get("database_specific") or {}).get("cwe_ids") or []) & cwes
+    )
+    adv_ecos = sorted(
+        {(a.get("package") or {}).get("ecosystem")
+         for a in adv.get("affected") or []} & ecosystems
+    )
     return adv_cwes[0], adv_ecos[0]
 
 
@@ -149,21 +155,29 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional
     so we don't bother caching the clone."""
     with tempfile.TemporaryDirectory(prefix="ghsa-resolve-") as td:
         td_p = Path(td)
+        from core.config import RaptorConfig
+        from core.sandbox.preexec import set_pdeathsig
+        _env = RaptorConfig.get_safe_env()
+        _pds = set_pdeathsig()
         try:
             subprocess.run(["git", "init", "-q", str(td_p)],
-                           check=True, timeout=15, capture_output=True)
+                           check=True, timeout=15, capture_output=True,
+                           env=_env, preexec_fn=_pds)
             subprocess.run(["git", "-C", str(td_p), "remote", "add", "origin", repo_url],
-                           check=True, timeout=15, capture_output=True)
+                           check=True, timeout=15, capture_output=True,
+                           env=_env, preexec_fn=_pds)
             r = subprocess.run(
                 ["git", "-C", str(td_p), "fetch", "-q", "--depth", "2",
                  "origin", fix_hash],
                 check=False, timeout=timeout, capture_output=True,
+                env=_env, preexec_fn=_pds,
             )
             if r.returncode != 0:
                 return None
             r = subprocess.run(
                 ["git", "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash],
                 check=False, timeout=15, capture_output=True, text=True,
+                env=_env, preexec_fn=_pds,
             )
             if r.returncode != 0:
                 return None
@@ -205,8 +219,7 @@ def _write_metadata_db(db_path: Path, harvested: list) -> None:
     """Write the harvested fixes into a fresh metadata DB.  Schema
     columns are exactly what :func:`cvefix_loader.load_pairs` needs;
     extras are deliberately omitted (don't fabricate data)."""
-    if db_path.exists():
-        db_path.unlink()
+    db_path.unlink(missing_ok=True)
     con = sqlite3.connect(db_path)
     try:
         con.executescript(_SCHEMA)

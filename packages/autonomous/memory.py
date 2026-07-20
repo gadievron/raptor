@@ -113,7 +113,7 @@ class FuzzingMemory:
 
         try:
             data = load_json(self.memory_file)
-            if data is None:
+            if not isinstance(data, dict):
                 logger.warning(f"Failed to parse memory file: {self.memory_file}")
                 return
 

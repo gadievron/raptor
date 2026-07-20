@@ -302,6 +302,7 @@ def enrich_with_caller_context(
                     inventory, target, max_depth=max_depth,
                 )
             except Exception:                          # noqa: BLE001
+                logger.debug("reachability enrichment failed for %s", target, exc_info=True)
                 continue
 
             direct_callers = one_hop.all_callers

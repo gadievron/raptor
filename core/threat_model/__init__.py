@@ -11,11 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
 # Range of schema versions ``from_dict`` will accept. Anything
@@ -246,7 +249,7 @@ class ThreatModel:
                 raise ValueError(
                     f"threat-model version must be an integer, got "
                     f"{type(raw_version).__name__}"
-                )
+                ) from None
             if not (
                 SCHEMA_VERSION_MIN <= version <= SCHEMA_VERSION_MAX
             ):
@@ -423,7 +426,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
     model = blank_for_project(project)
     model.source = "context-map"
     model.entry_points = _summaries_from_entries(
-        context_map.get("entry_points") or context_map.get("sources") or [],
+        context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
         default_label="entry",
     )
     model.trust_boundaries = _summaries_from_entries(
@@ -431,7 +434,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
         default_label="boundary",
     )
     sinks = _summaries_from_entries(
-        context_map.get("sink_details") or context_map.get("sinks") or [],
+        context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or [],
         default_label="sink",
     )
     model.domain_packs = _derive_domain_packs(context_map)
@@ -887,7 +890,7 @@ def lint_model(model: ThreatModel) -> list[dict[str, Any]]:
 def diff_context_map(model: ThreatModel, context_map: dict[str, Any]) -> dict[str, Any]:
     """Compare a model with a fresh ``context-map.json``."""
     fresh_entries = set(_summaries_from_entries(
-        context_map.get("entry_points") or context_map.get("sources") or [],
+        context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
         default_label="entry",
     ))
     fresh_boundaries = set(_summaries_from_entries(
@@ -1009,6 +1012,7 @@ def load_for_target(target: Path) -> Optional[ThreatModel]:
             return None
         return load_model(json_path)
     except Exception:
+        logger.warning("failed to load project threat model for %s", target, exc_info=True)
         return None
 
 
@@ -1026,9 +1030,10 @@ def _project_threat_model_json_path(project: Any) -> Optional[Path]:
     ``project.output_dir``. Anything outside is refused (returns
     None; caller treats as "no threat model").
     """
-    output_dir = Path(getattr(project, "output_dir", "") or "")
-    if not str(output_dir):
+    output_dir_str = getattr(project, "output_dir", "") or ""
+    if not output_dir_str:
         return None
+    output_dir = Path(output_dir_str)
     configured = getattr(project, "threat_model_path", "")
     if configured:
         candidate = Path(configured)
@@ -1161,7 +1166,7 @@ def _vuln_classes_for_packs(packs: list[str]) -> list[str]:
 
 def _data_flows_from_context_map(context_map: dict[str, Any]) -> list[dict[str, Any]]:
     entries = context_map.get("entry_points") or []
-    sinks = context_map.get("sink_details") or context_map.get("sinks") or []
+    sinks = context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or []
     entries_by_id = _records_by_id(entries)
     sinks_by_id = _records_by_id(sinks)
     out: list[dict[str, Any]] = []
@@ -1198,7 +1203,7 @@ def _threats_from_context_map(
         category = _category_from_sink(str(flow.get("sink") or ""))
         threats.append({
             "id": f"T-{i + 1:03d}",
-            "title": f"Unchecked flow from {flow.get('source')} to {flow.get('sink')}",
+            "title": f"Unchecked flow from {flow.get('source') or '?'} to {flow.get('sink') or '?'}",
             "category": category,
             "stride": _stride_for_category(category),
             "status": "needs_evidence",

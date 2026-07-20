@@ -353,7 +353,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                 if embedded_meta.get("name"):
                     project_name = embedded_meta["name"]
             except (json.JSONDecodeError, KeyError):
-                raise ValueError("Corrupt .project.json in archive")
+                raise ValueError("Corrupt .project.json in archive") from None
 
             # --- Validate name before any filesystem work ---
             from .project import ProjectManager
@@ -361,7 +361,7 @@ def import_project(zip_path: Path, projects_dir: Path,
             try:
                 mgr._validate_name(project_name)
             except ValueError as e:
-                raise ValueError(f"Cannot import: {e}")
+                raise ValueError(f"Cannot import: {e}") from e
 
             existing = mgr.load(project_name)
             if existing and not force:
@@ -447,7 +447,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                             f"Refusing to extract {info.filename!r}: "
                             f"resolved target {target_resolved} escapes "
                             f"destination {extract_dest_resolved}"
-                        )
+                        ) from None
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     actual_size = 0
                     with zf.open(info, "r") as src, open(target_path, "wb") as dst:
@@ -477,7 +477,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                 raise
 
     except zipfile.BadZipFile:
-        raise ValueError("Invalid zip file")
+        raise ValueError("Invalid zip file") from None
 
     # Register the project
     target = embedded_meta.get("target", "(imported)") if embedded_meta else "(imported)"

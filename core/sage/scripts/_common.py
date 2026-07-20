@@ -8,7 +8,7 @@ duplicates in the SAGE consensus store.
 `async_memory_exists` lets callers skip the propose step for items
 already stored, keyed by a stable per-memory tag that SAGE's
 tags-as-first-class feature makes queryable. (Introduced in SAGE
-6.6.0; still present in 8.4.2 — `list_memories(domain, tag, limit=1)`
+6.6.0; still present in 11.9.2 — `list_memories(domain, tag, limit=1)`
 remains the supported exact-filter lookup, verified against
 docs/reference/python-sdk.md.)
 

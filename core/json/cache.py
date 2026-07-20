@@ -542,7 +542,7 @@ class JsonCache:
                     "written_at": envelope.written_at,
                     "ttl_seconds": envelope.ttl_seconds,
                     "value": envelope.value,
-                }, fh)
+                }, fh, allow_nan=False)
             tmp.replace(path)
         except (OSError, TypeError, ValueError) as e:
             # OSError: disk full, permission denied, etc.
@@ -636,8 +636,13 @@ class JsonCache:
             ttl = int(ttl_raw)
         except (OverflowError, ValueError, TypeError) as e:
             raise ValueError(f"non-numeric ttl_seconds: {ttl_raw!r}") from e
+        written_raw = data["written_at"]
+        try:
+            written_at = float(written_raw)
+        except (OverflowError, ValueError, TypeError) as e:
+            raise ValueError(f"non-numeric written_at: {written_raw!r}") from e
         return CacheEnvelope(
-            written_at=float(data["written_at"]),
+            written_at=written_at,
             ttl_seconds=ttl,
             value=data["value"],
         )

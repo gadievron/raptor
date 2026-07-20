@@ -124,7 +124,7 @@ class TraceAdapter(BaseVerdictAdapter):
                 f"trace verdict dict missing required 'trace_id' field: "
                 f"{sorted(item.keys())}"
             )
-        return tid.strip() if isinstance(tid, str) else tid
+        return tid.strip() if isinstance(tid, str) else str(tid)
 
     def normalize_verdict(self, item: Dict[str, Any]) -> str:
         # Defensive: model output occasionally has type drift on enum

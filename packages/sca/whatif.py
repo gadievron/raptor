@@ -585,6 +585,8 @@ def _canonical_id(f: VulnFinding) -> str:
     advisories share a CVE alias. Falling back to ``osv_id`` covers
     advisories without a CVE assigned.
     """
+    if not f.advisories:
+        return f.package or ""
     advisory: Advisory = f.advisories[0]
     for alias in advisory.aliases:
         if isinstance(alias, str) and alias.upper().startswith("CVE-"):
@@ -605,6 +607,8 @@ def _ranked(findings: List[VulnFinding]) -> List[VulnFinding]:
 
 
 def _advisory_line(f: VulnFinding) -> str:
+    if not f.advisories:
+        return f"- {f.package or '?'}\n"
     primary = f.advisories[0]
     tags: List[str] = [f.severity.title()]
     if f.in_kev:

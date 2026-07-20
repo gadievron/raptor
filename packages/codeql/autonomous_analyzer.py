@@ -512,7 +512,7 @@ class AutonomousCodeQLAnalyzer:
         file_path = joined
 
         try:
-            with open(file_path) as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
 
             start = max(0, finding.start_line - context_lines - 1)
@@ -761,8 +761,8 @@ class AutonomousCodeQLAnalyzer:
                 tm_block = threat_model_untrusted_block(repo_path)
                 if tm_block:
                     blocks.append(tm_block)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("threat_model_untrusted_block failed: %s", exc)
 
         slots = {
             "rule_id": TaintedString(value=finding.rule_id, trust="untrusted"),
@@ -1158,7 +1158,7 @@ class AutonomousCodeQLAnalyzer:
                     ),
                 )
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("record_suppression failed for %s", _finding_dict.get("id", "?"))
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,
@@ -1205,7 +1205,7 @@ class AutonomousCodeQLAnalyzer:
                     self.logger.warning(f"Failed to generate visualizations: {e}")
 
             if dataflow_validation and not dataflow_validation.is_exploitable:
-                self.logger.info("❌ Dataflow not exploitable - skipping exploit generation")
+                self.logger.info("✗ Dataflow not exploitable - skipping exploit generation")
                 return AutonomousAnalysisResult(
                     finding=finding,
                     analysis=None,
@@ -1229,7 +1229,7 @@ class AutonomousCodeQLAnalyzer:
         )
 
         if not analysis.is_exploitable:
-            self.logger.info("❌ Not exploitable - skipping exploit generation")
+            self.logger.info("✗ Not exploitable - skipping exploit generation")
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=analysis,
@@ -1346,7 +1346,7 @@ class AutonomousCodeQLAnalyzer:
             else:
                 exploit_ext = ".py"
             exploit_file = out_dir / f"{safe_id}_exploit{exploit_ext}"
-            with open(exploit_file, 'w') as f:
+            with open(exploit_file, 'w', encoding='utf-8') as f:
                 f.write(exploit_code)
             self.logger.info(f"✓ Exploit saved: {exploit_file}")
 

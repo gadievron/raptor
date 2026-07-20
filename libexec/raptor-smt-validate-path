@@ -106,7 +106,7 @@ def _resolve_from_trace(args) -> "tuple[list, str | None] | int":
         return _err(f"attack-paths.json not found: {ap_path}")
 
     try:
-        paths = json.loads(ap_path.read_text())
+        paths = json.loads(ap_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         return _err(f"failed to read {ap_path}: {e}")
 

@@ -256,14 +256,19 @@ def _scan_one(
         _rmtree(sca_out)
 
     try:
+        from core.config import RaptorConfig
+        from core.git.clone import safe_git_command
+        from core.sandbox.preexec import set_pdeathsig
         subprocess.run(
-            [
-                "git", "clone", "--depth", "1",
+            safe_git_command(
+                "clone", "--depth", "1",
                 "--branch", sample.git_ref,
                 sample.repo_url, str(clone_root),
-            ],
+            ),
             check=True, capture_output=True, text=True,
             timeout=git_clone_timeout,
+            env=RaptorConfig.get_safe_env(),
+            preexec_fn=set_pdeathsig(),
         )
     except (subprocess.TimeoutExpired,
             subprocess.CalledProcessError) as e:

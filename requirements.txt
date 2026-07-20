@@ -71,7 +71,7 @@ packaging==25.0
 # https://ollama.ai
 
 # SAGE persistent memory (consensus-validated knowledge)
-# pip install sage-agent-sdk==8.4.2 httpx==0.28.1
+# pip install sage-agent-sdk==11.9.2 httpx==0.28.1
 
 # Zero Knowledge Proof of Exploit (ZKPoX)
 # packages/zkpox: AES-256-GCM (envelope.py) and CBOR encoding for the

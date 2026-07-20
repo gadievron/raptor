@@ -83,6 +83,7 @@ def test_dispatch_picks_macos_backend_on_darwin(reset_caches):
     )
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="runs real unshare")
 def test_dispatch_picks_linux_backend_on_linux(reset_caches):
     """Inverse: on Linux, the dispatch must use _spawn (or the
     Landlock-only subprocess fallback), NEVER _macos_spawn."""

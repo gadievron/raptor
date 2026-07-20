@@ -83,7 +83,7 @@ def normalize_status(value: Optional[str]) -> Optional[str]:
 
 def normalize_findings(data: dict) -> None:
     """Normalize all status/verdict fields in a findings dict in-place."""
-    for finding in data.get("findings", []):
+    for finding in data.get("findings") or []:
         if not isinstance(finding, dict):
             continue
         if finding.get("status"):

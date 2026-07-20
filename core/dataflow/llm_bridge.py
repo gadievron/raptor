@@ -24,6 +24,7 @@ extraction is a structured-output classification problem (per-function
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -39,6 +40,8 @@ from core.dataflow.sanitizer_evidence import (
 )
 from core.llm.task_types import TaskType
 from core.security.prompt_envelope import PromptBundle
+
+logger = logging.getLogger(__name__)
 
 
 def make_llm_extractor(
@@ -82,6 +85,7 @@ def make_llm_extractor(
                 task_type=task_type,
             )
         except Exception:
+            logger.debug("LLM extractor call failed", exc_info=True)
             return None
         return getattr(response, "content", None)
 

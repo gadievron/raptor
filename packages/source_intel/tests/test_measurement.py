@@ -128,8 +128,7 @@ def test_finding_to_dataflow_path_basic_shape():
     assert dp.message == "m"
 
 
-def test_finding_to_dataflow_path_column_zero_normalised_to_one():
-    # The adapter coerces column 0 to 1 — DataflowStep requires column >= 1.
+def test_finding_to_dataflow_path_column_zero_preserved():
     src = Step(file_path="a.c", line=1, column=0, snippet="s")
     snk = Step(file_path="a.c", line=2, column=0, snippet="s")
     f = Finding(
@@ -137,8 +136,8 @@ def test_finding_to_dataflow_path_column_zero_normalised_to_one():
         message="m", source=src, sink=snk,
     )
     dp = M._finding_to_dataflow_path(f)
-    assert dp.source.column == 1
-    assert dp.sink.column == 1
+    assert dp.source.column == 0
+    assert dp.sink.column == 0
 
 
 def test_finding_to_dataflow_path_intermediate_steps_relabeled():

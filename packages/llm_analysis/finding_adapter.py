@@ -62,7 +62,7 @@ class FindingAdapter(BaseVerdictAdapter):
             "is_exploitable": result.get("is_exploitable"),
             "exploitability_score": result.get("exploitability_score"),
             "ruling": result.get("ruling"),
-            "reasoning": result.get("reasoning", ""),
+            "reasoning": result.get("reasoning") or "",
         }
 
     def select_primary_with_error_fallback(

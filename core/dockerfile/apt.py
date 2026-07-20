@@ -337,7 +337,7 @@ def _is_env_prefix(tok: str) -> bool:
     leading tokens, never inside the install argument list, so the
     syntactic ambiguity is resolved by position.
     """
-    if "=" not in tok or tok.startswith("-") or tok.startswith("="):
+    if "=" not in tok or tok.startswith(("-", "=")):
         return False
     name = tok.split("=", 1)[0]
     if not name or name[0].isdigit():
@@ -357,13 +357,13 @@ def _parse_pkg(
     or shell-substitution / quote-fragment tokens (``$(...``, ```...``,
     ``"..."``).
     """
-    if not token or token.startswith("=") or token.startswith(":"):
+    if not token or token.startswith(("=", ":")):
         return None
     # File paths to local .deb files: real apt syntax, but the file
     # name is the install target — not a package name an OSV
     # advisory would match against. Skip; consumers can scan the
     # file separately if they care.
-    if token.startswith("/") or token.startswith("./") or token.startswith("../"):
+    if token.startswith(("/", "./", "../")):
         return None
     # Shell command substitution / variable expansion produces
     # token fragments that aren't packages (``$(cat`` or ``)`` from

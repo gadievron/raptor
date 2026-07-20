@@ -48,14 +48,18 @@ def main() -> int:
     except ImportError:
         return 0
 
-    ctx = json.loads(ctx_path.read_text())
+    try:
+        ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"✗ Cannot read context-map: {e}", file=sys.stderr)
+        return 1
     search_dirs = [workdir, workdir.parent]
 
     target_path = None
     checklist_path = workdir / "checklist.json"
     if checklist_path.is_file():
         try:
-            cl = json.loads(checklist_path.read_text())
+            cl = json.loads(checklist_path.read_text(encoding="utf-8"))
             target_path = cl.get("target_path")
         except (json.JSONDecodeError, OSError):
             pass
@@ -63,7 +67,8 @@ def main() -> int:
     result = enrich_context_map_with_frida(
         ctx, search_dirs, target_path=target_path)
     if result != ctx:
-        ctx_path.write_text(json.dumps(result, indent=2) + "\n")
+        from core.json import save_json
+        save_json(ctx_path, result)
         enriched = sum(
             1 for ep in result.get("entry_points", [])
             if ep.get("runtime_confirmed")

@@ -95,6 +95,8 @@ class WebCrawler:
         if not isinstance(metadata, dict):
             return False
         input_type = str(metadata.get("type", "")).strip().lower()
+        if input_type == "password":
+            return True
         normalized_name = str(name).strip().lower()
         return (
             input_type == "hidden" and normalized_name in _SENSITIVE_HIDDEN_INPUT_NAMES
@@ -434,7 +436,7 @@ class WebCrawler:
         for pattern in patterns:
             matches = re.findall(pattern, js_code, re.IGNORECASE)
             for match in matches:
-                if match.startswith("/") or match.startswith("http"):
+                if match.startswith(("/", "http")):
                     absolute_url = urljoin(self.client.base_url, match)
                     # Scheme-aware scope check via client._is_in_scope
                     # — bare netloc equality silently accepted a JS-

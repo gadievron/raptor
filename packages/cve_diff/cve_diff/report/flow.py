@@ -51,7 +51,7 @@ def write_outcome_patches(
     """
     try:
         if clone_diff_text:
-            (output_dir / f"{cve_id}.clone.patch").write_text(clone_diff_text)
+            (output_dir / f"{cve_id}.clone.patch").write_text(clone_diff_text, encoding="utf-8")
         # Aggregate the (method, text) pairs to write.
         pairs: list[tuple[str, str]] = []
         if api_diff_text and api_method:
@@ -83,7 +83,7 @@ def write_outcome_patches(
         _method_re = re.compile(r"[^A-Za-z0-9_-]")
         for method, text in seen.items():
             safe_method = _method_re.sub("_", str(method)) or "unknown"
-            (output_dir / f"{cve_id}.{safe_method}.patch").write_text(text)
+            (output_dir / f"{cve_id}.{safe_method}.patch").write_text(text, encoding="utf-8")
     except Exception:  # noqa: BLE001 — patch writes are best-effort
         pass
 
@@ -166,12 +166,12 @@ def write_flow_files(
             lines.append(json.dumps({
                 "i": i, "tool": name, "args": args,
             }, sort_keys=True))
-        flow_path.write_text("\n".join(lines) + ("\n" if lines else ""))
+        flow_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         md_path.write_text(render_flow(
             cve_id, lines, ok=ok, error_class=error_class,
             stage_signals=stage_signals,
             stage_status=stage_status,
-        ))
+        ), encoding="utf-8")
     except Exception as exc:  # noqa: BLE001 — report write must not abort pipeline
         import logging as _logging
         _logging.getLogger(__name__).debug(

@@ -94,7 +94,7 @@ def _pivot_root_nr() -> int:
             f"mount-ns sandbox: pivot_root syscall number unknown for "
             f"architecture {arch!r} — add to _PIVOT_ROOT_SYSCALL_NR in "
             f"core/sandbox/mount_ns.py (see asm-generic/unistd.h)."
-        )
+        ) from None
 
 # System directories bind-mounted read-only into the new root. Present-if-
 # present: if the host lacks /lib64 the loop silently skips it.
@@ -499,7 +499,7 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     b"after overlay; aborting (Landlock alone is "
                     b"insufficient for /etc write protection)\n"
                 )
-                raise OSError("mount_ns: /etc RO restore failed after overlay")
+                raise OSError("mount_ns: /etc RO restore failed after overlay") from None
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)

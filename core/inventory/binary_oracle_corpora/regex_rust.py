@@ -69,9 +69,9 @@ class _RegexRustDriver:
         profdata = tag_dir / "merged.profdata"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_and_run(tag_dir, target_dir, profdata)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         # Test binary path (hash suffix; glob to find latest).
         candidates = sorted((target_dir / "release" / "deps").glob("regex-*"))
@@ -200,7 +200,7 @@ def _build_demangle_map(binary: Path) -> Dict[str, str]:
     demangled = [line.split(None, 2) for line in out_demangled.splitlines()
                  if line.strip()]
     mapping: Dict[str, str] = {}
-    for m, d in zip(mangled, demangled):
+    for m, d in zip(mangled, demangled, strict=True):
         if len(m) >= 3 and len(d) >= 3 and m[1] == d[1] and m[1] in "tTwW":
             mapping[m[2]] = d[2]
     return mapping

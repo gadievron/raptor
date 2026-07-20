@@ -22,8 +22,8 @@ from typing import Any, Dict, Literal
 
 from core.analysis.binary_oracle import Classification
 
-FIXTURE_DIR = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-               / "binary_oracle")
+FIXTURE_DIR = (Path(__file__).resolve().parents[2] / "analysis" / "tests"
+               / "fixtures" / "binary_oracle")
 
 
 @dataclass

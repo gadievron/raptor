@@ -825,7 +825,7 @@ def main():
                         f"(got {size}). Trim before passing."
                     )
                     return
-                mgr.update_notes(args.name, path.read_text().strip())
+                mgr.update_notes(args.name, path.read_text(encoding="utf-8").strip())
                 print("Notes updated.")
             elif getattr(args, "edit", False):
                 if not os.isatty(0):
@@ -897,7 +897,7 @@ def main():
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")
                         return
-                    new_notes = Path(tf_path).read_text().strip()
+                    new_notes = Path(tf_path).read_text(encoding="utf-8").strip()
                     mgr.update_notes(args.name, new_notes)
                     print("Notes updated.")
                 finally:
@@ -1080,8 +1080,8 @@ def _count_sarif_results(run_dir):
         data = load_json(sarif_path)
         if not data or not isinstance(data, dict):
             continue
-        for run in data.get("runs", []):
-            count += len(run.get("results", []))
+        for run in (data.get("runs") or []):
+            count += len(run.get("results") or [])
     return count
 
 
@@ -1516,13 +1516,16 @@ def _print_coverage(project, detailed=False, fail_under=None):
     base = Path(project.output_dir)
     try:
         run_dirs = list(project.get_run_dirs(sweep=False))
-    except Exception:
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("failed to list run dirs: %s", exc)
         run_dirs = []
     checklist = load_json(base / "checklist.json")
-    if not checklist:
+    if not isinstance(checklist, dict):
+        checklist = None
         for d in run_dirs:
             cl = load_json(d / "checklist.json")
-            if cl:
+            if isinstance(cl, dict):
                 checklist = cl
                 break
     store_path = base / "coverage.json"
@@ -1595,7 +1598,7 @@ def _print_code_findings(merged, detailed=False):
         fname = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
 
         # Lines: show all lines in the group
-        lines_in_group = sorted(set(f.get("line", 0) for f in findings))
+        lines_in_group = sorted(set(f.get("line") or 0 for f in findings))
         if len(lines_in_group) == 1:
             loc = f"{fname}:{lines_in_group[0]}"
         else:
@@ -1610,7 +1613,7 @@ def _print_code_findings(merged, detailed=False):
 
         grouped_rows.append((loc, vtype, status, cvss_str, findings, fpath))
 
-    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line", 0) for f in r[4])))
+    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line") or 0 for f in r[4])))
 
     # Compact table
     headers = ("File", "Type", "Status", "CVSS")
@@ -1768,6 +1771,8 @@ def _parse_since(spec: str):
     if not spec:
         return None
     spec = spec.strip().lower()
+    if not spec:
+        return None
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
     if spec[-1] in multipliers:
         try:
@@ -1959,7 +1964,7 @@ def _do_correlate(project, json_out=False):
         display = persistent[:10]
         rows = []
         for pf in display:
-            models = ", ".join(pf.get("models", [])) or "—"
+            models = ", ".join(pf.get("models") or []) or "—"
             rows.append((
                 f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
                 pf.get("vuln_type", ""),
@@ -2061,7 +2066,11 @@ def _classify_clean_coverage(project, plan):
         survivors = [d for d in project.get_run_dirs(sweep=False)
                      if d not in victim_set]
         return [classify_removal(v, survivors) for v in victims]
-    except Exception:
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "clean consequence computation failed: %s", exc,
+        )
         return []
 
 
@@ -2077,14 +2086,14 @@ def _apply_clean_coverage(project, plan, consequences):
         from core.coverage.clean import apply_removal
 
         checklist = load_json(Path(project.output_dir) / "checklist.json")
-        if not checklist:
+        if not isinstance(checklist, dict):
             return
         cov_path = Path(project.output_dir) / "coverage.json"
         # Lock the whole read-modify-write: a run completing mid-clean snapshots
         # into the same coverage.json (see _snapshot_run_coverage).
         with coverage_store_lock(cov_path):
             store = CoverageStore(cov_path)
-            for victim, cons in zip(plan.get("delete_dirs", []), consequences):
+            for victim, cons in zip(plan.get("delete_dirs", []), consequences, strict=True):
                 apply_removal(store, victim, checklist, cons)
             store.save()
     except Exception as e:

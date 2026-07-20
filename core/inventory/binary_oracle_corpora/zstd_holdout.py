@@ -49,9 +49,9 @@ class _ZstdHoldoutDriver:
         build_o2 = tag_dir / "build_o2"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_fresh(tag_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         live = _collect_gcov_liveness(build_o0)
         candidates = _enumerate_candidates(build_o0)
@@ -139,17 +139,16 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             inputs.append(build_dir / "lib" / "decompress" / "zstd_decompress.c")
             inputs.append(build_dir / "lib" / "common" / "fse_decompress.c")
 
-            def _z(*argv: str) -> None:
-                # writable_paths includes build_dir because gcov
-                # instrumentation writes .gcda files alongside the
-                # .o files (under ``build_dir/obj/...``). Without
-                # the explicit allow, the sandbox blocks those
-                # writes and the live_set comes back empty —
-                # making absent_precision mathematically vacuous.
+            def _z(
+                *argv: str,
+                _zstd_bin=zstd_bin,
+                _build_dir=build_dir,
+                _tmp=tmp,
+            ) -> None:
                 _sandbox_run(
-                    [str(zstd_bin), *argv],
-                    target=str(build_dir), output=str(tmp),
-                    writable_paths=[str(build_dir)],
+                    [str(_zstd_bin), *argv],
+                    target=str(_build_dir), output=str(_tmp),
+                    writable_paths=[str(_build_dir)],
                     block_network=True, check=True, timeout=120,
                 )
 

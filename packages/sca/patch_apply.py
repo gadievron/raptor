@@ -61,10 +61,14 @@ def apply_patch_to_target(
         return 4
 
     try:
+        from core.config import RaptorConfig
+        from core.sandbox.preexec import set_pdeathsig
         proc = subprocess.run(
             ["git", "apply", str(patch_path)],
             cwd=str(target),
             capture_output=True, text=True, timeout=timeout,
+            env=RaptorConfig.get_safe_env(),
+            preexec_fn=set_pdeathsig(),
         )
     except (subprocess.SubprocessError, OSError) as e:
         print(f"{caller_label} --apply: git apply failed: {e}",

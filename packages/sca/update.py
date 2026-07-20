@@ -589,7 +589,12 @@ def _load_findings(args: argparse.Namespace) -> Optional[List[Dict[str, Any]]]:
         cache_root=Path(args.cache_root) if args.cache_root else None,
     )
     result = run_sca(target=target, output_dir=pre_out, options=options)
-    return json.loads(result.findings_path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(result.findings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"raptor-sca fix: cannot read findings: {exc}",
+              file=sys.stderr)
+        return None
 
 
 def _resolve_out_dir(args: argparse.Namespace, *, suffix: str = "") -> Path:

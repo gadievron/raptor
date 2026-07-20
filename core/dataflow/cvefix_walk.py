@@ -316,8 +316,8 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
         return None
     try:
         import json
-        data = json.loads(out.read_text())
-        return sum(len(r.get("results", [])) for r in data.get("runs", []))
+        data = json.loads(out.read_text(encoding="utf-8"))
+        return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
     except (OSError, ValueError):
         return None
 
@@ -465,41 +465,43 @@ def walk(
     controls ``--threads`` / ``--ram`` / ``--max-disk-cache``."""
     pairs = load_pairs(db_path, cwes=cwes, languages=languages)
     con = sqlite3.connect(str(results_db))
-    con.execute(_SCHEMA)
-    # Dedup todo by (fix_hash, cwe): the same commit credited to multiple CVE ids
-    # yields identical (DB, query, result), so process it once. (The PK already
-    # dedups at storage, but without this we'd waste a full rebuild on each.)
-    done = _processed(con)
-    todo, seen = [], set()
-    for p in pairs:
-        key = (p.fix_hash, p.cwe)
-        if key in done or key in seen:
-            continue
-        seen.add(key)
-        todo.append(p)
-    log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for pair in todo:
-        if limit is not None and n >= limit:
-            break
-        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                           fetch_timeout=fetch_timeout,
-                           build_timeout=build_timeout,
-                           analyze_timeout=analyze_timeout,
-                           tunables=tunables)
-        _record(con, pair, res)
-        n += 1
-        tag = "YIELD" if res.is_yield else res.status
-        log(f"  [{n}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
-            f"{pair.repo_url.split('github.com/')[-1]}: {tag} "
-            f"before={res.before_count} after={res.after_count}")
-    summary = dict(con.execute(
-        "SELECT 'total', count(*) FROM walk_results UNION ALL "
-        "SELECT 'yield', count(*) FROM walk_results WHERE status='ok' AND before_count>0 UNION ALL "
-        "SELECT 'fp_candidate', count(*) FROM walk_results WHERE status='ok' AND after_count>0"
-    ).fetchall())
-    con.close()
+    try:
+        con.execute(_SCHEMA)
+        # Dedup todo by (fix_hash, cwe): the same commit credited to multiple CVE ids
+        # yields identical (DB, query, result), so process it once. (The PK already
+        # dedups at storage, but without this we'd waste a full rebuild on each.)
+        done = _processed(con)
+        todo, seen = [], set()
+        for p in pairs:
+            key = (p.fix_hash, p.cwe)
+            if key in done or key in seen:
+                continue
+            seen.add(key)
+            todo.append(p)
+        log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for pair in todo:
+            if limit is not None and n >= limit:
+                break
+            res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                               fetch_timeout=fetch_timeout,
+                               build_timeout=build_timeout,
+                               analyze_timeout=analyze_timeout,
+                               tunables=tunables)
+            _record(con, pair, res)
+            n += 1
+            tag = "YIELD" if res.is_yield else res.status
+            log(f"  [{n}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
+                f"{pair.repo_url.split('github.com/')[-1]}: {tag} "
+                f"before={res.before_count} after={res.after_count}")
+        summary = dict(con.execute(
+            "SELECT 'total', count(*) FROM walk_results UNION ALL "
+            "SELECT 'yield', count(*) FROM walk_results WHERE status='ok' AND before_count>0 UNION ALL "
+            "SELECT 'fp_candidate', count(*) FROM walk_results WHERE status='ok' AND after_count>0"
+        ).fetchall())
+    finally:
+        con.close()
     return summary
 
 
@@ -523,37 +525,39 @@ def promote_misses(
     the expensive autobuilds are bounded to the buildless false-negative set.
     """
     con = sqlite3.connect(str(results_db))
-    con.execute(_SCHEMA)
-    ph = ",".join("?" * len(promote_languages))
-    rows = con.execute(
-        f"SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash "
-        f"FROM walk_results WHERE status='ok' AND before_count=0 "
-        f"AND repo_language IN ({ph}) ORDER BY cve_id", tuple(promote_languages)
-    ).fetchall()
-    log(f"promote: {len(rows)} buildless-miss rows in {tuple(promote_languages)}")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    promoted = n = 0
-    for fix_hash, cve_id, cwe, lang, repo_url, parent_hash in rows:
-        if limit is not None and n >= limit:
-            break
-        n += 1
-        pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
-        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                           build_timeout=build_timeout, build_mode="autobuild")
-        if res.status == "ok" and res.before_count > 0:
-            con.execute(
-                "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "
-                "WHERE fix_hash=? AND cwe=?",
-                ("ok_built", res.before_count, res.after_count, time.time(), fix_hash, cwe))
-            con.commit()
-            promoted += 1
-            log(f"  [{n}/{len(rows)}] PROMOTED {cve_id} {cwe} "
-                f"{repo_url.split('github.com/')[-1]}: before={res.before_count} "
-                f"after={res.after_count}")
-        else:
-            log(f"  [{n}/{len(rows)}] no-recovery {cve_id} {cwe}: "
-                f"{res.status} before={res.before_count}")
-    con.close()
+    try:
+        con.execute(_SCHEMA)
+        ph = ",".join("?" * len(promote_languages))
+        rows = con.execute(
+            f"SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash "
+            f"FROM walk_results WHERE status='ok' AND before_count=0 "
+            f"AND repo_language IN ({ph}) ORDER BY cve_id", tuple(promote_languages)
+        ).fetchall()
+        log(f"promote: {len(rows)} buildless-miss rows in {tuple(promote_languages)}")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        promoted = n = 0
+        for fix_hash, cve_id, cwe, lang, repo_url, parent_hash in rows:
+            if limit is not None and n >= limit:
+                break
+            n += 1
+            pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
+            res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                               build_timeout=build_timeout, build_mode="autobuild")
+            if res.status == "ok" and res.before_count > 0:
+                con.execute(
+                    "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "
+                    "WHERE fix_hash=? AND cwe=?",
+                    ("ok_built", res.before_count, res.after_count, time.time(), fix_hash, cwe))
+                con.commit()
+                promoted += 1
+                log(f"  [{n}/{len(rows)}] PROMOTED {cve_id} {cwe} "
+                    f"{repo_url.split('github.com/')[-1]}: before={res.before_count} "
+                    f"after={res.after_count}")
+            else:
+                log(f"  [{n}/{len(rows)}] no-recovery {cve_id} {cwe}: "
+                    f"{res.status} before={res.before_count}")
+    finally:
+        con.close()
     return {"candidates": len(rows), "promoted": promoted}
 
 
