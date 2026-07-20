@@ -425,7 +425,7 @@ class LLMProvider(ABC):
                 content = content.split("\n", 1)[1] if "\n" in content else content[3:]
             content = content.strip()
             parsed = json.loads(content)
-            parsed = _coerce_to_schema(parsed, schema)
+            parsed = _coerce_to_schema(parsed, _normalize_schema(schema))
             validated = pydantic_model.model_validate(parsed)
             result_dict = validated.model_dump()
             # Carry the resolved model from the underlying generate() call so
@@ -640,7 +640,10 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
             else:
                 coerced[field_name] = False
 
-        elif field_type == "number" and not isinstance(value, (int, float)):
+        elif field_type == "number" and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+        ):
             try:
                 coerced[field_name] = float(value)
             except (ValueError, TypeError):
@@ -2301,7 +2304,7 @@ class GeminiProvider(LLMProvider):
             if not parsed:
                 # Gemini sometimes returns {} in structured mode — fall back to text
                 raise ValueError("Gemini returned empty object in structured mode")
-            parsed = _coerce_to_schema(parsed, schema)
+            parsed = _coerce_to_schema(parsed, normalized)
             validated = pydantic_model.model_validate(parsed)
             result_dict = validated.model_dump()
             full_response = json.dumps(result_dict, indent=2)
@@ -2971,7 +2974,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         :class:`TurnResponse`. Defensive against malformed output —
         falls back to a text block if the result doesn't fit either
         branch of the discriminated schema."""
-        usd: Optional[float] = float(cost_usd) if cost_usd else None
+        usd: Optional[float] = float(cost_usd) if cost_usd is not None else None
         rtype = result.get("type")
         if rtype == "tool_call":
             name = result.get("tool_name")

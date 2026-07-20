@@ -1202,7 +1202,7 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
         items = context_map.get(key)
         if not isinstance(items, list):
             continue
-        clean = [e for e in items if not _references_file(e, stale_files)]
+        clean = [e for e in items if isinstance(e, dict) and not _references_file(e, stale_files)]
         removed += len(items) - len(clean)
         context_map[key] = clean
 

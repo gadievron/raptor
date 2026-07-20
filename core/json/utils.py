@@ -197,5 +197,5 @@ def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
               the mode is installed on the tempfile before rename — no
               chmod-after-rename window.
     """
-    content = json.dumps(data, indent=2, cls=_RaptorEncoder) + "\n"
+    content = json.dumps(data, indent=2, cls=_RaptorEncoder, allow_nan=False) + "\n"
     write_text_atomically(path, content, mode=mode, tmp_prefix=".~savejson-")

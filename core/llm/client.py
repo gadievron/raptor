@@ -1307,7 +1307,7 @@ class LLMClient:
         # N× the cost for a result they'd have shared.
         with self._key_lock(cache_key):
             cached_content = self._get_cached_response(cache_key)
-            if cached_content:
+            if cached_content is not None:
                 logger.debug(f"Using cached response for {model_config.provider}/{model_config.model_name}")
                 with self._stats_lock:
                     self.request_count += 1

@@ -895,10 +895,10 @@ class BuildDetector:
                             build_type = "synthesised-cc"
                         else:
                             logger.info("  CC didn't improve, using heuristic")
-                        self._write_build_script(
-                            script_path, build_dir,
-                            source_files, compiler, include_flags, define_flags,
-                        )
+                            self._write_build_script(
+                                script_path, build_dir,
+                                source_files, compiler, include_flags, define_flags,
+                            )
                         confidence = 0.5
                 else:
                     confidence = 0.5

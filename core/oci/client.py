@@ -498,6 +498,7 @@ class OciRegistryClient:
         # hosts per registry (most are sub-domains of the registry
         # host; explicit list keeps the surface small).
         _validate_realm(registry, realm)
+        self._tokens.pop((realm, service, scope), None)
         token = self._exchange_token(registry, realm, service, scope)
         req_headers["Authorization"] = f"Bearer {token}"
         resp.close()

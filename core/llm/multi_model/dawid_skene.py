@@ -205,10 +205,11 @@ def _credible_interval_for_posterior(
     commensurately. For large ``n`` the CI tightens around ``p_i``; for
     small ``n`` it inherits the prior's diffuseness.
     """
+    successes = int(round(n_models * p_i))
     posterior_dist = posterior_update(
         prior,
-        successes=int(round(n_models * p_i)),
-        failures=int(round(n_models * (1.0 - p_i))),
+        successes=successes,
+        failures=n_models - successes,
     )
     return posterior_dist.credible_interval(level)
 

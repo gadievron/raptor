@@ -602,6 +602,11 @@ def run_command_streaming(
         return -1, "", "Timeout"
     except Exception as e:
         logger.error(f"Command failed: {e}")
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
         return -1, "", str(e)
 
 

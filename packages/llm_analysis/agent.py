@@ -886,7 +886,8 @@ class AutonomousSecurityAgentV2:
             logger.info(f"  File: {vuln.file_path}:{vuln.start_line}")
             logger.info(f"  Severity: {vuln.level}")
             logger.info(f"  Has dataflow: {'Yes' if vuln.has_dataflow else 'No'}")
-            logger.info(f"  Message: {vuln.message[:100]}..." if len(vuln.message) > 100 else f"  Message: {vuln.message}")
+            msg = vuln.message or ""
+            logger.info(f"  Message: {msg[:100]}..." if len(msg) > 100 else f"  Message: {msg}")
 
         # Read the actual vulnerable code
         if not vuln.read_vulnerable_code():
@@ -2151,7 +2152,11 @@ class AutonomousSecurityAgentV2:
                         fn = (finding.get("function")
                               or (finding.get("metadata") or {}).get(
                                   "function_name", ""))
-                        line_no = int(finding.get("line") or 0)
+                        line_no = int(
+                            finding.get("start_line")
+                            if finding.get("start_line") is not None
+                            else finding.get("startLine", 0) or 0
+                        )
                         decision = check_suppress(
                             checklist=checklist,
                             file_path=rel, function_name=fn,
