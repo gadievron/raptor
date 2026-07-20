@@ -79,6 +79,39 @@ os.environ["RAPTOR_DIR"] = _conftest_dir
 # A genuinely-heavy test is not a bug — mark it @pytest.mark.slow (moves
 # it to the nightly tier, out of this guard's scope).
 
+# ---------------------------------------------------------------------------
+# Randomised test order
+# ---------------------------------------------------------------------------
+#
+# When RAPTOR_RANDOMISE_TESTS is set (to any value, or a numeric seed),
+# shuffle the collected test items so order-dependent failures surface
+# early.  No external plugin required.
+#
+# Deterministic: same seed → same order.  The seed is printed in the
+# terminal header so a failure can be reproduced.
+
+_RANDOMISE_SEED_RAW = os.environ.get("RAPTOR_RANDOMISE_TESTS")
+
+
+def pytest_collection_modifyitems(items):
+    if _RANDOMISE_SEED_RAW is None:
+        return
+    import random as _random
+    try:
+        seed = int(_RANDOMISE_SEED_RAW)
+    except (ValueError, TypeError):
+        seed = int.from_bytes(
+            _RANDOMISE_SEED_RAW.encode()[:8], "little"
+        ) % 2**31
+    _random.Random(seed).shuffle(items)
+
+
+def pytest_report_header():
+    if _RANDOMISE_SEED_RAW is None:
+        return []
+    return [f"raptor: randomised test order (seed={_RANDOMISE_SEED_RAW})"]
+
+
 _MAX_TEST_SECONDS = os.environ.get("RAPTOR_MAX_TEST_SECONDS")
 _slow_test_threshold = float(_MAX_TEST_SECONDS) if _MAX_TEST_SECONDS else None
 _slow_test_overruns: "list[tuple[str, float]]" = []

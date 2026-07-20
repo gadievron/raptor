@@ -44,10 +44,12 @@ EXTRA_ROOTS = (
 )
 
 
-def discover_py_files(repo: Path) -> list[Path]:
-    """Walk SCAN_ROOTS and collect every .py file (relative to repo)."""
+def discover_py_files(
+    repo: Path, extra_roots: tuple[str, ...] = ()
+) -> list[Path]:
+    """Walk SCAN_ROOTS (+ extra_roots) and collect every .py file."""
     files: list[Path] = []
-    for root in SCAN_ROOTS:
+    for root in (*SCAN_ROOTS, *extra_roots):
         root_path = repo / root
         if not root_path.is_dir():
             continue
@@ -97,8 +99,118 @@ def module_to_files(module: str, all_modules: dict[str, Path]) -> list[Path]:
     return hits
 
 
+def _get_str_literal(node: ast.expr) -> str | None:
+    """Extract a plain string from an AST node, or None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _extract_dynamic_imports(tree: ast.Module) -> list[str]:
+    """Find importlib.import_module("x") and __import__("x") calls.
+
+    Handles both ``importlib.import_module("x")`` (attribute form)
+    and ``import_module("x")`` after ``from importlib import
+    import_module`` (bare-name form).
+    """
+    bare_names: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.ImportFrom)
+                and node.module == "importlib"
+                and node.level == 0):
+            for alias in node.names:
+                if alias.name == "import_module":
+                    bare_names.add(alias.asname or alias.name)
+
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            # importlib.import_module("mod.name")
+            if (func.attr == "import_module"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "importlib"):
+                val = _get_str_literal(node.args[0])
+                if val:
+                    modules.append(val)
+        elif isinstance(func, ast.Name):
+            if func.id in bare_names:
+                val = _get_str_literal(node.args[0])
+                if val:
+                    modules.append(val)
+            elif func.id == "__import__":
+                val = _get_str_literal(node.args[0])
+                if val:
+                    modules.append(val)
+    return modules
+
+
+def _extract_lazy_export_dicts(tree: ast.Module) -> list[str]:
+    """Find PEP 562 lazy-export dicts assigned to conventional names.
+
+    Only matches module-level ``Assign`` where the target name
+    contains ``EXPORT`` or ``LAZY`` (e.g. ``_LAZY_EXPORTS``).
+    """
+    modules: list[str] = []
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(t, ast.Name)
+            and ("EXPORT" in t.id or "LAZY" in t.id)
+            for t in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        for val in node.value.values:
+            if not isinstance(val, ast.Tuple) or len(val.elts) < 1:
+                continue
+            mod = _get_str_literal(val.elts[0])
+            if mod:
+                modules.append(mod)
+    return modules
+
+
+_MODULE_PATH_RE = __import__("re").compile(
+    r"^(?:core|packages)\.[a-z_][a-z0-9_.]*[a-z0-9_]$"
+)
+
+
+def _extract_parametrize_modules(tree: ast.Module) -> list[str]:
+    """Find project-internal module paths in string constants.
+
+    Catches the pattern where a test parametrizes over module path
+    strings and calls ``importlib.import_module(param)`` in the body,
+    or uses ``mock.patch("core.some.module.func")`` — the variable-arg
+    call is invisible to ``_extract_dynamic_imports``, but the string
+    literals are extractable.
+
+    Only matches strings that look like valid dotted module paths
+    (no spaces, colons, format specifiers, etc.).
+    """
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant):
+            continue
+        if not isinstance(node.value, str):
+            continue
+        val = node.value
+        if _MODULE_PATH_RE.match(val):
+            modules.append(val)
+    return modules
+
+
 def extract_imports(path: Path, repo: Path) -> list[str] | None:
-    """Parse a .py file and return the dotted module names it imports."""
+    """Parse a .py file and return the dotted module names it imports.
+
+    Covers static imports, importlib.import_module() /
+    __import__() with string literals, PEP 562 lazy-export
+    dicts, and project-internal module paths in string constants
+    (e.g. ``@pytest.mark.parametrize`` arguments).
+    """
     try:
         source = (repo / path).read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source, filename=str(path))
@@ -133,6 +245,16 @@ def extract_imports(path: Path, repo: Path) -> list[str] | None:
                     for alias in node.names:
                         if alias.name != "*":
                             modules.append(f"{base}.{alias.name}")
+
+    # Dynamic imports: importlib.import_module("x") / __import__("x").
+    modules.extend(_extract_dynamic_imports(tree))
+
+    # PEP 562 lazy-export dicts in __init__.py files.
+    if path.name == "__init__.py":
+        modules.extend(_extract_lazy_export_dicts(tree))
+
+    # Project-internal module paths in string constants (parametrize etc.).
+    modules.extend(_extract_parametrize_modules(tree))
 
     # Only keep imports that point into our scan roots.
     return [
@@ -343,11 +465,10 @@ def main() -> int:
     total = len(all_py)
 
     if full_reason:
-        print(f"Full scan: {full_reason}")
+        print(f"::notice::CodeQL Python scope: full scan ({full_reason})")
         write_scoped_config(out_path, base_config, None)
         set_output("codeql_scoped_config", str(out_path))
         set_output("codeql_scope_mode", "full")
-        print(f"Wrote full config to {out_path}")
         return 0
 
     print(f"Building import graph for {total} Python files...")
@@ -373,10 +494,9 @@ def main() -> int:
     ratio = len(closure) / total if total > 0 else 1.0
 
     if ratio >= FULL_SCAN_THRESHOLD:
-        print(
-            f"Full scan: closure is {len(closure)}/{total} files "
-            f"({ratio:.0%} >= {FULL_SCAN_THRESHOLD:.0%} threshold)"
-        )
+        msg = (f"closure {len(closure)}/{total} files "
+               f"({ratio:.0%} >= {FULL_SCAN_THRESHOLD:.0%} threshold)")
+        print(f"::notice::CodeQL Python scope: full scan ({msg})")
         write_scoped_config(out_path, base_config, None)
         set_output("codeql_scoped_config", str(out_path))
         set_output("codeql_scope_mode", "full")
@@ -388,12 +508,11 @@ def main() -> int:
     set_output("codeql_scoped_config", str(out_path))
     set_output("codeql_scope_mode", "scoped")
 
-    print(f"Scoped scan: {len(closure)}/{total} files ({ratio:.0%})")
-    print(f"  Changed:    {len(changed_py)} files")
-    print(f"  Dependents: {len(closure) - len(changed_py)} files")
+    msg = (f"scoped to {len(closure)}/{total} files ({ratio:.0%}) — "
+           f"{len(changed_py)} changed, {len(closure) - len(changed_py)} dependents")
+    print(f"::notice::CodeQL Python scope: {msg}")
     if parse_failures:
         print(f"  Parse failures: {parse_failures} (below threshold)")
-    print(f"Wrote scoped config to {out_path}")
 
     return 0
 

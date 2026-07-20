@@ -42,9 +42,13 @@ from codeql_scope import (
 TIERS: dict[str, dict] = {
     "sandbox": {
         "test_dirs": ["core/sandbox/tests"],
+        "env": "sandbox",
+        "env_reason": "needs Linux namespaces / macOS sandbox-exec",
     },
     "exploit_feasibility": {
         "test_dirs": ["packages/exploit_feasibility/tests"],
+        "env": "exploit_feasibility",
+        "env_reason": "needs radare2, gcc, real binaries",
     },
     "codeql": {
         "test_dirs": ["packages/codeql/tests"],
@@ -69,6 +73,8 @@ TIERS: dict[str, dict] = {
     },
     "source_intel": {
         "test_dirs": ["packages/source_intel/tests"],
+        "env": "source_intel",
+        "env_reason": "needs coccinelle (spatch)",
     },
     "prompt_audit": {
         "test_files": ["core/security/tests/test_prompt_envelope_audit.py"],
