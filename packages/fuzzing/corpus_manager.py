@@ -127,8 +127,8 @@ class CorpusManager:
         return count
 
     def list_seeds(self) -> List[Path]:
-        """List all seeds in corpus."""
-        return list(self.corpus_dir.rglob("*"))
+        """List all seed files in corpus."""
+        return [p for p in self.corpus_dir.rglob("*") if p.is_file()]
 
     def get_stats(self) -> dict:
         """Get corpus statistics."""

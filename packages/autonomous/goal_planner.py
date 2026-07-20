@@ -65,8 +65,9 @@ class GoalPlanner:
         Args:
             goal: Goal to achieve
         """
-        if self.current_goal and not self.current_goal.achieved:
-            logger.info(f"Replacing current goal: {self.current_goal.description}")
+        if self.current_goal:
+            if not self.current_goal.achieved:
+                logger.info(f"Replacing current goal: {self.current_goal.description}")
             self.goal_history.append(self.current_goal)
 
         self.current_goal = goal

@@ -187,7 +187,7 @@ def _validate_metadata(metadata) -> None:
                 f"metadata value for {k!r} exceeds {_MAX_META_VALUE_LEN} "
                 f"chars: {len(v_str)}"
             )
-        if any(c in v_str for c in "\n\r\x00"):
+        if any(c in v_str for c in "\n\r\x00\t"):
             raise ValueError(
                 f"metadata value for {k!r} may not contain newline / null "
                 f"characters: {v_str!r}"

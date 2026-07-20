@@ -121,10 +121,10 @@ def _tighten_config_perms(path: Path) -> str | None:
     try:
         os.fchmod(fd, 0o600)
     except OSError as e:
-        os.close(fd)
         return (f"⚠ {path} mode {oct(st.st_mode)[-3:]} and chmod failed: {e}. "
                 f"Run: chmod 600 {path}")
-    os.close(fd)
+    finally:
+        os.close(fd)
 
     return (f"tightened {path} permissions to 600 "
             f"(was {oct(st.st_mode)[-3:]}; contains API keys)")

@@ -3201,6 +3201,7 @@ _FILES_BY_PATH_CACHE: Dict[int, Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]
 _FILES_BY_PATH_CACHE_MAX = 8
 _FILES_BY_PATH_CACHE_LOCK = threading.Lock()
 
+_ENTRY_REACHABLE_CACHE_MAX = 8
 _ENTRY_REACHABLE_CACHE_LOCK = threading.Lock()
 
 
@@ -3309,7 +3310,7 @@ def _entry_reachable_set(
     frozen = frozenset(reachable)
     with _ENTRY_REACHABLE_CACHE_LOCK:
         _ENTRY_REACHABLE_CACHE[inv_id] = (inventory, frozen, fc.truncated)
-        if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_SET_CACHE_MAX:
+        if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_REACHABLE_CACHE_MAX:
             _ENTRY_REACHABLE_CACHE.pop(
                 next(iter(_ENTRY_REACHABLE_CACHE)), None,
             )
@@ -4055,7 +4056,7 @@ def enclosing_function(
         # before our line. Same line_start-greatest-match
         # heuristic the substrate uses for nested-def
         # disambiguation.
-        if isinstance(line_end, int) and line_end >= 0 and line_end < line:
+        if isinstance(line_end, int) and line_end > 0 and line_end < line:
             continue
         if best is None or item["line_start"] > best["line_start"]:
             best = item
