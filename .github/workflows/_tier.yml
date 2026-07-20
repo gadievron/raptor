@@ -26,7 +26,10 @@ on:
         required: true
         type: string
       test_path:
-        description: pytest target path (e.g. "core/sage/tests").
+        description: >-
+          pytest target — a directory (e.g. "core/sage/tests") or
+          space-separated file paths. Word-split by the shell; no
+          glob expansion (set -f).
         required: true
         type: string
       pytest_args:

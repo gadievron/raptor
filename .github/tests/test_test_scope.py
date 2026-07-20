@@ -3,6 +3,7 @@ test tier dispatch."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from test_scope import (
     FAST_TIER_IGNORES,
     TIERS,
+    batch_matrix,
     compute_tier_dispatch,
     file_in_dir,
     file_in_fast_tier,
@@ -80,6 +82,56 @@ class TestFileInFastTier:
 
     def test_non_test_file(self):
         assert not file_in_fast_tier(Path("core/llm/client.py"))
+
+
+class TestBatchMatrix:
+    def test_empty_returns_empty(self):
+        assert batch_matrix([]) == []
+
+    def test_single_file(self):
+        result = batch_matrix([Path("core/llm/tests/test_a.py")])
+        assert len(result) == 1
+        assert result[0]["batch"] == 1
+        assert result[0]["files"] == "core/llm/tests/test_a.py"
+
+    def test_under_threshold_single_batch(self):
+        files = [Path(f"core/tests/test_{i}.py") for i in range(25)]
+        result = batch_matrix(files)
+        assert len(result) == 1
+        assert len(result[0]["files"].split()) == 25
+
+    def test_over_threshold_splits(self):
+        files = [Path(f"core/tests/test_{i:03d}.py") for i in range(26)]
+        result = batch_matrix(files)
+        assert len(result) == 2
+        sizes = [len(b["files"].split()) for b in result]
+        assert sorted(sizes) == [13, 13]
+
+    def test_large_count_caps_at_max(self):
+        files = [Path(f"core/tests/test_{i:03d}.py") for i in range(200)]
+        result = batch_matrix(files)
+        assert len(result) == 8
+
+    def test_batches_are_balanced(self):
+        files = [Path(f"core/tests/test_{i:03d}.py") for i in range(50)]
+        result = batch_matrix(files)
+        sizes = [len(b["files"].split()) for b in result]
+        assert max(sizes) - min(sizes) <= 1
+
+    def test_files_are_sorted(self):
+        files = [Path("z.py"), Path("a.py"), Path("m.py")]
+        result = batch_matrix(files)
+        assert result[0]["files"] == "a.py m.py z.py"
+
+    def test_batch_numbers_sequential(self):
+        files = [Path(f"t_{i}.py") for i in range(60)]
+        result = batch_matrix(files)
+        assert [b["batch"] for b in result] == [1, 2, 3]
+
+    def test_custom_parameters(self):
+        files = [Path(f"t_{i}.py") for i in range(10)]
+        result = batch_matrix(files, max_batches=2, target_per_batch=3)
+        assert len(result) == 2
 
 
 class TestTierConsistency:
@@ -184,3 +236,31 @@ class TestOnRealRepo:
         active = [t for t, i in result.items()
                   if not t.startswith("_") and i["run"]]
         assert len(active) == 0
+
+    def test_python_tier_has_matrix(self, repo):
+        """The python tier always includes a matrix key."""
+        result = compute_tier_dispatch(
+            ["core/config/__init__.py"], repo
+        )
+        assert "matrix" in result["python"]
+        if result["python"]["run"]:
+            matrix = result["python"]["matrix"]
+            assert len(matrix) >= 1
+            assert all("batch" in entry and "files" in entry
+                       for entry in matrix)
+            assert json.dumps(matrix)
+
+    def test_python_matrix_empty_when_no_files(self, repo):
+        result = compute_tier_dispatch(
+            ["README.md"], repo
+        )
+        assert result["python"]["matrix"] == []
+
+    def test_category_tier_has_file_list(self, repo):
+        """Category tiers produce file lists, not whole directories."""
+        result = compute_tier_dispatch(
+            ["packages/sca/optimise.py"], repo
+        )
+        sca_files = result["sca"]["files"]
+        assert len(sca_files) > 0
+        assert all(is_test_file(f) for f in sca_files)

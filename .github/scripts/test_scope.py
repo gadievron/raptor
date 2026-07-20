@@ -10,21 +10,29 @@ dependency installation, and parallelism), but the gate condition
 is now "does the graph show affected test files in this tier?"
 instead of "did a glob match?"
 
+Within each tier the job runs only the affected test files, not the
+entire directory.  The ``python`` (fast) tier additionally outputs a
+``python_matrix`` JSON so the CI job can fan out into dynamically-
+sized parallel batches via ``strategy.matrix.include``.
+
 Outputs to GITHUB_OUTPUT:
-  - tier_<name>=true|false       per-tier gate
-  - tier_<name>_files=<paths>    space-separated affected test files
-  - scope_mode=scoped|full       for observability
-  - scope_summary=<text>         human-readable summary
+  - <tier>=true|false              per-tier gate
+  - <tier>_files=<paths>           space-separated affected test files
+  - python_matrix=<json>           dynamic batch matrix for fast tier
+  - scope_mode=scoped|full         for observability
+  - scope_summary=<text>           human-readable summary
 
 Usage:
-    python3 .github/scripts/test_scope.py \
-        --changed-files /tmp/changed_files.txt \
+    python3 .github/scripts/test_scope.py \\
+        --changed-files /tmp/changed_files.txt \\
         --repo .
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -164,6 +172,61 @@ def file_in_fast_tier(path: Path) -> bool:
     return file_in_dir(path, "core") or file_in_dir(path, "packages")
 
 
+# ---------------------------------------------------------------------------
+# Dynamic batching
+# ---------------------------------------------------------------------------
+
+def batch_matrix(
+    files: list[Path],
+    *,
+    max_batches: int = 8,
+    target_per_batch: int = 25,
+) -> list[dict]:
+    """Partition test files into balanced batches for GHA matrix.
+
+    Returns a list of ``{"batch": N, "files": "a.py b.py ..."}`` dicts
+    suitable for ``strategy.matrix.include: ${{ fromJSON(...) }}``.
+
+    Uses round-robin distribution so batch sizes differ by at most 1
+    (26 files → 13+13, not 25+1).
+    """
+    if not files:
+        return []
+    sorted_files = sorted(str(f) for f in files)
+    n = len(sorted_files)
+    n_batches = min(max_batches, max(1, math.ceil(n / target_per_batch)))
+    batches: list[list[str]] = [[] for _ in range(n_batches)]
+    for i, f in enumerate(sorted_files):
+        batches[i % n_batches].append(f)
+    return [
+        {"batch": i + 1, "files": " ".join(b)}
+        for i, b in enumerate(batches)
+    ]
+
+
+def _discover_tier_files(tier_config: dict, repo: Path) -> list[Path]:
+    """Discover all test files belonging to a tier from disk."""
+    files = []
+    for d in tier_config.get("test_dirs", []):
+        dir_path = repo / d
+        if dir_path.is_dir():
+            for p in dir_path.rglob("*.py"):
+                rp = p.relative_to(repo)
+                if is_test_file(rp):
+                    files.append(rp)
+    for f in tier_config.get("test_files", []):
+        fp = Path(f)
+        if (repo / fp).is_file() and is_test_file(fp):
+            files.append(fp)
+    return files
+
+
+def _discover_fast_tier_files(repo: Path) -> list[Path]:
+    """Discover all fast-tier test files from disk."""
+    all_py = discover_py_files(repo)
+    return [f for f in all_py if file_in_fast_tier(f)]
+
+
 def compute_tier_dispatch(
     changed_files: list[str],
     repo: Path,
@@ -171,6 +234,8 @@ def compute_tier_dispatch(
     """Compute per-tier dispatch from the changed-file list.
 
     Returns {tier_name: {"run": bool, "files": [Path, ...]}}.
+    The ``python`` (fast) tier additionally includes a ``"matrix"``
+    key with the ``batch_matrix()`` result.
     """
     all_py = discover_py_files(repo)
     total = len(all_py)
@@ -217,18 +282,7 @@ def compute_tier_dispatch(
             # Tier's tests live outside the import graph (e.g. .github/tests).
             # Discover directly from disk and run all of them when triggered.
             triggered = extra_triggered
-            tier_files = []
-            for d in tier_config.get("test_dirs", []):
-                dir_path = repo / d
-                if dir_path.is_dir():
-                    for p in dir_path.rglob("*.py"):
-                        rp = p.relative_to(repo)
-                        if is_test_file(rp):
-                            tier_files.append(rp)
-            for f in tier_config.get("test_files", []):
-                fp = Path(f)
-                if (repo / fp).is_file() and is_test_file(fp):
-                    tier_files.append(fp)
+            tier_files = _discover_tier_files(tier_config, repo)
             # Check trigger_files (explicit file list, e.g. prompt_audit).
             if not triggered:
                 trigger_set = set(tier_config.get("trigger_files", []))
@@ -255,9 +309,12 @@ def compute_tier_dispatch(
         f.startswith("requirements") or f == "pyproject.toml"
         for f in changed_non_py
     )
+    if infra_changed and not fast_files:
+        fast_files = _discover_fast_tier_files(repo)
     result["python"] = {
-        "run": bool(fast_files) or infra_changed,
+        "run": bool(fast_files),
         "files": fast_files,
+        "matrix": batch_matrix(fast_files),
     }
 
     # The deps job should run if any tier with a venv needs to run.
@@ -277,6 +334,52 @@ def compute_tier_dispatch(
     }
 
     return result
+
+
+def _force_all_dispatch(repo: Path) -> dict[str, dict]:
+    """Full dispatch: discover all test files from disk, produce
+    complete file lists and matrices for every tier."""
+    result: dict[str, dict] = {}
+
+    for tier_name, tier_config in TIERS.items():
+        tier_files = _discover_tier_files(tier_config, repo)
+        result[tier_name] = {"run": True, "files": tier_files}
+
+    fast_files = _discover_fast_tier_files(repo)
+    result["python"] = {
+        "run": True,
+        "files": fast_files,
+        "matrix": batch_matrix(fast_files),
+    }
+    return result
+
+
+def _emit_outputs(
+    result: dict[str, dict],
+    set_output,
+) -> None:
+    """Write tier gates, file lists, and matrices to GITHUB_OUTPUT."""
+    summary_parts = []
+    for tier_name in sorted(result):
+        if tier_name.startswith("_"):
+            continue
+        info = result[tier_name]
+        gate = "true" if info["run"] else "false"
+        set_output(tier_name, gate)
+        files = info["files"]
+        if files:
+            file_list = " ".join(str(f) for f in sorted(files))
+            set_output(f"{tier_name}_files", file_list)
+            summary_parts.append(f"  {tier_name}: {len(files)} test files")
+        else:
+            summary_parts.append(f"  {tier_name}: skip")
+        # Fast tier: emit the batch matrix as JSON.
+        if "matrix" in info:
+            set_output(f"{tier_name}_matrix", json.dumps(info["matrix"]))
+
+    print("Tier dispatch:")
+    for line in summary_parts:
+        print(line)
 
 
 def main() -> int:
@@ -300,58 +403,37 @@ def main() -> int:
             with open(gh_output, "a", encoding="utf-8") as fh:
                 fh.write(f"{key}={val}\n")
 
-    # Load changed files.
-    def force_all() -> None:
-        for tier_name in list(TIERS) + ["python"]:
-            set_output(tier_name, "true")
+    # Full dispatch when no changed-file list is available.
+    full_dispatch = False
+    changed: list[str] = []
 
     if not args.changed_files:
         print("::notice::Test scope: full dispatch (no changed-file list)")
-        set_output("scope_mode", "full")
-        force_all()
-        return 0
+        full_dispatch = True
+    else:
+        cf_path = Path(args.changed_files)
+        if not cf_path.is_file():
+            print(f"::notice::Test scope: full dispatch (file not found: {cf_path})")
+            full_dispatch = True
+        else:
+            changed = [
+                line.strip()
+                for line in cf_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            if not changed:
+                print("::notice::Test scope: full dispatch (empty changed-file list)")
+                full_dispatch = True
 
-    cf_path = Path(args.changed_files)
-    if not cf_path.is_file():
-        print(f"::notice::Test scope: full dispatch (file not found: {cf_path})")
+    if full_dispatch:
         set_output("scope_mode", "full")
-        force_all()
-        return 0
-
-    changed = [
-        line.strip()
-        for line in cf_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if not changed:
-        print("::notice::Test scope: full dispatch (empty changed-file list)")
-        set_output("scope_mode", "full")
-        force_all()
+        result = _force_all_dispatch(repo)
+        _emit_outputs(result, set_output)
         return 0
 
     result = compute_tier_dispatch(changed, repo)
     set_output("scope_mode", "scoped")
-
-    summary_parts = []
-    for tier_name in sorted(result):
-        if tier_name.startswith("_"):
-            continue
-        info = result[tier_name]
-        gate = "true" if info["run"] else "false"
-        # Output names match tests.yml's existing output names
-        # (no prefix) so tier jobs don't need condition changes.
-        set_output(tier_name, gate)
-        files = info["files"]
-        if files:
-            file_list = " ".join(str(f) for f in sorted(files))
-            set_output(f"{tier_name}_files", file_list)
-            summary_parts.append(f"  {tier_name}: {len(files)} test files")
-        else:
-            summary_parts.append(f"  {tier_name}: skip")
-
-    print("Tier dispatch:")
-    for line in summary_parts:
-        print(line)
+    _emit_outputs(result, set_output)
 
     active = sum(1 for t, i in result.items()
                  if not t.startswith("_") and i["run"])

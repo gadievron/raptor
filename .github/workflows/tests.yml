@@ -136,10 +136,17 @@ jobs:
   # test dispatch via test_scope.py.  CodeQL per-language filters
   # (codeql_python, codeql_cpp, codeql_actions) live in codeql.yml's
   # own changes job — this job handles test tiers only.
+  #
+  # The scope step always runs (even on force_full / schedule /
+  # merge_group) so that downstream jobs receive file lists and
+  # matrices.  Without --changed-files, test_scope.py falls back to
+  # full dispatch internally — every gate is set to true and every
+  # file list is populated from disk.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
+      # Per-tier gates (true/false).
       python: ${{ steps.scope.outputs.python }}
       sandbox: ${{ steps.scope.outputs.sandbox }}
       exploit_feasibility: ${{ steps.scope.outputs.exploit_feasibility }}
@@ -153,7 +160,19 @@ jobs:
       orchestration: ${{ steps.scope.outputs.orchestration }}
       sca: ${{ steps.scope.outputs.sca }}
       source_intel: ${{ steps.scope.outputs.source_intel }}
-      force_full: ${{ steps.force.outputs.force_full }}
+      # Dynamic batch matrix for the fast tier (JSON for fromJSON()).
+      python_matrix: ${{ steps.scope.outputs.python_matrix }}
+      # Per-tier affected file lists (space-separated paths).
+      sandbox_files: ${{ steps.scope.outputs.sandbox_files }}
+      exploit_feasibility_files: ${{ steps.scope.outputs.exploit_feasibility_files }}
+      codeql_files: ${{ steps.scope.outputs.codeql_files }}
+      llm_analysis_files: ${{ steps.scope.outputs.llm_analysis_files }}
+      cve_diff_files: ${{ steps.scope.outputs.cve_diff_files }}
+      fuzzing_files: ${{ steps.scope.outputs.fuzzing_files }}
+      sage_files: ${{ steps.scope.outputs.sage_files }}
+      orchestration_files: ${{ steps.scope.outputs.orchestration_files }}
+      sca_files: ${{ steps.scope.outputs.sca_files }}
+      source_intel_files: ${{ steps.scope.outputs.source_intel_files }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
         with:
@@ -225,9 +244,10 @@ jobs:
       # Import-graph-based test dispatch. Builds the reverse import
       # graph with stdlib ast, walks outward from changed files, and
       # maps affected test files to their CI tier. Falls back to full
-      # dispatch when no changed-file list is available.
+      # dispatch (all gates true, all file lists populated) when no
+      # changed-file list is available — covers force_full, first
+      # push to a new branch, and API truncation.
       - id: scope
-        if: steps.force.outputs.force_full == 'false'
         run: |
           python3 .github/scripts/test_scope.py \
             ${CHANGED_FILES_LIST:+--changed-files "$CHANGED_FILES_LIST"} \
@@ -239,9 +259,9 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.python == 'true' ||
+      (needs.changes.outputs.python == 'true' ||
        needs.changes.outputs.sandbox == 'true' ||
+       needs.changes.outputs.sca == 'true' ||
        needs.changes.outputs.exploit_feasibility == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -297,19 +317,16 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.python == 'true')
+      needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      # Dynamic batching: test_scope.py partitions affected test files
+      # into 1-4 balanced batches based on count. A single-file PR
+      # gets 1 runner; a broad refactor gets 4.
       matrix:
-        # 4-way split: ~2x parallelism uplift over the 2-way split for
-        # the same per-runner setup cost (venv download + compileall).
-        # Sweet spot before per-runner overhead dominates the wall-clock
-        # win — a 5th group would mostly buy queueing + setup, not test
-        # parallelism.
-        group: [1, 2, 3, 4]
+        include: ${{ fromJSON(needs.changes.outputs.python_matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
@@ -396,30 +413,16 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m compileall -q core packages *.py
 
-      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 4)
+      - name: Run unit tests (batch ${{ matrix.batch }})
+        env:
+          TEST_FILES: ${{ matrix.files }}
         run: |
           source $VENV_PATH/bin/activate
-          # The prompt-envelope audit runs in its own narrowly-scoped
-          # job (python-prompt-audit) so it doesn't fire on unrelated
-          # Python changes. Exclude it here to avoid duplicate runs.
-          # The .github/tests filter-coverage suite has its own job so
-          # we don't pull it into the fast tier either.
-          # Heavy subsystems carved into their own gated jobs are
-          # ignored here too — see the dedicated `python-unit-tests-*`
-          # jobs further down.
-          pytest -n auto --splits 4 --group ${{ matrix.group }} core packages \
-            --ignore=core/sandbox/tests \
-            --ignore=packages/exploit_feasibility/tests \
-            --ignore=packages/codeql/tests \
-            --ignore=packages/llm_analysis/tests \
-            --ignore=packages/cve_diff/tests \
-            --ignore=packages/fuzzing/tests \
-            --ignore=packages/oss_forensics/tests \
-            --ignore=packages/source_intel/tests \
-            --ignore=packages/sca \
-            --ignore=core/sage/tests \
-            --ignore=core/orchestration/tests \
-            --ignore=core/security/tests/test_prompt_envelope_audit.py
+          # File list comes from test_scope.py's import-graph analysis.
+          # No --ignore or --splits needed — the list is already the
+          # precise set of affected test files for this batch.
+          set -f  # word-split $TEST_FILES without glob expansion
+          pytest -n auto $TEST_FILES
 
       # Note: the CLI smoke tests for raptor.py used to live at
       # test/test_cli_smoke.py with a dedicated group-1 step (to dodge
@@ -444,8 +447,7 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sca == 'true')
+      needs.changes.outputs.sca == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -520,15 +522,13 @@ jobs:
         run: chmod +x $VENV_PATH/bin/*
 
       - name: Run SCA tests (group ${{ matrix.group }} of 4)
+        env:
+          SCA_FILES: ${{ needs.changes.outputs.sca_files }}
         run: |
           source $VENV_PATH/bin/activate
-          # --durations-path: pytest-split reads the committed
-          # timings to balance shards by wall-clock instead of test
-          # count. Refresh via:
-          #   python -m pytest packages/sca --store-durations \
-          #     --durations-path packages/sca/test-durations.json
+          set -f  # word-split $SCA_FILES without glob expansion
           python -m pytest -n auto --splits 4 --group ${{ matrix.group }} \
-            --durations-path packages/sca/test-durations.json packages/sca
+            --durations-path packages/sca/test-durations.json $SCA_FILES
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.
@@ -536,8 +536,7 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sandbox == 'true')
+      needs.changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -614,7 +613,10 @@ jobs:
           # root on sys.path so `from core.security.redaction import ...`
           # in sandbox sources resolves. Bare pytest only works when
           # `core` is included in the args (e.g. `pytest core packages`).
-          python -m pytest core/sandbox/tests
+          set -f
+          python -m pytest $SANDBOX_FILES
+        env:
+          SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
 
   # macOS sandbox tier: runs the same core/sandbox/tests on a real Darwin
   # host so the darwin_only enforcement tests (sandbox-exec write-blocking,
@@ -626,8 +628,7 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sandbox == 'true')
+      needs.changes.outputs.sandbox == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -669,9 +670,12 @@ jobs:
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
 
       - name: Run sandbox tests (macOS)
+        env:
+          SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest core/sandbox/tests -v
+          set -f
+          python -m pytest $SANDBOX_FILES -v
 
   # Exploit-feasibility integration tier: 11 × ~15 s tests calling
   # analyze_binary against real binaries. Gated on the package's real
@@ -680,8 +684,7 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.exploit_feasibility == 'true')
+      needs.changes.outputs.exploit_feasibility == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -752,11 +755,12 @@ jobs:
         run: chmod +x $VENV_PATH/bin/*
 
       - name: Run exploit_feasibility integration tests
+        env:
+          EXPLOIT_FILES: ${{ needs.changes.outputs.exploit_feasibility_files }}
         run: |
           source $VENV_PATH/bin/activate
-          # See sandbox tests above for why `python -m pytest` is needed
-          # rather than bare `pytest`.
-          python -m pytest packages/exploit_feasibility/tests
+          set -f
+          python -m pytest $EXPLOIT_FILES
 
   # source_intel tier: Coccinelle-driven memory-corruption evidence.
   # The real-spatch E2E (test_e2e_real_spatch_* etc.) are
@@ -774,15 +778,14 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.source_intel == 'true')
+      needs.changes.outputs.source_intel == 'true'
     permissions:
       contents: read
       packages: read
     uses: ./.github/workflows/_tier.yml
     with:
       tier: source_intel
-      test_path: packages/source_intel/tests
+      test_path: ${{ needs.changes.outputs.source_intel_files }}
       pytest_args: ""
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
@@ -796,8 +799,7 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.prompt_audit == 'true')
+      needs.changes.outputs.prompt_audit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -827,8 +829,7 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.ci_lint == 'true')
+      needs.changes.outputs.ci_lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -855,15 +856,14 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.codeql == 'true')
+      needs.changes.outputs.codeql == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: codeql
-      test_path: packages/codeql/tests
+      test_path: ${{ needs.changes.outputs.codeql_files }}
       timeout_minutes: 25
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
@@ -871,15 +871,14 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.llm_analysis == 'true')
+      needs.changes.outputs.llm_analysis == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: llm_analysis
-      test_path: packages/llm_analysis/tests
+      test_path: ${{ needs.changes.outputs.llm_analysis_files }}
       timeout_minutes: 25
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
@@ -887,30 +886,28 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.cve_diff == 'true')
+      needs.changes.outputs.cve_diff == 'true'
     permissions:
       contents: read
       packages: read
     uses: ./.github/workflows/_tier.yml
     with:
       tier: cve_diff
-      test_path: packages/cve_diff/tests
+      test_path: ${{ needs.changes.outputs.cve_diff_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-fuzzing:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.fuzzing == 'true')
+      needs.changes.outputs.fuzzing == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: fuzzing
-      test_path: packages/fuzzing/tests
+      test_path: ${{ needs.changes.outputs.fuzzing_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # CANARY for the prebuilt-image migration (phase 2 of the fan-out
@@ -931,30 +928,28 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sage == 'true')
+      needs.changes.outputs.sage == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: sage
-      test_path: core/sage/tests
+      test_path: ${{ needs.changes.outputs.sage_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-orchestration:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.orchestration == 'true')
+      needs.changes.outputs.orchestration == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: orchestration
-      test_path: core/orchestration/tests
+      test_path: ${{ needs.changes.outputs.orchestration_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # Single aggregate gate over the whole suite. `needs:` every job and
