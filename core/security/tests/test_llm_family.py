@@ -483,6 +483,24 @@ def test_shorthand_returns_none_on_zero_match():
     assert resolve_model_shorthand("bogus", ["claude-opus-4-7"]) is None
 
 
+def test_shorthand_type_guards_non_string_input():
+    # Regression: a caller passing an already-resolved ModelConfig (or any
+    # non-string) here used to crash deep inside ``"/" in model_id`` with a
+    # confusing ``TypeError: argument of type 'ModelConfig' is not a
+    # container or iterable``. Fail loud at the boundary instead — the
+    # ONLY way this receives a non-string is a caller bug worth surfacing.
+    import pytest
+    from core.security.llm_family import resolve_model_shorthand
+    with pytest.raises(TypeError) as ei:
+        resolve_model_shorthand(object(), ["claude-haiku-4-5"])
+    assert "model_id must be str" in str(ei.value)
+    with pytest.raises(TypeError):
+        resolve_model_shorthand(42, ["claude-haiku-4-5"])
+    # None stays a sentinel for "missing input" — falsy short-circuit
+    # below returns None cleanly (per docstring contract).
+    assert resolve_model_shorthand(None, ["claude-haiku-4-5"]) is None
+
+
 def test_shorthand_rejects_qualified_names():
     # Provider-qualified (contains '/') and Bedrock-shaped (contains '.')
     # ids never take the shorthand path — they're already-qualified.
