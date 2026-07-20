@@ -286,6 +286,10 @@ jobs:
             --base-config .github/codeql/codeql-config.yml \
             --out .github/codeql/codeql-scoped-config.yml \
             --repo .
+          # Clean up __pycache__ left by the scoping script — CodeQL's
+          # Python extractor walk_dir chokes on stale .pyc artefacts
+          # inside .github/scripts/ (NotADirectoryError).
+          rm -rf .github/scripts/__pycache__
 
       # Initializes the CodeQL tools for scanning.
       # Python uses the import-graph-scoped config when available;
