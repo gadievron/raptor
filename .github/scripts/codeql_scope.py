@@ -511,7 +511,7 @@ def main() -> int:
         return 0
 
     # Scoped scan.
-    scoped_paths = [str(f) for f in sorted(closure)]
+    scoped_paths = [str(f) for f in sorted(closure) if (repo / f).exists()]
     write_scoped_config(out_path, base_config, scoped_paths)
     set_output("codeql_scoped_config", str(out_path))
     set_output("codeql_scope_mode", "scoped")
