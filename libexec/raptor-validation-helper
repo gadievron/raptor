@@ -232,6 +232,29 @@ def _apply_stage_file(workdir, stage_letter):
                     by_id[fid] = staged_finding
                     applied += 1
 
+        # Propagate ruling.status → status so get_display_status
+        # picks up the Stage D verdict instead of the stale Stage A
+        # value (not_disproven / poc_success).
+        # final_status is only set for values in the Stage E enum
+        # (confirmed / exploitable); ruled_out is NOT a valid
+        # final_status value — it flows via ruling.status instead.
+        _RULING_TO_FINAL = {
+            "confirmed": "confirmed",
+            "exploitable": "exploitable",
+        }
+        for finding in container.get("findings", []):
+            ruling = finding.get("ruling")
+            if isinstance(ruling, dict):
+                rs = ruling.get("status", "")
+                if rs in ("confirmed", "ruled_out", "exploitable"):
+                    finding["status"] = rs
+                final = _RULING_TO_FINAL.get(rs)
+                if final:
+                    finding["final_status"] = final
+            # Empty cvss_vector fails schema pattern; normalise to None
+            if finding.get("cvss_vector") == "":
+                finding["cvss_vector"] = None
+
         # Copy top-level metadata (but NOT findings or updates — those are handled above)
         for key, value in staged.items():
             if key not in ("stage", "updates", "findings"):
@@ -1309,7 +1332,8 @@ def prepare_bridge(workdir, target=None):
 
 
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
-              sanitizer_cut_mode=None, sanitizer_cut_parity_log=None):
+              sanitizer_cut_mode=None, sanitizer_cut_parity_log=None,
+              findings_path=None):
     """Stage 0: start lifecycle, build checklist, bridge understand output."""
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
@@ -1385,6 +1409,15 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         checklist = build_checklist(target, str(out_dir))
 
         (out_dir / "build").mkdir(exist_ok=True)
+
+        if findings_path:
+            import shutil
+            dest = out_dir / "findings.json"
+            shutil.copy2(findings_path, dest)
+            from core.json import load_json
+            pre_findings = load_json(dest)
+            n = len(pre_findings.get("findings", [])) if pre_findings else 0
+            print(f"Pre-existing findings: {n} from {Path(findings_path).name}")
 
         if not no_bridge:
             _bridge_understand_output(out_dir, checklist, target,
@@ -1512,7 +1545,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]
@@ -1534,6 +1567,15 @@ def main():
         if idx + 1 < len(args):
             model = args[idx + 1]
     no_bridge = "--no-bridge" in args
+    findings_path = None
+    if "--findings" in args:
+        idx = args.index("--findings")
+        if idx + 1 < len(args):
+            findings_path = args[idx + 1]
+            if not Path(findings_path).is_file():
+                print(f"ERROR: findings file not found: {findings_path}",
+                      file=sys.stderr)
+                sys.exit(1)
 
     # Sanitizer-cut mode (review #4, PR #794). Stage 0 resolves +
     # persists it; later stages reload it. None means "not passed".
@@ -1552,7 +1594,8 @@ def main():
     if stage == "0":
         prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge,
                   sanitizer_cut_mode=sanitizer_cut_mode,
-                  sanitizer_cut_parity_log=sanitizer_cut_parity_log)
+                  sanitizer_cut_parity_log=sanitizer_cut_parity_log,
+                  findings_path=findings_path)
         return
 
     # All other stages need a workdir
