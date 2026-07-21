@@ -1,4 +1,4 @@
-"""Tests for packages.codeql.smt_path_validator."""
+"""Tests for core.smt_solver.path_feasibility."""
 
 import sys
 from pathlib import Path
@@ -29,7 +29,7 @@ class TestNoZ3:
     """Behaviour when Z3 is unavailable — must degrade gracefully."""
 
     def test_returns_none_feasible(self):
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.feasible is None
         assert r.smt_available is False
@@ -39,12 +39,12 @@ class TestNoZ3:
             PathCondition("size > 0", step_index=0),
             PathCondition("offset < 1024", step_index=1),
         ]
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility(conditions)
         assert set(r.unknown) == {"size > 0", "offset < 1024"}
 
     def test_empty_conditions_still_returns_none(self):
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([])
         assert r.feasible is None
         assert r.smt_available is False
@@ -614,7 +614,7 @@ class TestStructuredRejection:
         """When Z3 is unavailable everything goes to unknown but we
         don't synthesise per-condition rejection reasons — there's no
         parser/solver to assign blame to."""
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.unknown == ["size > 0"]
         assert r.unknown_reasons == []
@@ -1831,7 +1831,7 @@ class TestWeakestPrecondition:
         assert r.wp_conjuncts == []
 
     def test_no_z3_has_no_wp(self):
-        with patch("packages.codeql.smt_path_validator._z3_available",
+        with patch("core.smt_solver.path_feasibility._z3_available",
                    return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.wp_predicate is None
@@ -1921,7 +1921,7 @@ class TestWeakestPrecondition:
         # Patch solver.check to return unknown for the first call,
         # forcing the conjunct to be kept even though it's redundant.
         real_extract = _extract_wp
-        with patch("packages.codeql.smt_path_validator._new_solver") as mock_ns:
+        with patch("core.smt_solver.path_feasibility._new_solver") as mock_ns:
             mock_solver = mock_ns.return_value
             mock_solver.check.return_value = z3.unknown
             mock_solver.__enter__ = lambda s: s
