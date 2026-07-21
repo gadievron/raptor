@@ -18,23 +18,27 @@ from core.llm.model_data import PROVIDER_DEFAULT_MODELS, MODEL_COSTS, MODEL_LIMI
 
 
 @pytest.fixture(autouse=True)
-def _restore_thinking_model_cache():
-    """Snapshot core.llm.config's module-level cache before each test and
-    restore after. Many tests in this file deliberately poke
-    `_thinking_model_checked` / `_cached_thinking_model` to force a
-    re-evaluation against tmp_path config; without restore, the module
-    is left in an inconsistent state and later tests in the suite (e.g.
-    packages/llm_analysis/tests/test_dispatch.py::test_multi_model_flags)
-    re-read the real environment and pick up unintended fallbacks.
+def _restore_llm_caches():
+    """Snapshot module-level caches before each test and restore after.
+
+    Covers both the thinking-model cache in core.llm.config and the
+    detection cache in core.llm.detection.  Without the detection
+    restore, a test that runs under a stripped env (no API keys) caches
+    ``external_llm=False``; any later test calling
+    ``_get_default_fallback_models`` then short-circuits to ``[]``
+    because it trusts the stale detection result.
     """
     import core.llm.config as cfg
+    import core.llm.detection as det
     saved_checked = getattr(cfg, "_thinking_model_checked", None)
     saved_cached = getattr(cfg, "_cached_thinking_model", None)
+    saved_avail = getattr(det, "_cached_llm_availability", None)
     try:
         yield
     finally:
         cfg._thinking_model_checked = saved_checked
         cfg._cached_thinking_model = saved_cached
+        det._cached_llm_availability = saved_avail
 
 
 class TestGetConfiguredModels:
@@ -675,8 +679,10 @@ class TestFallbackModelsFromConfig:
                    if k not in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
             with patch.dict(os.environ, env, clear=True):
                 import core.llm.config as cfg
+                import core.llm.detection as det
                 cfg._thinking_model_checked = False
                 cfg._cached_thinking_model = None
+                det._cached_llm_availability = None
                 fallbacks = _get_default_fallback_models()
         names = [f.model_name for f in fallbacks]
         assert "gemini-2.5-flash" in names
@@ -700,8 +706,10 @@ class TestFallbackModelsFromConfig:
                          if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
             with patch.dict(os.environ, env_clean, clear=True):
                 import core.llm.config as cfg
+                import core.llm.detection as det
                 cfg._thinking_model_checked = False
                 cfg._cached_thinking_model = None
+                det._cached_llm_availability = None
                 fallbacks = _get_default_fallback_models()
         flash = [f for f in fallbacks if f.model_name == "gemini-2.5-flash"]
         assert len(flash) == 1
@@ -728,8 +736,10 @@ class TestFallbackModelsFromConfig:
                          if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
             with patch.dict(os.environ, env_clean, clear=True):
                 import core.llm.config as cfg
+                import core.llm.detection as det
                 cfg._thinking_model_checked = False
                 cfg._cached_thinking_model = None
+                det._cached_llm_availability = None
                 fallbacks = _get_default_fallback_models()
         names = [f.model_name for f in fallbacks]
         assert "gemini-2.5-pro" in names

@@ -194,7 +194,7 @@ def main():
         return
 
     # Normalise vuln_types before validating findings
-    if schema_type == "findings":
+    if schema_type == "findings" and isinstance(data, dict):
         from core.schema_constants import normalise_vuln_type
         changed = False
         for f in data.get("findings", []):

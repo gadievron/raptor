@@ -330,8 +330,7 @@ class FuzzingPlanner:
         if state.is_coverage_stalled():
             logger.info("Coverage stalled - using aggressive mutation strategy")
             strategy["name"] = "aggressive"
-            strategy["extra_flags"].append("-L")  # MOpt mode
-            strategy["extra_flags"].append("-0")  # Zero stack
+            strategy["extra_flags"].extend(["-L", "0"])  # MOpt mode
 
         # If we have ASAN, reduce timeout (crashes faster)
         if state.has_asan:

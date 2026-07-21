@@ -22,6 +22,7 @@ out/
 
 # Runtime artifacts
 codeql_dbs/
+.github/codeql/codeql-scoped-config.yml
 engine/semgrep/rules/registry-cache/c.p.*.json
 
 # User-local tuning (regenerate with: raptor tune default)

@@ -37,7 +37,7 @@ from typing import Any, Optional
 def _safe_int(v, default: int = 0) -> int:
     try:
         return int(v)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return default
 
 

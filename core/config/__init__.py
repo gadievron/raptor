@@ -807,9 +807,12 @@ class RaptorConfig:
                 env[name] = value
         # Belt + braces: strip anything dangerous that somehow made it
         # through (either allowlisted explicitly or matching a prefix).
-        if not preserve_proxy:
-            env = strip_env_vars(env, RaptorConfig.PROXY_ENV_VARS)
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
+        if preserve_proxy:
+            for pv in RaptorConfig.PROXY_ENV_VARS:
+                val = os.environ.get(pv)
+                if val is not None:
+                    env[pv] = val
         # F102: restore PYTHONUSERBASE AFTER the dangerous-var strip
         # for callers that opted in (e.g. semgrep scanner spawn).
         # Take the value verbatim from os.environ — do NOT invent

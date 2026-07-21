@@ -189,7 +189,7 @@ def _load_one(yml_path: Path) -> Optional[CatalogEntry]:
         if not isinstance(data, dict):
             return None
         return CatalogEntry.from_dict(data)
-    except (OSError, yaml.YAMLError, ValueError):
+    except (OSError, yaml.YAMLError, ValueError, IndexError, TypeError):
         return None
 
 

@@ -352,6 +352,11 @@ class ToolUseLoop:
         total_cost_usd = 0.0
         tool_calls_made = 0
         terminal_tool_input: dict[str, Any] | None = None
+        # Per-turn token accounting — one (input, output) tuple appended
+        # per assistant turn added to ``messages``. Mirrors the message
+        # append order so downstream consumers (trajectory bridge) can
+        # zip messages+tokens by assistant-turn index.
+        per_turn_tokens: list[tuple[int, int]] = []
         wall_start = time.monotonic()
 
         # x-source: seed known_values from prompt + history
@@ -400,6 +405,7 @@ class ToolUseLoop:
                         total_output_tokens=total_output_tokens,
                         total_cost_usd=total_cost_usd,
                         terminated_by="give_up",
+                        per_turn_tokens=tuple(per_turn_tokens),
                     )
 
             # ---- pre-flight: cost budget --------------------------------
@@ -446,6 +452,7 @@ class ToolUseLoop:
                     total_output_tokens=total_output_tokens,
                     total_cost_usd=total_cost_usd,
                     terminated_by="max_seconds",
+                    per_turn_tokens=tuple(per_turn_tokens),
                 )
 
             # ---- pre-flight: total-tokens budget ------------------------
@@ -474,6 +481,7 @@ class ToolUseLoop:
                     total_output_tokens=total_output_tokens,
                     total_cost_usd=total_cost_usd,
                     terminated_by="max_total_tokens",
+                    per_turn_tokens=tuple(per_turn_tokens),
                 )
 
             # ---- pre-flight: context window -----------------------------
@@ -544,6 +552,9 @@ class ToolUseLoop:
                 role="assistant",
                 content=list(response.content),
             ))
+            per_turn_tokens.append(
+                (int(response.input_tokens), int(response.output_tokens)),
+            )
 
             # ---- termination by stop_reason -----------------------------
             if response.stop_reason is StopReason.COMPLETE:
@@ -582,6 +593,7 @@ class ToolUseLoop:
                     total_output_tokens=total_output_tokens,
                     total_cost_usd=total_cost_usd,
                     terminated_by="complete",
+                    per_turn_tokens=tuple(per_turn_tokens),
                 )
 
             # ---- PAUSE_TURN: model pause-resumed extended thinking ----
@@ -626,6 +638,7 @@ class ToolUseLoop:
                     total_cost_usd=total_cost_usd,
                     terminated_by=term_reason,    # type: ignore[arg-type]
                     error_message=err,
+                    per_turn_tokens=tuple(per_turn_tokens),
                 )
 
             # ---- dispatch tools -----------------------------------------
@@ -890,6 +903,7 @@ class ToolUseLoop:
                     total_output_tokens=total_output_tokens,
                     total_cost_usd=total_cost_usd,
                     terminated_by="terminal_tool",
+                    per_turn_tokens=tuple(per_turn_tokens),
                 )
 
         # ---- max_iterations hit -----------------------------------------
@@ -908,6 +922,7 @@ class ToolUseLoop:
             total_output_tokens=total_output_tokens,
             total_cost_usd=total_cost_usd,
             terminated_by="max_iterations",
+            per_turn_tokens=tuple(per_turn_tokens),
         )
 
     # ------------------------------------------------------------------

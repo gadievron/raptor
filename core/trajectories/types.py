@@ -54,6 +54,13 @@ class TrajectoryStep:
     text_blocks: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    # Token accounting per turn. Populated for assistant turns from
+    # the provider's TurnResponse.input_tokens / output_tokens; 0
+    # for user turns and for legacy trajectories written before this
+    # field existed. Consumers should treat 0 as "unknown", not
+    # "zero-token turn".
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass(frozen=True)

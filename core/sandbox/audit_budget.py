@@ -363,11 +363,7 @@ class AuditBudget:
         # general case.
         sampled_keeps = 0
         for cat, count in getattr(self, "_sampling_counters", {}).items():
-            cat_cfg = (
-                getattr(self, "_per_category_sampling", {}).get(cat)
-                if hasattr(self, "_per_category_sampling")
-                else None
-            )
+            cat_cfg = self.sampling_rates.get(cat)
             sample_n = cat_cfg if isinstance(cat_cfg, int) and cat_cfg > 0 else 0
             if sample_n > 0:
                 sampled_keeps += count // sample_n

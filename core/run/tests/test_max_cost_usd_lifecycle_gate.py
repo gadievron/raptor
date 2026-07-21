@@ -76,25 +76,23 @@ class TestExtractAndStrip:
         )
         assert cap == pytest.approx(0.0042)
 
-    def test_non_numeric_value_warns_and_returns_unchanged(self, capsys):
+    def test_non_numeric_value_warns_and_strips(self, capsys):
         raptor = _import_raptor()
         cap, out = raptor._extract_and_strip_max_cost_usd(
             ["--max-cost-usd", "lots", "--repo", "/x"],
         )
-        # Bad value → no cap applied; args returned UNCHANGED so
-        # the lifecycle doesn't silently lose context.
         assert cap is None
-        assert out == ["--max-cost-usd", "lots", "--repo", "/x"]
+        assert out == ["--repo", "/x"]
         captured = capsys.readouterr()
         assert "not a number" in captured.err
 
-    def test_zero_value_warns_and_returns_unchanged(self, capsys):
+    def test_zero_value_warns_and_strips(self, capsys):
         raptor = _import_raptor()
         cap, out = raptor._extract_and_strip_max_cost_usd(
             ["--max-cost-usd", "0"],
         )
         assert cap is None
-        assert out == ["--max-cost-usd", "0"]
+        assert out == []
         assert "> 0" in capsys.readouterr().err
 
     def test_negative_value_warns(self, capsys):

@@ -142,14 +142,14 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
             "ignoring cap for this run",
             file=sys.stderr,
         )
-        return (None, args)
+        return (None, out)
     if cap <= 0:
         print(
             f"WARNING: --max-cost-usd must be > 0 (got {cap}); "
             "ignoring cap for this run",
             file=sys.stderr,
         )
-        return (None, args)
+        return (None, out)
     return (cap, out)
 
 
@@ -481,7 +481,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         pass
 
     # Inject --out so the downstream script uses the lifecycle directory
-    if "--out" not in args:
+    if not any(a == "--out" or a.startswith("--out=") for a in args):
         args = args + ["--out", str(out_dir)]
 
     # ``flush=True``: when stdout is piped (e.g. operator's ``| tee

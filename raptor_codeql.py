@@ -193,8 +193,11 @@ def run_autonomous_workflow(args):
         run = runs[0]
         results = run.get("results", [])
 
-        # Analyze findings (up to max_findings)
-        findings_to_analyze = results[:args.max_findings]
+        # Analyze findings (up to max_findings across all SARIF files)
+        remaining = args.max_findings - total_analyzed
+        if remaining <= 0:
+            break
+        findings_to_analyze = results[:remaining]
         logger.info(f"Analyzing {len(findings_to_analyze)} findings...")
 
         from core.reporting.formatting import display_rule_id

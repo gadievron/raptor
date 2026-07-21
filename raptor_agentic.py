@@ -3744,7 +3744,7 @@ def _postprocess_findings(results):
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except SandboxSetupError as e:
         # Fail loud with the actionable message, not a traceback — the run
         # did NOT analyse anything, so never let it look like a clean pass.

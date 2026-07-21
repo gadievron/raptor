@@ -517,16 +517,16 @@ def _run_validate_postpass_unsafe(
                 caller_label="agentic-validate",
             )
         except subprocess.TimeoutExpired:
-            _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")
             lifecycle_settled = True
+            _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")
             logger.warning("validate post-pass timed out after %ds", _POSTPASS_TIMEOUT_S)
             return PostpassResult(ran=False, selected_count=len(selected),
                                   validate_dir=validate_dir,
                                   skipped_reason=f"timeout after {_POSTPASS_TIMEOUT_S}s",
                                   duration_s=time.time() - t0)
         except OSError as e:
-            _fail_lifecycle(validate_dir, f"launch failed: {e}")
             lifecycle_settled = True
+            _fail_lifecycle(validate_dir, f"launch failed: {e}")
             logger.warning("validate post-pass failed to launch: %s", e)
             return PostpassResult(ran=False, selected_count=len(selected),
                                   validate_dir=validate_dir,
@@ -534,8 +534,8 @@ def _run_validate_postpass_unsafe(
                                   duration_s=time.time() - t0)
 
         if proc.returncode != 0:
-            _fail_lifecycle(validate_dir, f"subprocess returned {proc.returncode}")
             lifecycle_settled = True
+            _fail_lifecycle(validate_dir, f"subprocess returned {proc.returncode}")
             logger.warning("validate post-pass returned %d", proc.returncode)
             return PostpassResult(ran=False, selected_count=len(selected),
                                   validate_dir=validate_dir,
@@ -552,8 +552,8 @@ def _run_validate_postpass_unsafe(
                               duration_s=time.time() - t0)
 
     except Exception:
-        _fail_lifecycle(validate_dir, "unexpected exception")
         lifecycle_settled = True
+        _fail_lifecycle(validate_dir, "unexpected exception")
         raise
     finally:
         if not lifecycle_settled:

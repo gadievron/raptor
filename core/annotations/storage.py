@@ -176,7 +176,7 @@ def _validate_metadata(metadata) -> None:
             raise ValueError(
                 f"metadata key exceeds {_MAX_META_KEY_LEN} chars: {len(k)}"
             )
-        if any(c in k for c in "\n\r\x00=\"' "):
+        if not re.fullmatch(r'\w[-\w]*', k):
             raise ValueError(
                 f"metadata key may not contain newline / quote / equals / "
                 f"space characters: {k!r}"
@@ -187,7 +187,7 @@ def _validate_metadata(metadata) -> None:
                 f"metadata value for {k!r} exceeds {_MAX_META_VALUE_LEN} "
                 f"chars: {len(v_str)}"
             )
-        if any(c in v_str for c in "\n\r\x00"):
+        if any(c in v_str for c in "\n\r\x00\t"):
             raise ValueError(
                 f"metadata value for {k!r} may not contain newline / null "
                 f"characters: {v_str!r}"
@@ -253,7 +253,7 @@ def _parse_meta(comment_body: str) -> Dict[str, str]:
         key = m.group(1)
         value = m.group(2) if m.group(2) is not None else m.group(3)
         if m.group(2) is not None:
-            value = value.replace('\\"', '"')
+            value = value.replace('\\"', '"').replace('\\\\', '\\')
         out[key] = value
     return out
 
@@ -266,7 +266,7 @@ def _format_meta(metadata: Dict[str, str]) -> str:
     for k in sorted(metadata):
         v = str(metadata[k])
         if (" " in v) or ('"' in v) or v == "":
-            v_escaped = v.replace('"', '\\"')
+            v_escaped = v.replace('\\', '\\\\').replace('"', '\\"')
             parts.append(f'{k}="{v_escaped}"')
         else:
             parts.append(f"{k}={v}")

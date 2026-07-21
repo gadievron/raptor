@@ -443,7 +443,7 @@ def _reset_builtin_output(out_dir: Path, seed_names: set[str]) -> None:
         if previous.get("source") == "raptor_builtin_seed_corpus":
             for seed in previous.get("seeds") or []:
                 destination = str(seed.get("destination") or "")
-                if destination and "/" not in destination and "\\" not in destination:
+                if destination and "/" not in destination and "\\" not in destination and ".." not in destination:
                     generated_names.add(destination)
         existing_manifest.unlink()
 

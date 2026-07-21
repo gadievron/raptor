@@ -179,6 +179,16 @@ jobs:
         run: |
           python3 .github/scripts/compute_filters.py
 
+      # Stash the changed-file list so the analyze matrix can build
+      # an import-graph-scoped CodeQL config for Python.
+      - name: Upload changed-file list
+        if: steps.changed_files.outputs.list != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # was v7.0.1
+        with:
+          name: changed-files
+          path: ${{ steps.changed_files.outputs.list }}
+          retention-days: 1
+
   # Run analyses in parallel; SARIF stashed as artifacts. No upload
   # happens here — the barrier job below collects all three and
   # delivers them atomically.
@@ -245,14 +255,52 @@ jobs:
         with:
           persist-credentials: false
 
+      # Python import-graph scoping: build a dynamic CodeQL config
+      # that restricts extraction + queries to changed files and
+      # their transitive dependents.  Falls back to full scan when
+      # the closure exceeds 60% of the codebase or when no changed-
+      # file list is available (schedule / workflow_dispatch).
+      # Non-Python matrix entries skip this and use the base config.
+      # Scoping applies to PRs and push-to-main.  Schedule and
+      # workflow_dispatch always get a full scan (safety net).
+      - name: Download changed-file list
+        if: steps.gate.outputs.run == 'true' && matrix.language == 'python' && (github.event_name == 'pull_request' || github.event_name == 'push')
+        id: dl_changed
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: changed-files
+          path: /tmp/changed-files
+        continue-on-error: true
+
+      - name: Compute scoped Python config
+        if: steps.gate.outputs.run == 'true' && matrix.language == 'python' && (github.event_name == 'pull_request' || github.event_name == 'push')
+        id: scope
+        run: |
+          set -euo pipefail
+          changed_arg=""
+          if [[ -f /tmp/changed-files/changed_files.txt ]]; then
+            changed_arg="--changed-files /tmp/changed-files/changed_files.txt"
+          fi
+          python3 .github/scripts/codeql_scope.py \
+            $changed_arg \
+            --base-config .github/codeql/codeql-config.yml \
+            --out .github/codeql/codeql-scoped-config.yml \
+            --repo .
+          # Clean up __pycache__ left by the scoping script — CodeQL's
+          # Python extractor walk_dir chokes on stale .pyc artefacts
+          # inside .github/scripts/ (NotADirectoryError).
+          rm -rf .github/scripts/__pycache__
+
       # Initializes the CodeQL tools for scanning.
+      # Python uses the import-graph-scoped config when available;
+      # other languages use the base config.
       - name: Initialize CodeQL
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          config-file: ./.github/codeql/codeql-config.yml
+          config-file: ${{ (matrix.language == 'python' && steps.scope.outputs.codeql_scope_mode == 'scoped') && './.github/codeql/codeql-scoped-config.yml' || './.github/codeql/codeql-config.yml' }}
 
       - name: Run manual build steps
         if: steps.gate.outputs.run == 'true' && matrix.build-mode == 'manual'
@@ -274,7 +322,7 @@ jobs:
       # left default-on).
       - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
         with:
           category: "/language:${{matrix.language}}"
           upload: never
@@ -370,7 +418,7 @@ jobs:
       # enough for the intermediary to recover.
       - name: Download all SARIF artifacts
         id: dl
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: ./sarif-in
           pattern: sarif-*
@@ -378,7 +426,7 @@ jobs:
 
       - name: Retry artifact download on transient failure
         if: steps.dl.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: ./sarif-in
           pattern: sarif-*
@@ -440,7 +488,7 @@ jobs:
       # the multi-run file as one batch and the meta-check fires with
       # all three configs visible.
       - name: Upload combined SARIF
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
         with:
           sarif_file: combined.sarif
           # No `category:` here — each run carries its own

@@ -235,7 +235,12 @@ def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
         elif op == ">":
             c = _loose_components(operand)
             if c:
-                lowers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
+                if c[3] == 1:
+                    lowers.append(f"{c[0] + 1}.0.0")
+                elif c[3] == 2:
+                    lowers.append(f"{c[0]}.{c[1] + 1}.0")
+                else:
+                    lowers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
         elif op == "<":
             c = _loose_components(operand)
             if c:

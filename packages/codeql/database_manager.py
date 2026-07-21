@@ -718,7 +718,7 @@ class DatabaseManager:
             return DatabaseResult(
                 success=False,
                 language=language,
-                database_path="",
+                database_path=None,
                 metadata=None,
                 errors=[
                     f"working_dir {working_dir!r} lacks execute permission "

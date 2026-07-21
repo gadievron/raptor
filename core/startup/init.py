@@ -121,10 +121,10 @@ def _tighten_config_perms(path: Path) -> str | None:
     try:
         os.fchmod(fd, 0o600)
     except OSError as e:
-        os.close(fd)
         return (f"⚠ {path} mode {oct(st.st_mode)[-3:]} and chmod failed: {e}. "
                 f"Run: chmod 600 {path}")
-    os.close(fd)
+    finally:
+        os.close(fd)
 
     return (f"tightened {path} permissions to 600 "
             f"(was {oct(st.st_mode)[-3:]}; contains API keys)")
@@ -627,15 +627,15 @@ def main():
     quote = read_random_quote()
 
     try:
-        logging.disable(logging.WARNING)
-
-        tool_results, tool_warnings, unavailable = check_tools()
-        llm_lines, llm_warnings = check_llm()
-        env_parts, env_warnings = check_env(unavailable)
-        lang_line = check_lang()
-        project_line = check_active_project()
-
-        logging.disable(logging.NOTSET)
+        try:
+            logging.disable(logging.WARNING)
+            tool_results, tool_warnings, unavailable = check_tools()
+            llm_lines, llm_warnings = check_llm()
+            env_parts, env_warnings = check_env(unavailable)
+            lang_line = check_lang()
+            project_line = check_active_project()
+        finally:
+            logging.disable(logging.NOTSET)
 
         output = format_banner(
             logo, quote, tool_results, tool_warnings,

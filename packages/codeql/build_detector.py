@@ -888,6 +888,10 @@ class BuildDetector:
                     cc_failures = self._dry_run(script_path, language=language)
                     if cc_failures is None:
                         logger.info("  CC retry didn't run — keeping heuristic")
+                        self._write_build_script(
+                            script_path, build_dir,
+                            source_files, compiler, include_flags, define_flags,
+                        )
                     else:
                         cc_ok = len(source_files) - len(cc_failures)
                         if cc_ok > heuristic_ok:

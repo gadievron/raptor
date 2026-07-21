@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Enrich context-map.json sinks with target-mitigation enrichments.
+
+Usage: raptor-enrich-context-map-mitigation <understand_dir> --binary <path>
+                                            [--source <source-root>]
+                                            [--dry-run]
+
+Reads ``<understand_dir>/context-map.json``, calls
+``exploit_feasibility.analyze_binary`` on ``--binary`` once, and
+enriches each ``sinks[]`` entry with a ``mitigation_context`` blob
+(schema in :mod:`packages.code_understanding.mitigation_enricher`).
+When ``--source`` is supplied, ``core.build.build_flags.extract_flags``
+reads it and overrides the ELF-derived FORTIFY heuristic on
+substrates that support the ``build_flags=`` kwarg (main post-PR
+#878; older branches skip the override with a warning).
+
+Runs as MAP-5m (mitigation), after MAP-5f (forward-reachable) /
+MAP-5s (sinks). Idempotent — safe to re-run. Best-effort: missing
+binary, substrate failure, or unparseable map returns quietly rather
+than aborting the /understand pipeline.
+
+Contract (co-authored with /audit; see
+``/tmp/integration/exploit-feasibility-into-understand.md``):
+
+* Opt-in — only fires when the operator passes ``--binary``.
+* Additive — never drops or filters sinks.
+* Idempotent — re-runs overwrite the enrichment with a fresh
+  ``generated_at``.
+* Namespaced — enrichment lives under ``sinks[].mitigation_context``
+  with ``source: exploit_feasibility.analyze_binary`` so /audit and
+  other substrates can coexist without collision.
+
+Exit codes:
+
+* 0 — success (enriched + wrote, or dry-run printed).
+* 1 — bad input (missing files, unparseable JSON).
+* 2 — substrate raised. Original file untouched.
+"""
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+import sys
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+# libexec scripts self-resolve the repo root — see CLAUDE.md
+# "Python path safety" section.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=(
+            "Enrich context-map.json sinks with target mitigation context "
+            "from exploit_feasibility.analyze_binary."
+        ),
+    )
+    ap.add_argument("understand_dir", type=Path,
+                    help="Directory containing context-map.json.")
+    ap.add_argument("--binary", type=Path, required=True,
+                    help="Target binary to analyse.")
+    ap.add_argument("--source", type=Path, default=None,
+                    help="Optional source root. extract_flags() reads it "
+                         "and overrides the ELF-derived FORTIFY heuristic.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Print enriched JSON to stdout, DO NOT overwrite.")
+    args = ap.parse_args()
+
+    context_map_path = args.understand_dir / "context-map.json"
+    if not args.understand_dir.is_dir():
+        sys.stderr.write(f"error: not a directory: {args.understand_dir}\n")
+        return 1
+    if not context_map_path.exists():
+        sys.stderr.write(f"error: context-map not found: {context_map_path}\n")
+        return 1
+    if not args.binary.exists():
+        sys.stderr.write(f"error: binary not found: {args.binary}\n")
+        return 1
+    if args.source is not None and not args.source.is_dir():
+        sys.stderr.write(f"error: --source must be a directory: {args.source}\n")
+        return 1
+
+    try:
+        cm = json.loads(context_map_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        sys.stderr.write(f"error: reading {context_map_path}: {e}\n")
+        return 1
+
+    build_flags = None
+    if args.source is not None:
+        try:
+            from core.build.build_flags import extract_flags
+            build_flags = extract_flags(args.source)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(
+                f"warning: extract_flags on {args.source} failed: {e}\n"
+            )
+
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    from packages.code_understanding.mitigation_enricher import enrich_context_map
+
+    try:
+        enrich_context_map(
+            cm,
+            binary_path=args.binary,
+            build_flags=build_flags,
+            generated_at=generated_at,
+        )
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"error: enrichment raised: {e}\n")
+        return 2
+
+    text = json.dumps(cm, indent=2, sort_keys=True) + "\n"
+    if args.dry_run:
+        sys.stdout.write(text)
+        return 0
+
+    from core.atomic_fs import atomic_write_text
+    atomic_write_text(context_map_path, text)
+    n_sinks = len(cm.get("sinks") or [])
+    enriched = sum(
+        1 for s in (cm.get("sinks") or [])
+        if isinstance(s, dict) and "mitigation_context" in s
+    )
+    print(f"enriched {enriched}/{n_sinks} sinks in {context_map_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
