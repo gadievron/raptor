@@ -6,7 +6,7 @@ and intelligent caching.
 """
 
 from .language_detector import LanguageDetector, LanguageInfo
-from .build_detector import BuildDetector, BuildSystem
+from core.build.build_detector import BuildDetector, BuildSystem
 from .database_manager import DatabaseManager, DatabaseResult, DatabaseMetadata
 from .query_runner import QueryRunner, QueryResult
 from .tunables import CodeQLTunables

@@ -671,7 +671,7 @@ class TestBuildDetectorMigration:
 
     def test_build_detector_imports_proxy_hosts_for_cc_dispatch(self):
         import inspect
-        from packages.codeql import build_detector
+        from core.build import build_detector
         src = inspect.getsource(build_detector)
         assert "proxy_hosts_for_cc_dispatch" in src, (
             "packages/codeql/build_detector.py must route the "
@@ -683,7 +683,7 @@ class TestBuildDetectorMigration:
 
     def test_build_detector_no_longer_hardcodes_anthropic_host(self):
         import inspect
-        from packages.codeql import build_detector
+        from core.build import build_detector
         src = inspect.getsource(build_detector)
         # The pre-migration literal. If this returns, the call
         # site reverted to hardcoded. Allow the string in
