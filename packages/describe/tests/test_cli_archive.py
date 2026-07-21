@@ -187,6 +187,18 @@ class TestArchiveCacheHit:
     /describe MUST use that path — not re-extract.
     """
 
+    @staticmethod
+    def _find_cache_dir(archive_path, safe_cache_name_fn, project_out):
+        from core.run.provenance import archive_snapshot
+        snap = archive_snapshot(archive_path)
+        if snap is None:
+            return None
+        cache_name = safe_cache_name_fn(
+            snap["archive_name"], snap["archive_sha256"],
+        )
+        candidate = project_out / "_sources" / cache_name
+        return candidate if candidate.is_dir() else None
+
     def _set_active_project(
         self, monkeypatch, home: Path, project_out: Path,
     ) -> None:
@@ -211,6 +223,12 @@ class TestArchiveCacheHit:
         monkeypatch.setattr(
             "core.run.output._resolve_active_project",
             lambda: (str(project_out), "_t", "/tmp"),
+        )
+        monkeypatch.setattr(
+            "packages.describe.cli._find_cached_extraction",
+            lambda archive_path, safe_cache_name_fn: (
+                self._find_cache_dir(archive_path, safe_cache_name_fn, project_out)
+            ),
         )
 
     def test_cache_hit_skips_extraction(
