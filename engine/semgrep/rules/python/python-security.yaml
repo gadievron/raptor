@@ -1,0 +1,110 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — pattern: insecure tempfile.mktemp (TOCTOU race)
+  # ---------------------------------------------------------------------------
+  - id: raptor.python.insecure-tempfile
+    message: >-
+      tempfile.mktemp() is vulnerable to a TOCTOU race — another process
+      can create the file between name generation and open. Use
+      tempfile.mkstemp() or tempfile.NamedTemporaryFile() instead.
+    languages: [python]
+    severity: HIGH
+    pattern: tempfile.mktemp(...)
+    metadata:
+      cwe: ["CWE-377"]
+      tags: ["security", "python", "tempfile"]
+
+  # ---------------------------------------------------------------------------
+  # Python — pattern: weak SSL/TLS context configuration
+  # ---------------------------------------------------------------------------
+  - id: raptor.python.weak-ssl-context-unverified
+    message: >-
+      ssl._create_unverified_context() disables certificate verification,
+      allowing man-in-the-middle attacks. Use ssl.create_default_context()
+      which enables verification by default.
+    languages: [python]
+    severity: CRITICAL
+    pattern: ssl._create_unverified_context(...)
+    metadata:
+      cwe: ["CWE-295"]
+      owasp_top_10: ["A7:2021-Identification and Authentication Failures"]
+      tags: ["security", "python", "ssl"]
+
+  - id: raptor.python.weak-ssl-no-hostname-check
+    message: >-
+      Disabling check_hostname allows connections to hosts that do not
+      match the certificate subject, enabling man-in-the-middle attacks.
+    languages: [python]
+    severity: CRITICAL
+    pattern: $CTX.check_hostname = False
+    metadata:
+      cwe: ["CWE-295"]
+      owasp_top_10: ["A7:2021-Identification and Authentication Failures"]
+      tags: ["security", "python", "ssl"]
+
+  - id: raptor.python.weak-ssl-cert-none
+    message: >-
+      Setting verify_mode to CERT_NONE disables TLS certificate
+      verification, allowing man-in-the-middle attacks. Use
+      ssl.CERT_REQUIRED.
+    languages: [python]
+    severity: CRITICAL
+    pattern: $CTX.verify_mode = ssl.CERT_NONE
+    metadata:
+      cwe: ["CWE-295"]
+      owasp_top_10: ["A7:2021-Identification and Authentication Failures"]
+      tags: ["security", "python", "ssl"]
+
+  # ---------------------------------------------------------------------------
+  # Python — taint: web sources -> filesystem path sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.python.path-join-traversal
+    message: >-
+      Untrusted data flows into a filesystem path operation. os.path.join
+      discards the base directory when the second argument is an absolute
+      path, and "../" components traverse above the base. Use
+      os.path.basename() to strip directory components, or validate the
+      resolved path stays within the intended base.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: os.path.join($BASE, $PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: open($PATH, ...)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: open($PATH)
+          - focus-metavariable: $PATH
+    pattern-sanitizers:
+      - pattern: os.path.basename(...)
+    metadata:
+      cwe: ["CWE-22"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "python", "path-traversal", "taint"]

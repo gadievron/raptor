@@ -28,11 +28,11 @@ position p_alloc;
 
 @leak@
 identifier alloc.ptr;
-expression E;
+expression E, E2;
 position p_ret;
 @@
 
-ptr = ...
+ptr = E2
 ...
 if (...) {
   ... when != kfree(ptr)

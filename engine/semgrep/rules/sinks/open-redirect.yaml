@@ -1,0 +1,184 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → redirect sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.web.open-redirect.taint.python
+    message: >-
+      Untrusted data flows into a redirect target. Validate the destination
+      against a strict allowlist of internal paths or domains. Do not rely on
+      URL parsing alone — urlparse does not validate the destination.
+    languages: [python]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      - pattern-either:
+          # Django
+          - pattern: redirect($URL)
+          - pattern: django.shortcuts.redirect($URL)
+          - pattern: HttpResponseRedirect($URL)
+          - pattern: HttpResponsePermanentRedirect($URL)
+          # Flask
+          - pattern: flask.redirect($URL)
+          # Starlette / FastAPI
+          - pattern: RedirectResponse($URL, ...)
+          - pattern: RedirectResponse(url=$URL, ...)
+          # Generic — manually setting Location header
+          - pattern: "Response(..., headers={\"Location\": $URL}, ...)"
+    metadata:
+      cwe: ["CWE-601"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "redirect", "open-redirect", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → redirect sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.web.open-redirect.taint.go
+    message: >-
+      Untrusted data flows into a redirect target. Validate the destination
+      against a strict allowlist of internal paths or domains.
+    languages: [go]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      - pattern-either:
+          # net/http
+          - pattern: http.Redirect($W, $R, $URL, ...)
+          # gin
+          - pattern: $CTX.Redirect($CODE, $URL)
+          # echo
+          - pattern: $CTX.Redirect($CODE, $URL)
+          # Manual header set
+          - pattern: $W.Header().Set("Location", $URL)
+    metadata:
+      cwe: ["CWE-601"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "redirect", "open-redirect", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → redirect sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.web.open-redirect.taint.java
+    message: >-
+      Untrusted data flows into a redirect target. Validate the destination
+      against a strict allowlist of internal paths or domains.
+    languages: [java]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletResponse $RESP).sendRedirect($URL)
+          # Manual Location header
+          - pattern: (HttpServletResponse $RESP).setHeader("Location", $URL)
+          - pattern: (HttpServletResponse $RESP).addHeader("Location", $URL)
+          # Spring MVC — redirect: prefix in view name
+          # Cannot match "redirect:" + tainted as a pattern — the Spring
+          # redirect: prefix in returned view strings is a template-level
+          # construct that semgrep cannot trace. Listed as a known limitation.
+    metadata:
+      cwe: ["CWE-601"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "redirect", "open-redirect", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → redirect sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.web.open-redirect.taint.javascript
+    message: >-
+      Untrusted data flows into a redirect target. Validate the destination
+      against a strict allowlist of internal paths or domains.
+    languages: [javascript, typescript]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      - pattern-either:
+          # Express
+          - pattern: $RES.redirect($URL)
+          - pattern: $RES.redirect($CODE, $URL)
+          # Manual Location header
+          - pattern: $RES.set("Location", $URL)
+          - pattern: $RES.setHeader("Location", $URL)
+          - pattern: "$RES.writeHead($CODE, {..., \"Location\": $URL, ...})"
+          # Koa
+          - pattern: $CTX.redirect($URL)
+          # window.location (client-side)
+          - pattern: window.location = $URL
+          - pattern: window.location.href = $URL
+          - pattern: window.location.assign($URL)
+          - pattern: window.location.replace($URL)
+    metadata:
+      cwe: ["CWE-601"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "redirect", "open-redirect", "taint"]

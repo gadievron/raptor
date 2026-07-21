@@ -16,13 +16,12 @@ expression arr;
 position p;
 @@
 
-(
-* arr[idx@p]
-)
+  arr[idx@p]
 
 // Exclude positions where idx was checked
-@checked@
+@checked depends on unchecked_index@
 identifier unchecked_index.idx;
+expression unchecked_index.arr;
 expression E;
 position unchecked_index.p;
 @@
@@ -41,18 +40,10 @@ position unchecked_index.p;
   if (idx <= E) { ... arr[idx@p] ... }
 )
 
-@unguarded depends on unchecked_index && !checked@
-identifier unchecked_index.idx;
-expression unchecked_index.arr;
-position unchecked_index.p;
-@@
-
-arr[idx@p]
-
-@script:python@
-p << unguarded.p;
-idx << unguarded.idx;
-arr << unguarded.arr;
+@script:python depends on unchecked_index && !checked@
+p << unchecked_index.p;
+idx << unchecked_index.idx;
+arr << unchecked_index.arr;
 @@
 
 import json, sys

@@ -12,12 +12,14 @@
 @spin_use_after@
 expression lock;
 expression ptr;
-identifier fld;
+identifier fld, fld2;
 position p_use;
 @@
 
 spin_lock(lock)
-... when exists
+... when any
+ptr->fld2
+... when any
 spin_unlock(lock)
 ...
 ptr->fld@p_use
@@ -40,12 +42,14 @@ for _p in p_use:
 @mutex_use_after@
 expression lock;
 expression ptr;
-identifier fld;
+identifier fld, fld2;
 position p_use;
 @@
 
 mutex_lock(lock)
-... when exists
+... when any
+ptr->fld2
+... when any
 mutex_unlock(lock)
 ...
 ptr->fld@p_use

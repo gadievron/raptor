@@ -16,11 +16,7 @@ position p_decl, p_ret;
 type T;
 @@
 
-(
   T err@p_decl;
-|
-  T err@p_decl = ...;
-)
 <... when != err = ...;
      when any
 (

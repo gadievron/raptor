@@ -1,0 +1,145 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → command execution sinks
+  # exec.Command("ls", "-la") with separate args is safe. The real sink is
+  # exec.Command("sh", "-c", tainted) where the shell interprets the input.
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.command.taint.go
+    message: >-
+      Untrusted data flows into command execution via a shell interpreter.
+      Avoid passing user input through sh -c. Use exec.Command() with
+      separate arguments instead.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      - pattern-either:
+          # Shell invocation — the dangerous pattern
+          - pattern: exec.Command("sh", "-c", $CMD)
+          - pattern: exec.Command("bash", "-c", $CMD)
+          - pattern: exec.Command("/bin/sh", "-c", $CMD)
+          - pattern: exec.Command("/bin/bash", "-c", $CMD)
+          - pattern: exec.CommandContext($CTX2, "sh", "-c", $CMD)
+          - pattern: exec.CommandContext($CTX2, "bash", "-c", $CMD)
+          - pattern: exec.CommandContext($CTX2, "/bin/sh", "-c", $CMD)
+          - pattern: exec.CommandContext($CTX2, "/bin/bash", "-c", $CMD)
+      # Tainted binary name — attacker controls which program runs.
+      # focus-metavariable restricts taint to $CMD only, preventing FPs
+      # when a constant binary receives tainted arguments (e.g.
+      # exec.Command("ls", "-la", userInput)).
+      - patterns:
+          - pattern: exec.Command($CMD, ...)
+          - focus-metavariable: $CMD
+      - patterns:
+          - pattern: exec.CommandContext($CTX2, $CMD, ...)
+          - focus-metavariable: $CMD
+    metadata:
+      cwe: ["CWE-78"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "command injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → Runtime.exec / ProcessBuilder
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.command.taint.java
+    message: >-
+      Untrusted data flows into command execution. Avoid Runtime.exec() and
+      ProcessBuilder with user-controlled arguments. Use a safe API or
+      strict input validation with an allowlist.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      - pattern-either:
+          # Runtime.exec — string form invokes the shell
+          - pattern: Runtime.getRuntime().exec($CMD)
+          - pattern: Runtime.getRuntime().exec($CMD, ...)
+          # ProcessBuilder
+          - pattern: new ProcessBuilder($CMD, ...)
+          - pattern: new ProcessBuilder(Arrays.asList($CMD, ...))
+          # ProcessBuilder.command with tainted args
+          - pattern: (ProcessBuilder $PB).command($CMD, ...)
+    metadata:
+      cwe: ["CWE-78"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "command injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → child_process sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.command.taint.javascript
+    message: >-
+      Untrusted data flows into command execution. Avoid child_process.exec()
+      and spawn with shell:true. Use execFile() or spawn() without shell
+      option and pass arguments as an array.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      - pattern-either:
+          # child_process.exec — always shell-interpreted
+          - pattern: child_process.exec($CMD, ...)
+          - pattern: child_process.execSync($CMD, ...)
+          - pattern: exec($CMD, ...)
+          - pattern: execSync($CMD, ...)
+          # spawn with shell option
+          - pattern: "child_process.spawn($CMD, ..., {shell: true, ...}, ...)"
+          - pattern: "child_process.spawnSync($CMD, ..., {shell: true, ...}, ...)"
+          - pattern: "spawn($CMD, ..., {shell: true, ...}, ...)"
+          - pattern: "spawnSync($CMD, ..., {shell: true, ...}, ...)"
+          # eval — different CWE (CWE-94 code injection) but same
+          # attacker-controls-execution impact in JS contexts
+          - pattern: eval($CMD)
+          - pattern: new Function($CMD)
+    metadata:
+      cwe: ["CWE-78"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "command injection", "taint"]
