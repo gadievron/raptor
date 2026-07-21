@@ -1,6 +1,7 @@
 """Bridge between /understand output and /validate input.
-This is the start of the full automation vision where our idea is that an analyst can run /understand to get a head start on mapping the 
-attack surface and then seamlessly pick up that context in /validate without manual exports or imports.
+This is the start of the full automation vision where our idea is that an analyst can run
+/understand to get a head start on mapping the attack surface and then seamlessly pick up
+that context in /validate without manual exports or imports.
 
 Handles three things automatically so the analyst doesn't have to:
 
@@ -614,6 +615,8 @@ def _augment_library_surface(context_map: Dict[str, Any],
     # surfaces too, not just the dynamic langs. library_mode=True is correct
     # here because we only reach this for a library/hybrid target.
     from core.analysis.reachability import _item_is_entry
+    header_api_raw = checklist.get("header_api")
+    header_api = frozenset(header_api_raw) if header_api_raw else None
     added = 0
     for fi in _list_at(checklist, "files"):
         if not isinstance(fi, dict):
@@ -630,7 +633,9 @@ def _augment_library_surface(context_map: Dict[str, Any],
             name = item.get("name")
             if not isinstance(name, str) or not name:
                 continue
-            if (path, name) in seen or not _item_is_entry(item, lang, library_mode=True):
+            if (path, name) in seen or not _item_is_entry(
+                item, lang, library_mode=True, header_api=header_api,
+            ):
                 continue
             seen.add((path, name))
             added += 1
@@ -1754,3 +1759,5 @@ def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     # as a contiguous slice of long.
     n = len(short)
     return any(long_[i:i + n] == short for i in range(len(long_) - n + 1))
+
+
