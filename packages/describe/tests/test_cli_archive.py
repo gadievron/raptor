@@ -204,6 +204,9 @@ class TestArchiveCacheHit:
             active.unlink()
         active.symlink_to("_t.json")
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(
+            "core.project.project.PROJECTS_DIR", proj_dir,
+        )
 
     def test_cache_hit_skips_extraction(
         self, tmp_path, monkeypatch,
