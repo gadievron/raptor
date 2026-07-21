@@ -49,6 +49,14 @@ RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot
 
 ---
 
+## Prerequisites
+
+- **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer -- RAPTOR runs inside a Claude Code session.
+- **Python 3.10+** and **Node.js 18+**.
+- **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
+
+For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
+
 ## Quick Start
 
 ### Option 1: Install manually
@@ -61,18 +69,19 @@ cd raptor
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install Claude Code
-npm install @anthropic-ai/claude-code
-
-# or globally if you want the `claude` command on PATH everywhere. YMMV
+# Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
 
 # Install Semgrep (required for scanning)
 pip install semgrep
 
-# Open RAPTOR
+# Launch RAPTOR
 claude
 ```
+
+If you add `bin/` to your PATH (or symlink `bin/raptor` somewhere on PATH), you can run `raptor` from any directory -- the launcher resolves the RAPTOR installation and sets up the working directory automatically.
+
+**Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from a different directory, you get plain Claude Code, not RAPTOR. Either `cd` into the repo first, or use the `raptor` launcher.
 
 ### Option 2: Devcontainer (recommended)
 
@@ -96,6 +105,36 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 
 ---
 
+## What to expect on a first run
+
+The simplest thing you can do:
+
+```
+/scan /path/to/code
+```
+
+This runs Semgrep (and CodeQL if installed) against the target, deduplicates findings, and writes a SARIF report. No LLM analysis, no API keys beyond Claude Code. Takes a few minutes on a typical repository.
+
+To add LLM-powered validation:
+
+```
+/agentic /path/to/code
+```
+
+This runs the full pipeline: scan, deduplicate, then send each finding through the validation stages (A-F). On a medium-sized codebase with ~50 findings, expect 10-30 minutes and $2-8 in analysis-layer LLM costs (depending on the model). The default cost cap is $10 per run; adjust with `--max-cost-usd`.
+
+**Cost note:** The Claude Code orchestration layer uses your Claude subscription. The analysis dispatch layer makes separate LLM API calls that are billed per token. If you only use Claude Code as the analysis model (the default), there is no extra cost beyond your subscription. If you configure external models (OpenAI, Gemini, etc.), those API calls are billed to those providers.
+
+---
+
+## Security model
+
+RAPTOR runs LLM-generated code and analyses untrusted repositories. Subprocesses that handle untrusted content are sandboxed using Linux namespaces, Landlock, and seccomp. The sandbox blocks network access, restricts filesystem visibility, and limits resource consumption. See `docs/sandbox.md` for the full threat model and configuration.
+
+Environment variables that could inject code into the launcher chain are stripped at startup (`core/security/_dangerous_env_strip.sh`). File paths from scanned repositories are never interpolated into shell strings — all subprocess calls use list-based arguments.
+
+---
+
 ## What RAPTOR can do
 
 | Command | What it does | Status |
@@ -112,8 +151,7 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
 | `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
-| `/project` | Named workspaces to organise runs and track findings over time | Stable |
-| `project threat-model` | Project-owned threat model for focus areas, trust boundaries, and proof expectations | Beta |
+| `/project` | Named workspaces to organise runs and track findings over time (includes `threat-model` subcommand) | Stable |
 | `/web` | Web application scanning | Alpha/stub |
 
 ---
@@ -147,6 +185,8 @@ With `--threat-model`, RAPTOR runs the map first, creates `threat-model.json` an
 - Stage B: what does an attacker need to reach it, and what gets in the way?
 - Stage C: does the code path actually exist? can it be reached from outside?
 - Stage D: final call -- is this test code, does it need unrealistic preconditions, is the model hedging?
+- Stage E: binary exploit feasibility (when a compiled artefact is available)
+- Stage F: self-review -- did any earlier stage hedge or contradict itself?
 
 Findings that clear validation get exploit PoCs and patches generated. A cross-finding analysis runs at the end to find shared root causes and attack chains.
 
@@ -225,13 +265,40 @@ Z3 is pre-installed in the devcontainer. For manual installs: `pip install z3-so
 
 ## Running offline and in air-gapped pipelines
 
-Semgrep scanning works fully offline. All registry packs that would normally be fetched from semgrep.dev at scan time are shipped in the repo under `engine/semgrep/rules/registry-cache/`. The scanner resolves pack IDs to local files before invoking semgrep, so no network call happens.
+RAPTOR's custom rules under `engine/semgrep/rules/` are fully local and run without network access.
 
-Cached packs: `p/security-audit`, `p/owasp-top-ten`, `p/secrets`, `p/command-injection`, `p/jwt`, `p/default`, `p/xss`.
+For registry packs (`p/security-audit`, `p/owasp-top-ten`, etc.), the cache directory ships empty. A cache tool (`engine/semgrep/tools/cache-packs.py`) handles population:
 
-Custom rules under `engine/semgrep/rules/` were never network-dependent and run as normal.
+```bash
+# On a connected machine — update the local cache directly:
+python3 engine/semgrep/tools/cache-packs.py update
+
+# Or fetch into a zip bundle for airgap transfer:
+python3 engine/semgrep/tools/cache-packs.py fetch
+# → produces semgrep-cache-YYYY-MM-DD.zip
+
+# On the airgapped machine — import the bundle:
+python3 engine/semgrep/tools/cache-packs.py import semgrep-cache-2026-07-16.zip
+
+# Check what's cached:
+python3 engine/semgrep/tools/cache-packs.py list
+```
+
+Once populated, the scanner resolves pack IDs to local files and no network call happens. Without the cache, RAPTOR will attempt to fetch registry packs from semgrep.dev at scan time; if offline, it drops uncached packs gracefully and runs with custom rules only.
 
 CodeQL needs network access only during initial setup to download the CLI and query packs. Once installed it runs offline.
+
+---
+
+## Custom rules
+
+RAPTOR ships 169 custom static analysis rules, adversarially tested to eliminate false positives:
+
+- **Semgrep (123 rules)** — taint-tracking and pattern rules for Python, Go, Java, and JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE, LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure TLS, and hardcoded secrets.
+- **Coccinelle (38 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer), integer bugs (overflow, sign extension, double sizeof), resource leaks, kernel bugs (GFP_KERNEL/sleep under spinlock, missing bounds checks), buffer handling (strncpy without NUL, copy_user size mismatch), TOCTOU races, and more.
+- **CodeQL (8 queries)** — interprocedural taint tracking for C++ (format string injection, integer truncation, use-after-move, iterator invalidation) and Java (XXE, insecure deserialisation, log injection, Spring SSRF).
+
+Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`, `engine/codeql/queries/`. These complement the registry packs (`p/security-audit`, `p/owasp-top-ten`, `p/0xdea`, `p/trailofbits`) which provide ~950 additional rules — overlap is minimal.
 
 ---
 
@@ -282,7 +349,7 @@ Model roles let you assign different models to different tasks:
 
 | Role | What it does |
 |------|-------------|
-| `analysis` | Validates and analyses each finding (Stages A-D) |
+| `analysis` | Validates and analyses each finding (Stages A-F) |
 | `code` | Writes exploit PoCs and patch code |
 | `consensus` | Second-opinion vote on true positives |
 | `aggregate` | Optional. LLM-written narrative synthesis on top of the deterministic multi-model correlation, written to `aggregation.json` and the final `agentic-report.md` |
@@ -303,7 +370,8 @@ python3 raptor.py agentic --repo /code \
 Budget control:
 
 ```bash
-export RAPTOR_MAX_COST=5.00   # cap analysis spend at $5 per run
+# Cap analysis-layer LLM spend at $5 for this run (default: $10)
+python3 raptor.py agentic --repo /code --max-cost-usd 5.00
 ```
 
 Ollama works for analysis but produces unreliable exploit and patch code. For code generation tasks, use a frontier model.
@@ -371,11 +439,12 @@ Requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery access. See `.claude/comm
 
 ## Expert personas
 
-Nine expert personas are available on demand. Load one when you want a different perspective on a finding or a specific technique:
+Ten expert personas are available on demand. Load one when you want a different perspective on a finding or a specific technique:
 
 ```
 Mark Dowd                       Binary exploitation and vulnerability research
 Charlie Miller / Halvar Flake   Low-level exploitation and reverse engineering
+Offensive Security Researcher   Exploitation feasibility assessment
 Security Researcher             General adversarial code review
 Patch Engineer                  Secure fix generation
 Penetration Tester              Realistic attack scenario assessment
@@ -398,6 +467,8 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 | `docs/sca.md` | Software composition analysis reference |
 | `docs/FUZZING_QUICKSTART.md` | Binary fuzzing guide |
 | `docs/ARCHITECTURE.md` | Technical architecture detail |
+| `docs/sandbox.md` | Subprocess sandboxing: threat model, API, configuration |
+| `docs/threat-model.md` | Project threat model feature reference |
 | `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |
 | `docs/DEPENDENCIES.md` | External tools, versions, and licences |
 | `.claude/commands/oss-forensics.md` | OSS forensics investigation guide |
@@ -410,7 +481,7 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 RAPTOR is open source. Good places to start if you want to contribute:
 
 - A proper web exploitation module (the current one is a stub)
-- SSRF detection rules (no registry pack exists and the local rules directory is empty)
+- SSRF rule coverage for annotation-driven frameworks (Spring `@RequestParam`, FastAPI typed params) — semgrep cannot match these sources, so alternative approaches are welcome
 - YARA signature generation
 - Ports to other AI coding tools (Cursor, Windsurf, Copilot, Cline)
 - Better firmware analysis coverage
