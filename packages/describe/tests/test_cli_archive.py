@@ -270,12 +270,13 @@ class TestArchiveCacheHit:
             monkeypatch, tmp_path / "fakehome", project_out,
         )
 
-        # 4. Run describe. Expect cache hit → no tmp extract dir
-        #    created (verify with /tmp tally) + content reflects
-        #    the cached tree.
+        # 4. Isolate from parallel xdist workers: redirect tempdir
+        #    so any fallback extraction lands in a private dir and
+        #    the leak check is immune to other workers' dirs.
         import tempfile as _tmp
-        sys_tmp = Path(_tmp.gettempdir())
-        before = set(sys_tmp.glob("raptor-describe-*"))
+        private_tmp = tmp_path / "systmp"
+        private_tmp.mkdir()
+        monkeypatch.setattr(_tmp, "tempdir", str(private_tmp))
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -285,8 +286,7 @@ class TestArchiveCacheHit:
         )
         assert rc == 0, err_buf.getvalue()
 
-        after = set(sys_tmp.glob("raptor-describe-*"))
-        leaked = after - before
+        leaked = set(private_tmp.glob("raptor-describe-*"))
         assert not leaked, (
             "cache hit must NOT create a tmp extract dir; "
             f"new tmp dirs: {leaked}"
