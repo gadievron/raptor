@@ -21,7 +21,7 @@ def get_finding_id(finding: Dict[str, Any]) -> Optional[str]:
 
 def dedup_key(finding: Dict[str, Any]) -> Tuple[str, str, int]:
     """Dedup key for a finding: (file, function, line). More stable than ID."""
-    return (finding.get("file", ""), finding.get("function", ""), finding.get("line", 0))
+    return (finding.get("file", ""), finding.get("function", ""), finding.get("line") or 0)
 
 
 def group_key(finding: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -65,7 +65,7 @@ def load_findings_from_dir(run_dir: Path) -> List[Dict[str, Any]]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        return data.get("findings", data.get("results", []))
+        return data.get("findings") or data.get("results") or []
     return []
 
 
@@ -88,7 +88,7 @@ def load_sca_findings_from_dir(run_dir: Path) -> List[Dict[str, Any]]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        return data.get("findings", data.get("results", []))
+        return data.get("findings") or data.get("results") or []
     return []
 
 

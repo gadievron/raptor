@@ -412,6 +412,8 @@ def _render_review_markdown(
             ),
         )
         for f in ordered:
+            if not f.advisories:
+                continue
             primary = f.advisories[0]
             tags: List[str] = [f.severity.title()]
             if f.in_kev:

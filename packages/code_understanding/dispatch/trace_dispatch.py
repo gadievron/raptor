@@ -353,6 +353,6 @@ def _build_strategy_block(traces: List[Dict[str, Any]]) -> str:
                 + "\n</untrusted_verified_outcomes>"
             )
     except Exception:
-        pass
+        logger.debug("exemplar_block enrichment failed", exc_info=True)
 
     return block

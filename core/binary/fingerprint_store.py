@@ -144,9 +144,9 @@ def load_fingerprint(
     if not file_path.is_file():
         return None
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.debug(
             "core.binary.fingerprint_store: load failed for %s: %s",
             file_path, e,
@@ -210,9 +210,9 @@ def iter_refs(
             # final-named entry is what's load-bearing.
             continue
         try:
-            with open(entry, "r") as f:
+            with open(entry, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
         if not isinstance(payload, dict):
             continue

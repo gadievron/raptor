@@ -571,7 +571,7 @@ def _print_summary(payload: dict, output_path: Path) -> None:
         print("Models: none (mechanical binary substrate)")
     print(f"Items: {len(items)}")
     if failed:
-        print(f"Failed models: {', '.join(failed)}")
+        print(f"Failed models: {', '.join(failed)}", file=sys.stderr)
         # Show first error per failed model so operators can debug
         # without needing to dig into raw substrate output.
         errors = payload.get("model_errors") or {}
@@ -579,7 +579,7 @@ def _print_summary(payload: dict, output_path: Path) -> None:
             err = errors.get(m)
             if err:
                 # Truncate so a giant traceback doesn't fill the screen
-                print(f"  {m}: {err[:200]}{'...' if len(err) > 200 else ''}")
+                print(f"  {m}: {err[:200]}{'...' if len(err) > 200 else ''}", file=sys.stderr)
 
     total_cost = payload.get("total_cost_usd") or 0.0
     if total_cost > 0:
@@ -660,6 +660,32 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     _print_summary(payload, output_path)
+
+    # SAGE store: persist results for cross-run learning.
+    try:
+        target = str(Path(args.target).resolve())
+        if payload["mode"] == "hunt":
+            from core.sage.hooks import store_hunt_results
+            items = payload.get("items") or []
+            hunt_data = {
+                "meta": {
+                    "pattern": payload.get("pattern", "unknown"),
+                    "total_matches": len(items),
+                },
+                "root_cause_groups": [],
+            }
+            store_hunt_results(target, hunt_data)
+        elif payload["mode"] == "trace":
+            from core.sage.hooks import store_trace_result
+            for item in (payload.get("items") or []):
+                if isinstance(item, dict):
+                    store_trace_result(target, item)
+        elif payload["mode"] == "map":
+            from core.sage.hooks import store_map_results
+            store_map_results(target, payload)
+    except Exception:
+        pass
+
     return 0
 
 

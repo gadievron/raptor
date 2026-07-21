@@ -50,7 +50,7 @@ def parse_expected_results(csv_path: Path) -> Dict[str, Tuple[int, bool]]:
     one) and any row that doesn't begin with ``BenchmarkTest``.
     """
     mapping: Dict[str, Tuple[int, bool]] = {}
-    with csv_path.open() as f:
+    with csv_path.open(encoding="utf-8") as f:
         for raw_line in f:
             stripped = raw_line.strip()
             if not stripped or stripped.startswith("#"):
@@ -107,10 +107,14 @@ def _rewrite_finding_paths_and_snippets(
     line_cache: Dict[Path, List[str]] = {}
 
     def _read_line(rel_path: str, line: int) -> Optional[str]:
-        full = repo_root / rel_path
+        full = (repo_root / rel_path).resolve()
+        if not full.is_relative_to(repo_root.resolve()):
+            return None
         if full not in line_cache:
             try:
-                line_cache[full] = full.read_text().splitlines()
+                line_cache[full] = full.read_text(
+                    encoding="utf-8", errors="replace",
+                ).splitlines()
             except OSError:
                 line_cache[full] = []
         lines = line_cache[full]
@@ -173,7 +177,10 @@ def generate(
 ) -> List[Tuple[Finding, GroundTruth]]:
     expected = parse_expected_results(expected_results_csv)
 
-    sarif = json.loads(sarif_path.read_text())
+    try:
+        sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"SARIF read/parse failed: {sarif_path}: {e}") from e
     runs = sarif.get("runs", [])
     if not runs:
         return []
@@ -251,10 +258,10 @@ def write_corpus(pairs: Sequence[Tuple[Finding, GroundTruth]], out_dir: Path) ->
     out_dir.mkdir(parents=True, exist_ok=True)
     for finding, label in pairs:
         (out_dir / f"{finding.finding_id}.json").write_text(
-            finding.to_json(indent=2)
+            finding.to_json(indent=2), encoding="utf-8",
         )
         (out_dir / f"{finding.finding_id}.label.json").write_text(
-            label.to_json(indent=2)
+            label.to_json(indent=2), encoding="utf-8",
         )
     return len(pairs)
 

@@ -136,13 +136,7 @@ def test_npm_no_package_json(monkeypatch, tmp_path: Path) -> None:
     assert "no package.json" in (res.error or "")
 
 
-@pytest.mark.slow
 def test_npm_dry_run_success(monkeypatch, tmp_path: Path) -> None:
-    # Slow-gated: ~33s on CI. Same shape as the gated pip-compile
-    # tests — the resolver routes ``npm install`` through
-    # core.sandbox.run; subprocess.run is patched for the matchers,
-    # but the sandbox setup (landlock + seccomp + mount namespace)
-    # costs ~30s per invocation on the 2-core GHA runner. Local: <0.1s.
     (tmp_path / "package.json").write_text(
         '{"name":"app","dependencies":{"lodash":"^4"}}',
         encoding="utf-8",
@@ -216,16 +210,8 @@ def test_pip_no_manifest(monkeypatch, tmp_path: Path) -> None:
     assert "no requirements" in (res.error or "")
 
 
-@pytest.mark.slow
 def test_pip_compile_path(monkeypatch, tmp_path: Path) -> None:
-    """When pip-compile is on PATH, it's preferred.
-
-    Slow-gated: ~83s on CI. The resolver routes pip-compile via
-    core.sandbox.run; the test patches subprocess.run for matcher-
-    based stubbing but the sandbox setup (landlock + seccomp + mount
-    namespace) costs ~80s per invocation on a 2-core GHA runner.
-    Local: <0.1s.
-    """
+    """When pip-compile is on PATH, it's preferred."""
     (tmp_path / "requirements.txt").write_text(
         "django>=4.0\n", encoding="utf-8")
     _patch_run(monkeypatch, [
@@ -248,12 +234,7 @@ def test_pip_no_system_pipcompile_falls_back_to_venv(
     monkeypatch, tmp_path: Path,
 ) -> None:
     """No system pip-compile → resolver goes straight to the venv
-    pipeline (which always works given network access to PyPI).
-
-    Slow-gated: ~84s on CI for the same reason as the other
-    venv-routed pip tests — sandbox setup cost per sandbox.run call
-    on the 2-core runner. Local: <0.1s.
-    """
+    pipeline (which always works given network access to PyPI)."""
     (tmp_path / "requirements.txt").write_text(
         "django>=4.0\n", encoding="utf-8")
     venv_dir = _resolver_venv_dir(tmp_path)
@@ -405,17 +386,11 @@ def test_pip_compile_pep668_falls_back_to_venv(
             shutil.rmtree(venv_dir, ignore_errors=True)
 
 
-@pytest.mark.slow
 def test_pep668_fallback_cleans_up_venv(
     monkeypatch, tmp_path: Path,
 ) -> None:
     """The ephemeral venv directory is removed after the resolver
-    finishes, success or failure.
-
-    Slow-gated: ~83s on CI for the same reason as test_pip_compile_path
-    — the venv-create sandbox.run pays the per-invocation sandbox
-    setup cost on the 2-core runner. Local: <0.1s.
-    """
+    finishes, success or failure."""
     (tmp_path / "requirements.txt").write_text(
         "django>=4.0\n", encoding="utf-8")
     venv_dir = _resolver_venv_dir(tmp_path)
@@ -452,11 +427,7 @@ def test_go_no_gomod(monkeypatch, tmp_path: Path) -> None:
     assert "no go.mod" in (res.error or "")
 
 
-@pytest.mark.slow
 def test_go_tidy_success(monkeypatch, tmp_path: Path) -> None:
-    # Slow-gated: ~6s on CI — modest, but same pattern (``go mod tidy``
-    # routes through core.sandbox.run; sandbox setup cost dominates).
-    # Local: <0.05s.
     (tmp_path / "go.mod").write_text(
         "module example\n\nrequire github.com/foo/bar v1.0.0\n",
         encoding="utf-8")

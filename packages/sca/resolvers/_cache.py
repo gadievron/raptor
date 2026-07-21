@@ -287,7 +287,7 @@ def cached_dry_run_batch(
             resolver, miss_dirs,
             common_root=common_root, timeout=timeout,
         )
-        for idx, result in zip(miss_indices, fresh):
+        for idx, result in zip(miss_indices, fresh, strict=True):
             hsh = probe_hashes.get(idx)
             if hsh is None:
                 continue
@@ -303,7 +303,7 @@ def cached_dry_run_batch(
     out: List[ResolverResult] = [None] * len(project_dirs)  # type: ignore[list-item]
     for idx, result in cached_results.items():
         out[idx] = result
-    for idx, result in zip(miss_indices, fresh):
+    for idx, result in zip(miss_indices, fresh, strict=True):
         out[idx] = result
     return out
 

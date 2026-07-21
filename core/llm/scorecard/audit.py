@@ -109,7 +109,7 @@ def _load_raw(path: Path) -> Optional[dict]:
         with path.open("r", encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"scorecard-audit: cannot read {path}: {exc}")
+        raise SystemExit(f"scorecard-audit: cannot read {path}: {exc}") from exc
 
 
 def audit(path: Path = DEFAULT_PATH) -> AuditReport:

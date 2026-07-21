@@ -152,8 +152,12 @@ def parse_image_index(parsed: dict) -> List[IndexEntry]:
         platform = entry.get("platform") or {}
         if not isinstance(digest, str):
             continue
+        try:
+            size = int(size)
+        except (ValueError, TypeError):
+            size = 0
         out.append(IndexEntry(
-            digest=digest, size=int(size), media_type=ltype,
+            digest=digest, size=size, media_type=ltype,
             os=platform.get("os"),
             architecture=platform.get("architecture"),
             variant=platform.get("variant"),

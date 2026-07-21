@@ -110,7 +110,7 @@ def prune_pool(
             continue
         for path in sorted(sig_dir.glob("*.json")):
             try:
-                blob = json.loads(path.read_text())
+                blob = json.loads(path.read_text(encoding="utf-8"))
                 rec = LabeledAttempt.from_dict(blob)
             except (OSError, ValueError, KeyError, TypeError):
                 continue

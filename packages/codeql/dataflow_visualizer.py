@@ -167,7 +167,7 @@ class DataflowVisualizer:
                     continue
                 
                 if file_path.exists():
-                    with open(file_path) as f:
+                    with open(file_path, encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
 
                     start = max(0, node['line'] - 6)
@@ -195,7 +195,7 @@ class DataflowVisualizer:
             sanitizers=dataflow.sanitizers
         )
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
         return output_file
@@ -620,7 +620,7 @@ class DataflowVisualizer:
         lines.append("")
 
         # Add source node
-        lines.append(f'    A0["🔴 SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
+        lines.append(f'    A0["⚠️ SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
         lines.append('    style A0 fill:#f48771,stroke:#fff,stroke-width:2px,color:#000')
         lines.append("")
 
@@ -672,7 +672,7 @@ class DataflowVisualizer:
             for san in dataflow.sanitizers:
                 lines.append(f"- {san}")
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
         return output_file
@@ -730,7 +730,7 @@ class DataflowVisualizer:
 
         # Source
         lines.append("┌─────────────────────────────────────────────────────────────────────────────┐")
-        lines.append("│ 🔴 SOURCE (User-Controlled Input)                                          │")
+        lines.append("│ ⚠️ SOURCE (User-Controlled Input)                                          │")
         lines.append("└─────────────────────────────────────────────────────────────────────────────┘")
         lines.append(f"  Location: {dataflow.source.file_path}:{dataflow.source.line}:{dataflow.source.column}")
         lines.append(f"  Label: {dataflow.source.label}")
@@ -777,7 +777,7 @@ class DataflowVisualizer:
         lines.append("=" * 80)
         lines.append("")
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
         # Also print to logger for terminal viewing
@@ -836,12 +836,12 @@ class DataflowVisualizer:
 
         lines.append("}")
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
         # Add instructions
         instructions_file = self.output_dir / f"{finding_id}_dataflow_instructions.txt"
-        with open(instructions_file, 'w') as f:
+        with open(instructions_file, 'w', encoding="utf-8") as f:
             f.write("To render the DOT file:\n\n")
             f.write("# Install Graphviz (if not already installed):\n")
             f.write("# macOS: brew install graphviz\n")

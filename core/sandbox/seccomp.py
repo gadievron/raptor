@@ -521,7 +521,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     null_args = ctypes.POINTER(_ScmpArgCmp)()
                     ret = lib.seccomp_rule_add_array(ctx, deny, num, 0, null_args)
                     if ret < 0:
-                        _os_write(2, b"RAPTOR: seccomp add_rule failed\n")
+                        _os_write(2, b"RAPTOR: seccomp add_rule failed -- "
+                                     b"refusing to exec without filter\n")
+                        os._exit(126)
 
                 # Audit-mode-only extras: open/openat/connect get the
                 # TRACE action so the tracer logs every file path and
@@ -538,7 +540,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                             ctx, trace_act, num, 0, null_args,
                         )
                         if ret < 0:
-                            _os_write(2, b"RAPTOR: seccomp audit rule failed\n")
+                            _os_write(2, b"RAPTOR: seccomp audit rule failed -- "
+                                         b"refusing to exec without filter\n")
+                            os._exit(126)
 
                 # socket() with blocked family — one rule per family
                 if socket_num >= 0:
@@ -550,7 +554,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                             ctx, deny, socket_num, 1, arg_arr,
                         )
                         if ret < 0:
-                            _os_write(2, b"RAPTOR: seccomp socket family rule failed\n")
+                            _os_write(2, b"RAPTOR: seccomp socket family rule failed"
+                                         b" -- refusing to exec without filter\n")
+                            os._exit(126)
 
                     # socket() with SOCK_RAW — argument 1 is type (with optional
                     # SOCK_NONBLOCK/CLOEXEC bits). Use MASKED_EQ with the
@@ -570,7 +576,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                         ctx, deny, socket_num, 1, arg_arr,
                     )
                     if ret < 0:
-                        _os_write(2, b"RAPTOR: seccomp SOCK_RAW rule failed\n")
+                        _os_write(2, b"RAPTOR: seccomp SOCK_RAW rule failed -- "
+                                     b"refusing to exec without filter\n")
+                        os._exit(126)
 
                 # UDP block — only when proxy mode is active. We can't
                 # filter on (family, type) simultaneously in a single
@@ -608,7 +616,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                             ctx, deny, socket_num, 2, args,
                         )
                         if ret < 0:
-                            _os_write(2, b"RAPTOR: seccomp UDP block rule failed\n")
+                            _os_write(2, b"RAPTOR: seccomp UDP block rule failed"
+                                         b" -- refusing to exec without filter\n")
+                            os._exit(126)
 
                 # socketpair() is DELIBERATELY NOT filtered here. Unlike
                 # socket(AF_UNIX) which returns a socket that can then
@@ -639,7 +649,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                             ctx, deny, ioctl_num, 1, arg_arr,
                         )
                         if ret < 0:
-                            _os_write(2, b"RAPTOR: seccomp ioctl rule failed\n")
+                            _os_write(2, b"RAPTOR: seccomp ioctl rule failed -- "
+                                         b"refusing to exec without filter\n")
+                            os._exit(126)
 
                 ret = lib.seccomp_load(ctx)
                 if ret < 0:

@@ -59,7 +59,7 @@ class WaybackClient:
             return []
 
         headers = data[0]
-        return [dict(zip(headers, row)) for row in data[1:]]
+        return [dict(zip(headers, row, strict=True)) for row in data[1:]]
 
     def get_snapshot(self, url: str, timestamp: str) -> str | None:
         """Fetch archived page content."""

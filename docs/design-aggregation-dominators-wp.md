@@ -284,10 +284,10 @@ circularity closed — gated on replay-harness validation.
   a sibling branch that does not lexically precede the sink but post-
   dominates every path to it, nor about call-graph reachability through
   helper functions.
-- `core/inventory/binary_oracle_edges.py` (591 lines) extracts direct
+- `core/analysis/binary_oracle_edges.py` (591 lines) extracts direct
   call edges + vtable resolution via r2. These are the natural input to
   a real dominator tree.
-- `core/inventory/binary_oracle.py` already has the chokepoint that
+- `core/analysis/binary_oracle.py` already has the chokepoint that
   emits `suppressions.jsonl` records pre-LLM.
 
 ### Phase 5 — CFG construction + Lengauer–Tarjan
@@ -300,7 +300,7 @@ because both have ready-made substrate in tree:
 - **Python intra-procedural** via the stdlib `ast` module. No external
   dep, no tree-sitter (the startup banner shows `tree-sitter ✗`).
   Covers `if / for / while / try / with / match` control-flow nodes.
-- **C / C++ inter-procedural** via `core/inventory/binary_oracle_edges.py`
+- **C / C++ inter-procedural** via `core/analysis/binary_oracle_edges.py`
   (direct call edges + vtable resolution from r2). Intra-procedural
   C / C++ blocks deferred — basic-block extraction from a binary is
   a project, and for the Phase 7 suppression check we don't need it
@@ -313,14 +313,14 @@ not in a Python module we can call directly), JavaScript / TypeScript,
 Go, Rust. These come in a follow-on arc once Python + C/C++ have
 proved the suppression substrate.
 
-- Add `core/inventory/cfg_builder.py`:
+- Add `core/analysis/cfg_builder.py`:
     - `build_python_cfg(file_path, function_name) -> CFG` — walks the
       `ast` tree, emits basic blocks and branch edges.
     - `build_cpp_callgraph(binary_paths) -> CallGraph` — consumes
       `binary_oracle_edges.py` output.
     - A uniform `Graph` protocol both produce so phase 5/6/7 code is
       language-agnostic at the consumer.
-- Add `core/inventory/dominators.py` — Lengauer–Tarjan iterative
+- Add `core/analysis/dominators.py` — Lengauer–Tarjan iterative
   implementation. O(E·α(E)). Pure Python, no SciPy. Returns a `DomTree`
   with `idom(node)`, `dominates(a, b)`, `dominators_of(node)` queries.
 - Property tests against a small hand-checked graph corpus
@@ -375,7 +375,7 @@ the dominators-of-sink set with the sanitizer catalog gives the
 candidate sanitizers cheaply before the vertex-cut check runs. The
 dominator tree narrows; the vertex-cut decides.
 
-- New pre-LLM suppressor: `core/inventory/sanitizer_cut.py`. For each
+- New pre-LLM suppressor: `core/analysis/sanitizer_cut.py`. For each
   finding:
     1. `dominators_of(sink) ∩ sanitizer_catalog_nodes` → candidates.
     2. If `sink` is unreachable from `source` in `CFG \ candidates`,
@@ -508,9 +508,9 @@ when tractable; A/B measurement.
 | 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (the Phase-4 gate-flip validation mechanism; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
 | 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; unconditional — no flag, since the field is purely additive) |
 | 4 | A | Posterior-weighted scorecard updates | **deferred by design** — not missing: gated on real `/validate` ground truth (Phase 1a returned *no-data*, so a flip now is prior-dominated noise). Gate + checkpoint are written down (see "Phase 4 gate" below); lands in a follow-up PR as one consensus mode (soft credits via `record_event_soft`, no second event slot) with priors from `/validate`. |
-| 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | **done** (#794) — `core/inventory/cfg_builder.py`, `cfg_builder_cpp.py`, `dominators.py` |
+| 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | **done** (#794) — `core/analysis/cfg_builder.py`, `cfg_builder_cpp.py`, `dominators.py` |
 | 6 | B | Sanitizer catalog + recognition | **done** (#794) — `core/dataflow/sanitizer_catalog.py` |
-| 7 | B | Vertex-cut suppressor + `smt_barrier` upgrade | **done** (#794) — `core/inventory/sanitizer_cut.py`; `smt_barrier` dominance checks delegate to the vertex cut |
+| 7 | B | Vertex-cut suppressor + `smt_barrier` upgrade | **done** (#794) — `core/analysis/sanitizer_cut.py`; `smt_barrier` dominance checks delegate to the vertex cut |
 | 8 | C | WP predicate extraction (minimal sat subset) | **done** (Project C PR) — `PathSMTResult.wp_predicate` via implication-based redundancy in `packages/codeql/smt_path_validator.py` |
 | 9 | C | `/exploit` consumes WP predicate | **done** (Project C PR) — surfaced through `validate_path` → Tier 4 `smt_witness` → exploit prompt as a hard constraint |
 

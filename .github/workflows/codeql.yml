@@ -245,10 +245,19 @@ jobs:
         with:
           persist-credentials: false
 
-      # Initializes the CodeQL tools for scanning.
+      # Free disk space so CodeQL's overlay analysis can cache the
+      # base database (~200-800MB). Without this, the runner's
+      # default ~14GB free is insufficient and overlay silently
+      # falls back to full extraction.
+      - name: Free disk space for overlay analysis
+        if: steps.gate.outputs.run == 'true' && matrix.language == 'python'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
       - name: Initialize CodeQL
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -274,7 +283,7 @@ jobs:
       # left default-on).
       - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
         with:
           category: "/language:${{matrix.language}}"
           upload: never
@@ -364,8 +373,21 @@ jobs:
         with:
           persist-credentials: false
 
+      # download-artifact's JS client treats Azure intermediary 403s
+      # as non-retryable, causing transient failures (~1-in-20 runs).
+      # A second attempt after the implicit delay between steps is
+      # enough for the intermediary to recover.
       - name: Download all SARIF artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        id: dl
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          path: ./sarif-in
+          pattern: sarif-*
+        continue-on-error: true
+
+      - name: Retry artifact download on transient failure
+        if: steps.dl.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: ./sarif-in
           pattern: sarif-*
@@ -427,7 +449,7 @@ jobs:
       # the multi-run file as one batch and the meta-check fires with
       # all three configs visible.
       - name: Upload combined SARIF
-        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # was v4.37.0
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
         with:
           sarif_file: combined.sarif
           # No `category:` here — each run carries its own

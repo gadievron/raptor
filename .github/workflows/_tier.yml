@@ -26,7 +26,10 @@ on:
         required: true
         type: string
       test_path:
-        description: pytest target path (e.g. "core/sage/tests").
+        description: >-
+          pytest target — a directory (e.g. "core/sage/tests") or
+          space-separated file paths. Word-split by the shell; no
+          glob expansion (set -f).
         required: true
         type: string
       pytest_args:
@@ -90,6 +93,7 @@ jobs:
           PYTEST_EXTRA: ${{ inputs.pytest_args }}
           PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
           RAPTOR_MAX_TEST_SECONDS: "10"
+          RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           set -f  # word-split $PYTEST_EXTRA without glob expansion
           python -m pytest $TEST_PATH $PYTEST_EXTRA
@@ -106,7 +110,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ inputs.python_version }}
       - name: Install uv
@@ -125,6 +129,7 @@ jobs:
           PYTEST_EXTRA: ${{ inputs.pytest_args }}
           PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
           RAPTOR_MAX_TEST_SECONDS: "10"
+          RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           set -f  # word-split $PYTEST_EXTRA without glob expansion
           python -m pytest $TEST_PATH $PYTEST_EXTRA

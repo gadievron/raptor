@@ -496,3 +496,11 @@ class ToolLoopResult:
         "give_up",
     ]
     error_message: str | None = None
+    # Per-turn token accounting — one (input, output) tuple per
+    # assistant turn in ``messages``, in order. Zero entries when
+    # the loop couldn't populate them (defensive default; producers
+    # populate on every real turn). Consumers that want per-turn
+    # cost use these alongside the pricing table; consumers that
+    # only want totals use ``total_input_tokens`` / ``total_output
+    # _tokens``.
+    per_turn_tokens: tuple[tuple[int, int], ...] = ()

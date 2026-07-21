@@ -115,7 +115,7 @@ def main() -> int:
     excluded_via_frontmatter: set[str] = set()
     for md in md_files:
         name = md.stem
-        fm = _parse_frontmatter(md.read_text())
+        fm = _parse_frontmatter(md.read_text(encoding="utf-8"))
         dispatch = fm.get("dispatch")
         if not dispatch:
             errs.append(
@@ -133,7 +133,7 @@ def main() -> int:
     # frontmatter-flagged set. Pull the names out of the documented
     # text by looking for the pattern "raptor-X" / "/X" in the
     # exclusion sentence.
-    commands_md = COMMANDS_INDEX.read_text()
+    commands_md = COMMANDS_INDEX.read_text(encoding="utf-8")
     excl_pattern = re.compile(
         r"internal/duplicate commands.*?(?=\.\s|\n\n)",
         re.IGNORECASE | re.DOTALL,

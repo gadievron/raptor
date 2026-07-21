@@ -277,7 +277,7 @@ def build_inventory(
     old_inventory = load_json(checklist_file)
 
     old_files_by_path = {}
-    if old_inventory:
+    if isinstance(old_inventory, dict):
         for f in old_inventory.get('files', []):
             if f.get('path') and f.get('sha256'):
                 old_files_by_path[f['path']] = f
@@ -393,6 +393,16 @@ def build_inventory(
     if limitations:
         inventory['limitations'] = limitations
 
+    has_c_cpp = any(
+        f.get("language") in ("c", "cpp")
+        for f in files_info
+    )
+    if has_c_cpp:
+        from .header_api import scan_public_api
+        header_names = scan_public_api(str(target))
+        if header_names:
+            inventory['header_api'] = sorted(header_names)
+
     # Binary-oracle enrichment (Inc 4 + Phase 4 multi-binary) — opt-in
     # via the process-wide ``RaptorConfig.BINARY_ORACLE_PATHS`` (set by
     # ``raptor_agentic`` / ``raptor_codeql``'s repeatable ``--binary``
@@ -408,7 +418,7 @@ def build_inventory(
     bin_paths = RaptorConfig.BINARY_ORACLE_PATHS
     if bin_paths:
         try:
-            from .binary_oracle import enrich_inventory_with_binary_oracle
+            from core.analysis.binary_oracle import enrich_inventory_with_binary_oracle
             enrich_inventory_with_binary_oracle(inventory, bin_paths)
         except Exception as exc:                          # noqa: BLE001
             logger.warning("binary_oracle enrichment failed for %r: %s",
@@ -419,7 +429,7 @@ def build_inventory(
         # via r2 ``aaa``) so gated behind RaptorConfig.BINARY_ORACLE_EDGES.
         if RaptorConfig.BINARY_ORACLE_EDGES:
             try:
-                from .binary_oracle_edges import (
+                from core.analysis.binary_oracle_edges import (
                     extract_direct_call_edges,
                     annotate_inventory_with_edges,
                 )
@@ -448,7 +458,7 @@ def build_inventory(
                 # Carry forward checked_by only for unchanged files
                 _carry_forward_coverage(old_inventory, inventory, modified=set(diff['modified']))
         except (KeyError, TypeError):
-            pass  # Incompatible old inventory
+            logger.debug("incompatible old inventory, skipping diff", exc_info=True)
 
     from core.inventory import save_checklist
     save_checklist(str(output_path), inventory)
@@ -477,7 +487,7 @@ def _carry_forward_coverage(
         modified = set()
 
     def _get_items(fi):
-        return fi.get("items", fi.get("functions", []))
+        return fi.get("items", fi.get("functions", [])) or []
 
     # Build lookup: (path, name, kind) -> checked_by from old inventory
     old_coverage = {}
@@ -505,8 +515,10 @@ def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) ->
     extension, bounded at ``cap`` (we only need "holds source? roughly how
     many" for an operator warning — not an exact census of a huge tree).
     """
+    _skip = {"node_modules", "vendor", ".git", "__pycache__", ".tox", ".venv"}
     n = 0
-    for _root, _dirs, files in os.walk(dirpath):
+    for _root, dirs, files in os.walk(dirpath):
+        dirs[:] = [d for d in dirs if d not in _skip]
         for f in files:
             if Path(f).suffix.lower() in extensions:
                 n += 1
@@ -786,7 +798,7 @@ def _process_single_file(
                 if ls and any(lo <= ls <= hi for lo, hi in dead_ranges):
                     item_dict['lexical_dead'] = True
         # Call-graph extraction. The resolver in
-        # core.inventory.reachability is language-agnostic; per-file
+        # core.analysis.reachability is language-agnostic; per-file
         # extractors emit the same FileCallGraph dataclass for
         # whichever languages have a walker.
         if language == 'python':
@@ -919,6 +931,6 @@ def _process_single_file(
                 }
         return record
 
-    except Exception as e:
-        logger.warning(f"Failed to process {filepath}: {e}")
+    except Exception:
+        logger.warning("Failed to process %s", filepath, exc_info=True)
         return None

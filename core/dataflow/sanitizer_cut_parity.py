@@ -49,13 +49,20 @@ from typing import (
 LABEL_SHOULD_SUPPRESS = "should_suppress"
 LABEL_SHOULD_NOT_SUPPRESS = "should_not_suppress"
 
-# Value-bound verdict surface (mirrors core.inventory.sanitizer_cut),
+# Value-bound verdict surface (mirrors core.analysis.sanitizer_cut),
 # duplicated as string constants so this module doesn't import the
 # inventory package at import time.
 VERDICT_SUPPRESS = "suppress"
 VERDICT_CANDIDATE_ONLY = "candidate_only"
 VERDICT_NO_SUPPRESS = "no_suppress"
 VERDICT_UNRESOLVED = "unresolved"
+
+
+def _safe_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +123,8 @@ class ParityRecord:
             file=d.get("file", ""),
             cwe=d.get("cwe", ""),
             language=d.get("language", ""),
-            source_line=int(d.get("source_line", 0)),
-            sink_line=int(d.get("sink_line", 0)),
+            source_line=_safe_int(d.get("source_line", 0)),
+            sink_line=_safe_int(d.get("sink_line", 0)),
             kind=d.get("kind", ""),
             lexical_suppressed=bool(d["lexical_suppressed"]),
             value_bound_verdict=d.get("value_bound_verdict", VERDICT_UNRESOLVED),
@@ -173,11 +180,11 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
     to import for callers that only aggregate existing records.
     """
     try:
-        from core.inventory.finding_resolver import (
+        from core.analysis.finding_resolver import (
             ResolvedFinding,
             resolve_finding,
         )
-        from core.inventory.sanitizer_cut import evaluate_finding
+        from core.analysis.sanitizer_cut import evaluate_finding
     except ImportError:                                     # pragma: no cover
         return VERDICT_UNRESOLVED
     resolved = resolve_finding(finding)

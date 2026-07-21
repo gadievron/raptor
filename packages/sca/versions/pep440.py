@@ -123,7 +123,7 @@ def _fallback_compare(a: str, b: str) -> int:
             dev_key = dev
         else:
             post_key = post or 0
-            dev_key = dev or 0
+            dev_key = -1 if dev is None and post is not None else (dev or 0)
         sub = (
             pre_label_order.get(pre[0]) if pre else None,
             pre[1] if pre else None,

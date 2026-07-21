@@ -1253,7 +1253,7 @@ class TestBuildLLMConfigFromFlags:
         from packages.llm_analysis.orchestrator import build_llm_config_from_flags
         result = build_llm_config_from_flags(models=["opus-4-8"], auto_detect=False)
         assert result is None
-        assert "unrecognized model" in capsys.readouterr().out
+        assert "unrecognized model" in capsys.readouterr().err
 
     @patch.dict("os.environ", {"OPENAI_API_KEY": "k", "MISTRAL_API_KEY": "k2"})
     def test_explicit_model_composes_with_role_flag_only(self):

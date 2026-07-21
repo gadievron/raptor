@@ -70,12 +70,12 @@ def _find_claude_ancestor() -> Optional[int]:
     for _ in range(20):
         try:
             pid = os.getppid() if pid == os.getpid() else _read_ppid(pid)
-        except (OSError, ValueError):
+        except (OSError, ValueError, IndexError):
             return None
         if pid <= 1:
             return None
         try:
-            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
         except OSError:
             return None
         if comm == "claude":
@@ -97,7 +97,7 @@ def _read_ppid(pid: int) -> int:
     one well-known exception type.
     """
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ProcessLookupError(
             f"_read_ppid: /proc/{pid}/stat vanished — process exited"
@@ -177,7 +177,7 @@ def _pid_alive(pid: int) -> bool:
         # Non-Linux or `/proc` not mounted — best-effort accept.
         return True
     try:
-        comm = proc_comm.read_text(errors="replace").strip().lower()
+        comm = proc_comm.read_text(encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return True
     return "claude" in comm
@@ -336,9 +336,10 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
         if name:
             from core.json import load_json as _load
             data = _load(PROJECTS_DIR / f"{name}.json")
-            if data:
-                candidate = Path(data.get("output_dir", ""))
-                if candidate.is_dir():
+            if isinstance(data, dict):
+                candidate_str = data.get("output_dir") or ""
+                candidate = Path(candidate_str) if candidate_str else None
+                if candidate and candidate.is_dir():
                     project_dir = candidate
     except (FileNotFoundError, ImportError, json.JSONDecodeError, KeyError, PermissionError) as exc:
         # Narrowed from bare Exception. Pre-fix a corrupt project
@@ -835,6 +836,8 @@ def _update_status(output_dir: Path, status: str,
     metadata = load_json(path)
     if metadata is None:
         raise FileNotFoundError(f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Malformed {RUN_METADATA_FILE} in {output_dir} — expected JSON object")
     current = metadata.get("status")
     if current in _TERMINAL_STATUSES and current != status:
         logger.warning(
@@ -857,7 +860,7 @@ def _update_status(output_dir: Path, status: str,
                 pass
 
     if extra:
-        existing_extra = metadata.get("extra", {})
+        existing_extra = metadata.get("extra") or {}
         existing_extra.update(extra)
         metadata["extra"] = existing_extra
 
@@ -865,7 +868,7 @@ def _update_status(output_dir: Path, status: str,
         # Merge caller-supplied end-of-run provenance into the start-sealed
         # manifest. Shallow top-level merge: source_control / environment
         # (sealed at start) stay put; models land here.
-        existing_manifest = metadata.get("manifest", {})
+        existing_manifest = metadata.get("manifest") or {}
         existing_manifest.update(manifest)
         metadata["manifest"] = existing_manifest
 

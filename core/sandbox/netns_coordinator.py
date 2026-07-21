@@ -114,11 +114,11 @@ def _setup_direct() -> None:
     if libc.unshare(CLONE_NEWUSER | CLONE_NEWNET) != 0:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err), "unshare(NEWUSER|NEWNET)")
-    with open("/proc/self/uid_map", "w") as f:
+    with open("/proc/self/uid_map", "w", encoding="utf-8") as f:
         f.write(f"0 {parent_uid} 1\n")
-    with open("/proc/self/setgroups", "w") as f:
+    with open("/proc/self/setgroups", "w", encoding="utf-8") as f:
         f.write("deny\n")
-    with open("/proc/self/gid_map", "w") as f:
+    with open("/proc/self/gid_map", "w", encoding="utf-8") as f:
         f.write(f"0 {parent_gid} 1\n")
     _bring_lo_up()
 
@@ -294,7 +294,10 @@ def _run_child(role: str, spec: Dict[str, Any], result: _ChildResult) -> None:
 
     cmd = spec["cmd"]
     env = spec.get("env", {})
-    timeout = float(spec.get("timeout_s", 10.0))
+    try:
+        timeout = float(spec.get("timeout_s", 10.0))
+    except (TypeError, ValueError):
+        timeout = 10.0
     profile = spec.get("profile", "target_run")
     block_network = bool(spec.get("block_network", True))
     allowed_tcp_ports = spec.get("allowed_tcp_ports") or None
@@ -402,7 +405,7 @@ def _wait_listen_port(port: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with open("/proc/self/net/tcp", "r") as f:
+            with open("/proc/self/net/tcp", "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.split()
                     if len(parts) < 4:

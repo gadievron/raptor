@@ -341,7 +341,8 @@ def select_slice(slices: list[MachOSlice], requested_arch: Optional[str], host_a
         "arm": "arm64",
         "amd64": "x86_64",
         "x64": "x86_64",
-        "x86": "x86_64",
+        "i386": "x86",
+        "armv7": "arm",
     }
     wanted = aliases.get(str(requested_arch or host_arch or ""), str(requested_arch or host_arch or ""))
     for item in slices:

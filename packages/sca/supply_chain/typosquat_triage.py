@@ -32,12 +32,15 @@ from __future__ import annotations
 import datetime
 import enum
 import json as _json
+import logging
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from .typosquat_audit import Candidate, _load_name_set
+
+logger = logging.getLogger(__name__)
 
 # Auto-legit floor. A name the LLM calls "legit" is only auto-filed to
 # reviewed-legit when it looks like an established independent project; a YOUNG
@@ -547,13 +550,13 @@ def osv_malicious(http, ecosystem: str, names: List[str]) -> set:
             body = {"queries": [
                 {"package": {"ecosystem": eco, "name": n}} for n in chunk]}
             resp = http.post_json(OSV_QUERY_BATCH_URL, body)
-            for n, res in zip(chunk, (resp or {}).get("results") or []):
+            for n, res in zip(chunk, (resp or {}).get("results") or [], strict=True):
                 vulns = (res or {}).get("vulns") or []
                 if any(isinstance(v, dict) and isinstance(v.get("id"), str)
                        and v["id"].startswith("MAL-") for v in vulns):
                     mal.add(n)
-    except Exception:                              # noqa: BLE001 — fail-soft
-        pass
+    except Exception as exc:                        # noqa: BLE001 — fail-soft
+        logger.warning("OSV malware advisory check failed: %s", exc)
     return mal
 
 
@@ -585,7 +588,7 @@ def reaudit_reviewed_legit(
                     "removed from registry or unreachable")
                 continue
             ev = collect_evidence(Candidate(name, "", 0, 0, 0), eco,
-                                  lambda _n: meta)
+                                  lambda _n, _meta=meta: _meta)
             if ev.deprecated:
                 flags.setdefault(name, []).append("now deprecated")
         if osv_malicious_fn is not None:

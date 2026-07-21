@@ -337,7 +337,7 @@ def _migrate(data: Dict, from_version) -> bool:
     Returns True on success, False for an unknown version (caller raises rather
     than silently corrupting). Currently: v1 -> v2 (flat -> bucketed events)."""
     if from_version == 1:
-        for by_dc in data.get("models", {}).values():
+        for by_dc in (data.get("models") or {}).values():
             if not isinstance(by_dc, dict):
                 continue
             for cell in by_dc.values():
@@ -521,8 +521,9 @@ class ModelScorecard:
                 # event so the result counts towards the standard Wilson view
                 # over that slot. correct = response parsed + matched schema;
                 # incorrect = it didn't.
-                pass_n = int(u.get("schema_valid_pass", 0))
-                fail_n = int(u.get("schema_valid_fail", 0))
+                from core.llm.coerce import to_int_safe
+                pass_n = to_int_safe(u.get("schema_valid_pass", 0))
+                fail_n = to_int_safe(u.get("schema_valid_fail", 0))
                 if pass_n or fail_n:
                     now_iso = _now_iso()
                     sv = cell["events"].setdefault(EventType.SCHEMA_VALID, {})
@@ -928,7 +929,7 @@ class ModelScorecard:
             model_version=cell.get("model_version", ""),
             policy_override=cell.get("policy_override", "auto"),
             events=events,
-            disagreement_samples=list(cell.get("disagreement_samples", [])),
+            disagreement_samples=list(cell.get("disagreement_samples") or []),
             calls=_safe_int(cell.get("calls"), 0),
             cost_usd=_safe_float(cell.get("cost_usd"), 0.0),
             tokens=_safe_int(cell.get("tokens"), 0),
@@ -969,6 +970,14 @@ class ModelScorecard:
             lock_path = path.with_suffix(path.suffix + ".lock")
             self.lock_fh = open(lock_path, "a+", encoding="utf-8")
             try:
+                return self._enter_under_lock(path, lock_path)
+            except BaseException:
+                self.lock_fh.close()
+                self.lock_fh = None
+                raise
+
+        def _enter_under_lock(self, path, lock_path):
+            try:
                 fcntl.flock(
                     self.lock_fh.fileno(),
                     fcntl.LOCK_EX if self.write else fcntl.LOCK_SH,
@@ -996,11 +1005,11 @@ class ModelScorecard:
                 try:
                     import json
                     self.data = json.loads(content)
+                    if not isinstance(self.data, dict):
+                        raise TypeError(
+                            f"expected dict, got {type(self.data).__name__}"
+                        )
                 except (ValueError, TypeError) as e:
-                    # Corrupt sidecar — degrade gracefully. We do
-                    # NOT raise: a corrupt scorecard should never
-                    # block a scan. Operator can inspect / restore
-                    # via the CLI's reset --all if needed.
                     logger.warning(
                         f"scorecard: corrupt JSON at {path} — "
                         f"reading as empty (error: {e})"

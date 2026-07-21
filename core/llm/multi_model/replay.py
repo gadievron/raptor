@@ -341,7 +341,7 @@ def render_markdown(report: ReplayReport) -> str:
         lines.append("")
         lines.append("| bin | count | bar |")
         lines.append("|---|---:|---|")
-        max_count = max(report.posterior_distribution.values()) or 1.0
+        max_count = max(report.posterior_distribution.values(), default=1.0) or 1.0
         for label, count in report.posterior_distribution.items():
             bar = "█" * int(round(40 * count / max_count))
             lines.append(f"| `{label}` | {int(count)} | {bar} |")

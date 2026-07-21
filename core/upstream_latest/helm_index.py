@@ -192,6 +192,6 @@ def _normalize_index_url(repository: str) -> str:
         raise UpstreamLookupError(
             f"Helm index URL refused: no hostname in {repository!r}"
         )
-    if repository.endswith(".yaml") or repository.endswith(".yml"):
+    if repository.endswith((".yaml", ".yml")):
         return repository
     return f"{repository}/index.yaml"

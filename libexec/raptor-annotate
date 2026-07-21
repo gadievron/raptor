@@ -45,12 +45,15 @@ operator notes.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE")
@@ -102,8 +105,8 @@ def _resolve_base(explicit: Optional[str]) -> Path:
             project = mgr.load(name)
             if project:
                 return Path(project.output_dir).resolve() / "annotations"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("annotation base resolution failed: %s", exc)
     sys.stderr.write(
         "raptor-annotate: no annotation base — pass --base PATH or "
         "activate a project with `/project use <name>`.\n"
@@ -154,7 +157,7 @@ def _lookup_bounds_by_name(
             if item.get("name") == function:
                 ls = item.get("line_start")
                 le = item.get("line_end")
-                if ls and le:
+                if ls is not None and le is not None:
                     return int(ls), int(le)
     return None
 

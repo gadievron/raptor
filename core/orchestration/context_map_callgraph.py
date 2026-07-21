@@ -97,7 +97,7 @@ def enrich_with_forward_reachable(
             return 0
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ExternalFunction,
             InternalFunction,
             enclosing_function,
@@ -130,6 +130,7 @@ def enrich_with_forward_reachable(
                 inventory, [host], max_depth=max_depth,
             )
         except Exception:                              # noqa: BLE001
+            logger.debug("callgraph enrichment failed for %s", host, exc_info=True)
             continue
 
         internal_names: list = []
@@ -160,8 +161,69 @@ def enrich_with_forward_reachable(
     return enriched_count
 
 
+def enrich_with_call_edges(
+    context_map: Dict[str, Any],
+    checklist_path: Optional[Path] = None,
+    *,
+    checklist: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Add a ``call_edges`` array to the context map from checklist call graphs.
+
+    Each edge is ``{"caller_file": ..., "caller": ..., "callee": ...}``.
+    Consumers (sink-unreachability gate, /diagram) use this for transitive
+    reachability without loading the full checklist separately.
+
+    Provide either ``checklist_path`` (loaded from disk) or ``checklist``
+    (pre-loaded dict).  Returns the number of edges added.  Idempotent —
+    overwrites any prior ``call_edges``.
+    """
+    if checklist is None:
+        if checklist_path is None or not checklist_path.exists():
+            return 0
+        import json
+        try:
+            checklist = json.loads(checklist_path.read_text())
+        except Exception:
+            return 0
+
+    func_to_file: Dict[str, str] = {}
+    for fi in checklist.get("files", []):
+        path = fi.get("path", "")
+        for item in fi.get("items", []):
+            name = item.get("name", "")
+            if name:
+                func_to_file[name] = path
+
+    edges: list = []
+    for fi in checklist.get("files", []):
+        path = fi.get("path", "")
+        cg = fi.get("call_graph")
+        if not isinstance(cg, dict):
+            continue
+        for call in cg.get("calls", []):
+            caller = call.get("caller", "")
+            if not caller:
+                continue
+            for callee in call.get("chain", []):
+                edges.append({
+                    "caller_file": path,
+                    "caller": caller,
+                    "callee": callee,
+                    "callee_file": func_to_file.get(callee, ""),
+                })
+
+    context_map["call_edges"] = edges
+    if edges:
+        logger.info(
+            "context_map_callgraph: added %d call edges from checklist",
+            len(edges),
+        )
+    return len(edges)
+
+
 __all__ = [
     "DEFAULT_MAX_DEPTH",
     "MAX_NAMES_PER_LIST",
+    "enrich_with_call_edges",
     "enrich_with_forward_reachable",
 ]

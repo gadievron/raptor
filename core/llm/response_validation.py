@@ -168,7 +168,8 @@ def _get_required(schema: Dict[str, Any]) -> Set[str]:
 def _get_field_type(field_spec: Any) -> str:
     """Extract the primary type from a JSON Schema property or simple description."""
     if isinstance(field_spec, str):
-        token = field_spec.split()[0].strip().lower()
+        parts = field_spec.split()
+        token = parts[0].strip().lower() if parts else "string"
         return {"bool": "boolean", "str": "string", "int": "integer",
                 "float": "number", "list": "array"}.get(token, token)
     if isinstance(field_spec, dict):

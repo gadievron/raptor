@@ -6,6 +6,7 @@ handles per-call kwarg validation, and attaches structured sandbox_info
 to each result.
 """
 
+import errno
 import logging
 import os
 import shutil
@@ -868,7 +869,8 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # verified the sandboxed program doesn't need /tmp to start —
         # ``python3 -S`` exploits don't write pyc cache, but a normal
         # ``python3`` import will.
-        writable_paths = [] if exclude_tmp_baseline else ["/tmp"]
+        import tempfile as _tempfile
+        writable_paths = [] if exclude_tmp_baseline else [_tempfile.gettempdir()]
         if output:
             # Absolutize: a relative path like "out/foo" fails Landlock
             # open in the mount-ns child after pivot_root (the new
@@ -1077,12 +1079,17 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                 raise RuntimeError(msg + " (require_sanitisation=True)")
             logger.warning("Sandbox: %s; identity surfaces will be host-real.", msg)
         else:
+            import shutil as _shutil
             import tempfile as _tf
             _persona_tmpdir = _tf.mkdtemp(prefix="raptor-persona-")
             _effective_cpu_count = cpu_count if cpu_count is not None else 4
-            _persona = build_persona(
-                Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
-            )
+            try:
+                _persona = build_persona(
+                    Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
+                )
+            except BaseException:
+                _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+                raise
     elif cpu_count is not None:
         # cpu_count without the master switch is a caller mistake — the
         # CPU-mask change is part of the fingerprint persona, not an
@@ -2209,7 +2216,14 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                             _denv = dict(_dk.get("env") if _dk.get("env") is not None else os.environ)
                             _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
                             _dk["env"] = _denv
-                            result = subprocess.run(full_cmd, **_dk)
+                            try:
+                                result = subprocess.run(full_cmd, **_dk)
+                            except OSError as _ebadf:
+                                if _ebadf.errno != errno.EBADF:
+                                    raise
+                                result = subprocess.CompletedProcess(
+                                    full_cmd, returncode=-9,
+                                )
                         finally:
                             for _dfd in (_death_r, _death_w):
                                 try:
@@ -2217,11 +2231,18 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                 except OSError:
                                     pass
                     else:
-                        result = subprocess.run(
-                            full_cmd,
-                            start_new_session=_start_new_session,
-                            **kwargs,
-                        )
+                        try:
+                            result = subprocess.run(
+                                full_cmd,
+                                start_new_session=_start_new_session,
+                                **kwargs,
+                            )
+                        except OSError as _ebadf:
+                            if _ebadf.errno != errno.EBADF:
+                                raise
+                            result = subprocess.CompletedProcess(
+                                full_cmd, returncode=-9,
+                            )
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)

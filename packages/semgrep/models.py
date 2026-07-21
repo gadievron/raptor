@@ -45,10 +45,13 @@ class SemgrepFinding:
             artifact = phys.get("artifactLocation") or {}
             file = artifact.get("uri", "")
             region = phys.get("region") or {}
-            line = int(region.get("startLine", 0))
-            column = int(region.get("startColumn", 0))
-            line_end = int(region.get("endLine", 0))
-            column_end = int(region.get("endColumn", 0))
+            try:
+                line = int(region.get("startLine", 0))
+                column = int(region.get("startColumn", 0))
+                line_end = int(region.get("endLine", 0))
+                column_end = int(region.get("endColumn", 0))
+            except (ValueError, TypeError):
+                pass
 
         return cls(
             file=file,

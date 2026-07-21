@@ -94,7 +94,7 @@ def wheel_matrix_for_version(
         filename = f.get("filename") if isinstance(f, dict) else None
         if not isinstance(filename, str):
             continue
-        if filename.endswith(".tar.gz") or filename.endswith(".zip"):
+        if filename.endswith((".tar.gz", ".zip")):
             has_sdist = True
             continue
         if filename.endswith(".whl"):
@@ -415,7 +415,7 @@ def find_compatible_version(
         return None
 
     stable = [
-        v for v in releases.keys()
+        v for v in releases
         if _is_stable_version(v)
     ]
     stable.sort(key=_version_key, reverse=True)

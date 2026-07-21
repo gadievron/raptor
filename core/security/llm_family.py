@@ -211,6 +211,16 @@ def resolve_model_shorthand(
     this helper treats each name in the iterable as a distinct
     candidate so it can raise a truthful ambiguity error.
     """
+    # Guard: fail loud at the boundary rather than crashing deep inside
+    # ``"/" in <non-string>`` with a confusing TypeError. A misrouted
+    # ModelConfig arriving here always means the caller made a mistake.
+    # ``None`` is kept as a "missing input" sentinel per the docstring —
+    # the falsy short-circuit below returns None for that case.
+    if model_id is not None and not isinstance(model_id, str):
+        raise TypeError(
+            f"resolve_model_shorthand: model_id must be str or None, got "
+            f"{type(model_id).__name__}"
+        )
     if not model_id or "/" in model_id or "." in model_id:
         return None
     if len(model_id) < 3 or model_id.isdigit():

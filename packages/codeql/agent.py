@@ -206,7 +206,8 @@ class CodeQLAgent:
         build_commands: Optional[Dict[str, str]] = None,
         force_db_creation: bool = False,
         use_extended: bool = False,
-        min_files: int = 3
+        min_files: int = 3,
+        sage_build_recall: Optional[str] = None,
     ) -> CodeQLWorkflowResult:
         """
         Run complete autonomous CodeQL analysis workflow.
@@ -217,11 +218,18 @@ class CodeQLAgent:
             force_db_creation: Force database recreation
             use_extended: Use extended security suites
             min_files: Minimum files to consider a language present
+            sage_build_recall: Optional formatted SAGE recall text for CodeQL build hints
 
         Returns:
             CodeQLWorkflowResult with complete analysis results
         """
         errors = []
+
+        self.build_detector.sage_prior_build_notes = (
+            sage_build_recall.strip() if sage_build_recall else None
+        )
+        if self.build_detector.sage_prior_build_notes:
+            logger.info("SAGE CodeQL build recall will be passed into CC flag-suggestion prompts when used.")
 
         try:
             # PHASE 1: Language Detection
@@ -323,7 +331,7 @@ class CodeQLAgent:
             logger.info(f"{'=' * 70}")
 
             language_build_map = {}
-            for lang in detected.keys():
+            for lang in detected:
                 if build_commands and lang in build_commands:
                     # Use custom build command
                     logger.info(f"{lang}: Using custom build command")
@@ -427,7 +435,7 @@ class CodeQLAgent:
                 )
 
             logger.info(f"\n✓ Created {len(successful_dbs)} database(s):")
-            for lang in successful_dbs.keys():
+            for lang in successful_dbs:
                 cached = " (cached)" if db_results[lang].cached else ""
                 logger.info(f"  - {lang}{cached}")
 
@@ -807,7 +815,7 @@ Examples:
     build_commands = None
     if args.build_command:
         if not languages or len(languages) != 1:
-            print("Error: --build-command requires exactly one language specified with --languages")
+            print("✗ --build-command requires exactly one language specified with --languages", file=sys.stderr)
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
 
@@ -851,13 +859,22 @@ Examples:
             codeql_cli=args.codeql_cli
         )
 
+        from core.sage.hooks import format_sage_memories_for_prompt, recall_context_for_codeql_build
+        sage_rows = recall_context_for_codeql_build(
+            str(Path(args.repo).resolve()), languages=languages
+        )
+        sage_ctx = format_sage_memories_for_prompt(sage_rows)
+        if sage_ctx:
+            logger.info("SAGE CodeQL build recall:\n%s", sage_ctx[:4000])
+
         # Run analysis
         result = agent.run_autonomous_analysis(
             languages=languages,
             build_commands=build_commands,
             force_db_creation=args.force,
             use_extended=args.extended,
-            min_files=args.min_files
+            min_files=args.min_files,
+            sage_build_recall=sage_ctx or None,
         )
 
         # Print summary
@@ -885,7 +902,7 @@ Examples:
         sys.exit(0 if result.success else 1)
 
     except KeyboardInterrupt:
-        print("\n\nAnalysis interrupted by user")
+        print("\n\nAnalysis interrupted by user", file=sys.stderr)
         sys.exit(130)
     except SandboxSetupError as e:
         # Sandbox could not engage. Emit the dedicated exit code so a parent
@@ -897,7 +914,7 @@ Examples:
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        print(f"\n✗ Fatal error: {e}")
+        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

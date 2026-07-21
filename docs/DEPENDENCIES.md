@@ -31,9 +31,15 @@ For example CodeQL does not allow commerical use.
 - Note: User installs separately, not bundled with RAPTOR
 
 **Python packages** (from requirements.txt)
-- requests (Apache 2.0)
-- anthropic (MIT)
-- tabulate (MIT)
+- requests (Apache 2.0) — HTTP client
+- urllib3 (MIT) — connection pooling, proxy handling
+- pydantic (MIT) — data validation and settings
+- typer (MIT) — CLI framework for libexec scripts
+- instructor (MIT) — structured LLM output
+- pyyaml (MIT) — YAML parsing (CodeQL pack trust, k8s manifests)
+- defusedxml (PSF) — safe XML parsing (Maven POM)
+- packaging (Apache 2.0 / BSD) — PEP 440 version parsing (SCA)
+- tabulate (MIT) — table formatting
 - Install: `pip install -r requirements.txt`
 - Note: Managed by pip, not bundled with RAPTOR
 

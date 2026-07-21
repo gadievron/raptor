@@ -679,7 +679,7 @@ def synthesise_from_understand_output(
         )
         return counts
     if repo_root is None:
-        repo_root = Path(checklist.get("target_path", "."))
+        repo_root = Path(checklist.get("target_path") or ".")
 
     base_dir = output_dir / "annotations"
 

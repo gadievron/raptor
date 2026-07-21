@@ -75,7 +75,7 @@ class RaptorEnrichFlowTraceAstViewTests(unittest.TestCase):
             proc = _run(str(tmp))
             self.assertEqual(proc.returncode, 0,
                              msg=f"wrapper failed: {proc.stderr}")
-            self.assertIn("no flow-trace-", proc.stdout)
+            self.assertIn("no flow-trace-", proc.stderr)
 
     def test_enriches_single_trace_file(self):
         """Happy path: one trace file with a resolvable step gets

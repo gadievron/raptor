@@ -137,7 +137,7 @@ def _get_inventory(api_key: Optional[str]) -> list[str]:
     global _INVENTORY, _INVENTORY_PROBED
 
     # Fast path — already probed. Reads of ``_INVENTORY_PROBED`` and
-    # ``_INVENTORY`` are atomic in CPython (PEP 13), so the lockless
+    # ``_INVENTORY`` are atomic in CPython (GIL), so the lockless
     # check is safe for the steady-state read pattern.
     if _INVENTORY_PROBED:
         return _INVENTORY or []
@@ -166,6 +166,7 @@ def _fetch_inventory(api_key: str) -> list[str]:
     r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
         "https://api.anthropic.com/v1/models",
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        params={"limit": 1000},
         timeout=5,
     )
     if r.status_code != 200:

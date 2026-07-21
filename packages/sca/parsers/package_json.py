@@ -426,9 +426,7 @@ def _classify(spec: str) -> Tuple[PinStyle, Optional[str], Optional[str]]:
     # Git references (git+https://, git+ssh://, git://, github:owner/repo,
     # bitbucket:..., gitlab:..., gist:...).
     if (
-        spec.startswith(("git+", "git:", "git@"))
-        or spec.startswith(("github:", "bitbucket:", "gitlab:", "gist:"))
-        or "://" in spec and spec.split("://", 1)[0].endswith("git")
+        spec.startswith(("git+", "git:", "git@", "github:", "bitbucket:", "gitlab:", "gist:")) or "://" in spec and spec.split("://", 1)[0].endswith("git")
     ):
         # Try to extract a #ref or #semver: spec for the version field.
         version: Optional[str] = None

@@ -55,6 +55,9 @@ _SOURCE_LEVEL_SINKS: FrozenSet[str] = frozenset({
     "subprocess.check_output",
     "subprocess.check_call",
     # Python — code execution / deserialization
+    "eval",
+    "exec",
+    "compile",
     "pickle.loads",
     "pickle.load",
     "yaml.load",
@@ -68,13 +71,161 @@ _SOURCE_LEVEL_SINKS: FrozenSet[str] = frozenset({
     "nixio.exec",
     "nixio.execp",
     # JS — code execution
-    "eval",
-    # Ruby
+    "Function",
+    # Ruby — shell / code execution / deserialization
     "Kernel.system",
     "Kernel.exec",
+    "Kernel.eval",
+    "Kernel.send",
+    "system",
+    "Marshal.load",
+    # Java — process execution
+    "Runtime.exec",
+    "ProcessBuilder",
+    # PHP — shell / code execution
+    "passthru",
+    "shell_exec",
+    "popen",
     # Go
     "exec.Command",
     "os/exec.Command",
+    # Rust — process execution
+    "Command::new",
+    # Python — file / path sinks (attacker-controlled path = traversal / overwrite)
+    "open",
+    "io.open",
+    "os.open",
+    "os.remove",
+    "os.unlink",
+    "os.rename",
+    "os.symlink",
+    "os.chmod",
+    "shutil.rmtree",
+    "shutil.copy",
+    "shutil.copyfile",
+    "shutil.move",
+    "tempfile.mktemp",
+    # Python — deserialization (missing from above)
+    "yaml.unsafe_load",
+    "yaml.full_load",
+    "jsonpickle.decode",
+    "shelve.open",
+    # Python — dynamic import (code execution)
+    "__import__",
+    "importlib.import_module",
+    # ── SSRF / outbound request with user-controlled URL ──────────
+    "requests.get",
+    "requests.post",
+    "requests.put",
+    "requests.delete",
+    "requests.patch",
+    "requests.head",
+    "requests.request",
+    "urllib.request.urlopen",
+    "urllib.request.urlretrieve",
+    "urllib.request.Request",
+    "http.client.HTTPConnection",
+    "http.client.HTTPSConnection",
+    "httpx.get",
+    "httpx.post",
+    "httpx.request",
+    "aiohttp.ClientSession",
+    # JS — SSRF
+    "fetch",
+    "axios.get",
+    "axios.post",
+    "axios.request",
+    "http.get",
+    "http.request",
+    "https.get",
+    "https.request",
+    "got",
+    "node-fetch",
+    # Go — SSRF
+    "http.Get",
+    "http.Post",
+    "http.NewRequest",
+    # Java — SSRF
+    "URL.openConnection",
+    "URL.openStream",
+    "HttpURLConnection",
+    "HttpClient.send",
+    "RestTemplate.getForObject",
+    "RestTemplate.postForObject",
+    "WebClient.create",
+    # ── XXE / XML parsing with external entities ──────────────────
+    "xml.etree.ElementTree.parse",
+    "xml.etree.ElementTree.fromstring",
+    "xml.dom.minidom.parse",
+    "xml.dom.minidom.parseString",
+    "xml.sax.parse",
+    "xml.sax.parseString",
+    "lxml.etree.parse",
+    "lxml.etree.fromstring",
+    "lxml.etree.XML",
+    # Java — XXE
+    "DocumentBuilderFactory.newInstance",
+    "SAXParserFactory.newInstance",
+    "XMLInputFactory.newInstance",
+    # ── Template injection ────────────────────────────────────────
+    "jinja2.Template",
+    "jinja2.from_string",
+    "Template",
+    "mako.template.Template",
+    "string.Template",
+    # Ruby — template injection
+    "ERB.new",
+    # JS — template injection
+    "ejs.render",
+    "pug.render",
+    "Handlebars.compile",
+    # ReDoS: re.compile / RegExp omitted — too common for mechanical
+    # discovery. Taint analysis catches user-controlled patterns.
+    # ── LDAP injection ────────────────────────────────────────────
+    "ldap.search_s",
+    "ldap.search",
+    "ldap.search_ext_s",
+    "ldap3.Connection.search",
+    # Java — LDAP
+    "DirContext.search",
+    "InitialDirContext.search",
+    # ── Deserialization with class instantiation ──────────────────
+    # json.loads omitted — only dangerous with object_hook; too noisy
+    "msgpack.unpackb",
+    "msgpack.unpack",
+    "cbor2.loads",
+    # Java — deserialization
+    "ObjectInputStream.readObject",
+    "XMLDecoder.readObject",
+    "XStream.fromXML",
+    # PHP — deserialization
+    "unserialize",
+    # Ruby — deserialization
+    "YAML.load",
+    "Marshal.load",
+    # .NET — deserialization
+    "BinaryFormatter.Deserialize",
+    "JsonConvert.DeserializeObject",
+    # ── Path traversal (additional) ───────────────────────────────
+    # os.path.join / pathlib.Path omitted — too common for mechanical
+    # discovery. Taint analysis catches user-controlled paths.
+    "zipfile.ZipFile.extractall",
+    "tarfile.TarFile.extractall",
+    "shutil.unpack_archive",
+    # ── SQL injection (additional ORMs / drivers) ─────────────────
+    "cursor.execute",
+    "connection.execute",
+    "engine.execute",
+    "Session.execute",
+    "db.execute",
+    "db.executemany",
+    "psycopg2.extensions.cursor.execute",
+    # MongoDB — NoSQL injection
+    "collection.find",
+    "collection.find_one",
+    "collection.update",
+    "collection.delete",
+    "collection.aggregate",
 })
 
 
@@ -103,12 +254,20 @@ class SinkInfo:
 
 
 @dataclass
+class ChainHop:
+    """One hop in a mechanical call chain toward a dangerous sink."""
+    file: str
+    function: str
+
+
+@dataclass
 class TransitiveReach:
     """A function that transitively reaches a dangerous sink."""
     file: str
     function: str
     distance: int        # hop count to nearest dangerous sink
     sinks: List[str]     # dangerous targets reachable (transitively)
+    chain: Optional[List[ChainHop]] = None  # forward path toward sink
 
 
 @dataclass
@@ -120,12 +279,23 @@ class FrameworkAPI:
 
 
 @dataclass
+class UnreachableVerdict:
+    """Per-function verdict for sink unreachability eligibility."""
+    file: str
+    function: str
+    eligible: bool
+    reason: str
+    narrowed_classes: List[str]
+
+
+@dataclass
 class SinkDiscoveryResult:
     """Complete result of mechanical sink discovery."""
     direct_sinks: List[SinkInfo]
     transitive_reach: List[TransitiveReach]
     framework_apis: List[FrameworkAPI]
     dangerous_target_counts: Dict[str, int]
+    unreachable_eligible: Optional[Dict[Tuple[str, str], UnreachableVerdict]] = None
 
     def as_dict(self) -> dict:
         """Serialise for JSON output / context-map enrichment."""
@@ -145,6 +315,10 @@ class SinkDiscoveryResult:
                     "function": t.function,
                     "distance": t.distance,
                     "reachable_sinks": t.sinks,
+                    **({"chain": [
+                        {"file": h.file, "function": h.function}
+                        for h in t.chain
+                    ]} if t.chain else {}),
                 }
                 for t in self.transitive_reach
             ],
@@ -163,6 +337,27 @@ class SinkDiscoveryResult:
                 )
             },
         }
+
+
+def _reconstruct_chain(
+    start: FuncKey,
+    successor: Dict[FuncKey, FuncKey],
+    max_depth: int,
+) -> List[ChainHop]:
+    """Walk the successor links to build a forward chain toward a sink."""
+    hops: List[ChainHop] = []
+    node = start
+    seen: Set[FuncKey] = set()
+    for _ in range(max_depth + 1):
+        if node in seen:
+            break
+        seen.add(node)
+        nxt = successor.get(node)
+        if nxt is None:
+            break
+        hops.append(ChainHop(file=nxt[0], function=nxt[1]))
+        node = nxt
+    return hops
 
 
 def _is_dangerous(chain: List[str]) -> Optional[str]:
@@ -277,6 +472,14 @@ def discover_sinks(
     # Track all call targets for framework discovery
     target_callers: Dict[str, Set[FuncKey]] = defaultdict(set)
     target_files: Dict[str, Set[str]] = defaultdict(set)
+    # Build cross-file function index: function name → files where it is
+    # defined (approximated by where it appears as a caller in call graphs).
+    # This enables cross-file edge building below.
+    _func_defined_in: Dict[str, Set[str]] = defaultdict(set)
+    for filepath, graph in call_graphs.items():
+        for call in graph.calls:
+            if call.caller and call.caller != "<module>":
+                _func_defined_in[call.caller].add(filepath)
 
     for filepath, graph in call_graphs.items():
         for call in graph.calls:
@@ -300,11 +503,30 @@ def discover_sinks(
                 ))
                 direct_dangerous[caller_key].add(danger)
 
-            # Build inter-function edges (same-file only for now)
+            # Build inter-function edges — same-file and cross-file.
+            # Cross-file edges are added when a bare function call
+            # matches a function defined in another file within the
+            # inventory.  Import-qualified resolution (e.g. resolving
+            # ``from pkg import func`` to the defining file) is not
+            # yet handled — that requires the import resolver in
+            # core.analysis.reachability.
+            # TODO: use import resolution from core.analysis.reachability
+            # to resolve qualified cross-file calls (e.g. module.func).
             if len(call.chain) == 1:
-                callee_key: FuncKey = (filepath, call.chain[0])
+                callee_name = call.chain[0]
+                callee_key: FuncKey = (filepath, callee_name)
                 forward_edges[caller_key].add(callee_key)
                 reverse_edges[callee_key].add(caller_key)
+                # Cross-file: callee defined in other inventory files
+                resolved = False
+                for other_file in _func_defined_in.get(callee_name, ()):
+                    resolved = True
+                    if other_file != filepath:
+                        cross_key: FuncKey = (other_file, callee_name)
+                        forward_edges[caller_key].add(cross_key)
+                        reverse_edges[cross_key].add(caller_key)
+                if not resolved and callee_name in _func_defined_in:
+                    resolved = True
             elif len(call.chain) == 2 and call.chain[0] in ("self", "this"):
                 callee_key = (filepath, call.chain[1])
                 forward_edges[caller_key].add(callee_key)
@@ -315,6 +537,9 @@ def discover_sinks(
     transitive_reach: List[TransitiveReach] = []
     visited: Dict[FuncKey, int] = {}  # key → distance
     reachable_sinks: Dict[FuncKey, Set[str]] = defaultdict(set)
+    # successor[caller] = next hop toward sink (reverse BFS predecessor
+    # = forward call chain successor). Used to reconstruct chains.
+    successor: Dict[FuncKey, FuncKey] = {}
 
     # Seed: all direct dangerous callers at distance 0
     queue: List[Tuple[FuncKey, int]] = []
@@ -335,6 +560,8 @@ def discover_sinks(
         head += 1
         if dist >= max_depth:
             continue
+        if visited.get(current, dist) < dist:
+            continue
         for caller_key in reverse_edges.get(current, set()):
             new_dist = dist + 1
             prev_dist = visited.get(caller_key)
@@ -343,6 +570,7 @@ def discover_sinks(
             sinks_grew = len(reachable_sinks[caller_key]) > old_count
             if prev_dist is None or prev_dist > new_dist:
                 visited[caller_key] = new_dist
+                successor[caller_key] = current
                 queue.append((caller_key, new_dist))
             elif sinks_grew:
                 queue.append((caller_key, prev_dist))
@@ -350,11 +578,13 @@ def discover_sinks(
     for key, dist in sorted(visited.items()):
         if dist == 0:
             continue  # direct callers are in direct_sinks already
+        chain = _reconstruct_chain(key, successor, max_depth)
         transitive_reach.append(TransitiveReach(
             file=key[0],
             function=key[1],
             distance=dist,
             sinks=sorted(reachable_sinks[key]),
+            chain=chain,
         ))
 
     # Phase 3: Framework API discovery
@@ -382,9 +612,60 @@ def discover_sinks(
     for si in direct_sinks:
         dangerous_counts[si.target] += 1
 
+    # Phase 4: 3-layer FN defense for sink_unreachable eligibility
+    #
+    # Functions with zero transitive reach are candidates for
+    # scope-narrowing (fewer CWE classes reviewed), but only if they
+    # pass both layers:
+    #   L1: no indirection flags on the function's file
+    #   L2: (covered by call_graph via INDIRECTION_FN_POINTER)
+    #
+    # External callees not in DANGEROUS_TARGETS are already classified
+    # by the catalog — blocking on them made tier 0 a no-op for C code
+    # (every function calls libc).
+
+    all_func_keys: Set[FuncKey] = set()
+    for filepath, graph in call_graphs.items():
+        for call in graph.calls:
+            c = call.caller or "<module>"
+            all_func_keys.add((filepath, c))
+
+    reachable_keys = set(visited.keys())
+
+    file_has_indirection: Dict[str, Set[str]] = {}
+    for filepath, graph in call_graphs.items():
+        if graph.indirection:
+            file_has_indirection[filepath] = graph.indirection
+
+    unreachable_eligible: Dict[Tuple[str, str], UnreachableVerdict] = {}
+    for key in all_func_keys:
+        if key in reachable_keys:
+            continue
+        filepath, funcname = key
+        indir = file_has_indirection.get(filepath)
+        if indir:
+            unreachable_eligible[key] = UnreachableVerdict(
+                file=filepath,
+                function=funcname,
+                eligible=False,
+                reason=f"indirection flags: {sorted(indir)}",
+                narrowed_classes=[],
+            )
+            continue
+        unreachable_eligible[key] = UnreachableVerdict(
+            file=filepath,
+            function=funcname,
+            eligible=True,
+            reason="no transitive reach, no indirection",
+            narrowed_classes=[],
+        )
+
     logger.info(
-        "sink_discovery: %d direct sinks, %d transitive, %d framework APIs",
+        "sink_discovery: %d direct sinks, %d transitive, %d framework APIs, "
+        "%d unreachable verdicts (%d eligible)",
         len(direct_sinks), len(transitive_reach), len(framework_apis),
+        len(unreachable_eligible),
+        sum(1 for v in unreachable_eligible.values() if v.eligible),
     )
 
     return SinkDiscoveryResult(
@@ -392,6 +673,7 @@ def discover_sinks(
         transitive_reach=transitive_reach,
         framework_apis=framework_apis,
         dangerous_target_counts=dict(dangerous_counts),
+        unreachable_eligible=unreachable_eligible,
     )
 
 
@@ -444,11 +726,12 @@ def discover_sinks_for_target(
         if not extractor:
             continue
         try:
-            content = source_file.read_text(errors="replace")
+            content = source_file.read_text(encoding="utf-8", errors="replace")
             graph = extractor(content)
             if graph.calls:
                 call_graphs[rel] = graph
         except Exception:  # noqa: BLE001
+            logger.debug("sink discovery: callgraph extraction failed for %s", rel, exc_info=True)
             continue
 
     return discover_sinks(
@@ -468,9 +751,13 @@ def _get_call_graph_extractors():
         extract_call_graph_javascript,
         extract_call_graph_c,
         extract_call_graph_cpp,
+        extract_call_graph_csharp,
         extract_call_graph_go,
         extract_call_graph_java,
         extract_call_graph_lua,
+        extract_call_graph_php,
+        extract_call_graph_ruby,
+        extract_call_graph_rust,
     )
     return {
         "python": extract_call_graph_python,
@@ -479,20 +766,30 @@ def _get_call_graph_extractors():
         "tsx": partial(extract_call_graph_javascript, language="tsx"),
         "c": extract_call_graph_c,
         "cpp": extract_call_graph_cpp,
+        "csharp": extract_call_graph_csharp,
         "go": extract_call_graph_go,
         "java": extract_call_graph_java,
         "lua": extract_call_graph_lua,
+        "php": extract_call_graph_php,
+        "ruby": extract_call_graph_ruby,
+        "rust": extract_call_graph_rust,
     }
 
 
 def _iter_source_files(target: Path):
-    """Yield source files under target, respecting common exclusions."""
+    """Yield source files under target, respecting common exclusions.
+
+    Uses os.walk with walk-time pruning so excluded subtrees are never
+    traversed (avoids hundreds of thousands of stat() calls on repos
+    with large node_modules/ or vendor/ trees).
+    """
+    import os as _os
     skip_dirs = {
         ".git", "node_modules", "__pycache__", ".tox", ".venv",
         "venv", "vendor", "third_party", "build", "dist",
     }
-    for child in target.rglob("*"):
-        if child.is_file() and not any(
-            p in skip_dirs for p in child.relative_to(target).parts
-        ):
-            yield child
+    for root, dirs, files in _os.walk(target):
+        dirs[:] = [d for d in dirs if d not in skip_dirs
+                   and not (Path(root) / d).is_symlink()]
+        for fname in files:
+            yield Path(root) / fname

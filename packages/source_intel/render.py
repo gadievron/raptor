@@ -555,7 +555,7 @@ def _privileged_cap_constant_on_line(
     but returns the constant name rather than a boolean (so the
     render can include it in the prose)."""
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return None

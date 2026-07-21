@@ -34,6 +34,13 @@ from enum import Enum
 from typing import Any, Optional
 
 
+def _safe_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (ValueError, TypeError, OverflowError):
+        return default
+
+
 class WitnessSource(str, Enum):
     """Which pipeline produced this witness.
 
@@ -191,7 +198,7 @@ class Witness:
 
         return cls(
             bytes_hash=data["bytes_hash"],
-            bytes_len=int(data.get("bytes_len", 0)),
+            bytes_len=_safe_int(data.get("bytes_len", 0)),
             source=WitnessSource(data["source"]),
             observed_outcome=WitnessOutcome(data["observed_outcome"]),
             target_binary_hash=data.get("target_binary_hash"),

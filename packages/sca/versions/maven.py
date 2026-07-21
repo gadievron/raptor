@@ -104,7 +104,7 @@ def compare(a: str, b: str) -> int:
     # Compare aligned non-separator tokens.
     ia = [p for p in items_a if p[0] != "sep"]
     ib = [p for p in items_b if p[0] != "sep"]
-    for ta, tb in zip(ia, ib):
+    for ta, tb in zip(ia, ib, strict=False):
         c = _compare_tokens(ta, tb)
         if c != 0:
             return c
@@ -131,8 +131,8 @@ def _compare_tokens(ta: Tuple[str, Union[int, str]],
     if ka == "str" and kb == "int":
         return -1
     # both str: qualifier order
-    oa = _QUALIFIER_ORDER.get(va, None)
-    ob = _QUALIFIER_ORDER.get(vb, None)
+    oa = _QUALIFIER_ORDER.get(va)
+    ob = _QUALIFIER_ORDER.get(vb)
     if oa is not None and ob is not None:
         if oa == ob:
             return 0
@@ -161,7 +161,7 @@ def _compare_extra(extras: List[Tuple[str, Union[int, str]]]) -> int:
                 return 1 if val > 0 else -1
             # int 0 is trivial; continue
         elif kind == "str":
-            order = _QUALIFIER_ORDER.get(val, None)
+            order = _QUALIFIER_ORDER.get(val)
             if order is None:
                 # Unknown qualifier — convention: sort longer side higher
                 return 1
@@ -185,7 +185,7 @@ def _strip_trivial_tail(items: List[Tuple[str, Union[int, str]]]
         if kind == "int" and val == 0:
             out.pop()
             continue
-        if kind == "str" and _QUALIFIER_ORDER.get(val, None) == 0:
+        if kind == "str" and _QUALIFIER_ORDER.get(val) == 0:
             # ga / final / release: trivial
             out.pop()
             continue

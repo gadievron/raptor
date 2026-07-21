@@ -15,10 +15,14 @@ the current HEAD.
 """
 
 import hashlib
+import logging
+import os
 import platform
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Repo root = parents[2] of this file:
 #   parents[0] = core/run   (this module's dir)
@@ -68,7 +72,8 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
     except Exception:
-        env = None
+        logger.warning("get_safe_env unavailable; using inherited env")
+        env = os.environ.copy()
     if untrusted:
         from core.git.clone import safe_git_command
         cmd = safe_git_command("-C", str(repo_dir), *args)
@@ -83,7 +88,7 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None
     if result.returncode != 0:
         return None
@@ -160,7 +165,8 @@ def tool_version(name: str) -> Optional[str]:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
     except Exception:
-        env = None
+        logger.warning("get_safe_env unavailable; using inherited env")
+        env = os.environ.copy()
     try:
         result = subprocess.run(
             probe,
@@ -170,7 +176,7 @@ def tool_version(name: str) -> Optional[str]:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None
     out = (result.stdout or result.stderr or "").strip()
     if not out:

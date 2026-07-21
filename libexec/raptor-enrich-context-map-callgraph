@@ -103,7 +103,8 @@ def main() -> int:
         print(
             "raptor-enrich-context-map-callgraph: no entries enriched "
             "(no entry_points field, all hosts unresolvable, or inventory "
-            "build skipped)"
+            "build skipped)",
+            file=sys.stderr,
         )
     return 0
 

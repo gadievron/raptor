@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -443,13 +445,16 @@ def _count_sarif_results(sarif_path: Path, target_uri: Optional[str] = None,
     (a file with N unrelated findings shouldn't make a correct single-flow
     barrier look unsound). The preserve check stays file-scoped (the pre-fix vuln
     sits at a different line after the patch's line shifts)."""
-    data = json.loads(Path(sarif_path).read_text())
+    try:
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
     if target_uri is None:
-        return sum(len(r.get("results", [])) for r in data.get("runs", []))
+        return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
     n = 0
-    for run in data.get("runs", []):
-        for res in run.get("results", []):
-            for loc in res.get("locations", []):
+    for run in (data.get("runs") or []):
+        for res in (run.get("results") or []):
+            for loc in (res.get("locations") or []):
                 phys = loc.get("physicalLocation", {})
                 if phys.get("artifactLocation", {}).get("uri") != target_uri:
                     continue
@@ -479,7 +484,7 @@ def _summarise_surviving_finding(
       ``"surviving flow: <source-file>:<line> <msg> -> ... -> <sink-file>:<line> <sink-snippet>"``
     """
     try:
-        data = json.loads(Path(sarif_path).read_text())
+        data = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
 
@@ -500,19 +505,19 @@ def _summarise_surviving_finding(
             if target_line is not None and line != target_line:
                 continue
             # We have the surviving result — describe it.
-            cfs = res.get("codeFlows", [])
-            steps = (cfs[0].get("threadFlows", [{}])[0].get("locations", [])
-                     if cfs else [])
+            cfs = res.get("codeFlows") or []
+            tflows = (cfs[0].get("threadFlows") or []) if cfs else []
+            steps = tflows[0].get("locations", []) if tflows else []
             chain = []
             for step in steps:
-                node = step.get("location", {})
-                phys = node.get("physicalLocation", {})
-                s_uri = phys.get("artifactLocation", {}).get("uri", "?")
-                s_line = phys.get("region", {}).get("startLine", "?")
-                s_msg = node.get("message", {}).get("text", "").strip()
+                node = step.get("location") or {}
+                phys = node.get("physicalLocation") or {}
+                s_uri = (phys.get("artifactLocation") or {}).get("uri", "?")
+                s_line = (phys.get("region") or {}).get("startLine", "?")
+                s_msg = ((node.get("message") or {}).get("text") or "").strip()
                 chain.append(f"{Path(s_uri).name}:{s_line}"
                              + (f" {s_msg}" if s_msg else ""))
-            sink_msg = res.get("message", {}).get("text", "").strip()
+            sink_msg = ((res.get("message") or {}).get("text") or "").strip()
             sink_part = f"{Path(uri).name}:{line}" if uri else "?"
             if sink_msg:
                 sink_part += f" — {sink_msg}"
@@ -544,10 +549,11 @@ def adjudicate(
         raise ValueError(f"unknown language {language!r}; known: {sorted(_LANG_PACK)}")
     (pack / "qlpack.yml").write_text(
         'name: raptor/barrier-synth\nversion: 0.0.1\n'
-        f'dependencies:\n  {dep}: "*"\n'
+        f'dependencies:\n  {dep}: "*"\n',
+        encoding="utf-8",
     )
     ql = pack / "SynthBarrier.ql"
-    ql.write_text(query_ql)
+    ql.write_text(query_ql, encoding="utf-8")
     extra = ["--additional-packs", search_path] if search_path else []
     result = analyze(
         db_path, [str(ql)], pack / "out.sarif",
@@ -1206,27 +1212,36 @@ def main(argv: Optional[list] = None) -> int:
                    help="source the LLM reasons over (the function/path)")
     p.add_argument("--search-path", help="codeql query-pack search path (--additional-packs)")
     p.add_argument("--max-attempts", type=int, default=3)
-    p.add_argument("--work-dir", type=Path, default=Path("/tmp/trust-synth-work"))
+    p.add_argument("--work-dir", type=Path, default=None)
     args = p.parse_args(argv)
 
-    proposal = BarrierProposal(
-        sink_class=args.sink_class, finding_id=args.finding_id, language=args.language,
-        sink_snippet=args.sink, source_context=args.source_file.read_text(encoding="utf-8"),
-    )
-    res = run_synthesis_loop(
-        proposal, args.after_db, args.before_db,
-        proposer=make_llm_proposer(default_completer()),
-        work_dir=args.work_dir, search_path=args.search_path,
-        max_attempts=args.max_attempts,
-    )
-    if res is None:
-        print(f"{args.finding_id}: no compilable barrier after {args.max_attempts} attempts",
-              file=sys.stderr)
-        return 1
-    print(f"{args.finding_id}: sound={res.is_sound} "
-          f"(after={res.after_count}, before={res.before_count})", file=sys.stderr)
-    print(res.query_ql)
-    return 0 if res.is_sound else 2
+    work_dir = args.work_dir
+    created_tmp = work_dir is None
+    if created_tmp:
+        work_dir = Path(tempfile.mkdtemp(prefix="trust-synth-work-"))
+
+    try:
+        proposal = BarrierProposal(
+            sink_class=args.sink_class, finding_id=args.finding_id, language=args.language,
+            sink_snippet=args.sink, source_context=args.source_file.read_text(encoding="utf-8"),
+        )
+        res = run_synthesis_loop(
+            proposal, args.after_db, args.before_db,
+            proposer=make_llm_proposer(default_completer()),
+            work_dir=work_dir, search_path=args.search_path,
+            max_attempts=args.max_attempts,
+        )
+        if res is None:
+            print(f"{args.finding_id}: no compilable barrier after {args.max_attempts} attempts",
+                  file=sys.stderr)
+            return 1
+        print(f"{args.finding_id}: sound={res.is_sound} "
+              f"(after={res.after_count}, before={res.before_count})", file=sys.stderr)
+        print(res.query_ql)
+        return 0 if res.is_sound else 2
+    finally:
+        if created_tmp:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

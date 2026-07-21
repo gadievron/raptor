@@ -4,6 +4,7 @@ Exports a project output directory as a zip archive and imports
 zip archives back, with path traversal and symlink validation.
 """
 
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -234,11 +235,13 @@ def export_project(project_output_dir: Path, dest_path: Path,
     # plus per-process / transient artefacts that shouldn't ship in a
     # portable archive (POSIX advisory lock files, tempfile leftovers).
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for item in project_output_dir.rglob("*"):
-            if item.is_symlink():
-                logger.debug(f"Skipping symlink in export: {item}")
-                continue
-            if item.is_file():
+        for dirpath, dirnames, filenames in os.walk(project_output_dir, followlinks=False):
+            dirnames[:] = [d for d in dirnames if not Path(dirpath, d).is_symlink()]
+            for fname in filenames:
+                item = Path(dirpath, fname)
+                if item.is_symlink():
+                    logger.debug(f"Skipping symlink in export: {item}")
+                    continue
                 if _is_transient_artefact(item):
                     logger.debug(f"Skipping transient artefact: {item}")
                     continue
@@ -353,7 +356,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                 if embedded_meta.get("name"):
                     project_name = embedded_meta["name"]
             except (json.JSONDecodeError, KeyError):
-                raise ValueError("Corrupt .project.json in archive")
+                raise ValueError("Corrupt .project.json in archive") from None
 
             # --- Validate name before any filesystem work ---
             from .project import ProjectManager
@@ -361,7 +364,7 @@ def import_project(zip_path: Path, projects_dir: Path,
             try:
                 mgr._validate_name(project_name)
             except ValueError as e:
-                raise ValueError(f"Cannot import: {e}")
+                raise ValueError(f"Cannot import: {e}") from e
 
             existing = mgr.load(project_name)
             if existing and not force:
@@ -447,7 +450,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                             f"Refusing to extract {info.filename!r}: "
                             f"resolved target {target_resolved} escapes "
                             f"destination {extract_dest_resolved}"
-                        )
+                        ) from None
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     actual_size = 0
                     with zf.open(info, "r") as src, open(target_path, "wb") as dst:
@@ -477,7 +480,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                 raise
 
     except zipfile.BadZipFile:
-        raise ValueError("Invalid zip file")
+        raise ValueError("Invalid zip file") from None
 
     # Register the project
     target = embedded_meta.get("target", "(imported)") if embedded_meta else "(imported)"

@@ -48,7 +48,7 @@ def compare(a: str, b: str) -> int:
         nums_a.append(0)
     while len(nums_b) < max_len:
         nums_b.append(0)
-    for x, y in zip(nums_a, nums_b):
+    for x, y in zip(nums_a, nums_b, strict=True):
         if x != y:
             return -1 if x < y else 1
     if stab_a != stab_b:

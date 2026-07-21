@@ -95,7 +95,7 @@ def test_rules_root_exists():
 
 def test_expected_axes_present():
     """All expected axis subdirs exist."""
-    for axis in EXPECTED_RULES.keys():
+    for axis in EXPECTED_RULES:
         axis_dir = _RULES_ROOT / axis
         assert axis_dir.is_dir(), f"missing axis dir: {axis_dir}"
 

@@ -230,7 +230,7 @@ def _synthesize_snippet(
     """Read source lines around the finding location."""
     try:
         full = source_root / rel_path
-        lines = full.read_text(errors="replace").splitlines()
+        lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
         s = max(0, start_line - 1)
         e = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
         return "\n".join(lines[s:e])

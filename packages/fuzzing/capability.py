@@ -305,6 +305,7 @@ def _probe_version(binary: str, args: List[str]) -> str:
             capture_output=True,
             text=True,
             timeout=10,
+            env=RaptorConfig.get_safe_env(),
         )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         for line in output.splitlines():
@@ -356,6 +357,7 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
             capture_output=True,
             text=True,
             timeout=30,
+            env=RaptorConfig.get_safe_env(),
         )
         return result.returncode == 0
     except Exception:

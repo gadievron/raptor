@@ -9,6 +9,7 @@ from unittest.mock import patch
 class TestSageConfig(unittest.TestCase):
     """Test SageConfig defaults and environment variable overrides."""
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_default_values(self):
         """Config should have sane defaults."""
         from core.sage.config import SageConfig

@@ -107,7 +107,7 @@ def main() -> int:
         # ---- Stage 5: show the manifest JSON ----
         _hr("Stage 5: on-disk manifest (operator-readable JSON)")
         manifest_path = store_root / "manifests" / f"{witness.bytes_hash}.json"
-        manifest_data = json.loads(manifest_path.read_text())
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
         print(json.dumps(manifest_data, indent=2))
 
         # ---- Stage 6: list all witnesses in the store ----

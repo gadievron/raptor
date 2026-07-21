@@ -237,10 +237,7 @@ def _detect_build_systems(
             def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return not (
-                    msg.startswith("Detecting build system for ")
-                    or msg.startswith("No build system detected for ")
-                    or msg.startswith("✓ Detected ")
-                    or msg.startswith("  Command: ")
+                    msg.startswith(("Detecting build system for ", "No build system detected for ", "✓ Detected ", "  Command: "))
                 )
 
         raptor_logger = logging.getLogger("raptor")

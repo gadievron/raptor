@@ -46,7 +46,7 @@ from typing import Any, Dict, Literal, Set, Tuple
 # ``_METHOD_TRAILING_QUALS`` live in ``binary_oracle`` so the classifier
 # can demangle DWARF linkage names with the same logic. Re-exported here
 # for any external importer.
-from ..binary_oracle import (  # noqa: F401  (re-export)
+from core.analysis.binary_oracle import (  # noqa: F401  (re-export)
     _demangle_linkage_names,
     _find_arglist_open,
     _METHOD_TRAILING_QUALS,
@@ -111,9 +111,9 @@ class _SnappyDriver:
         profdata = sha_dir / "merged.profdata"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_and_run(sha_dir, build_dir, profdata)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         binary = build_dir / "snappy_unittest"
         live, candidates = _liveness_from_llvm_cov(binary, profdata)
@@ -268,8 +268,7 @@ def _liveness_from_llvm_cov(
         # precision measurement. The qualified-name extractor flags
         # them by the literal ``(anonymous namespace)`` prefix; admit
         # those AND the snappy-prefixed ones.
-        is_snappy_surface = (qualified.startswith("snappy::")
-                             or qualified.startswith("snappy_"))
+        is_snappy_surface = (qualified.startswith(("snappy::", "snappy_")))
         is_anon = "(anonymous namespace)" in qualified
         if not (is_snappy_surface or is_anon):
             continue

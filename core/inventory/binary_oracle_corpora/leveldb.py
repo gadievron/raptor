@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Set, Tuple
 
-from ..binary_oracle import (
+from core.analysis.binary_oracle import (
     _demangle_linkage_names,
     _qualified_from_demangled,
 )
@@ -70,9 +70,9 @@ class _LeveldbDriver:
         profdata = sha_dir / "merged.profdata"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_and_run(sha_dir, build_dir, profdata)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         binary = build_dir / "leveldb_tests"
         live, candidates = _liveness_from_llvm_cov(binary, profdata)
@@ -175,13 +175,13 @@ def _patch_drop_benchmark(cmakelists: Path) -> None:
     and the benchmark lib's CMake forces -Werror which clang-21 trips.
 
     Idempotent: re-applying produces no change."""
-    text = cmakelists.read_text()
+    text = cmakelists.read_text(encoding="utf-8")
     new_text = _BENCHMARK_LINK_RE.sub("leveldb gmock gtest", text)
     new_text = _BENCHMARK_SUBDIR_RE.sub(
         "# benchmark add_subdirectory skipped — tests-only build",
         new_text)
     if new_text != text:
-        cmakelists.write_text(new_text)
+        cmakelists.write_text(new_text, encoding="utf-8")
         logger.info("leveldb: patched out benchmark dep in CMakeLists.txt")
 
 
@@ -227,8 +227,7 @@ def _liveness_from_llvm_cov(
         # and miscellaneous C runtime functions inflate the candidate
         # set with methodology noise. Anonymous-namespace helpers are
         # admitted (adversarial review E P1-4: ICF/DCE-prime category).
-        is_leveldb_surface = (qualified.startswith("leveldb::")
-                              or qualified.startswith("leveldb_"))
+        is_leveldb_surface = (qualified.startswith(("leveldb::", "leveldb_")))
         is_anon = "(anonymous namespace)" in qualified
         if not (is_leveldb_surface or is_anon):
             continue

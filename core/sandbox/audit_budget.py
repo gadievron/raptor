@@ -161,7 +161,7 @@ def _default_categorise(action: str) -> str:
     write → file-write, etc.). Unrecognised actions return their
     own name (sharing only the global cap, no category sub-cap).
     """
-    if action.startswith("file-write") or action.startswith("file-mknod"):
+    if action.startswith(("file-write", "file-mknod")):
         return "file-write"
     if action == "file-read-metadata":
         return "file-read-metadata"
@@ -363,11 +363,7 @@ class AuditBudget:
         # general case.
         sampled_keeps = 0
         for cat, count in getattr(self, "_sampling_counters", {}).items():
-            cat_cfg = (
-                getattr(self, "_per_category_sampling", {}).get(cat)
-                if hasattr(self, "_per_category_sampling")
-                else None
-            )
+            cat_cfg = self.sampling_rates.get(cat)
             sample_n = cat_cfg if isinstance(cat_cfg, int) and cat_cfg > 0 else 0
             if sample_n > 0:
                 sampled_keeps += count // sample_n

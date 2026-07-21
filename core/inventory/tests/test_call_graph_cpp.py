@@ -415,7 +415,7 @@ class TestFunctionCalledIntegration:
         """``ns::Foo::bar()`` invoked via implicit-this from
         ``ns::Foo::other()`` — resolver synthesises
         ``ns.Foo.bar`` from the file's namespace + receiver_class."""
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             Verdict, function_called,
         )
 
@@ -596,7 +596,7 @@ class TestCrossFileFullyQualifiedCall:
         """File A defines ``ns::Util::helper()``; file B calls
         ``ns::Util::helper()`` directly. The resolver matches via
         the dotted-chain fast-path, NOT via the import map."""
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             Verdict, function_called,
         )
 
@@ -628,7 +628,7 @@ class TestCrossFileFullyQualifiedCall:
         """Strict equality: target ``ns.Other.helper`` doesn't
         match chain ``ns::Util::helper`` — must return
         NOT_CALLED."""
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             Verdict, function_called,
         )
 
@@ -644,7 +644,7 @@ class TestCrossFileFullyQualifiedCall:
         """Chain ``["Util", "helper"]`` (no namespace prefix) must
         NOT match target ``ns.Util.helper``. Strict equality
         guards against partial-match false positives."""
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             Verdict, function_called,
         )
 
@@ -718,7 +718,7 @@ class TestCallersCalleesIndexParity:
     returned the C++ caller in method_match instead of definitive."""
 
     def test_callers_of_namespace_class_method_definitive(self):
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             callers_of, InternalFunction,
         )
 
@@ -759,7 +759,7 @@ class TestCallersCalleesIndexParity:
     def test_callees_of_namespace_class_method_definitive(self):
         """Symmetric: callees_of(use) lists ns::Util::helper as
         a definitive callee."""
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             callees_of, InternalFunction,
         )
 
@@ -798,7 +798,7 @@ class TestCallersCalleesIndexParity:
         NOT match the seeded ``ns.Util.helper`` qualified name —
         falls through to method_match_overinclusive. Strict
         equality guards against over-promoting partial matches."""
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             callers_of, InternalFunction,
         )
 

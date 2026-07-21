@@ -234,6 +234,7 @@ def test_credible_interval_tightens_with_more_models():
     for sf, bf in zip(
         sorted(small_result.findings, key=lambda f: f.finding_id),
         sorted(big_result.findings, key=lambda f: f.finding_id),
+        strict=True,
     ):
         assert sf.finding_id == bf.finding_id
         small_width = sf.credible_interval[1] - sf.credible_interval[0]

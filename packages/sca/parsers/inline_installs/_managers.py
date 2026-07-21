@@ -38,7 +38,8 @@ class _PkgManager:
     ecosystem: str                  # the SCA ecosystem string
     purl_type: str                  # the purl `type` segment
     purl_namespace: Optional[str]   # the purl `namespace` segment (or None)
-    parse_args: Callable[[str], Iterator[Tuple[str, Optional[str], PinStyle]]]
+    parse_args: Callable[[str], Iterator[Tuple[str, Optional[str], PinStyle,
+                                              Optional[str], Optional[str]]]]
 
 
 _NAME_RE = r"[A-Za-z0-9][A-Za-z0-9._+\-]*"

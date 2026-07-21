@@ -610,7 +610,8 @@ class AutonomousSecurityAgentV2:
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
                  record_witnesses: bool = True,
-                 use_verified_exemplars: bool = True):
+                 use_verified_exemplars: bool = True,
+                 sage_precall_memories: Optional[List[Dict[str, Any]]] = None):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -659,6 +660,13 @@ class AutonomousSecurityAgentV2:
         # prompts are unchanged.
         self.use_verified_exemplars = use_verified_exemplars
         self._verified_outcomes = None  # lazy, collected once per run
+
+        self._sage_precall_text = ""
+        if sage_precall_memories:
+            from core.sage.hooks import format_sage_memories_for_prompt
+            self._sage_precall_text = (
+                format_sage_memories_for_prompt(sage_precall_memories) or ""
+            )
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -709,7 +717,7 @@ class AutonomousSecurityAgentV2:
             if availability.claude_code:
                 print("\n🤖 No external LLM configured — Claude Code will handle analysis")
             else:
-                print("\n⚠️  No LLM available — producing structured findings for manual review")
+                print("\n⚠️  No LLM available — producing structured findings for manual review", file=sys.stderr)
             print()
 
     def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
@@ -851,11 +859,11 @@ class AutonomousSecurityAgentV2:
                     logger.info(f"      Purpose: {san_detail.get('purpose')}")
                     logger.info(f"      Bypassable: {san_detail.get('bypass_possible')}")
                     if san_detail.get('bypass_method'):
-                        logger.info(f"      Bypass: {san_detail.get('bypass_method')[:100]}")
+                        logger.info(f"      Bypass: {(san_detail.get('bypass_method') or '')[:100]}")
 
             if validation.get('attack_payload_concept'):
                 logger.info("\n  Attack Payload Concept:")
-                logger.info(f"    {validation.get('attack_payload_concept')[:200]}")
+                logger.info(f"    {(validation.get('attack_payload_concept') or '')[:200]}")
 
             # Save validation details
             validation_file = self.out_dir / "validation" / f"{vuln.finding_id}_validation.json"
@@ -878,7 +886,8 @@ class AutonomousSecurityAgentV2:
             logger.info(f"  File: {vuln.file_path}:{vuln.start_line}")
             logger.info(f"  Severity: {vuln.level}")
             logger.info(f"  Has dataflow: {'Yes' if vuln.has_dataflow else 'No'}")
-            logger.info(f"  Message: {vuln.message[:100]}..." if len(vuln.message) > 100 else f"  Message: {vuln.message}")
+            msg = vuln.message or ""
+            logger.info(f"  Message: {msg[:100]}..." if len(msg) > 100 else f"  Message: {msg}")
 
         # Read the actual vulnerable code
         if not vuln.read_vulnerable_code():
@@ -931,8 +940,18 @@ class AutonomousSecurityAgentV2:
             tm_block = threat_model_untrusted_block(Path(vuln.repo_path))
             if tm_block:
                 extra_blocks.append(tm_block)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("threat_model_untrusted_block failed: %s", exc)
+
+        if getattr(self, "_sage_precall_text", ""):
+            from core.security.prompt_envelope import UntrustedBlock
+            extra_blocks.append(
+                UntrustedBlock(
+                    content=self._sage_precall_text,
+                    kind="sage-precall-scan-context",
+                    origin="sage:precall",
+                ),
+            )
 
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
@@ -1020,7 +1039,7 @@ class AutonomousSecurityAgentV2:
 
             logger.info(f"\n  Reasoning: {(analysis.get('reasoning') or '')[:150]}...")
             if analysis.get('attack_scenario'):
-                logger.info(f"  Attack Scenario: {analysis.get('attack_scenario')[:150]}...")
+                logger.info(f"  Attack Scenario: {(analysis.get('attack_scenario') or '')[:150]}...")
 
             # Deep dataflow validation for high-confidence findings
             if vuln.has_dataflow and vuln.exploitable:
@@ -1067,12 +1086,12 @@ class AutonomousSecurityAgentV2:
                     if validation:
                         # Update exploitability based on validation
                         if validation.get('false_positive'):
-                            logger.info("⚠️  Validation marked as FALSE POSITIVE:")
+                            logger.info("⚠️  Validation marked as False Positive:")
                             logger.info(f"    Reason: {validation.get('false_positive_reason')}")
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
                         elif not validation.get('is_exploitable'):
-                            logger.info("⚠️  Validation determined NOT EXPLOITABLE:")
+                            logger.info("⚠️  Validation determined Not Exploitable:")
                             logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
                             vuln.exploitable = False
                             # Same null-vs-missing distinction as the
@@ -1084,7 +1103,7 @@ class AutonomousSecurityAgentV2:
                             vuln.exploitability_score = _conf * 0.5
                         else:
                             # Validation confirms exploitability
-                            logger.info("✓ Validation confirms EXPLOITABLE")
+                            logger.info("✓ Validation confirms Exploitable")
                             # Use validation confidence to refine score —
                             # fall back to existing score if missing OR
                             # explicit null (max(float, None) → TypeError).
@@ -1112,7 +1131,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.")
+                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.", file=sys.stderr)
             else:
                 logger.warning("  Using fallback heuristic analysis")
             # Fallback to marking as potentially exploitable
@@ -1339,7 +1358,7 @@ class AutonomousSecurityAgentV2:
                 # Save exploit
                 exploit_file = self.out_dir / "exploits" / f"{vuln.finding_id}_exploit.cpp"
                 exploit_file.parent.mkdir(exist_ok=True, parents=True)
-                exploit_file.write_text(exploit_code)
+                exploit_file.write_text(exploit_code, encoding="utf-8")
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
@@ -1387,7 +1406,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     # File extensions that map to languages the gcc-based validator
@@ -1604,7 +1623,7 @@ class AutonomousSecurityAgentV2:
 
         logger.info("   ✓ Reading full file for context...")
 
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8", errors="replace") as f:
             full_file_content = f.read()
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
@@ -1678,7 +1697,7 @@ class AutonomousSecurityAgentV2:
 *Review and test before applying to production*
 """
 
-            patch_file.write_text(patch_content_formatted)
+            patch_file.write_text(patch_content_formatted, encoding="utf-8")
             vuln.patch_code = patch_content
 
             logger.info(f"   ✓ Patch generated: {len(patch_content)} bytes")
@@ -1688,7 +1707,7 @@ class AutonomousSecurityAgentV2:
         except Exception as e:
             logger.error(f"   ✗ Patch generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     # Match a markdown fenced code block. Captures the optional
@@ -1749,7 +1768,7 @@ class AutonomousSecurityAgentV2:
         converted = convert_validated_to_agent_format(data)
 
         logger.info(f"Loaded {len(converted)} findings from {Path(findings_path).name} "
-                    f"(skipped {len(data.get('findings', [])) - len(converted)} ruled out/unlikely)")
+                    f"(skipped {len(data.get('findings') or []) - len(converted)} ruled out/unlikely)")
         return converted
 
     def _emit_finding_annotation(
@@ -2125,7 +2144,7 @@ class AutonomousSecurityAgentV2:
                 reach_skipped_this = False
                 if checklist:
                     try:
-                        from core.inventory.reach_chokepoint import (
+                        from core.analysis.reach_chokepoint import (
                             check_suppress,
                         )
                         rel = (finding.get("file_path")
@@ -2133,7 +2152,11 @@ class AutonomousSecurityAgentV2:
                         fn = (finding.get("function")
                               or (finding.get("metadata") or {}).get(
                                   "function_name", ""))
-                        line_no = int(finding.get("line") or 0)
+                        line_no = int(
+                            finding.get("start_line")
+                            if finding.get("start_line") is not None
+                            else finding.get("startLine", 0) or 0
+                        )
                         decision = check_suppress(
                             checklist=checklist,
                             file_path=rel, function_name=fn,
@@ -2159,7 +2182,7 @@ class AutonomousSecurityAgentV2:
                             # walking each per-finding annotation.
                             # Best-effort; never blocks.
                             try:
-                                from core.inventory.reach_chokepoint \
+                                from core.analysis.reach_chokepoint \
                                     import record_suppression
                                 record_suppression(
                                     self.out_dir,
@@ -2167,7 +2190,12 @@ class AutonomousSecurityAgentV2:
                                     verdict=verdict, reason=reason,
                                 )
                             except Exception:  # noqa: BLE001
-                                pass
+                                logger.debug(
+                                    "record_suppression failed for %s",
+                                    finding.get("finding_id")
+                                    or finding.get("id"),
+                                    exc_info=True,
+                                )
                     except Exception as e:  # noqa: BLE001
                         logger.debug(
                             "reachability pre-flight failed on %s: %s",
@@ -2465,6 +2493,11 @@ def main() -> None:
              "no prior corpus; the opt-out exists for cost control and "
              "byte-for-byte run comparison.",
     )
+    ap.add_argument(
+        "--sage-precall",
+        metavar="PATH",
+        help='JSON file with {"memories": [...]} from SAGE pre-scan recall',
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -2534,16 +2567,26 @@ def main() -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
+    sage_precall_memories: Optional[List[Dict[str, Any]]] = None
+    if getattr(args, "sage_precall", None):
+        precall_path = Path(args.sage_precall)
+        if precall_path.is_file():
+            raw = load_json(precall_path)
+            if isinstance(raw, dict):
+                sage_precall_memories = raw.get("memories") or []
+
     # When role flags are present, force prep-only then hand off to orchestrator
     prep_only = args.prep_only or _has_role_flags
     agent = AutonomousSecurityAgentV2(
-        repo_path, out_dir,
+        repo_path,
+        out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
         verify_exploits=not args.no_verify_exploits,
         judge_intent=not args.no_judge_intent,
         record_witnesses=not args.no_record_witnesses,
         use_verified_exemplars=not args.no_verified_exemplars,
+        sage_precall_memories=sage_precall_memories,
     )
 
     # Load checklist for metadata lookup
@@ -2597,7 +2640,7 @@ def main() -> None:
                 )
                 if result:
                     return
-        print("\n  Orchestration skipped — check model/API key configuration")
+        print("\n  ✗ Orchestration skipped — check model/API key configuration", file=sys.stderr)
         return
 
     if report.get('mode') != 'prep_only':

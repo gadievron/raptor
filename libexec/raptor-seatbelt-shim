@@ -189,7 +189,8 @@ def main() -> int:
         # already consumed (death fd closed above; status fd dup'd onto fd 3).
         # Popping here means sandbox-exec -> /bin/sh -> target inherit a clean
         # env with no _RAPTOR_* names.
-        for _m in ("_RAPTOR_TRUSTED", "_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD"):
+        for _m in ("_RAPTOR_TRUSTED", "_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
+                   "CLAUDECODE"):
             os.environ.pop(_m, None)
         try:
             os.execvp(argv[0], argv)

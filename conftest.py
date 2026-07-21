@@ -32,7 +32,7 @@ os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 # sidecar (the cross-project verdict-frequency log is supposed to
 # reflect real operator runs, not the test corpus). Tests that
 # exercise the log directly opt back in via ``RAPTOR_REACH_VERDICT_LOG``
-# pointing at a tmp file (see core/inventory/tests/test_reach_verdict_log.py).
+# pointing at a tmp file (see core/analysis/tests/test_reach_verdict_log.py).
 os.environ.setdefault("RAPTOR_REACH_VERDICT_LOG_DISABLED", "1")
 
 # Force RAPTOR_DIR to point at THIS worktree, not whatever the
@@ -57,6 +57,19 @@ if _existing and _existing != _conftest_dir:
     )
 os.environ["RAPTOR_DIR"] = _conftest_dir
 
+# Put the repo root on sys.path so ``from core.X import Y`` and
+# ``from packages.Y.Z import W`` resolve during pytest collection.
+# pytest.ini's ``pythonpath`` only lists a handful of package-standalone
+# roots; ``--import-mode=importlib`` deliberately declines to auto-insert
+# rootdir. Without this, parent-package ``__init__.py`` files that import
+# from ``core.*`` fail collection whenever an xdist worker's batch starts
+# with a test that hasn't already transitively imported something from
+# ``core.*``. Insert at position 0 to shadow any environment-inherited
+# ``core``/``packages`` on PYTHONPATH — the worktree conftest.py lives in
+# is the source of truth per the RAPTOR_DIR block above.
+if _conftest_dir not in sys.path:
+    sys.path.insert(0, _conftest_dir)
+
 
 # ---------------------------------------------------------------------------
 # Default-tier slow-test guard
@@ -78,6 +91,39 @@ os.environ["RAPTOR_DIR"] = _conftest_dir
 #
 # A genuinely-heavy test is not a bug — mark it @pytest.mark.slow (moves
 # it to the nightly tier, out of this guard's scope).
+
+# ---------------------------------------------------------------------------
+# Randomised test order
+# ---------------------------------------------------------------------------
+#
+# When RAPTOR_RANDOMISE_TESTS is set (to any value, or a numeric seed),
+# shuffle the collected test items so order-dependent failures surface
+# early.  No external plugin required.
+#
+# Deterministic: same seed → same order.  The seed is printed in the
+# terminal header so a failure can be reproduced.
+
+_RANDOMISE_SEED_RAW = os.environ.get("RAPTOR_RANDOMISE_TESTS")
+
+
+def pytest_collection_modifyitems(items):
+    if _RANDOMISE_SEED_RAW is None:
+        return
+    import random as _random
+    try:
+        seed = int(_RANDOMISE_SEED_RAW)
+    except (ValueError, TypeError):
+        seed = int.from_bytes(
+            _RANDOMISE_SEED_RAW.encode()[:8], "little"
+        ) % 2**31
+    _random.Random(seed).shuffle(items)
+
+
+def pytest_report_header():
+    if _RANDOMISE_SEED_RAW is None:
+        return []
+    return [f"raptor: randomised test order (seed={_RANDOMISE_SEED_RAW})"]
+
 
 _MAX_TEST_SECONDS = os.environ.get("RAPTOR_MAX_TEST_SECONDS")
 _slow_test_threshold = float(_MAX_TEST_SECONDS) if _MAX_TEST_SECONDS else None

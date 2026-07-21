@@ -341,10 +341,10 @@ def _render_table(
         for i in range(len(headers))
     ]
     lines = []
-    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths)))
+    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)))
     lines.append("-+-".join("-" * w for w in widths))
     for r in rows:
-        lines.append(" | ".join(str(c).ljust(w) for c, w in zip(r, widths)))
+        lines.append(" | ".join(str(c).ljust(w) for c, w in zip(r, widths, strict=True)))
     return "\n".join(lines)
 
 
@@ -398,10 +398,10 @@ def _render_compare(
         for i in range(len(headers))
     ]
     lines = []
-    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths)))
+    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)))
     lines.append("-+-".join("-" * w for w in widths))
     for r in rows:
-        lines.append(" | ".join(str(c).ljust(w) for c, w in zip(r, widths)))
+        lines.append(" | ".join(str(c).ljust(w) for c, w in zip(r, widths, strict=True)))
     return "\n".join(lines)
 
 
@@ -545,7 +545,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
     # Cheapest short-circuit (lowest $/call from each cell's _usage row).
     cheapest: Optional[tuple] = None
-    sc_aliases = {m for (_, m) in sc_models_by_dc.keys()}
+    sc_aliases = {m for (_, m) in sc_models_by_dc}
     for m in sc_aliases:
         u = usage_cell_by_model.get(m)
         if u and u.calls > 0:
@@ -938,13 +938,13 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
     try:
         analysis = _json.loads(Path(args.analysis).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        print(f"error: cannot read analysis report {args.analysis!r}: {e}",
+        print(f"✗ Cannot read analysis report {args.analysis!r}: {e}",
               file=sys.stderr)
         return 2
     try:
         validation = _json.loads(Path(args.validation).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        print(f"error: cannot read validation report {args.validation!r}: {e}",
+        print(f"✗ Cannot read validation report {args.validation!r}: {e}",
               file=sys.stderr)
         return 2
 

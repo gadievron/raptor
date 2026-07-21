@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal
 
-from ..binary_oracle import Classification
+from core.analysis.binary_oracle import Classification
 
-FIXTURE_DIR = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-               / "binary_oracle")
+FIXTURE_DIR = (Path(__file__).resolve().parents[2] / "analysis" / "tests"
+               / "fixtures" / "binary_oracle")
 
 
 @dataclass
@@ -37,7 +37,7 @@ class _SyntheticDriver:
     def prepare(self, work_dir: Path) -> Dict[str, Any]:
         subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True)
         binary = FIXTURE_DIR / "demo"
-        from ..binary_oracle import classify_binary_evidence
+        from core.analysis.binary_oracle import classify_binary_evidence
         probe = classify_binary_evidence(["folded_a", "folded_b"], binary)
         fold_w = probe.get("folded_a")
         folded_verdict: Classification = (

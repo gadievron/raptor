@@ -11,10 +11,14 @@ seccomp installs LAST — inheriting NO_NEW_PRIVS from Landlock's
 restrict_self.
 """
 
+import ctypes
+import ctypes.util
 import json
 import logging
 import os
 import resource
+import signal
+import sys
 from pathlib import Path
 
 from . import state
@@ -126,7 +130,7 @@ def _load_user_limits() -> dict:
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
             # against a malformed config file.
-            data = json.loads(_CONFIG_PATH.read_text())
+            data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 # Accept non-negative ints; 0 is a valid "skip this rlimit"
                 # sentinel (see _set_limits guards: `if mem > 0:` etc.).
@@ -186,10 +190,7 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
     """
     landlock_fn = None
     if (writable_paths or allowed_tcp_ports) and check_landlock_available():
-        # Ensure at least /tmp is writable — processes need temp files
-        effective_paths = list(writable_paths) if writable_paths else ["/tmp"]
-        if "/tmp" not in effective_paths:
-            effective_paths.append("/tmp")
+        effective_paths = list(writable_paths) if writable_paths else []
         landlock_fn = _make_landlock_preexec(effective_paths, allowed_tcp_ports,
                                              readable_paths=readable_paths)
 
@@ -198,7 +199,10 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
         if seccomp_profile else None
     )
 
+    pdeathsig_fn = set_pdeathsig()
+
     def _set_limits():
+        pdeathsig_fn()
         # Fallbacks below must stay in sync with _DEFAULT_LIMITS. Callers
         # through context.sandbox() always pass the merged effective_limits
         # (DEFAULT + user config + caller overrides) so the fallbacks only
@@ -289,3 +293,48 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
             seccomp_fn()
 
     return _set_limits
+
+
+# ── PR_SET_PDEATHSIG ────────────────────────────────────────────────
+#
+# For non-sandboxed subprocess calls (git, readelf, codeql, gdb, etc.)
+# the death-pipe mechanism in context.py doesn't apply — there is no
+# pid-namespace shim watching for orchestrator exit.  If the parent is
+# killed (SIGKILL, OOM, crash) while a child runs, the child orphans
+# and lives forever.
+#
+# PR_SET_PDEATHSIG tells the kernel to deliver a signal to this process
+# when its parent thread exits.  Unlike the death-pipe, it is cleared
+# by setuid exec and by unshare(CLONE_NEWUSER) — which is why the
+# sandboxed-spawn path uses the pipe instead.  For plain fork+exec
+# without user-ns, PDEATHSIG is reliable.
+
+_PR_SET_PDEATHSIG = 1
+_libc = None
+
+
+def _get_libc():
+    global _libc
+    if _libc is None:
+        name = ctypes.util.find_library("c")
+        if name:
+            _libc = ctypes.CDLL(name, use_errno=True)
+    return _libc
+
+
+def set_pdeathsig(sig=signal.SIGKILL):
+    """Return a preexec_fn that sets PR_SET_PDEATHSIG on the child.
+
+    Linux-only; returns a no-op on other platforms.  Callers pass this
+    to ``subprocess.run(..., preexec_fn=set_pdeathsig())`` so the child
+    is killed when the parent dies — no more orphaned git/readelf/gdb.
+    """
+    if sys.platform != "linux":
+        return lambda: None
+
+    def _apply():
+        libc = _get_libc()
+        if libc is not None:
+            libc.prctl(_PR_SET_PDEATHSIG, sig)
+
+    return _apply

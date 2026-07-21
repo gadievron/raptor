@@ -62,7 +62,7 @@ class FindingAdapter(BaseVerdictAdapter):
             "is_exploitable": result.get("is_exploitable"),
             "exploitability_score": result.get("exploitability_score"),
             "ruling": result.get("ruling"),
-            "reasoning": result.get("reasoning", ""),
+            "reasoning": result.get("reasoning") or "",
         }
 
     def select_primary_with_error_fallback(
@@ -144,9 +144,8 @@ class FindingAdapter(BaseVerdictAdapter):
             # anything else→1 (mirrors legacy's truthy check via
             # normalize_verdict).
             verdict_rank = 0 if self.normalize_verdict(r) == "positive" else 1
-            # exploitability_score: legacy uses ``r.get("...", 0) or 0``
-            # so None or 0 both fall back to 0.
-            score = r.get("exploitability_score", 0) or 0
+            score_raw = r.get("exploitability_score", 0) or 0
+            score = score_raw if isinstance(score_raw, (int, float)) and not isinstance(score_raw, bool) else 0.0
             return (below_floor, verdict_rank, -quality, -score)
 
         return dict(sorted(model_results, key=sort_key)[0])

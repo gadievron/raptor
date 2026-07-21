@@ -323,10 +323,14 @@ def _emit_baseline_delta(
                        baseline_path)
         return
 
-    baseline_rows = _json.loads(
-        baseline_path.read_text(encoding="utf-8"))
-    current_rows = _json.loads(
-        current_findings.read_text(encoding="utf-8"))
+    try:
+        baseline_rows = _json.loads(
+            baseline_path.read_text(encoding="utf-8"))
+        current_rows = _json.loads(
+            current_findings.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        logger.warning("raptor-sca: cannot read baseline/findings: %s", exc)
+        return
     if not isinstance(baseline_rows, list) or not isinstance(current_rows, list):
         logger.warning("raptor-sca: baseline/current findings.json not a list; "
                        "skipping delta")

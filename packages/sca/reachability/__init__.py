@@ -188,7 +188,7 @@ def scan(
     eco_scans.clear()
 
     # Function-level reachability tier. Inventory-based resolver
-    # from ``core.inventory.reachability`` consumes per-language
+    # from ``core.analysis.reachability`` consumes per-language
     # call_graph data emitted by the inventory builder (Python AST
     # + JS / TS tree-sitter). Gated per-ecosystem on the presence
     # of advisory-shipped affected-function data — when no dep in
@@ -317,7 +317,8 @@ def scan(
     return out
 
 
-_inventory_build_failed: bool = False
+_inventory_build_failures: int = 0
+_INVENTORY_MAX_RETRIES: int = 3
 
 
 def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
@@ -340,8 +341,8 @@ def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
     inventory subdir; ``checklist.json`` regenerates from scratch
     on a missing file).
     """
-    global _inventory_build_failed
-    if _inventory_build_failed:
+    global _inventory_build_failures
+    if _inventory_build_failures >= _INVENTORY_MAX_RETRIES:
         return None
     if current is not None:
         return current
@@ -349,14 +350,17 @@ def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
         from core.inventory.builder import build_inventory
         cache_dir = _inventory_cache_dir(target)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        return build_inventory(str(target), str(cache_dir))
+        result = build_inventory(str(target), str(cache_dir))
+        _inventory_build_failures = 0
+        return result
     except Exception:                                # noqa: BLE001
+        _inventory_build_failures += 1
         logger.warning(
-            "sca.reachability: inventory build failed; "
+            "sca.reachability: inventory build failed (%d/%d); "
             "function-level tiers will skip",
+            _inventory_build_failures, _INVENTORY_MAX_RETRIES,
             exc_info=True,
         )
-        _inventory_build_failed = True
         return None
 
 

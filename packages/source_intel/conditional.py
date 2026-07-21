@@ -63,7 +63,7 @@ def _index_file(path_str: str) -> Tuple[ConditionalBlock, ...]:
     """
     path = Path(path_str)
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ()
 

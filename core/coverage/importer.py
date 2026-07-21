@@ -134,7 +134,7 @@ def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
         path = fe.get("path")
         if not path:
             continue
-        for fn in fe.get("items", fe.get("functions", [])):
+        for fn in fe.get("items", fe.get("functions", [])) or []:
             lo = fn.get("line_start")
             if lo is None:
                 continue
@@ -296,7 +296,7 @@ def import_annotations(
         path = fe.get("path")
         if not path:
             continue
-        for it in fe.get("items", fe.get("functions", [])):
+        for it in fe.get("items", fe.get("functions", [])) or []:
             name = it.get("name")
             if name:
                 lo = it.get("line_start")
@@ -384,7 +384,7 @@ def _function_ranges(checklist: Dict[str, Any]) -> Dict[tuple, tuple]:
         path = fe.get("path")
         if not path:
             continue
-        for it in fe.get("items", fe.get("functions", [])):
+        for it in fe.get("items", fe.get("functions", [])) or []:
             name = it.get("name")
             lo = it.get("line_start")
             if name and lo is not None:

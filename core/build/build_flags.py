@@ -178,8 +178,15 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     have different flags (e.g. some compiled with ``-DCONFIG_KASAN``),
     and we want the most-hardened observed setting per flag.
     """
-    raw = path.read_text(errors="replace")
-    entries = json.loads(raw)
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("malformed compile_commands.json at %s", path)
+        return BuildFlagsContext(
+            source="compile_commands.json",
+            extraction_confidence="absent",
+        )
     if not isinstance(entries, list) or not entries:
         return BuildFlagsContext(
             source="compile_commands.json",
@@ -236,7 +243,7 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
     config bits since the kernel build doesn't surface raw compiler
     flags via this file.
     """
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
     configs: Dict[str, bool] = {}
 
     for m in re.finditer(
@@ -310,7 +317,7 @@ def _from_makefile(path: Path) -> BuildFlagsContext:
     or follow ``include`` directives — confidence is ``best_effort``
     accordingly.
     """
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
     pieces = [m.group(1) for m in _CFLAGS_LINE_RE.finditer(text)]
     if not pieces:
         return BuildFlagsContext(

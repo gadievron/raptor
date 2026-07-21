@@ -2,7 +2,7 @@
 
 Sits on top of the module-level Python scan (``packages.sca
 .reachability.python``) and the cross-language resolver
-(``core.inventory.reachability``). For PyPI deps that already came
+(``core.analysis.reachability``). For PyPI deps that already came
 back ``imported`` from the module-level pass AND have at least one
 OSV advisory carrying ``affected_functions`` data, this module asks
 the function-level resolver: "is the affected function actually
@@ -179,7 +179,7 @@ def refine_pypi_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )

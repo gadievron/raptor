@@ -100,7 +100,7 @@ def main() -> int:
 
         # --- 1. Build target binary with ASAN ---
         src = td_path / "target.c"
-        src.write_text(_TARGET_SOURCE)
+        src.write_text(_TARGET_SOURCE, encoding="utf-8")
         binary = td_path / "target"
         subprocess.run(
             ["gcc", "-O0", "-g", "-fno-omit-frame-pointer",

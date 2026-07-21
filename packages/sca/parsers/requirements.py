@@ -187,7 +187,7 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
             continue
 
         editable = False
-        if line.startswith("-e ") or line.startswith("--editable "):
+        if line.startswith(("-e ", "--editable ")):
             editable = True
             line = line.split(maxsplit=1)[1].strip()
 
@@ -282,9 +282,10 @@ def _include_path(line: str, parent_dir: Path) -> Optional[Path]:
     # Drop trailing inline options if any (rare; pip accepts e.g. --hash
     # only for top-level requirements, not includes — we still split on
     # whitespace to be safe).
-    candidate = candidate.split()[0]
-    if not candidate:
+    parts_ws = candidate.split()
+    if not parts_ws:
         return None
+    candidate = parts_ws[0]
     p = Path(candidate)
     if not p.is_absolute():
         p = parent_dir / p

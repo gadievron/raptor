@@ -66,7 +66,7 @@ def parse_manifest(path: Path) -> List[Dependency]:
     excluded.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gomod: cannot read %s: %s", path, e)
         return []
@@ -109,7 +109,7 @@ def parse_lockfile(path: Path) -> List[Dependency]:
     we dedupe.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("sca.parsers.gomod: cannot read %s: %s", path, e)
         return []

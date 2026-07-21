@@ -163,7 +163,7 @@ def _advisory_priority(a: Advisory) -> int:
         return 0
     if p.startswith("CVE-"):
         return 1
-    if p.startswith("PYSEC-") or p.startswith("OSV-"):
+    if p.startswith(("PYSEC-", "OSV-")):
         return 2
     return 3
 
@@ -302,9 +302,9 @@ def _smallest_applicable_fix(
     """
     if not fixed_versions:
         return None
-    if installed_version is None or len(fixed_versions) == 1:
-        # No installed version to compare against, or only one fix —
-        # nothing to filter; preserve OSV order on parse errors.
+    if installed_version is None:
+        # No installed version to compare against — nothing to filter;
+        # preserve OSV order on parse errors.
         try:
             return min(fixed_versions, key=_VersionKey(ecosystem))
         except VersionError:

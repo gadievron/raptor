@@ -52,6 +52,7 @@ class AFLRunner:
         deterministic: bool = False,
         custom_mutator: Optional[Path] = None,
         seed_profile: str = "default",
+        extra_afl_flags: Optional[List[str]] = None,
     ):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
@@ -93,6 +94,7 @@ class AFLRunner:
         self.check_sanitizers = check_sanitizers
         self.recompile_guide = recompile_guide
         self.use_showmap = use_showmap
+        self.extra_afl_flags = list(extra_afl_flags or [])
 
         # AFL++ advanced features
         self.cmplog_binary = Path(cmplog_binary).resolve() if cmplog_binary else None
@@ -148,7 +150,7 @@ class AFLRunner:
             logger.warning("AFL validation timed out - AFL may be slow to start")
         except Exception as e:
             logger.warning(f"AFL validation failed: {e}")
-            raise RuntimeError(f"AFL++ validation failed: {e}")
+            raise RuntimeError(f"AFL++ validation failed: {e}") from e
 
     def _create_default_corpus(self) -> Path:
         """Create minimal default corpus if none provided.
@@ -241,7 +243,7 @@ class AFLRunner:
                 
                 # If afl-fuzz --help fails with shmget error, the system needs configuration
                 if "shmget" in result.stderr or "No space left on device" in result.stderr:
-                    logger.error("❌ AFL shared memory configuration issue detected!")
+                    logger.error("✗ AFL shared memory configuration issue detected!")
                     logger.error("   On macOS, AFL requires higher shared memory limits.")
                     logger.error("   Run the following commands:")
                     logger.error("   1. afl-system-config (as root/sudo)")
@@ -253,7 +255,7 @@ class AFLRunner:
                 logger.warning("AFL --help command timed out")
             except FileNotFoundError:
                 logger.error("afl-fuzz not found in PATH")
-                raise RuntimeError("AFL++ not installed")
+                raise RuntimeError("AFL++ not installed") from None
             except Exception as e:
                 logger.warning(f"AFL compatibility check failed: {e}")
 
@@ -448,41 +450,27 @@ class AFLRunner:
             stdout_path = log_dir / f"{instance_name}.stdout.log"
             stderr_path = log_dir / f"{instance_name}.stderr.log"
             stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
-            stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
-            (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n")
+            try:
+                stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
+            except BaseException:
+                stdout_fp.close()
+                raise
+            (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
 
-            # Intentionally bare Popen — AFL fuzz daemon is long-running and
-            # needs streaming output. Cannot use sandbox_run (blocks until exit).
-            #
-            # `stdout=DEVNULL` instead of `PIPE`. Pre-fix both
-            # streams went to PIPE buffers without ANY drainer
-            # thread consuming them while AFL ran. AFL's
-            # status-screen writes to stdout periodically; after
-            # roughly the OS-default 64KB pipe buffer filled, the
-            # next write blocked AFL waiting for a reader — the
-            # whole fuzzing daemon stalled silently with no
-            # error visible to the operator (process showed as
-            # alive but execs/sec dropped to 0). The stall could
-            # last hours before the operator noticed in the
-            # status dashboard.
-            #
-            # stdout=DEVNULL discards the (verbose, redundant
-            # with our own status capture) AFL output without
-            # buffer-fill risk. stderr stays PIPE because:
-            #  (1) it's much lower volume — AFL only writes to
-            #      stderr on startup errors and shutdown,
-            #  (2) the post-exit `proc.communicate(timeout=1)`
-            #      below collects it for diagnostic logging
-            #      (the shmget / SHM-config error messages
-            #      operators rely on for setup troubleshooting).
-            # 64KB stderr pre-exit is plenty for either case.
-            proc = subprocess.Popen(
-                cmd,
-                stdout=stdout_fp,
-                stderr=stderr_fp,
-                text=True,
-                env=afl_env,
-            )
+            try:
+                from core.sandbox.preexec import set_pdeathsig
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=stdout_fp,
+                    stderr=stderr_fp,
+                    text=True,
+                    env=afl_env,
+                    preexec_fn=set_pdeathsig(),
+                )
+            except BaseException:
+                stdout_fp.close()
+                stderr_fp.close()
+                raise
             processes.append({
                 "name": instance_name,
                 "proc": proc,
@@ -835,6 +823,10 @@ class AFLRunner:
         if self.dict_path and self.dict_path.exists():
             cmd.extend(["-x", str(self.dict_path)])
 
+        # Optional SAGE-derived or operator-supplied AFL++ flags (before ``--``).
+        if self.extra_afl_flags:
+            cmd.extend(self.extra_afl_flags)
+
         # Target binary
         cmd.append("--")
         cmd.append(str(self.binary))
@@ -849,27 +841,15 @@ class AFLRunner:
     def get_stats(self) -> dict:
         """Get fuzzing statistics from AFL."""
         stats_file = self.output_dir / "main" / "fuzzer_stats"
-
-        if not stats_file.exists():
-            return {}
-
         stats = {}
-        # Explicit `encoding="utf-8"` + `errors="replace"`. Pre-fix
-        # bare `open(stats_file)` used the host locale encoding —
-        # AFL writes its `fuzzer_stats` file in UTF-8 (the C side
-        # writes ASCII keys + UTF-8 stringified values), so a
-        # latin-1 / cp1252 default could mojibake non-ASCII path
-        # components in `target_mode`, `command_line`, etc., and
-        # raise UnicodeDecodeError on operator paths with i18n
-        # characters. `errors="replace"` keeps the parse going even
-        # if a byte sequence somehow doesn't decode (preferred over
-        # crashing the whole stats read for a single bad value).
-        with open(stats_file, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if ":" in line:
-                    key, value = line.strip().split(":", 1)
-                    stats[key.strip()] = value.strip()
-
+        try:
+            with open(stats_file, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if ":" in line:
+                        key, value = line.strip().split(":", 1)
+                        stats[key.strip()] = value.strip()
+        except FileNotFoundError:
+            pass
         return stats
 
     def run_showmap(self) -> dict:

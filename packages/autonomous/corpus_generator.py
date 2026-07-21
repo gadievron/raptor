@@ -172,7 +172,7 @@ class CorpusGenerator:
 
         for path in files:
             try:
-                text = path.read_text(errors="replace")[:65536]
+                text = path.read_text(encoding="utf-8", errors="replace")[:65536]
             except OSError:
                 continue
 
@@ -203,7 +203,7 @@ class CorpusGenerator:
 
         # For each seed, create versions with each detected command
         for seed in seeds:
-            for cmd in self.detected_commands.keys():
+            for cmd in self.detected_commands:
                 # Format: COMMAND:DATA
                 wrapped = f"{cmd}:".encode() + seed
                 wrapped_seeds.append(wrapped)

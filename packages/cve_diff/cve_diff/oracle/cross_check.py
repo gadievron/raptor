@@ -152,7 +152,12 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"cross-check: cannot read {summary_path}: {exc}",
+              file=sys.stderr)
+        sys.exit(1)
     results = summary.get("results") or []
     if args.limit > 0:
         results = results[: args.limit]

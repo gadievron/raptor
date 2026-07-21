@@ -94,7 +94,7 @@ def classify(
         # form, not raw user input.
         payload = fetch(slug)
         if payload:
-            repo_langs = frozenset(str(k).lower() for k in payload.keys())
+            repo_langs = frozenset(str(k).lower() for k in payload)
             for path in files:
                 ext = _ext(path)
                 lang = _EXT_TO_LANGUAGE.get(ext)

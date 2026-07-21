@@ -116,8 +116,10 @@ def parse_vector(vector: str) -> dict:
     parts = vector.split("/")[1:]  # Skip "CVSS:3.1" prefix
     metrics = {}
     for part in parts:
-        key, value = part.split(":")
-        metrics[key] = value
+        kv = part.split(":", 1)
+        if len(kv) != 2:
+            raise ValueError(f"Invalid CVSS metric component: {part!r}")
+        metrics[kv[0]] = kv[1]
     return metrics
 
 

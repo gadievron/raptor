@@ -12,7 +12,7 @@ through a sanitizer but not *value flow*, so it would falsely
 suppress cases where the sanitizer cleans the wrong symbol
 (`safe = escape(other); render(user)`). That hole is closed.
 
-The value-bound gate (`core/inventory/sanitizer_cut.py::evaluate_finding`)
+The value-bound gate (`core/analysis/sanitizer_cut.py::evaluate_finding`)
 now proves the sanitizer's cleaned value actually reaches the sink,
 across:
 

@@ -75,6 +75,8 @@ def evaluate_bump_vulns(
     # ``query_batch`` returns ``OsvResult`` per dep, in input
     # order. We always pass [current, target] so we know which is
     # which.
+    if len(results) < 2:
+        return []
     current_result, target_result = results[0], results[1]
     new_advisories = _advisory_delta(
         target_advisories=target_result.advisories,

@@ -60,7 +60,7 @@ def _read_validated(directory):
     vfile = Path(directory) / ".validated"
     result = {}
     if vfile.exists():
-        for line in vfile.read_text().splitlines():
+        for line in vfile.read_text(encoding="utf-8").splitlines():
             if ":" in line:
                 name, h = line.split(":", 1)
                 result[name.strip()] = h.strip()
@@ -73,7 +73,7 @@ def _write_validated(directory, filename, filehash):
     existing = _read_validated(directory)
     existing[filename] = filehash
     lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
-    vfile.write_text("\n".join(lines) + "\n")
+    vfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _validate_stage_file(data, filename):
@@ -158,8 +158,8 @@ def is_already_validated(filepath):
 
 def main():
     if len(sys.argv) < 3 or sys.argv[1] not in VALIDATORS:
-        print(f"Usage: {sys.argv[0]} <type> <file>")
-        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}")
+        print(f"Usage: {sys.argv[0]} <type> <file>", file=sys.stderr)
+        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}", file=sys.stderr)
         sys.exit(2)
 
     schema_type = sys.argv[1]
@@ -168,16 +168,16 @@ def main():
     # Auto-detect stage files regardless of what type was requested
     if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
         if schema_type != "stage":
-            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'")
+            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'", file=sys.stderr)
             schema_type = "stage"
 
     if not filepath.exists():
-        print(f"ERROR: file not found: {filepath}")
+        print(f"✗ file not found: {filepath}", file=sys.stderr)
         sys.exit(2)
 
     data = load_json(filepath)
     if data is None:
-        print(f"ERROR: cannot parse JSON: {filepath}")
+        print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
         sys.exit(2)
 
     # Stage file validation (different format from findings.json)
@@ -187,14 +187,14 @@ def main():
             _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
             print(f"OK: {filepath.name}")
         else:
-            print(f"ERRORS in {filepath.name}:")
+            print(f"✗ Errors in {filepath.name}:", file=sys.stderr)
             for e in errors:
-                print(f"  {e}")
+                print(f"  {e}", file=sys.stderr)
             sys.exit(1)
         return
 
     # Normalise vuln_types before validating findings
-    if schema_type == "findings":
+    if schema_type == "findings" and isinstance(data, dict):
         from core.schema_constants import normalise_vuln_type
         changed = False
         for f in data.get("findings", []):
@@ -214,9 +214,9 @@ def main():
         _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
         print(f"OK: {filepath.name}")
     else:
-        print(f"ERRORS in {filepath.name}:")
+        print(f"ERRORS in {filepath.name}:", file=sys.stderr)
         for e in errors:
-            print(f"  {e}")
+            print(f"  {e}", file=sys.stderr)
         sys.exit(1)
 
 

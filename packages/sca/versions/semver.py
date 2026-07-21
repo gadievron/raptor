@@ -62,7 +62,7 @@ def compare(a: str, b: str) -> int:
     pa = parse(a)
     pb = parse(b)
     # Compare major.minor.patch numerically.
-    for x, y in zip(pa[:3], pb[:3]):
+    for x, y in zip(pa[:3], pb[:3], strict=True):
         if x != y:
             return -1 if x < y else 1
     # Pre-release: a version with pre is < the same version without.
@@ -74,7 +74,7 @@ def compare(a: str, b: str) -> int:
     if b_pre is None:
         return -1
     # Both pre — compare identifier by identifier.
-    for ai, bi in zip(a_pre, b_pre):
+    for ai, bi in zip(a_pre, b_pre, strict=False):
         c = _compare_identifier(ai, bi)
         if c != 0:
             return c
@@ -235,7 +235,12 @@ def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
         elif op == ">":
             c = _loose_components(operand)
             if c:
-                lowers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
+                if c[3] == 1:
+                    lowers.append(f"{c[0] + 1}.0.0")
+                elif c[3] == 2:
+                    lowers.append(f"{c[0]}.{c[1] + 1}.0")
+                else:
+                    lowers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
         elif op == "<":
             c = _loose_components(operand)
             if c:

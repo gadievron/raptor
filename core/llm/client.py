@@ -210,13 +210,13 @@ def _is_quota_error(error: Exception) -> bool:
             pass
 
     error_str = str(error).lower()
-    return any([
+    return any((
         "429" in error_str,
         "quota exceeded" in error_str,
         "quota" in error_str and "exceeded" in error_str,
         "rate limit" in error_str,
         "generate_content_free_tier" in error_str,  # Gemini-specific
-    ])
+    ))
 
 
 def _is_daily_quota_error(error: Exception) -> bool:
@@ -348,6 +348,7 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     from dataclasses import replace
     from core.llm.config import (
         ModelConfig,
+        MODEL_LIMITS,
         _PROVIDER_BUILDERS,
         _get_configured_models,
     )
@@ -371,6 +372,13 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     #      (the previous version silently skipped this path and produced
     #      auth failures when the operator's credentials lived only in
     #      the config file)
+    from core.llm.model_data import _strip_dated_alias
+    limits = MODEL_LIMITS.get(model_name) or MODEL_LIMITS.get(
+        _strip_dated_alias(model_name), {},
+    )
+    max_tokens = limits.get("max_output", 4096)
+    max_context = limits.get("max_context", 32000)
+
     builder = _PROVIDER_BUILDERS.get(provider)
     base = builder() if builder is not None else None
     if base is None:
@@ -381,12 +389,18 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
                     model_name=entry.get("model", model_name),
                     api_key=entry["api_key"],
                     api_base=entry.get("api_base"),
+                    max_tokens=max_tokens,
+                    max_context=max_context,
                 )
                 break
     if base is None:
-        primary = ModelConfig(provider=provider, model_name=model_name, role="code")
+        primary = ModelConfig(
+            provider=provider, model_name=model_name, role="code",
+            max_tokens=max_tokens, max_context=max_context,
+        )
     else:
-        primary = replace(base, model_name=model_name, role="code")
+        primary = replace(base, model_name=model_name, role="code",
+                          max_tokens=max(base.max_tokens, max_tokens))
     return LLMConfig(primary_model=primary, fallback_models=[])
 
 
@@ -718,8 +732,8 @@ class LLMClient:
             # so mocked/cached clients that never call a provider never register
             # an atexit handler or write to the scorecard.
             self._arm_usage_flush()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_record_fired_model failed: %s", exc)
 
     def _record_usage(
         self, alias: str, *, cost: float = 0.0, tokens: int = 0,
@@ -748,8 +762,8 @@ class LLMClient:
                 cur["latency_ms_sum"] += ms
                 if ms > cur["latency_ms_max"]:
                     cur["latency_ms_max"] = ms
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_record_usage failed: %s", exc)
 
     def _record_schema_validity(self, alias: str, *, success: bool) -> None:
         """Accumulate per-alias schema-validation outcomes for the run-end
@@ -770,8 +784,8 @@ class LLMClient:
                     cur["pass"] += 1
                 else:
                     cur["fail"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_record_schema_validity failed: %s", exc)
 
     def _arm_usage_flush(self) -> None:
         """Register the run-end usage flush exactly once, the first time a real
@@ -785,8 +799,8 @@ class LLMClient:
                 return
             import atexit
             atexit.register(self.flush_usage_to_scorecard)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_arm_usage_flush failed: %s", exc)
 
     def _snapshot_and_clear_fired(self) -> tuple:
         """Atomically copy + clear ``_fired_models`` / ``_fired_usage`` /
@@ -841,7 +855,7 @@ class LLMClient:
                 if not alias:
                     continue
                 cur = agg.setdefault(alias, {"calls": 0, "resolved": None})
-                cur["calls"] += int(f.get("calls", 0)) or 1
+                cur["calls"] += int(f.get("calls") or 0) or 1
                 if f.get("resolved"):
                     cur["resolved"] = f["resolved"]
             uses = []
@@ -851,8 +865,8 @@ class LLMClient:
             for a, v in agg.items():
                 m = usage_metrics.get(a, {})
                 calls = int(v["calls"])
-                cost = float(m.get("cost_usd", 0.0))
-                lat_sum = int(m.get("latency_ms_sum", 0))
+                cost = float(m.get("cost_usd") or 0.0)
+                lat_sum = int(m.get("latency_ms_sum") or 0)
                 tot_calls += calls
                 tot_cost += cost
                 tot_lat_ms += lat_sum
@@ -860,11 +874,11 @@ class LLMClient:
                     "model": a, "decision_class": "_usage",
                     "calls": calls, "model_version": v["resolved"],
                     "cost_usd": cost,
-                    "tokens": int(m.get("tokens", 0)),
-                    "input_tokens": int(m.get("input_tokens", 0)),
-                    "output_tokens": int(m.get("output_tokens", 0)),
+                    "tokens": int(m.get("tokens") or 0),
+                    "input_tokens": int(m.get("input_tokens") or 0),
+                    "output_tokens": int(m.get("output_tokens") or 0),
                     "latency_ms_sum": lat_sum,
-                    "latency_ms_max": int(m.get("latency_ms_max", 0)),
+                    "latency_ms_max": int(m.get("latency_ms_max") or 0),
                 })
             # Append _structured entries for schema-validity outcomes. Different
             # decision_class from _usage so the schema reliability signal is
@@ -873,8 +887,8 @@ class LLMClient:
             for alias, counts in schema_dict.items():
                 if not alias:
                     continue
-                p = int(counts.get("pass", 0))
-                f = int(counts.get("fail", 0))
+                p = int(counts.get("pass") or 0)
+                f = int(counts.get("fail") or 0)
                 if not (p or f):
                     continue
                 uses.append({
@@ -925,8 +939,8 @@ class LLMClient:
                     f"`raptor-llm-scorecard` for details",
                     file=_sys.stderr,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("scorecard summary print failed: %s", exc)
         except Exception as e:  # pragma: no cover - shutdown-path best effort
             logger.debug("scorecard usage flush failed: %s", e)
 
@@ -1307,7 +1321,7 @@ class LLMClient:
         # N× the cost for a result they'd have shared.
         with self._key_lock(cache_key):
             cached_content = self._get_cached_response(cache_key)
-            if cached_content:
+            if cached_content is not None:
                 logger.debug(f"Using cached response for {model_config.provider}/{model_config.model_name}")
                 with self._stats_lock:
                     self.request_count += 1

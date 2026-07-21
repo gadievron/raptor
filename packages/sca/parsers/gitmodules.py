@@ -119,7 +119,7 @@ def _parse_sections(text: str) -> List[Tuple[str, Dict[str, str]]]:
     current_fields: Dict[str, str] = {}
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith(";"):
+        if not stripped or stripped.startswith(("#", ";")):
             continue
         section_match = _SECTION_RE.match(stripped)
         if section_match:

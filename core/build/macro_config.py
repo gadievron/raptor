@@ -139,8 +139,12 @@ def _scan_tokens(tokens: List[str], defined: Dict[str, str],
 
 
 def _from_compile_commands(path: Path) -> MacroConfig:
-    raw = path.read_text(errors="replace")
-    entries = json.loads(raw)
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("malformed compile_commands.json at %s", path)
+        return MacroConfig(source="compile_commands.json")
     if not isinstance(entries, list) or not entries:
         return MacroConfig(source="compile_commands.json")
     defined: Dict[str, str] = {}
@@ -161,7 +165,7 @@ def _from_compile_commands(path: Path) -> MacroConfig:
 
 
 def _from_kconfig(path: Path) -> MacroConfig:
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
     defined: Dict[str, str] = {}
     undefined: set = set()
     for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$", text, re.MULTILINE):
@@ -237,7 +241,7 @@ def extract_build_tus(target: Path) -> Optional[frozenset]:
     if cc is None:
         return None
     try:
-        entries = json.loads(cc.read_text(errors="replace"))
+        entries = json.loads(cc.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         logger.debug("compile_commands.json TU-set parse failed: %s", exc)
         return None

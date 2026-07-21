@@ -23,6 +23,7 @@ import platform
 from core.config import RaptorConfig
 from core.hash import sha256_string
 from core.logging import get_logger
+from core.sage.hooks import store_crash_analysis_pattern
 from packages.binary_analysis._validators import is_valid_hex_address
 
 logger = get_logger()
@@ -134,7 +135,7 @@ class CrashAnalyser:
             logger.info(f"Detected macOS/Mach-O binary, trying LLDB. Binary type: {binary_type[:100]}...")
             try:
                 result = _run_trusted(["lldb", "--version"], capture_output=True, text=True, timeout=5)
-                logger.info(f"LLDB version check result: {result.returncode}, stdout: {result.stdout[:100]}, stderr: {result.stderr[:100]}")
+                logger.info(f"LLDB version check result: {result.returncode}, stdout: {(result.stdout or '')[:100]}, stderr: {(result.stderr or '')[:100]}")
                 if result.returncode == 0:
                     logger.info("Using LLDB debugger for macOS/Mach-O binary")
                     return "lldb"
@@ -375,7 +376,7 @@ class CrashAnalyser:
         try:
             memory_info = self._get_memory_layout_info()
             context.binary_info.update(memory_info)
-            logger.info("✓ Memory layout and protections analyzed")
+            logger.info("✓ Memory layout and protections analysed")
         except Exception as e:
             logger.error(f"✗ Memory layout analysis failed: {e}")
 
@@ -451,6 +452,19 @@ class CrashAnalyser:
         context.stack_hash = self._compute_stack_hash(context.stack_trace)
         if context.stack_hash:
             logger.info(f"  Stack hash: {context.stack_hash}")
+
+        # Future-agent note: this hook is additive and must remain best-effort.
+        # Do not let memory persistence affect crash-analysis success path.
+        store_crash_analysis_pattern(
+            repo_path=str(self.binary.parent),
+            binary_path=str(self.binary),
+            signal=context.signal,
+            function_name=context.function_name,
+            crash_type=context.crash_type,
+            source_location=context.source_location,
+            stack_hash=context.stack_hash,
+            exploitability_hint=context.exploitability,
+        )
 
         return context
 
@@ -867,7 +881,7 @@ class CrashAnalyser:
             # Frame lines: `frame #N: ...` or `* frame #N` (current
             # frame marker). Reject the bare `*` header that also
             # starts with `*` but isn't a frame.
-            if stripped.startswith("frame #") or stripped.startswith("* frame #"):
+            if stripped.startswith(("frame #", "* frame #")):
                 backtrace_lines.append(stripped)
 
         context.stack_trace = "\n".join(backtrace_lines)
@@ -927,18 +941,21 @@ class CrashAnalyser:
             for line in backtrace_lines:
                 if "`" in line and "(" in line:
                     func_part = line.split("`")[1].split("(")[0].strip()
-                    context.function_name = func_part
-                    
+                    if func_part:
+                        context.function_name = func_part
+
                     # Extract source location if available
                     if " at " in line and (".c:" in line or ".cpp:" in line):
-                        source_part = line.split(" at ")[1].split()[0].strip()
-                        context.source_location = source_part
-                        logger.info(f"✓ Source location extracted from backtrace: {source_part}")
+                        parts = line.split(" at ")[1].split()
+                        if parts:
+                            context.source_location = parts[0].strip()
+                            logger.info(f"✓ Source location extracted from backtrace: {parts[0].strip()}")
                     break
                 # Alternative format without backticks
                 elif " in " in line:
-                    func_part = line.split(" in ")[1]
-                    context.function_name = func_part.split()[0].split("(")[0].strip()
+                    parts = line.split(" in ")[1].split()
+                    if parts:
+                        context.function_name = parts[0].split("(")[0].strip()
                     break
 
     def _parse_gdb_output(self, context: CrashContext, gdb_output: str) -> None:
@@ -1090,8 +1107,9 @@ class CrashAnalyser:
         if backtrace_lines:
             first_frame = backtrace_lines[0]
             if "in " in first_frame:
-                func_part = first_frame.split("in ")[1]
-                context.function_name = func_part.split()[0].split("(")[0].strip()  # Handle function(args)
+                parts = first_frame.split("in ")[1].split()
+                if parts:
+                    context.function_name = parts[0].split("(")[0].strip()
             elif "@" in first_frame:  # Alternative format
                 func_part = first_frame.split("@")[0].strip()
                 context.function_name = func_part

@@ -298,7 +298,7 @@ def test_audit_verbose_records_extended_categories(tmp_path):
     target_file = output / "audited"
     py = (
         f"open({str(target_file)!r}, 'w').write('x')\n"
-        f"open('/etc/hostname', 'r').read()\n"
+        f"open('/etc/hosts', 'r').read()\n"
         f"import subprocess; subprocess.run(['/bin/echo','hi'], "
         f"capture_output=True)\n"
     )

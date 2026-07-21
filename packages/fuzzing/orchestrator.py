@@ -289,10 +289,12 @@ class FuzzingOrchestrator:
                 },
                 "fuzzer": plan.fuzzer,
                 "needs_harness": plan.needs_harness,
-            }, indent=2)
+            }, indent=2),
+            encoding="utf-8",
         )
         (out_dir / "capability_report.json").write_text(
-            json.dumps(plan.capabilities.to_dict(), indent=2, default=str)
+            json.dumps(plan.capabilities.to_dict(), indent=2, default=str),
+            encoding="utf-8",
         )
 
         logger.info(plan.summary())
@@ -403,7 +405,7 @@ class FuzzingOrchestrator:
             "commands_detected": sorted(generator.detected_commands.keys()),
             "formats_detected": sorted(generator.detected_formats),
         }
-        (out_dir / "generated-corpus.json").write_text(json.dumps(info, indent=2))
+        (out_dir / "generated-corpus.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
         logger.info(f"Generated agentic fuzz corpus: {seeds} seeds at {generated_dir}")
         return generated_dir, info
 
@@ -424,7 +426,7 @@ class FuzzingOrchestrator:
             "seeds": manifest["seed_count"],
             "manifest": str(seed_dir / "manifest.json"),
         }
-        (out_dir / "seed-corpus.json").write_text(json.dumps(info, indent=2) + "\n")
+        (out_dir / "seed-corpus.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
         logger.info(
             "Using RAPTOR built-in seed corpus: "
             f"{manifest['seed_count']} seeds at {seed_dir}"

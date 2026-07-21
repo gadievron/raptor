@@ -121,16 +121,20 @@ def test_multi_path_uses_require_any_for_union_semantics(tmp_path):
     assert "(require-not (require-any " in p, (
         f"expected (require-not (require-any ...)) idiom; got:\n{p}"
     )
-    # Three exception paths: /private/tmp + output + extra → all
-    # three (subpath ...) must live inside ONE require-any clause.
+    # Three dir exception paths: /private/tmp + output + extra as
+    # (subpath ...) plus device-node (literal ...) entries, all
+    # inside ONE require-any clause.
     import re
     require_any_match = re.search(
-        r"\(require-any\s+((?:\(subpath [^)]+\)\s*)+)\)", p
+        r"\(require-any\s+((?:\((?:subpath|literal) [^)]+\)\s*)+)\)", p
     )
-    assert require_any_match, "no (require-any (subpath ...) ...) found"
+    assert require_any_match, "no (require-any ...) found"
     inside = require_any_match.group(1)
     assert inside.count("(subpath ") == 3, (
         f"expected 3 subpaths inside require-any, got: {inside}"
+    )
+    assert "(literal \"/dev/null\")" in inside, (
+        f"/dev/null literal missing from require-any: {inside}"
     )
     # Regression catch for form (b): we should NOT see multiple
     # (require-not ...) clauses on the same deny (each holding one

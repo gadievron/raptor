@@ -129,7 +129,7 @@ def _drop_unreachable_registry_packs(
     """
     needs_network = [
         (n, c) for n, c in configs
-        if c.startswith("p/") or c.startswith("category/")
+        if c.startswith(("p/", "category/"))
     ]
     if not needs_network:
         return configs
@@ -138,10 +138,8 @@ def _drop_unreachable_registry_packs(
     sock.settimeout(3)
     try:
         sock.connect(("semgrep.dev", 443))
-        sock.close()
         return configs
     except (OSError, socket.timeout):
-        sock.close()
         dropped = [n for n, _ in needs_network]
         logger.warning(
             "semgrep.dev unreachable (3 s probe failed) — "
@@ -150,6 +148,8 @@ def _drop_unreachable_registry_packs(
         )
         drop_set = {c for _, c in needs_network}
         return [(n, c) for n, c in configs if c not in drop_set]
+    finally:
+        sock.close()
 
 
 def _resolve_baseline_packs(
@@ -306,7 +306,7 @@ def _pack_rules_applicable_count(
     if not cache_file.is_file():
         return None
     try:
-        data = json.loads(cache_file.read_text())
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     rules = data.get("rules") or []
@@ -349,7 +349,7 @@ def _pack_applicable_rule_ids(
     if not cache_file.is_file():
         return None
     try:
-        data = json.loads(cache_file.read_text())
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     rules = data.get("rules") or []
@@ -883,7 +883,7 @@ def run_single_semgrep(
     # cost with a tighter ceiling so a stuck fetch drops that pack and the
     # remaining packs still run. Local rule directories keep the longer
     # timeout because they do real scan work without network.
-    is_registry_pack = config.startswith("p/") or config.startswith("category/")
+    is_registry_pack = config.startswith(("p/", "category/"))
     effective_timeout = min(timeout, RaptorConfig.SEMGREP_PACK_TIMEOUT) if is_registry_pack else timeout
 
     try:
@@ -1558,7 +1558,7 @@ def _sarif_has_findings(sarif_path: Path) -> bool:
     "unknown" the same as "empty" because the goal is opportunistic cleanup.
     """
     try:
-        data = json.loads(sarif_path.read_text())
+        data = json.loads(sarif_path.read_text(encoding="utf-8"))
     except Exception:
         return False
     for run_obj in data.get("runs", []) or []:
@@ -1609,7 +1609,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
         # Read exit code BEFORE any deletion.
         exit_code: Optional[int]
         try:
-            exit_code = int(exit_file.read_text().strip())
+            exit_code = int(exit_file.read_text(encoding="utf-8").strip())
         except Exception:
             exit_code = None
 
@@ -1741,7 +1741,7 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
     if tool == "semgrep":
         exit_file = out_dir / f"{stem}.exit"
         try:
-            exit_code = int(exit_file.read_text().strip())
+            exit_code = int(exit_file.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             exit_code = -1
     else:
@@ -1981,6 +1981,20 @@ def main():
         from core.sandbox.summary import set_active_run_dir
         set_active_run_dir(out_dir)
 
+        precall = out_dir / "sage_precall_scan.json"
+        if precall.exists():
+            try:
+                from core.json import load_json
+                from core.sage.hooks import format_sage_memories_for_prompt
+                _raw = load_json(precall)
+                raw = _raw if isinstance(_raw, dict) else {}
+                mems = raw.get("memories") or []
+                formatted = format_sage_memories_for_prompt(mems)
+                if formatted:
+                    logger.info("SAGE pre-scan recall (from pipeline):\n%s", formatted[:4000])
+            except Exception as e:
+                logger.debug("SAGE precall file present but unreadable: %s", e)
+
         # Manifest
         logger.info("Computing repository hash...")
         repo_hash = sha256_tree(repo_path)
@@ -2159,7 +2173,7 @@ def main():
                 logger.info(f"Merged SARIF created: {merged}")
             except Exception as e:
                 logger.warning(f"SARIF merge failed, using individual files: {e}")
-                (out_dir / "sarif_merge.stderr.log").write_text(str(e))
+                (out_dir / "sarif_merge.stderr.log").write_text(str(e), encoding="utf-8")
 
         # Generate metrics. When --exclude-dir filtered the combined
         # SARIF, metrics should reflect the filtered set — read from

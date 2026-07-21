@@ -65,7 +65,7 @@ def generate_banner():
         # Non-fatal — write a minimal banner
         output_file = REPO_ROOT / ".startup-output"
         try:
-            output_file.write_text(f"RAPTOR startup error: {e}\n")
+            output_file.write_text(f"RAPTOR startup error: {e}\n", encoding="utf-8")
         except OSError:
             pass
 

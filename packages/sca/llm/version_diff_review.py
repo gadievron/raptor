@@ -265,6 +265,8 @@ def _archive_url(dep: Dependency) -> Optional[str]:
         basename = name.split("/")[-1] if "/" in name else name
         return template.format(name=name, basename=basename, version=version)
     if dep.ecosystem == "PyPI":
+        if not name:
+            return None
         initial = name[0].lower()
         return template.format(name=name, initial=initial, version=version)
     if dep.ecosystem == "NuGet":

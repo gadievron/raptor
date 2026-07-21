@@ -209,7 +209,7 @@ def _iter_records_in_dir(root: Path) -> Iterable[LabeledAttempt]:
             continue
         for record_file in sorted(finding_dir.glob("*.json")):
             try:
-                data = json.loads(record_file.read_text())
+                data = json.loads(record_file.read_text(encoding="utf-8"))
                 yield LabeledAttempt.from_dict(data)
             except (json.JSONDecodeError, ValueError, KeyError, TypeError):
                 # Skip corrupt / outdated records rather than fail the

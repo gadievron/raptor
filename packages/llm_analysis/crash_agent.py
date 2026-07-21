@@ -6,6 +6,7 @@ LLM-powered analysis of crashes from fuzzing.
 """
 
 import json
+import sys
 from pathlib import Path
 
 from core.json import save_json
@@ -80,6 +81,8 @@ def _build_crash_analysis_bundle(
     crash_context: CrashContext,
     signal_name_fn,
     format_registers_fn,
+    *,
+    sage_prior_recall: Optional[str] = None,
 ) -> PromptBundle:
     """Build the crash-analysis prompt as a role-separated PromptBundle.
 
@@ -117,6 +120,13 @@ def _build_crash_analysis_bundle(
             content=crash_context.disassembly,
             kind="disassembly",
             origin=f"crash:{crash_context.crash_id}:{crash_context.crash_address or '?'}",
+        ))
+
+    if sage_prior_recall and sage_prior_recall.strip():
+        blocks.append(UntrustedBlock(
+            content=sage_prior_recall.strip(),
+            kind="sage-crash-pattern-recall",
+            origin="sage:crashes",
         ))
 
     asan_output = crash_context.binary_info.get('asan_output')
@@ -424,10 +434,10 @@ class CrashAnalysisAgent:
             if availability.claude_code:
                 print("\n🤖 No external LLM configured — Claude Code will handle analysis")
             else:
-                print("\n⚠️  No LLM available — producing structured findings for manual review")
+                print("\n⚠️  No LLM available — producing structured findings for manual review", file=sys.stderr)
             print()
 
-    def analyse_crash(self, crash_context: CrashContext) -> bool:
+    def analyse_crash(self, crash_context: CrashContext, *, sage_prior_recall: Optional[str] = None) -> bool:
         """
         Analyse a crash using LLM.
 
@@ -446,7 +456,10 @@ class CrashAnalysisAgent:
         # Build prompt via core/security/prompt_envelope. Untrusted target content
         # (stack traces, register dumps, ASan output, hex dump of attacker input,
         # disassembly) is wrapped in envelope blocks; identifiers go in slots.
-        bundle = _build_crash_analysis_bundle(crash_context, self._signal_name, self._format_registers)
+        bundle = _build_crash_analysis_bundle(
+            crash_context, self._signal_name, self._format_registers,
+            sage_prior_recall=sage_prior_recall,
+        )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
@@ -577,7 +590,7 @@ class CrashAnalysisAgent:
 
             # Save analysis
             analysis_file = self.out_dir / "analysis" / f"{crash_context.crash_id}.json"
-            analysis_file.parent.mkdir(exist_ok=True)
+            analysis_file.parent.mkdir(parents=True, exist_ok=True)
             
             # Include input file information
             input_info = {
@@ -611,7 +624,7 @@ class CrashAnalysisAgent:
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     def generate_exploit(self, crash_context: CrashContext) -> bool:
@@ -696,8 +709,8 @@ class CrashAnalysisAgent:
 
                 # Save exploit with full response for debugging
                 exploit_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit.cpp"
-                exploit_file.parent.mkdir(exist_ok=True)
-                exploit_file.write_text(exploit_code)
+                exploit_file.parent.mkdir(parents=True, exist_ok=True)
+                exploit_file.write_text(exploit_code, encoding="utf-8")
 
                 # Save full response for analysis
                 response_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit_response.txt"
@@ -706,7 +719,7 @@ class CrashAnalysisAgent:
 
 FULL LLM RESPONSE:
 {full_response}"""
-                response_file.write_text(response_content)
+                response_file.write_text(response_content, encoding="utf-8")
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
@@ -762,7 +775,7 @@ FULL LLM RESPONSE:
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key.")
+                print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
             return False
 
     def _verify_exploit_compiles(

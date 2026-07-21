@@ -67,7 +67,7 @@ def load_finder_identity(path: Optional[Path] = None) -> Optional[Dict[str, str]
     try:
         if not p.exists() or p.stat().st_size > _MAX_FILE_BYTES:
             return None  # absent, or implausibly large (DoS / not a real config)
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict):

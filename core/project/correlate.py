@@ -149,8 +149,8 @@ def _get_run_model(run_dir: Path) -> str:
     """Extract the analysis model name for a run."""
     orch = load_json(run_dir / "orchestrated_report.json")
     if orch and isinstance(orch, dict):
-        o = orch.get("orchestration", {})
-        models = o.get("analysis_models", [])
+        o = orch.get("orchestration") or {}
+        models = o.get("analysis_models") or []
         if models:
             return ", ".join(models)
         m = o.get("analysis_model")
@@ -158,8 +158,8 @@ def _get_run_model(run_dir: Path) -> str:
             return m
     meta = load_run_metadata(run_dir)
     if meta:
-        extra = meta.get("extra", {})
-        models = extra.get("analysis_models", [])
+        extra = meta.get("extra") or {}
+        models = extra.get("analysis_models") or []
         if models:
             return ", ".join(models)
         m = extra.get("analysis_model")
@@ -245,7 +245,7 @@ def _find_disagreements(
         disagreements.append({
             "file": f.get("file", ""),
             "function": f.get("function", ""),
-            "line": f.get("line", 0),
+            "line": f.get("line") or 0,
             "vuln_type": f.get("vuln_type", ""),
             "verdicts": verdicts,
             "disagreement_type": dtype,
@@ -271,7 +271,7 @@ def _find_new_and_resolved(
     Only compares runs of the same command type — a finding in scan-001
     but absent from validate-001 is expected, not "resolved."
     """
-    run_order = [d.name for d in run_dirs]
+    run_order = sorted(d.name for d in run_dirs)
 
     key_to_runs_by_type: Dict[tuple, Dict[str, List[str]]] = defaultdict(
         lambda: defaultdict(list),
@@ -306,7 +306,7 @@ def _find_new_and_resolved(
                 new_findings.append({
                     "file": f.get("file", ""),
                     "function": f.get("function", ""),
-                    "line": f.get("line", 0),
+                    "line": f.get("line") or 0,
                     "vuln_type": f.get("vuln_type", ""),
                     "status": status,
                     "verdict": normalize_verdict(status),
@@ -326,7 +326,7 @@ def _find_new_and_resolved(
                 potentially_resolved.append({
                     "file": f.get("file", ""),
                     "function": f.get("function", ""),
-                    "line": f.get("line", 0),
+                    "line": f.get("line") or 0,
                     "vuln_type": f.get("vuln_type", ""),
                     "last_seen_run": last_run,
                     "absent_from": absent,
@@ -513,7 +513,7 @@ def _find_persistent(
         persistent.append({
             "file": f.get("file", ""),
             "function": f.get("function", ""),
-            "line": f.get("line", 0),
+            "line": f.get("line") or 0,
             "vuln_type": f.get("vuln_type", ""),
             "status": f.get("final_status") or f.get("status", ""),
             "runs_seen": len(runs),
@@ -533,7 +533,7 @@ def _build_trends(
 
     Returns {finding_label: [{run, status, score, model}]} ordered by run time.
     """
-    run_order = [d.name for d in run_dirs]
+    run_order = sorted(d.name for d in run_dirs)
 
     key_to_history: Dict[tuple, List[Dict]] = defaultdict(list)
     for run_name, findings in findings_by_run.items():

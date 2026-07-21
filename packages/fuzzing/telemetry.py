@@ -214,11 +214,18 @@ class FuzzingTelemetry:
         self._announced_first_path = False
         self._plateau_announced = False
 
+    def __del__(self) -> None:
+        if self._events_fp:
+            try:
+                self._events_fp.close()
+            except Exception:
+                pass
+
     def start(self) -> None:
         with self._lock:
             self.stats.started = time.time()
             self.stats.last_path_at = self.stats.started
-            self._events_fp = self.events_path.open("a", buffering=1)
+            self._events_fp = self.events_path.open("a", buffering=1, encoding="utf-8")
             self._emit(FuzzEvent(
                 kind="campaign_start",
                 timestamp=self.stats.started,
@@ -241,7 +248,11 @@ class FuzzingTelemetry:
             if self._events_fp:
                 self._events_fp.close()
                 self._events_fp = None
-            self.summary_path.write_text(json.dumps(self.stats.to_dict(), indent=2, default=str))
+            from core.atomic_fs import write_text_atomically
+            write_text_atomically(
+                self.summary_path,
+                json.dumps(self.stats.to_dict(), indent=2, default=str),
+            )
             logger.info(
                 f"Fuzzing campaign complete: {self.stats.duration_s:.1f}s, "
                 f"{self.stats.total_executions} execs, "

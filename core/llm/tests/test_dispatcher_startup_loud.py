@@ -1,20 +1,11 @@
 """Pin that ``raptor._get_or_start_dispatcher`` surfaces failures
-loudly on stderr — Phase C activation step 1.
+loudly on stderr.
 
 The dispatcher's startup failure used to be a silent
 ``logger.warning`` that operators would only see if they had
-log-level configured. Today (post-step-1) it also writes a
-single-line message to stderr at the moment of failure, so
-operators see the failure regardless of log config.
-
-Why this matters: once Phase C activation strips API keys from
-``RaptorConfig.get_llm_env``, the env-direct fallback that
-``_get_or_start_dispatcher → None`` falls through to will
-produce workers WITHOUT auth. The symptom shifts from "dispatcher
-silently absent, env-direct works fine" to "dispatcher silently
-absent, worker fails 30 seconds later on its first LLM call".
-Step 1 makes the underlying root cause visible at the moment it
-happens.
+log-level configured. Now it also writes a single-line message to
+stderr at the moment of failure, so operators see the failure
+regardless of log config.
 """
 
 from __future__ import annotations
@@ -78,9 +69,7 @@ def test_dispatcher_startup_failure_writes_loud_stderr_line(
     )
     assert "RuntimeError" in captured
     assert "simulated dispatcher crash" in captured
-    # Phase C migration hint must be present so operators understand
-    # the consequence of ignoring the failure.
-    assert "Phase C" in captured
+    assert "env-direct" in captured
 
 
 def test_dispatcher_startup_success_is_quiet(fresh_raptor_module):
@@ -102,13 +91,11 @@ def test_dispatcher_startup_success_is_quiet(fresh_raptor_module):
     )
 
 
-def test_loud_message_includes_phase_c_migration_hint(
+def test_loud_message_includes_fallback_hint(
     fresh_raptor_module,
 ):
-    """The stderr message must explain WHY this matters now (the
-    pre-Phase-C "no worse than today" guarantee) so operators
-    don't dismiss it as cosmetic. Pin specific phrasing so a future
-    well-meaning edit doesn't drop the migration hint."""
+    """The stderr message must explain the consequence so operators
+    don't dismiss it as cosmetic."""
     raptor = fresh_raptor_module
 
     err = io.StringIO()
@@ -119,11 +106,8 @@ def test_loud_message_includes_phase_c_migration_hint(
         raptor._get_or_start_dispatcher()
 
     captured = err.getvalue()
-    # The message must specifically warn that workers will lose
-    # LLM auth post-activation — not just a generic "fallback"
-    # phrasing that operators could ignore.
-    assert "auth" in captured.lower(), (
-        f"loud message lacks auth-implication hint: {captured!r}"
+    assert "credential-isolation" in captured.lower(), (
+        f"loud message lacks credential-isolation hint: {captured!r}"
     )
 
 

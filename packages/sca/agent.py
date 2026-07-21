@@ -278,7 +278,7 @@ def _run_sandboxed(
         raise RuntimeError(
             "sca.agent: --sandbox requested but core.sandbox.context "
             "is not importable; refusing to run unsandboxed"
-        )
+        ) from None
 
     with sandbox(
         target=str(target),

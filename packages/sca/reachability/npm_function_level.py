@@ -5,7 +5,7 @@ covering npm packages instead of PyPI. Same architecture: when an
 OSV advisory carries ``imports[].symbols`` data and the project's
 JS / TS source has been inventoried via
 ``core.inventory.call_graph.extract_call_graph_javascript``, the
-resolver in ``core.inventory.reachability`` matches each affected
+resolver in ``core.analysis.reachability`` matches each affected
 function name against project call sites.
 
 OSV npm advisories ship symbol data less consistently than Go
@@ -155,7 +155,7 @@ def refine_npm_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )

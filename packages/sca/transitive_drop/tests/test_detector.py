@@ -390,7 +390,7 @@ class _StubCargo:
         # crates.io aggregate: ``{crate: {newest_version}, versions: [...]}``
         return {
             "releases": {
-                v: [] for (c, v) in self._d.keys() if c == name
+                v: [] for (c, v) in self._d if c == name
             },
             "info": {"version": self._latest[name]},
         }
@@ -453,7 +453,7 @@ class _StubRubyGems:
 
     def get_metadata(self, name):
         # Return latest version info
-        vers = [v for (g, v) in self._d.keys() if g == name]
+        vers = [v for (g, v) in self._d if g == name]
         if not vers:
             return None
         return {"releases": {v: [] for v in vers},
@@ -641,7 +641,7 @@ class _StubMaven:
             return None
         return {
             "releases": {
-                v: [] for (c, v) in self._p.keys() if c == name
+                v: [] for (c, v) in self._p if c == name
             },
             "info": {"version": self._latest[name]},
         }
@@ -701,7 +701,7 @@ class _StubNuGet:
         self._n = {(p.lower(), v): nspec
                     for (p, v), nspec in nuspecs.items()}
         self._latest = {}
-        for (pkg, ver) in self._n.keys():
+        for (pkg, ver) in self._n:
             cur = self._latest.get(pkg)
             if cur is None or _version_lt(cur, ver):
                 self._latest[pkg] = ver
@@ -712,7 +712,7 @@ class _StubNuGet:
             return None
         return {
             "releases": {
-                v: [] for (p, v) in self._n.keys() if p == n
+                v: [] for (p, v) in self._n if p == n
             },
             "info": {"version": self._latest[n]},
         }

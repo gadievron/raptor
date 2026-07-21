@@ -111,21 +111,29 @@ _PROFILES = {
 }
 
 _COMMENTS = {
+    "codeql_enabled": "set false to disable CodeQL across all runs",
     "codeql_ram_mb": "MB of RAM for CodeQL analysis",
     "codeql_threads": "CPUs for CodeQL (0 = all available)",
+    "codeql_max_disk_cache_mb": "MB cap on CodeQL DB cache (0 = unbounded)",
     "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
     "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
     "max_agentic_parallel": "parallel Claude Code agents for analysis",
     "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
+    "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs)",
+    "max_json_memo_mb": "byte budget for in-process JSON cache; oldest entries evicted past this",
 }
 
 _KEY_ORDER = [
+    "codeql_enabled",
     "codeql_ram_mb",
     "codeql_threads",
+    "codeql_max_disk_cache_mb",
     "max_semgrep_workers",
     "max_codeql_workers",
     "max_agentic_parallel",
     "max_fuzz_parallel",
+    "max_inventory_workers",
+    "max_json_memo_mb",
 ]
 
 
@@ -156,12 +164,16 @@ def _show() -> None:
     print()
 
     fields = [
+        ("codeql_enabled", t.codeql_enabled, ""),
         ("codeql_ram_mb", t.codeql_ram_mb, "MB"),
         ("codeql_threads", t.codeql_threads, "CPUs"),
+        ("codeql_max_disk_cache_mb", t.codeql_max_disk_cache_mb, "MB"),
         ("max_semgrep_workers", t.max_semgrep_workers, ""),
         ("max_codeql_workers", t.max_codeql_workers, ""),
         ("max_agentic_parallel", t.max_agentic_parallel, ""),
         ("max_fuzz_parallel", t.max_fuzz_parallel, ""),
+        ("max_inventory_workers", t.max_inventory_workers, ""),
+        ("max_json_memo_mb", t.max_json_memo_mb, "MB"),
     ]
     for name, value, unit in fields:
         raw_val = raw.get(name, _DEFAULTS.get(name))

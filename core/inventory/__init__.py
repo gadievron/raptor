@@ -104,13 +104,13 @@ __all__ = [
 
 
 
-def _get_items(file_entry):
+def get_items(file_entry):
     """Read code items from a file entry. Handles both old and new format.
 
     Old format: file_entry["functions"] (list of function dicts)
     New format: file_entry["items"] (list of CodeItem dicts with "kind" field)
     """
-    return file_entry.get("items", file_entry.get("functions", []))
+    return file_entry.get("items", file_entry.get("functions", [])) or []
 
 
 def save_checklist(output_dir, data):

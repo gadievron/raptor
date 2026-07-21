@@ -52,7 +52,7 @@ def to_int_safe(
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         (on_error or _default_log)(value, default)
         return default
 
@@ -68,7 +68,7 @@ def to_float_safe(
         return default
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         (on_error or _default_log)(value, default)
         return default
 

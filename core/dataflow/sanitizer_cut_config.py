@@ -265,13 +265,20 @@ def persist(run_dir: str) -> Optional[str]:
         "mode": _active.mode,
         "parity_log_path": _active.parity_log_path,
     }
-    # Per-run internal artifact — no other UID needs to read it. Create
-    # 0o600 rather than the umask default (0o644) so it isn't
-    # world-readable (review #4 on PR #794). O_TRUNC mirrors the
-    # overwrite semantics of "w".
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+    import tempfile
+    dir_name = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 

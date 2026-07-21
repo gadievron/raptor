@@ -30,6 +30,11 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
+from core.sage.hooks import (
+    format_sage_memories_for_prompt,
+    recall_context_for_codeql_build,
+    store_codeql_build_reliability,
+)
 from packages.codeql.agent import CodeQLAgent
 from packages.codeql.autonomous_analyzer import AutonomousCodeQLAnalyzer
 
@@ -99,6 +104,10 @@ def run_autonomous_workflow(args):
             logger.error("--build-command requires exactly one language")
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
+    sage_rows = recall_context_for_codeql_build(repo_path=args.repo, languages=languages)
+    sage_build_ctx = format_sage_memories_for_prompt(sage_rows)
+    if sage_build_ctx:
+        logger.info("SAGE CodeQL build recall (methodology domain):\n%s", sage_build_ctx[:4000])
 
     # PHASE 1: CodeQL Scanning
     logger.info("\n" + "=" * 70)
@@ -116,7 +125,8 @@ def run_autonomous_workflow(args):
         build_commands=build_commands,
         force_db_creation=args.force,
         use_extended=args.extended,
-        min_files=args.min_files
+        min_files=args.min_files,
+        sage_build_recall=sage_build_ctx or None,
     )
 
     if not scan_result.success:
@@ -183,8 +193,11 @@ def run_autonomous_workflow(args):
         run = runs[0]
         results = run.get("results", [])
 
-        # Analyze findings (up to max_findings)
-        findings_to_analyze = results[:args.max_findings]
+        # Analyze findings (up to max_findings across all SARIF files)
+        remaining = args.max_findings - total_analyzed
+        if remaining <= 0:
+            break
+        findings_to_analyze = results[:remaining]
         logger.info(f"Analyzing {len(findings_to_analyze)} findings...")
 
         from core.reporting.formatting import display_rule_id
@@ -222,7 +235,7 @@ def run_autonomous_workflow(args):
                         else:
                             logger.info("  ⚠ Exploit failed to compile")
                 else:
-                    logger.info("❌ Not exploitable")
+                    logger.info("✗ Not exploitable")
 
             except Exception as e:
                 logger.error(f"Analysis failed: {e}", exc_info=True)
@@ -241,6 +254,15 @@ def run_autonomous_workflow(args):
 
     summary_file = agent.out_dir / "autonomous_summary.json"
     save_json(summary_file, summary)
+    # Future-agent note: post-run reliability memory is additive only; failures
+    # inside SAGE hooks must not fail the CodeQL workflow.
+    store_codeql_build_reliability(
+        repo_path=args.repo,
+        languages=languages or [],
+        build_command=args.build_command or "auto",
+        auto_detect_outcome="success",
+        analyses_completed=total_analyzed,
+    )
 
     logger.info(f"\n✓ Autonomous analysis summary saved: {summary_file}")
 
@@ -249,7 +271,7 @@ def run_autonomous_workflow(args):
     print("AUTONOMOUS ANALYSIS SUMMARY")
     print(f"{'=' * 70}")
     print(f"Total findings: {scan_result.total_findings}")
-    print(f"Analyzed: {total_analyzed}")
+    print(f"Analysed: {total_analyzed}")
     print(f"Exploitable: {total_exploitable}")
     print(f"Exploits generated: {total_exploits_generated}")
     print(f"Exploits compiled: {total_exploits_compiled}")
@@ -326,7 +348,7 @@ Examples:
             "raptor_agentic.py for detail."
         ),
     )
-    from core.inventory.binary_oracle_cli import add_binary_args
+    from core.analysis.binary_oracle_cli import add_binary_args
     add_binary_args(parser)
     # Sanitizer-cut value-bound suppression mode (review #4, PR #794).
     from core.dataflow import sanitizer_cut_config
@@ -384,7 +406,7 @@ Examples:
     # auto-detect walk, active-project binary layering, RaptorConfig
     # mutation, and the no-leak-across-runs guarantee. raptor_agentic.py
     # uses the same call site to keep behaviour aligned.
-    from core.inventory.binary_oracle_cli import apply_to_config
+    from core.analysis.binary_oracle_cli import apply_to_config
     apply_to_config(args, Path(args.repo), parser=parser)
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
@@ -419,7 +441,7 @@ Examples:
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        print(f"\n✗ Fatal error: {e}")
+        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

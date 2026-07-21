@@ -700,7 +700,9 @@ def _transform_bedrock_request(endpoint: str, body: bytes) -> tuple[str, bytes]:
     try:
         payload = json.loads(body) if body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise BedrockTransformError(400, "bedrock: request body is not valid JSON")
+        raise BedrockTransformError(
+            400, "bedrock: request body is not valid JSON",
+        ) from None
     if not isinstance(payload, dict):
         raise BedrockTransformError(400, "bedrock: request body must be a JSON object")
     # InvokeModel is non-streaming only. The Anthropic SDK sets ``stream``

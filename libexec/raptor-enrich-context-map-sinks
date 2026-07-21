@@ -105,7 +105,8 @@ def main() -> int:
     else:
         print(
             "raptor-enrich-context-map-sinks: no entries enriched "
-            "(no call graphs built or no dangerous calls found)"
+            "(no call graphs built or no dangerous calls found)",
+            file=sys.stderr,
         )
     return 0
 
