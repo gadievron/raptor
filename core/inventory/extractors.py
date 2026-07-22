@@ -4,7 +4,7 @@ Extracts functions, globals, macros, and classes from source files.
 AST-based for Python, tree-sitter when available, regex fallback.
 
 Security metadata (decorators, annotations, visibility, types) is captured
-in FunctionMetadata. See docs/design-inventory-metadata.md for design rationale.
+in FunctionMetadata.
 """
 
 import ast
@@ -72,7 +72,6 @@ class FunctionMetadata:
     """Security-relevant metadata extracted from function definitions.
 
     Language-agnostic — same fields for all languages, language-specific values.
-    See docs/design-inventory-metadata.md for field semantics.
     """
     class_name: Optional[str] = None
     visibility: Optional[str] = None      # public/private/protected/static/exported/extern

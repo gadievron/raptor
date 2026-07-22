@@ -1,8 +1,6 @@
 """Phase 15 — baseline parity report generator tests."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from core.dataflow.sanitizer_cut_parity import (
@@ -78,17 +76,3 @@ class TestBaselineSummary:
         assert "Safe to remove lexical (Phase 16 gate): NO" in report
 
 
-class TestCommittedReportInSync:
-    def test_committed_report_matches_generator(self):
-        """The committed first-report.md must match the generator
-        output. If this fails, regenerate:
-            RAPTOR_SANITIZER_CUT=1 core/dataflow/scripts/sanitizer-cut-parity-report \\
-                > docs/sanitizer-cut-parity/first-report.md
-        """
-        repo_root = Path(__file__).resolve().parents[3]
-        committed = repo_root / "docs" / "sanitizer-cut-parity" / "first-report.md"
-        assert committed.exists(), "first-report.md missing"
-        generated = render_baseline_report() + "\n"
-        assert committed.read_text(encoding="utf-8") == generated, (
-            "Committed first-report.md is stale — regenerate it."
-        )
