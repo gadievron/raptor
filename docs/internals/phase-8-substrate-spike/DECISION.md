@@ -27,8 +27,9 @@ weight and substrate fit (see below).
 ### Why tree-sitter wins
 
 1. **Already the substrate of choice.** RAPTOR uses tree-sitter for
-   every C/C++ inventory walk shipped today (`call_graph.py:4162`
-   for C, `:4519` for C++). Phase 9 is reusing existing infrastructure,
+   every C/C++ inventory walk shipped today (`call_graph.py`
+   `extract_call_graph_c()` for C, `extract_call_graph_cpp()` for C++).
+   Phase 9 is reusing existing infrastructure,
    not adopting a new dependency.
 2. **No build needed.** The sanitizer-cut gate runs on the inventory
    walk, which is source-only. Adding libclang would mean either
@@ -143,5 +144,5 @@ tree-sitter walker lives in `core/analysis/cfg_builder_cpp.py`.
 
 Phase 9 starts here: build `core/analysis/cfg_builder_cpp.py` (the
 C/C++ analog of `cfg_builder.py`) on top of `tree-sitter-c` and
-`tree-sitter-cpp`, returning `CPPCFGNode` matching the `Graph[N]`
-Protocol.
+`tree-sitter-cpp`, returning `CPPCFG` (the graph, which implements the
+`Graph[N]` Protocol; `CPPCFGNode` is the node type).

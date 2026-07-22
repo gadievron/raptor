@@ -42,7 +42,6 @@ raptor/
 │   │   ├── exclusions.py           # File exclusion + generated-file detection
 │   │   ├── lookup.py               # lookup_function() — file:line → function
 │   │   ├── diff.py                 # compare_inventories() — SHA-256 diffing
-│   │   ├── reachability.py         # Function-call reachability (substrate)
 │   │   └── coverage.py             # checked_by tracking + coverage stats
 │   ├── json/                       # BOM-tolerant JSON utils + cache helpers
 │   ├── labeled_attempts/           # Finding-keyed append-only corpus of oracle-verified attempts
@@ -136,14 +135,7 @@ raptor/
 │   │   ├── __init__.py
 │   │   ├── agent.py                # Main: Source code analysis
 │   │   ├── crash_agent.py          # Main: Binary crash analysis
-│   │   ├── orchestrator.py         # Multi-agent coordination (requires Claude Code)
-│   │   └── llm/
-│   │       ├── __init__.py
-│   │       ├── client.py           # LLM client abstraction
-│   │       ├── config.py           # LLM configuration
-│   │       ├── detection.py        # LLM availability detection
-│   │       ├── model_data.py       # Model costs, limits, provider endpoints
-│   │       └── providers.py        # Provider implementations (Anthropic, OpenAI, etc.)
+│   │   └── orchestrator.py         # Multi-agent coordination (requires Claude Code)
 │   │
 │   ├── nvd/                        # NVD API v2.0 shared client + parser
 │   │
@@ -260,14 +252,15 @@ per-package detail:
 `agent.py` (workflow orchestration) plus `autonomous_analyzer.py`,
 `build_detector.py`, `database_manager.py`, `dataflow_validator.py`,
 `dataflow_visualizer.py`, `language_detector.py`, `query_runner.py`. Emits
-`codeql_*.sarif`, `dataflow_*.json`, `dataflow_*.svg`, `codeql_analysis.json`.
+`codeql_<lang>.sarif`, `<finding_id>_dataflow.{svg,html,dot}`, `codeql_report.json`,
+`autonomous_summary.json`, and per-finding `<id>_analysis.json`.
 Also driven end-to-end by `raptor_codeql.py`.
 
 ### `llm_analysis`
 `agent.py` (standalone source-code analysis, OpenAI/Anthropic-compatible),
 `crash_agent.py` (binary crash analysis), and `orchestrator.py` (Phase-4
 orchestration: dispatches `claude -p` sub-agents for parallel analysis; requires
-Claude Code). The `llm/` subpackage abstracts providers (`client.py`,
+Claude Code). The `core/llm/` substrate abstracts providers (`client.py`,
 `config.py`, `detection.py`, `model_data.py`, `providers.py`) so Anthropic,
 OpenAI, and local backends are interchangeable. See
 [calibrated aggregation](#calibrated-aggregation) below for the orchestrator's
@@ -307,8 +300,9 @@ The three top-level workflow scripts are the mechanical drivers behind the
 ### `raptor_codeql.py` — CodeQL workflow
 Phases: language/build detection → database creation → query execution → dataflow
 validation → dataflow-diagram generation → optional LLM exploitability analysis.
-Key flags: `--repo` (required), `--language`, `--validate-dataflow`,
-`--visualize`, `--analyze`, `--output`.
+Key flags: `--repo` (required), `--languages`, `--build-command`, `--out`,
+`--extended`, `--scan-only` (SARIF only; analysis runs otherwise),
+`--no-visualizations` (diagrams are on by default), `--force`, `--max-findings`.
 
 ### `raptor_fuzzing.py` — binary fuzzing workflow
 Phases: AFL++ fuzz (`afl_runner.py`) → collect/rank crashes (`crash_collector.py`)

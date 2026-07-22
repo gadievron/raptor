@@ -33,9 +33,10 @@ that hands a new artifact to `/exploit`.
 
 ### Substrate today
 
-- `core/llm/scorecard/consensus.py:131` literally computes
+- `core/llm/scorecard/consensus.py` `record_consensus_outcomes()`
+  literally computes
   `majority_says_exploitable = exploitable_count > non_exploitable_count`
-  and uses that as ground truth in `consensus.py:146`
+  and uses that as ground truth in the same function
   (`outcome = "correct" if with_majority else "incorrect"`).
 - `core/llm/scorecard/scorecard.py` accumulates `(model, decision_class)`
   cells with Wilson upper bounds (`_wilson_upper_bound`, line 233).
@@ -153,15 +154,16 @@ unwind. Using them as confusion-matrix input would reintroduce the
 circularity. The scorecard is the *prior* (phase 1b), not the
 likelihood input.
 
-Source of the raw verdicts: `core/llm/multi_model/dispatch.py:226`
-emits per-finding panel results before they reach the aggregator. A
+Source of the raw verdicts: `core/llm/multi_model/dispatch.py`
+`run_multi_model()` emits per-finding panel results before they reach
+the aggregator. A
 prerequisite sub-task in phase 2 is verifying these are persisted to
 disk; if they aren't, we add a JSONL log
 (`<run_output_dir>/multi_model_panel.jsonl`, one record per
 `{finding_id, model, verdict, confidence}`) before wiring the
 estimator. Without this log, phase 2 has no input.
 
-> ⚠ Superseded: never created; the estimator reads `orchestrated_report.json` (`core/llm/multi_model/panel_log.py:111`).
+> ⚠ Superseded: never created; the estimator reads `orchestrated_report.json` (`core/llm/multi_model/panel_log.py` `load_from_orchestrated_report()`).
 
 - Add `core/llm/multi_model/dawid_skene.py`. Inputs:
   per-finding list of `(model, verdict)` tuples loaded from the panel
@@ -204,12 +206,13 @@ gates landing the deferred posterior-weighted scorecard update.
 **Goal:** make Dawid–Skene the default in `--consensus` while preserving
 the JSON shape downstream tools depend on.
 
-- Wire the estimator into `core/llm/multi_model/dispatch.py:226`
-  (`aggregator.aggregate(merged, correlation)`). Keep the current vote
+- Wire the estimator into `core/llm/multi_model/dispatch.py`
+  `run_multi_model()` (`aggregator.aggregate(merged, correlation)`). Keep
+  the current vote
   aggregator behind a `--consensus=vote` flag for ablation and emergency
   fallback.
 
-  > ⚠ Superseded: `dispatch.py:226` is the generic synthesis aggregator; calibration is attached in `packages/llm_analysis/orchestrator.py:420`.
+  > ⚠ Superseded: `dispatch.py` `run_multi_model()` is the generic synthesis aggregator; calibration is attached in `packages/llm_analysis/orchestrator.py` `_attach_calibrated_aggregation()`.
   >
   > ⚠ Superseded: `--consensus` takes a MODEL name; vote is an automatic internal fallback, no flag.
 - Output schema extension (additive, backward-compatible):
@@ -282,7 +285,7 @@ circularity closed — gated on replay-harness validation.
 
 ### Substrate today
 
-- `core/dataflow/smt_barrier.py:936,1183` already encodes the
+- `core/dataflow/smt_barrier.py` already encodes the
   *concept* of "sanitizer dominates sink" via the functions
   `validator_dominates_sink`, `substitution_dominates_sink`. But the
   check is **lexical** — `line < sink_line and not
@@ -293,8 +296,9 @@ circularity closed — gated on replay-harness validation.
 - `core/analysis/binary_oracle_edges.py` (684 lines) extracts direct
   call edges + vtable resolution via r2. These are the natural input to
   a real dominator tree.
-- `core/analysis/binary_oracle.py` already has the chokepoint that
-  emits `suppressions.jsonl` records pre-LLM.
+- `core/analysis/reach_chokepoint.py` already has the chokepoint that
+  emits `suppressions.jsonl` records pre-LLM (its single writer);
+  `binary_oracle.py` only supplies the `earns_suppression` verdict it consumes.
 
 ### Phase 5 — CFG construction + Lengauer–Tarjan
 
@@ -314,7 +318,7 @@ because both have ready-made substrate in tree:
   sanitized function").
 
 Explicitly deferred: Ruby (the existing CFG support lives inside
-CodeQL queries — `barrier_synth.py:331` imports `codeql.ruby.CFG` —
+CodeQL queries — `barrier_synth.py` `_assemble_ruby()` imports `codeql.ruby.CFG` —
 not in a Python module we can call directly), JavaScript / TypeScript,
 Go, Rust. These come in a follow-on arc once Python + C/C++ have
 proved the suppression substrate.
@@ -381,7 +385,7 @@ the dominators-of-sink set with the sanitizer catalog gives the
 candidate sanitizers cheaply before the vertex-cut check runs. The
 dominator tree narrows; the vertex-cut decides.
 
-> ⚠ Superseded — actually shipped: no dominator pre-filter (unsound for symmetric sanitizers); candidates come from `match_sanitizers_in_cfg` over the full CFG — `core/analysis/sanitizer_cut.py:507`.
+> ⚠ Superseded — actually shipped: no dominator pre-filter (unsound for symmetric sanitizers); candidates come from `match_sanitizers_in_cfg` over the full CFG — `core/analysis/sanitizer_cut.py` `evaluate_finding()`.
 
 - New pre-LLM suppressor: `core/analysis/sanitizer_cut.py`. For each
   finding:
@@ -390,8 +394,8 @@ dominator tree narrows; the vertex-cut decides.
        emit `verdict: "sanitizer_dominated"` in `suppressions.jsonl`
        with the witnessing cut set logged.
     3. Otherwise let the finding fall through to the LLM.
-- Rewrite `smt_barrier.py:936` (`validator_dominates_sink`) and
-  `smt_barrier.py:1183` (`substitution_dominates_sink`) to delegate to
+- Rewrite `smt_barrier.py` (`validator_dominates_sink`) and
+  `smt_barrier.py` (`substitution_dominates_sink`) to delegate to
   the vertex-cut check. Keep the existing signatures; the lexical
   check (`line < sink_line`) becomes a fallback only when CFG
   construction failed (loud log with the failure reason).

@@ -463,9 +463,9 @@ out/fuzz_<binary>_<timestamp>/
 │   └── secondary*/          # Parallel instances
 ├── analysis/
 │   ├── analysis/            # LLM crash analysis
-│   │   └── crash_*.json
+│   │   └── <crash_id>.json
 │   └── exploits/            # Generated exploits
-│       └── crash_*_exploit.cpp
+│       └── <crash_id>_exploit.cpp
 └── fuzzing_report.json      # Summary report
 ```
 

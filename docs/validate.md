@@ -236,7 +236,7 @@ A run writes to a timestamped directory (or the project directory, or the `--out
 directory you passed). The layout:
 
 ```
-out/validate_<target>_<timestamp>_pidNNNNN/
+out/validate_<target>_<timestamp>_pid<PID>_<NNNN>/
 ├── checklist.json          # Stage 0: ground truth — every function/line to check
 ├── findings.json           # Cumulative findings; each stage merges into it
 ├── attack-surface.json     # Stage B: sources, sinks, trust boundaries

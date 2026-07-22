@@ -81,7 +81,7 @@ Consumer accesses f.metadata.attributes, f.metadata.visibility, etc.
 | `visibility` | `Optional[str]` | Stage A, `--map` | public/private/static/exported/extern — reachability signal |
 | `return_type` | `Optional[str]` | `--trace` | Type at function output for data flow analysis |
 | `parameters` | `List[Tuple[str, Optional[str]]]` | `--trace` | Type at function input: source markers, taint tracking |
-| `class_attributes` | `List[str]` | reachability (Java) | Enclosing-class stereotype annotations (`@Service`/`@Component`) so public methods of container-managed beans count as framework entries (`extractors.py:84`) |
+| `class_attributes` | `List[str]` | reachability (Java) | Enclosing-class stereotype annotations (`@Service`/`@Component`) so public methods of container-managed beans count as framework entries (`extractors.py` `FunctionMetadata.class_attributes`) |
 
 ### Fields considered and rejected
 
@@ -201,9 +201,9 @@ This enables deferred integration work:
 
 The analysis prompt accepts metadata (`build_analysis_prompt_bundle(metadata=...)`) but the agentic pipeline doesn't populate it yet. The agentic pipeline goes SARIF → prep → analysis without building a checklist.
 
-> ⚠ Superseded: shipped — forwarded into `build_analysis_prompt_bundle` (`packages/llm_analysis/agent.py:915,950`).
+> ⚠ Superseded: shipped — forwarded into `build_analysis_prompt_bundle` (`packages/llm_analysis/agent.py` `analyze_vulnerability()`).
 >
-> ⚠ Superseded: shipped — `_build_checklist` (`core/orchestration/agentic_passes.py:659`); `checklist.json` at `raptor_agentic.py:1770`.
+> ⚠ Superseded: shipped — `_build_checklist` (`core/orchestration/agentic_passes.py`); `checklist.json` at `raptor_agentic.py` `main()`.
 
 To wire it up:
 1. Build checklist in agentic Phase 1 (alongside scanning) or Phase 3 (prep)

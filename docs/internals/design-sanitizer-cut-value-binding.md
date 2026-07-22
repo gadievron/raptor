@@ -29,7 +29,8 @@ symbol-level layer that closes the gap, then extends value-bound
 suppression across function boundaries (Python inter-procedural) and
 into the second supported language (C/C++ intra-procedural).
 
-The lexical fallback at `core/dataflow/smt_barrier.py:936` / `:1183`
+The lexical fallback at `core/dataflow/smt_barrier.py`
+`validator_dominates_sink()` / `substitution_dominates_sink()`
 stays until A/B parity is demonstrated; only Phase 16 removes it.
 
 ## Why one arc, not three branches
@@ -60,7 +61,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/analysis/taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
 | 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/analysis/interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | **done** (33 tests; `core/dataflow/sanitizer_cut_parity.py` — ParityRecord, shadow-log via `RAPTOR_SANITIZER_CUT_PARITY_LOG`, Wilson-CI aggregation, removal-safe gate = rate-criterion AND zero per-finding regression; HORIZON.md + committed first-report.md show value-bound and lexical are complementary so the gate is correctly NOT-yet-cleared; ruff clean) |
-| 16 | D | Lexical fallback removal at `smt_barrier.py:936` / `:1183` | **done (honest closure)** — parity gate (phase 15) is NOT cleared, so the lexical bodies are RETAINED, not deleted; the end-state is reachable via `RAPTOR_SANITIZER_CUT_NO_LEXICAL`; a closure tripwire test pins the gate's not-cleared state; arc closed for its soundness goal, open for full lexical retirement (8 tests; ruff clean; `docs/internals/sanitizer-cut-parity/CLOSURE.md`) |
+| 16 | D | Lexical fallback removal at `smt_barrier.py` `validator_dominates_sink()` / `substitution_dominates_sink()` | **done (honest closure)** — parity gate (phase 15) is NOT cleared, so the lexical bodies are RETAINED, not deleted; the end-state is reachable via `RAPTOR_SANITIZER_CUT_NO_LEXICAL`; a closure tripwire test pins the gate's not-cleared state; arc closed for its soundness goal, open for full lexical retirement (8 tests; ruff clean; `docs/internals/sanitizer-cut-parity/CLOSURE.md`) |
 
 Sub-arcs A → B → D and A → C → D are sequential. B and C are
 independent of each other; both must land before D starts (D
@@ -230,9 +231,10 @@ the inputs `evaluate_finding` needs.
 **Goal:** make suppressions reviewable, and make `candidate_only`
 visible without it being a silent suppression.
 
-- `record_sanitizer_cut_suppression` extends the JSONL record:
-  `sanitizer_call`, `sanitizer_input_symbols`,
-  `sanitizer_output_symbols`, `sink_arg`, `witness_lines`.
+- `record_sanitizer_cut_suppression` extends the JSONL record with top-level
+  `sink_arg` and `witness_lines`; the sanitizer callable and its input/output
+  symbols ride per-binding inside the `bindings` / `catalog_matches` arrays as
+  `callable`, `input_symbols`, `output_symbols`.
 - `candidate_only` results write to the same file with
   `verdict="sanitizer_candidate"` and `dropped: false` —
   greppable, but the finding survives to the LLM.
@@ -300,8 +302,9 @@ Full writeup at `docs/internals/phase-8-substrate-spike/DECISION.md`. Three
 load-bearing reasons:
 
 1. **Already the substrate of every existing C/C++ inventory walk**
-   in RAPTOR (`core/inventory/call_graph.py:4162` for C, `:4519`
-   for C++; `core/ast/view.py`'s lazy-imported grammars). Phase 9
+   in RAPTOR (`core/inventory/call_graph.py` `extract_call_graph_c()`
+   for C, `extract_call_graph_cpp()` for C++; `core/ast/view.py`'s
+   lazy-imported grammars). Phase 9
    is reusing existing infrastructure, not adopting a new
    dependency.
 2. **No build needed.** The gate runs on source. Adding libclang
