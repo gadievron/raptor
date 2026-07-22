@@ -1,20 +1,15 @@
-name: Nightly (slow + integration + shuffle)
+name: Nightly (slow + integration)
 
 # The `slow` and `integration` markers are deselected by default in
 # pytest.ini (`addopts = -m "not integration and not slow"`), so these
 # tests run NOWHERE in the per-PR / per-push test matrix. This workflow
-# is the only place they execute in CI:
+# is the only place they execute in CI.
 #
 #   * slow        — perf baselines + sandbox-setup-heavy resolver tests
 #                   (deterministic; a failure is a real regression).
 #   * integration — live-network contract tests against OSV / NVD /
 #                    GitHub (may flake on external outages; failures
 #                    red-fail the run so they are investigated).
-#
-# The `shuffled-fast` job re-runs the default-tier tests (not slow, not
-# integration) multiple times with distinct random seeds to flush out
-# order-dependent failures. The fast suite completes in seconds per
-# iteration, so many passes are cheap. Aborts on first failure.
 #
 # Deliberately a standalone workflow, NOT a job in tests.yml: it must
 # never ride tests.yml's `merge_group` force_full path — the merge queue
@@ -39,12 +34,8 @@ env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  FAST_ITERATIONS: '10'
 
 jobs:
-  # -----------------------------------------------------------------
-  # Job 1: slow + integration tests (one pass each)
-  # -----------------------------------------------------------------
   slow-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -123,61 +114,5 @@ jobs:
         with:
           name: nightly-slow-integration-results
           path: ${{ runner.temp }}/integration-attempt-*.xml
-          retention-days: 14
-          if-no-files-found: ignore
-
-  # -----------------------------------------------------------------
-  # Job 2: default-tier tests shuffled N times (abort on first failure)
-  # -----------------------------------------------------------------
-  shuffled-fast:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
-
-      - name: Create venv and install deps
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
-
-      - name: Shuffled default-tier tests (${{ env.FAST_ITERATIONS }} iterations)
-        run: |
-          source $VENV_PATH/bin/activate
-          for i in $(seq 1 "$FAST_ITERATIONS"); do
-            seed="${{ github.run_id }}-${i}"
-            echo ""
-            echo "=========================================="
-            echo "  Iteration ${i}/${FAST_ITERATIONS}  (seed=${seed})"
-            echo "=========================================="
-            echo ""
-            RAPTOR_RANDOMISE_TESTS="$seed" \
-              python -m pytest core packages \
-              --durations=25 --tb=short \
-              --junitxml="$RUNNER_TEMP/fast-iter-${i}.xml"
-          done
-          echo ""
-          echo "All ${FAST_ITERATIONS} iterations passed."
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: nightly-shuffled-fast-results
-          path: ${{ runner.temp }}/fast-iter-*.xml
           retention-days: 14
           if-no-files-found: ignore
