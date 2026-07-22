@@ -85,6 +85,7 @@ def _verdicts_for_built_demo(built_demo: Path):
     return classify_binary_evidence(list(EXPECTED_VERDICTS), built_demo)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name,expected", sorted(EXPECTED_VERDICTS.items()))
 def test_classify_matches_expected_verdict(_verdicts_for_built_demo,
                                             name: str, expected: str) -> None:
@@ -255,6 +256,7 @@ def test_enrich_is_idempotent(built_demo: Path) -> None:
 # Adversarial-review regression tests (2026-05-30)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_enrich_does_not_crash_on_metadata_none(built_demo: Path) -> None:
     """Inventory item with ``metadata: None`` (vs missing) — ``setdefault``
     would return None and the next assignment crash. Initialise explicitly."""
@@ -292,6 +294,7 @@ def _clang_built_demo(tmp_path_factory):
     return work / "demo"
 
 
+@pytest.mark.slow
 def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> None:
     """clang emits ``(indexed string: 0xN): name`` where gcc emits
     ``(indirect string, offset: 0xN): name``. Parser must read both —
@@ -679,6 +682,7 @@ def test_build_inventory_swallows_enrichment_errors(
         assert bo["counts"].get("classified", 0) == 0
 
 
+@pytest.mark.slow
 def test_enrich_combines_multi_binary_verdicts_with_alive_in_any_wins(
     tmp_path: Path,
 ) -> None:
