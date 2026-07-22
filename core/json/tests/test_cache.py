@@ -8,6 +8,7 @@ generic ``core.json.cache`` location.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -371,15 +372,18 @@ def test_reaper_runs_when_sentinel_is_stale(
 ) -> None:
     """When the sentinel's mtime is older than the rate-limit window,
     the reaper must run again."""
-    JsonCache(root=tmp_path)
-    sentinel = tmp_path / ".reap_last_run"
-    # Make the sentinel old enough to fall outside the rate-limit
-    # window (default 3600s; backdate by 2 hours for safety).
-    old = time.time() - 7200
-    import os as _os
-    _os.utime(sentinel, (old, old))
-
     from core.json import cache as cache_mod
+
+    sentinel = tmp_path / ".reap_last_run"
+    sentinel.touch()
+    old = time.time() - 7200
+    os.utime(sentinel, (old, old))
+    age = time.time() - sentinel.stat().st_mtime
+    assert age > cache_mod._REAP_RATE_LIMIT_S, (
+        f"sentinel not stale enough: age={age:.1f}s, "
+        f"limit={cache_mod._REAP_RATE_LIMIT_S}s"
+    )
+
     calls: list = []
     original = cache_mod._iter_tempfile_candidates
 

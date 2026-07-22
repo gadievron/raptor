@@ -29,7 +29,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-_default_log = logging.getLogger(__name__).debug
+_logger = logging.getLogger(__name__)
+
+
+def _default_log(value: object, default: object) -> None:
+    _logger.debug("coerce fallback: %r → %r", value, default)
 
 
 def to_int_safe(
