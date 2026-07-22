@@ -1,4 +1,4 @@
-name: Nightly (slow + integration)
+name: Nightly (slow + integration + shuffle)
 
 # The `slow` and `integration` markers are deselected by default in
 # pytest.ini (`addopts = -m "not integration and not slow"`), so these
@@ -11,10 +11,10 @@ name: Nightly (slow + integration)
 #                    GitHub (may flake on external outages; failures
 #                    red-fail the run so they are investigated).
 #
-# The default-tier tests (not slow, not integration) already run per-PR
-# in tests.yml but only once per seed.  Here we re-run them 10x with
-# distinct random seeds to flush out order-dependent failures cheaply —
-# the fast suite completes in seconds per iteration.
+# The `shuffled-fast` job re-runs the default-tier tests (not slow, not
+# integration) multiple times with distinct random seeds to flush out
+# order-dependent failures. The fast suite completes in seconds per
+# iteration, so many passes are cheap. Aborts on first failure.
 #
 # Deliberately a standalone workflow, NOT a job in tests.yml: it must
 # never ride tests.yml's `merge_group` force_full path — the merge queue
@@ -39,14 +39,15 @@ env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Number of shuffled default-tier iterations per nightly.  The fast
-  # suite runs in seconds, so 10 iterations adds ~minutes not hours.
   FAST_ITERATIONS: '10'
 
 jobs:
+  # -----------------------------------------------------------------
+  # Job 1: slow + integration tests (one pass each)
+  # -----------------------------------------------------------------
   slow-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
@@ -71,18 +72,6 @@ jobs:
           uv pip install -r requirements-dev.txt
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
-        # The binary-oracle precision/edge corpora (core/inventory) are the
-        # only @pytest.mark.slow tests needing system tooling beyond the
-        # gcc/gcov ubuntu-latest already ships:
-        #   * radare2 (r2)        — direct-call-edge extraction
-        #   * LLVM 21 + clang-21  — snappy/leveldb LLVM source-based coverage
-        #                           (snappy's cmake calls plain clang/clang++
-        #                           with a clang-21 diagnostic flag) and the
-        #                           regex-rust llvm-cov/llvm-profdata path.
-        # continue-on-error: an apt / apt.llvm.org hiccup must not red-fail
-        # the nightly — the corpus tests skip themselves when a tool is
-        # absent (skipif guards), so a provisioning miss degrades to
-        # skipped-not-failed and shows up as a SKIP reason in the run log.
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -91,62 +80,27 @@ jobs:
           wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
           chmod +x /tmp/llvm.sh
           sudo /tmp/llvm.sh 21
-          # llvm-21 carries llvm-cov / llvm-profdata; clang-21 is the
-          # compiler. The drivers prefer the -21 suffixed binaries.
           sudo apt-get install -y --no-install-recommends llvm-21 clang-21
-          # snappy's cmake invokes plain ``clang`` / ``clang++``.
           sudo update-alternatives --install /usr/bin/clang clang \
             /usr/bin/clang-21 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ \
             /usr/bin/clang++-21 100
-          # Make the unsuffixed llvm-cov / llvm-profdata resolvable too.
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
-          # Sanity (non-fatal — the tests guard on presence regardless).
           r2 -v || true
           clang --version || true
           /usr/lib/llvm-21/bin/llvm-cov --version || true
           /usr/lib/llvm-21/bin/llvm-profdata --version || true
 
-      - name: Run slow tests (single pass, shuffled)
+      - name: Run slow tests
         env:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           source $VENV_PATH/bin/activate
           python -m pytest -m slow core packages --durations=25
 
-      - name: Run default-tier tests (10 shuffled iterations)
-        run: |
-          source $VENV_PATH/bin/activate
-          failed=0
-          for i in $(seq 1 "$FAST_ITERATIONS"); do
-            seed="${{ github.run_id }}-${i}"
-            echo ""
-            echo "::group::Fast iteration ${i}/${FAST_ITERATIONS} (seed=${seed})"
-            rc=0
-            RAPTOR_RANDOMISE_TESTS="$seed" \
-              python -m pytest core packages --durations=25 \
-              --tb=short --junitxml="$RUNNER_TEMP/fast-iter-${i}.xml" \
-              || rc=$?
-            echo "::endgroup::"
-            if [ "$rc" -ne 0 ]; then
-              echo "::error::Fast iteration ${i} failed (seed=${seed}, exit ${rc})"
-              failed=$((failed + 1))
-            fi
-          done
-          echo ""
-          echo "Default-tier tests: $((FAST_ITERATIONS - failed))/${FAST_ITERATIONS} iterations passed"
-          if [ "$failed" -gt 0 ]; then
-            exit 1
-          fi
-
-      - name: Run integration tests (live network — retry once on failure)
-        # External-service outages (OSV/NVD/GitHub down or rate-limited)
-        # cause transient failures. Retry once after 60s — a genuine
-        # contract break fails both attempts; a transient outage
-        # recovers on the second. The job red-fails only on persistent
-        # failure, so a red nightly is always worth investigating.
+      - name: Run integration tests (retry once on external outage)
         env:
-          GITHUB_TOKEN: ${{ github.token }}  # higher rate limits for the live GitHub tests
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           source $VENV_PATH/bin/activate
           rc=0
@@ -167,9 +121,63 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
-          name: nightly-test-results
-          path: |
-            ${{ runner.temp }}/fast-iter-*.xml
-            ${{ runner.temp }}/integration-attempt-*.xml
+          name: nightly-slow-integration-results
+          path: ${{ runner.temp }}/integration-attempt-*.xml
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------
+  # Job 2: default-tier tests shuffled N times (abort on first failure)
+  # -----------------------------------------------------------------
+  shuffled-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Create venv and install deps
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+
+      - name: Shuffled default-tier tests (${{ env.FAST_ITERATIONS }} iterations)
+        run: |
+          source $VENV_PATH/bin/activate
+          for i in $(seq 1 "$FAST_ITERATIONS"); do
+            seed="${{ github.run_id }}-${i}"
+            echo ""
+            echo "=========================================="
+            echo "  Iteration ${i}/${FAST_ITERATIONS}  (seed=${seed})"
+            echo "=========================================="
+            echo ""
+            RAPTOR_RANDOMISE_TESTS="$seed" \
+              python -m pytest core packages \
+              --durations=25 --tb=short \
+              --junitxml="$RUNNER_TEMP/fast-iter-${i}.xml"
+          done
+          echo ""
+          echo "All ${FAST_ITERATIONS} iterations passed."
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: nightly-shuffled-fast-results
+          path: ${{ runner.temp }}/fast-iter-*.xml
           retention-days: 14
           if-no-files-found: ignore
