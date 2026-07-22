@@ -227,9 +227,10 @@ RAPTOR does **not** ship a populated offline Semgrep registry cache.
 
 What actually ships and how it behaves:
 
-- **Local custom rules run fully offline.** ~21 rule files ship under
+- **Local custom rules run fully offline.** ~40 rule files ship under
   `engine/semgrep/rules/` (`auth/`, `crypto/`, `deserialisation/`,
-  `filesystem/`, `flows/`, `injection/`, `logging/`, `secrets/`, `sinks/`). No
+  `filesystem/`, `flows/`, `go/`, `injection/`, `java/`, `javascript/`,
+  `logging/`, `python/`, `secrets/`, `sinks/`, `web/`, `xml/`). No
   network needed for these.
 - **`engine/semgrep/rules/registry-cache/` ships empty** — it contains only a
   `.gitkeep`. It is a slot for cached registry packs, not a shipped cache.

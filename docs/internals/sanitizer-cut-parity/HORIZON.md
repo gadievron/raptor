@@ -111,7 +111,7 @@ real horizon window, not the synthetic baseline.
 
 ```bash
 RAPTOR_SANITIZER_CUT=1 core/dataflow/scripts/sanitizer-cut-parity-report \
-    > docs/sanitizer-cut-parity/first-report.md
+    > docs/internals/sanitizer-cut-parity/first-report.md
 ```
 
 The baseline is a synthetic machinery smoke test

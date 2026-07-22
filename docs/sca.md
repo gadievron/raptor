@@ -63,7 +63,7 @@ bin/raptor-sca render /path/to/findings.json \
 - .NET: `*.csproj`, `*.fsproj`, `*.vbproj`, `packages.config`, `packages.lock.json`
 - PHP: `composer.json`, `composer.lock`
 
-**Inline-install sources** (parsed by `parsers/inline_installs.py`):
+**Inline-install sources** (parsed by `parsers/inline_installs/`):
 
 - `Dockerfile`, `Containerfile`, `Dockerfile.<x>`, `*.dockerfile`
 - `devcontainer.json` / `.devcontainer.json` — `postCreateCommand` / `onCreateCommand` / etc.

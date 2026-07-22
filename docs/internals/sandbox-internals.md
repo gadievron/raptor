@@ -222,7 +222,7 @@ raises instead of warning if the host can't provide the overlay.
 specific vars (`JAVA_HOME`, `GOROOT`, `DOTNET_ROOT`, `RUSTUP_HOME`) — adding
 them globally would broaden exposure for every non-that-language caller.
 Instead, each build-system entry in
-`packages/codeql/build_detector.BUILD_SYSTEMS` declares an `env_detect` list,
+`core/build/build_detector.BUILD_SYSTEMS` declares an `env_detect` list,
 and `core/build/toolchain.py` auto-resolves those vars from filesystem layout
 (e.g. `/usr/lib/jvm/default-java`, `readlink -f $(which java)`) at build time.
 Detected values land in the build subprocess's env ONLY — scanners, LLM

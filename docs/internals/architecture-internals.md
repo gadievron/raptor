@@ -17,7 +17,7 @@ works" tour (modes, design principles, model reasoning), read
 ```
 raptor/
 │
-├── core/                           # Shared utilities layer (45 subpackages)
+├── core/                           # Shared utilities layer (48 subpackages)
 │   ├── __init__.py
 │   ├── analysis/                   # Taint approx, reachability, binary-oracle verdicts, CFG, dataflow
 │   ├── annotations/                # Per-function prose annotations (markdown mirroring source tree)
@@ -31,6 +31,7 @@ raptor/
 │   ├── cve/                        # Per-CVE signal layer: EPSS, KEV, vulnrichment
 │   ├── dataflow/                   # Producer-neutral dataflow finding schema + adapters
 │   ├── dockerfile/                 # Dockerfile parsing helpers (FROM/ENV)
+│   ├── evidence/                   # Unified evidence tiers — grade observations by closeness to ground truth
 │   ├── function_taxonomy/          # Shared taxonomy of function-name categories with security significance
 │   ├── git/                        # Sandbox-routed clone + URL allowlist
 │   ├── hash/                       # SHA-256 helpers (tree/file/bytes/string)
@@ -62,6 +63,8 @@ raptor/
 │   ├── security/                   # Prompt envelope, secret redaction, env sanitisation, cc_trust
 │   ├── sentinels/                  # Reload-stable sentinel objects
 │   ├── smt_solver/                 # Z3-based path-feasibility (rejection, witness, csem)
+│   ├── source/                     # Source-text utilities — comment stripping, line handling
+│   ├── staleness/                  # Span-level staleness detection (has this source span changed?)
 │   ├── startup/                    # CLI startup banner + env validation
 │   ├── status/                     # Status/verdict string normalisation (single source of truth)
 │   ├── tar/                        # Tar primitives for attacker-influenced archives
@@ -98,7 +101,6 @@ raptor/
 │   │   ├── __init__.py
 │   │   ├── agent.py                # Main: CodeQL workflow orchestration
 │   │   ├── autonomous_analyzer.py  # Autonomous CodeQL analysis
-│   │   ├── build_detector.py       # Build system detection
 │   │   ├── database_manager.py     # CodeQL database creation/management
 │   │   ├── dataflow_validator.py   # Dataflow path validation
 │   │   ├── dataflow_visualizer.py  # Dataflow visualization
@@ -250,7 +252,7 @@ per-package detail:
 
 ### `codeql`
 `agent.py` (workflow orchestration) plus `autonomous_analyzer.py`,
-`build_detector.py`, `database_manager.py`, `dataflow_validator.py`,
+`database_manager.py`, `dataflow_validator.py`,
 `dataflow_visualizer.py`, `language_detector.py`, `query_runner.py`. Emits
 `codeql_<lang>.sarif`, `<finding_id>_dataflow.{svg,html,dot}`, `codeql_report.json`,
 `autonomous_summary.json`, and per-finding `<id>_analysis.json`.
@@ -354,7 +356,7 @@ working.
 
 The step is unconditional: it is purely additive (only ever adds the
 `calibrated_aggregation` field), so there is no opt-out to maintain. The block at
-`orchestrator.py:~830` is wrapped in a `try / except` — if D–S fails for any
+`orchestrator.py`'s `_attach_calibrated_aggregation()` is wrapped in a `try / except` — if D–S fails for any
 reason, the field is dropped, a `WARNING` is logged, and the failure is recorded
 under `orchestration.calibrated_aggregation.failed` in `orchestrated_report.json`.
 

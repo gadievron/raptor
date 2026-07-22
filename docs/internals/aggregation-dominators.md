@@ -39,7 +39,7 @@ that hands a new artifact to `/exploit`.
   and uses that as ground truth in the same function
   (`outcome = "correct" if with_majority else "incorrect"`).
 - `core/llm/scorecard/scorecard.py` accumulates `(model, decision_class)`
-  cells with Wilson upper bounds (`_wilson_upper_bound`, line 233).
+  cells with Wilson upper bounds (`_wilson_upper_bound`, line 244).
 - The scorecard is a passive observer: it records reliability data that
   nothing downstream consumes when deciding new findings.
 
@@ -427,8 +427,8 @@ measurement on existing corpora.
 
 ### Substrate today
 
-- `packages/codeql/smt_path_validator.py` (1354 lines) already has
-  `assert_and_track` + `unsat_core` wired in (comment at line 1288).
+- `core/smt_solver/path_feasibility.py` (1501 lines) already has
+  `assert_and_track` + `unsat_core` wired in (comment at line 1435).
 - Outputs today: sat/unsat verdict + one model when sat. The model is
   consumed by the LLM prompt for CWE-190/120/122/193/476.
 
@@ -462,7 +462,7 @@ Iterative algorithm (deletion-based):
    ordering.
 
 The Z3 `assert_and_track` + `unsat_core` infrastructure already wired
-in `smt_path_validator.py` (line 1288 comment confirms it) is reused
+in `path_feasibility.py` (line 1435 comment confirms it) is reused
 for a *secondary* role: when an attempted drop produces unsat, the
 returned unsat core tells us which other conjuncts `c_i` was
 load-bearing for, useful for the trace logged into the run output.
@@ -523,7 +523,7 @@ when tractable; A/B measurement.
 | 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | **done** (#794) — `core/analysis/cfg_builder.py`, `cfg_builder_cpp.py`, `dominators.py` |
 | 6 | B | Sanitizer catalog + recognition | **done** (#794) — `core/dataflow/sanitizer_catalog.py` |
 | 7 | B | Vertex-cut suppressor + `smt_barrier` upgrade | **done** (#794) — `core/analysis/sanitizer_cut.py`; `smt_barrier` dominance checks delegate to the vertex cut |
-| 8 | C | WP predicate extraction (minimal sat subset) | **done** (Project C PR) — `PathSMTResult.wp_predicate` via implication-based redundancy in `packages/codeql/smt_path_validator.py` |
+| 8 | C | WP predicate extraction (minimal sat subset) | **done** (Project C PR) — `PathSMTResult.wp_predicate` via implication-based redundancy in `core/smt_solver/path_feasibility.py` |
 | 9 | C | `/exploit` consumes WP predicate | **done** (Project C PR) — surfaced through `validate_path` → Tier 4 `smt_witness` → exploit prompt as a hard constraint |
 
 **Total: 9 phases.** Phases within a project are sequential. Across
