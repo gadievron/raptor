@@ -1,7 +1,9 @@
 # RAPTOR Modular Architecture
 
-**Version**: 3.0
-**Date**: 2026-07-19
+**Version**: 3.1
+**Date**: 2026-07-22
+
+See also: [README](README.md), [security](security.md), [sandbox](sandbox.md).
 
 
 
@@ -32,7 +34,7 @@ RAPTOR (Recursive Autonomous Penetration Testing and Observation Robot) is a sec
 3. **Binary Fuzzing Mode**: Coverage-guided fuzzing of compiled binaries using AFL++ (`raptor_fuzzing.py`)
 4. **Software Composition Analysis**: Dependency scanning, advisory matching, SBOM generation (`packages/sca/`)
 5. **Exploitability Validation**: Multi-stage pipeline proving findings are real, reachable, and exploitable
-6. **Code Understanding**: Adversarial code comprehension — attack surface mapping, data flow tracing
+6. **Code Understanding**: Adversarial code comprehension -- attack surface mapping, data flow tracing
 
 All modes are accessible via the unified `raptor.py` launcher or via Claude Code slash commands (`/scan`, `/agentic`, `/codeql`, `/fuzz`, `/web`, `/sca`, `/validate`, `/understand`, etc.).
 
@@ -40,55 +42,138 @@ The modular architecture refactors the original monolithic structure into a clea
 
 ```
 raptor/
+├── bin/                   # User-facing launcher scripts
+│   └── raptor             # Main entry point (launches Claude Code)
+├── libexec/               # Internal helper scripts (not user-facing)
+│   ├── raptor-agentic     # Agentic workflow wrapper
+│   ├── raptor-annotate    # Annotation management
+│   ├── raptor-ast         # AST enrichment
+│   ├── raptor-binary      # Binary investigation
+│   ├── raptor-binary-graph-query  # Binary call-graph queries
+│   ├── raptor-binary-oracle-e2e   # Binary oracle end-to-end audit
+│   ├── raptor-binary-oracle-precision  # Binary oracle precision measurement
+│   ├── raptor-build-checklist     # Build checklist generation
+│   ├── raptor-cc-trust-check      # C compiler trust check
+│   ├── raptor-coverage-summary    # Coverage summary reporting
+│   ├── raptor-cve-diff            # CVE patch diffing
+│   ├── raptor-describe            # Pre-flight target inspection
+│   ├── raptor-enrich-context-map-*  # Context map enrichment passes
+│   ├── raptor-enrich-flow-trace-*   # Flow trace enrichment passes
+│   ├── raptor-frida               # Frida instrumentation
+│   ├── raptor-lifecycle-hook      # Run lifecycle hook
+│   ├── raptor-llm-scorecard       # LLM scorecard queries
+│   ├── raptor-normalize-context-map  # Context map normalisation
+│   ├── raptor-pick-strategies     # Strategy selection
+│   ├── raptor-pid1-shim           # PID 1 shim for sandboxed processes
+│   ├── raptor-project-manager     # Project workspace management
+│   ├── raptor-r2-sandboxed        # Sandboxed radare2 wrapper
+│   ├── raptor-render-diagrams     # Mermaid diagram generation
+│   ├── raptor-run-feasibility     # Run feasibility check
+│   ├── raptor-run-lifecycle       # Run lifecycle management
+│   ├── raptor-run-sandboxed       # Sandboxed subprocess runner
+│   ├── raptor-sage-setup          # SAGE memory layer setup
+│   ├── raptor-sandbox-*           # Sandbox calibration and observation
+│   ├── raptor-sca-*               # SCA helpers
+│   ├── raptor-seatbelt-shim       # macOS Seatbelt shim
+│   ├── raptor-session-init        # Session initialisation
+│   ├── raptor-smt-*               # SMT constraint checkers
+│   ├── raptor-startup-check       # Startup environment validation
+│   ├── raptor-strategy-eval       # Strategy evaluation
+│   ├── raptor-threat-model        # Threat model management
+│   ├── raptor-tune                # LLM tuning helpers
+│   ├── raptor-understand          # Code understanding workflow
+│   ├── raptor-understand-annotate # Understanding annotation synthesis
+│   ├── raptor-understand-sage     # Understanding SAGE integration
+│   ├── raptor-validate-schema     # Schema validation
+│   ├── raptor-validation-helper   # Validation pipeline helper
+│   ├── raptor-verified-outcomes   # Verified outcome tracking
+│   └── raptor-zkpox               # Zero-knowledge proof of exploitation
 ├── core/                  # Shared infrastructure
 │   ├── analysis/          # Reasoning about code (reachability, CFG, taint, binary oracle)
 │   ├── annotations/       # Per-function prose annotations (manual + LLM-emitted)
+│   ├── archive/           # Archive extraction and handling
 │   ├── ast/               # AST enrichment helpers
+│   ├── atomic_fs/         # Atomic filesystem operations (tempfile + rename)
+│   ├── binary/            # Binary analysis primitives (ELF parsing, symbol lookup)
 │   ├── build/             # Build-system detection + toolchain probes
 │   ├── config/            # RaptorConfig (paths, settings)
 │   ├── coverage/          # Read-coverage tracking + summary
+│   ├── cve/               # CVE data structures and lookups
+│   ├── dataflow/          # Dataflow analysis primitives
 │   ├── dockerfile/        # Dockerfile parsing helpers
+│   ├── dynamic/           # Dynamic analysis support (Frida integration)
+│   ├── evidence/          # Evidence collection and management
+│   ├── function_taxonomy/ # Function classification (source, sink, sanitiser)
 │   ├── git/               # Sandbox-routed clone + URL allowlist
 │   ├── hash/              # SHA-256 helpers
 │   ├── http/              # EgressClient + per-host allowlists
 │   ├── inventory/         # Source inventory (file enumeration, extractors, call graph)
 │   ├── json/              # BOM-tolerant JSON utils + cache helpers
+│   ├── labeled_attempts/  # Labeled attempt tracking for iterative workflows
+│   ├── license/           # Licence detection and analysis
 │   ├── llm/               # LLM substrate (clients, providers, scorecard, tool-use loop)
 │   ├── logging/           # Structured logging with JSONL audit trail
 │   ├── oci/               # OCI image-ref parsing + canonicalisation
 │   ├── orchestration/     # Pipeline orchestration helpers
+│   ├── progress/          # Progress bar and status tracking
 │   ├── project/           # Project workspace management
+│   ├── reporting/         # Report generation and formatting
 │   ├── run/               # Per-run lifecycle (output dir, metadata)
 │   ├── sage/              # SAGE inception client + hooks (memory layer)
 │   ├── sandbox/           # Subprocess isolation (Landlock + seccomp + namespaces)
 │   ├── sarif/             # SARIF 2.1.0 parsing
+│   ├── schema_constants/  # Shared schema constants and enums
 │   ├── security/          # Prompt envelope, secret redaction, env sanitisation
+│   ├── sentinels/         # Sentinel values and markers
 │   ├── smt_solver/        # Z3-based path feasibility
+│   ├── source/            # Source file reading and normalisation
+│   ├── staleness/         # Staleness detection (hash-based drift)
 │   ├── startup/           # CLI startup banner + env validation
-│   └── witness/           # Witness collection + sandbox outcome tracking
+│   ├── status/            # Run status tracking and reporting
+│   ├── tar/               # Tar archive handling
+│   ├── threat_model/      # Threat model data structures
+│   ├── trajectories/      # LLM trajectory recording and replay
+│   ├── tuning/            # LLM tuning parameters and configuration
+│   ├── upstream_latest/   # Upstream version resolution
+│   ├── url_patterns/      # URL pattern matching and validation
+│   ├── verified_outcome/  # Verified outcome tracking
+│   ├── witness/           # Witness collection + sandbox outcome tracking
+│   └── zip/               # Zip archive handling
 ├── packages/              # Independent security capabilities
 │   ├── static-analysis/   # Semgrep scanning
 │   ├── codeql/            # CodeQL deep analysis and dataflow validation
+│   ├── coccinelle/        # Coccinelle semantic patch analysis
 │   ├── llm_analysis/      # LLM-powered vulnerability analysis
 │   ├── autonomous/        # Autonomous planning, memory, and dialogue
 │   ├── fuzzing/           # AFL++ fuzzing orchestration
 │   ├── binary_analysis/   # GDB crash analysis and triage
+│   ├── checker_synthesis/  # Automated checker synthesis
 │   ├── code_understanding/# Code comprehension (/understand)
 │   ├── cve_diff/          # CVE patch diffing
+│   ├── cve_env/           # CVE reproduction environments
+│   ├── cvss/              # CVSS scoring utilities
 │   ├── describe/          # Pre-flight target inspection (/describe)
 │   ├── diagram/           # Mermaid diagram generation (/diagram)
 │   ├── exploit_feasibility/# Binary exploit feasibility analysis
 │   ├── exploitability_validation/# Multi-stage exploitability validation
 │   ├── exploitation/      # Exploit generation engine
+│   ├── frida/             # Frida dynamic instrumentation
 │   ├── hypothesis_validation/# Hypothesis-driven validation
+│   ├── nvd/               # NVD (National Vulnerability Database) queries
+│   ├── osv/               # OSV (Open Source Vulnerabilities) queries
 │   ├── recon/             # Reconnaissance and enumeration
 │   ├── sca/               # Software Composition Analysis
 │   ├── semgrep/           # Semgrep rule management
 │   ├── source_intel/      # Source-level intelligence gathering
+│   ├── strategy_eval/     # Strategy evaluation and comparison
 │   ├── web/               # Web application testing
 │   └── zkpox/             # Zero-knowledge proof of exploitation
+├── plugins/               # Hook-based extensions
+│   └── coverage/          # Coverage tracking plugin (PostToolUse hook)
 ├── engine/                # Analysis engines (CodeQL suites, Semgrep rules)
 ├── tiers/                 # Expert personas and recovery protocols
+├── test/                  # Integration and end-to-end tests
+├── eval/                  # Evaluation harnesses and corpora
 ├── docs/                  # Documentation
 ├── out/                   # All outputs (scans, logs, reports)
 ├── raptor.py              # Main launcher (unified CLI)
@@ -99,17 +184,16 @@ raptor/
 
 
 
+## Architecture Principles
 
-## Directory Structure
-
-The detailed tree is in the overview above. Key structural notes:
+Key structural notes:
 
 - **`core/inventory/`** captures structural facts: file enumeration, function extraction,
   call-graph building, language detection, exclusions.
 - **`core/analysis/`** reasons about code properties: reachability, CFG construction,
-  taint summaries, dataflow, dominators, binary oracle, sanitizer identification.
+  taint summaries, dataflow, dominators, binary oracle, sanitiser identification.
   Split from `core/inventory/` in the analysis refactor (#880).
-- **`core/llm/`** is the LLM substrate — client abstraction, provider implementations,
+- **`core/llm/`** is the LLM substrate -- client abstraction, provider implementations,
   scorecard (per-model reliability tracking), tool-use loop.
 - **`packages/`** contains independent security capabilities. Each package owns its
   CLI, tests, and domain logic. Run `ls packages/` for the full list.
@@ -124,7 +208,7 @@ Provide minimal shared utilities that all packages need.
 ### Components
 
 #### `core/config/` - RaptorConfig
-**Responsibility**: Centralized configuration management
+**Responsibility**: Centralised configuration management
 
 ```python
 class RaptorConfig:
@@ -190,7 +274,7 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 - `get_severity(result)`: Map SARIF levels to severity
 - (Additional utilities as needed)
 
-**Why Separate Module**: SARIF parsing is shared by scanner, llm_analysis, and reporting. Centralization prevents duplication.
+**Why Separate Module**: SARIF parsing is shared by scanner, llm_analysis, and reporting. Centralisation prevents duplication.
 
 
 ## Packages Layer
@@ -218,7 +302,7 @@ python3 packages/static-analysis/scanner.py \
 
 **Responsibilities**:
 - Run Semgrep scans with configured policy groups
-- Parse and normalize SARIF outputs
+- Parse and normalise SARIF outputs
 - Generate scan metrics (files scanned, findings count, severities)
 - (Future: CodeQL integration)
 
@@ -270,7 +354,7 @@ python3 packages/codeql/agent.py \
 - Automatic language and build system detection
 - CodeQL database creation
 - Query execution with custom suites
-- Dataflow path validation and visualization
+- Dataflow path validation and visualisation
 - LLM-powered exploitability analysis of CodeQL findings
 
 **Outputs**:
@@ -315,7 +399,7 @@ python3 packages/llm_analysis/agent.py \
 **Responsibilities**:
 - Parse SARIF findings
 - Read vulnerable code files
-- Analyze exploitability with LLM reasoning
+- Analyse exploitability with LLM reasoning
 - Generate working exploit PoCs (optional)
 - Create secure patches (optional)
 - Produce analysis reports
@@ -325,9 +409,9 @@ python3 packages/llm_analysis/agent.py \
 - `exploits/` - Generated exploit code (if requested)
 - `patches/` - Proposed secure fixes (if requested)
 
-**Calibrated Aggregation Output** (Phase 3 of the calibrated-aggregation arc — see `docs/design-aggregation-dominators-wp.md`):
+**Calibrated Aggregation Output** (Phase 3 of the calibrated-aggregation arc -- see `docs/design-aggregation-dominators-wp.md`):
 
-Each finding in `orchestrated_report.json` gains an additive `calibrated_aggregation` field carrying a Dawid–Skene calibrated posterior over the panel verdict. Shape:
+Each finding in `orchestrated_report.json` gains an additive `calibrated_aggregation` field carrying a Dawid--Skene calibrated posterior over the panel verdict. Shape:
 
 ```json
 "calibrated_aggregation": {
@@ -335,8 +419,8 @@ Each finding in `orchestrated_report.json` gains an additive `calibrated_aggrega
   "credible_interval": [0.42, 0.97],
   "n_models": 3,
   "decision_class": "agentic:py/sql-injection",
-  "aggregation_method": "dawid_skene",        // or "vote"
-  "aggregation_fallback_reason": null,         // string when vote fallback
+  "aggregation_method": "dawid_skene",
+  "aggregation_fallback_reason": null,
   "converged": true,
   "model_reliabilities": [
     {"model": "haiku", "alpha": 0.91, "beta": 0.88},
@@ -345,15 +429,15 @@ Each finding in `orchestrated_report.json` gains an additive `calibrated_aggrega
 }
 ```
 
-- `aggregation_method = "dawid_skene"` when the finding had ≥2 valid panel members; the EM estimator (`core/llm/multi_model/dawid_skene.py`) infers per-model `(α, β)` confusion matrices and a per-finding latent-label posterior.
+- `aggregation_method = "dawid_skene"` when the finding had >=2 valid panel members; the EM estimator (`core/llm/multi_model/dawid_skene.py`) infers per-model `(alpha, beta)` confusion matrices and a per-finding latent-label posterior.
 - `aggregation_method = "vote"` when there's no panel (single-model run, all-error panel). `aggregation_fallback_reason` is populated (`"no_panel"`, `"insufficient_panel_size_1"`, etc.) and `posterior_true_positive` degenerates to `1.0` / `0.0` matching the legacy `is_exploitable` boolean.
-- `model_reliabilities` is per-decision-class — the same model can have different `(α, β)` on `py/sql-injection` vs `cpp/uncontrolled-format`. The deferred Phase 4 (below) will read this for posterior-weighted scorecard updates.
+- `model_reliabilities` is per-decision-class -- the same model can have different `(alpha, beta)` on `py/sql-injection` vs `cpp/uncontrolled-format`. The deferred Phase 4 (below) will read this for posterior-weighted scorecard updates.
 
 The existing `is_exploitable`, `multi_model_analyses`, and `ruling` fields are untouched; downstream consumers that don't read `calibrated_aggregation` keep working.
 
-The step is unconditional: it is purely additive (only ever adds the `calibrated_aggregation` field), so there is no opt-out to maintain. The block at `orchestrator.py:~830` is wrapped in a `try / except` — if D–S fails for any reason, the field is dropped, a `WARNING` is logged, and the failure is recorded under `orchestration.calibrated_aggregation.failed` in `orchestrated_report.json`.
+The step is unconditional: it is purely additive (only ever adds the `calibrated_aggregation` field), so there is no opt-out to maintain. The block at `orchestrator.py:~830` is wrapped in a `try / except` -- if D--S fails for any reason, the field is dropped, a `WARNING` is logged, and the failure is recorded under `orchestration.calibrated_aggregation.failed` in `orchestrated_report.json`.
 
-**Phase 4 (deferred, follow-up PR)**: the posterior-weighted scorecard update is *not* in this PR. `core/llm/scorecard/consensus.py` still grades dissenters against the majority vote via `record_event` on the single `multi_model_consensus` slot. The follow-up — gated on replay-harness validation because the Phase-1a audit returned no-data — will collapse to one consensus mode that always records *soft* credits (the legacy discrete update being the `correct=1.0, incorrect=0.0` special case), grade against the Dawid–Skene posterior (`correct_credit = p if verdict else (1-p)`), and draw its priors from `/validate` ground truth rather than the scorecard. See `docs/design-aggregation-dominators-wp.md` Phase 4.
+**Phase 4 (deferred, follow-up PR)**: the posterior-weighted scorecard update is *not* in this PR. `core/llm/scorecard/consensus.py` still grades dissenters against the majority vote via `record_event` on the single `multi_model_consensus` slot. The follow-up -- gated on replay-harness validation because the Phase-1a audit returned no-data -- will collapse to one consensus mode that always records *soft* credits (the legacy discrete update being the `correct=1.0, incorrect=0.0` special case), grade against the Dawid--Skene posterior (`correct_credit = p if verdict else (1-p)`), and draw its priors from `/validate` ground truth rather than the scorecard. See `docs/design-aggregation-dominators-wp.md` Phase 4.
 
 **LLM Abstraction**:
 ```
@@ -364,7 +448,7 @@ llm/
 ```
 
 **Benefits**:
-- Provider-agnostic (swap OpenAI ↔ Anthropic easily)
+- Provider-agnostic (swap OpenAI <-> Anthropic easily)
 - Configurable via environment variables
 - Rate limiting and error handling
 
@@ -446,7 +530,7 @@ shim or `python3 raptor.py sca`)
 
 **CLI Interface**:
 ```bash
-# Recommended — wraps the run-lifecycle helpers + project resolution.
+# Recommended -- wraps the run-lifecycle helpers + project resolution.
 libexec/raptor-sca-run /path/to/code --out /path/to/output
 
 # Equivalent direct invocation:
@@ -616,14 +700,14 @@ python3 packages/web/scanner.py \
 
 **Usage**: Consumed by `packages/static-analysis/scanner.py` for Semgrep scanning
 
-**Design Rationale**: Separating analysis engines from packages allows for centralized rule management and easier rule updates without modifying package code.
+**Design Rationale**: Separating analysis engines from packages allows for centralised rule management and easier rule updates without modifying package code.
 
 
 ## Tiered Expertise System
 
 ### `tiers/`
 
-**Purpose**: Progressive loading of expert personas and guidance for specialized tasks
+**Purpose**: Progressive loading of expert personas and guidance for specialised tasks
 
 **Components**:
 
@@ -638,7 +722,7 @@ python3 packages/web/scanner.py \
 - Loaded when errors occur during analysis
 
 #### `tiers/personas/`
-Expert persona specifications for specialized analysis:
+Expert persona specifications for specialised analysis:
 - `binary_exploitation_specialist.md` - Binary exploitation expertise
 - `codeql_analyst.md` - CodeQL query development
 - `codeql_finding_analyst.md` - CodeQL finding analysis
@@ -655,10 +739,10 @@ Expert persona specifications for specialized analysis:
 
 **Usage**:
 - Loaded on-demand by `raptor.py` (Claude Code integration)
-- Provides specialized context for different security testing phases
+- Provides specialised context for different security testing phases
 - Enables persona-based LLM prompting for improved analysis quality
 
-**Design Rationale**: Progressive loading reduces initial context size while providing deep expertise when needed. Persona-based approach allows for specialized prompting tailored to specific security tasks.
+**Design Rationale**: Progressive loading reduces initial context size while providing deep expertise when needed. Persona-based approach allows for specialised prompting tailored to specific security tasks.
 
 
 ## Entry Points
@@ -679,14 +763,14 @@ claude-code raptor.py
 - Claude Code integration for interactive analysis
 - Progressive loading of expert personas from `tiers/`
 - Slash command support (/scan, /fuzz, /web, /agentic, /codeql, /analyze, /exploit, /patch)
-- On-demand loading of specialized guidance
+- On-demand loading of specialised guidance
 - ASCII art and inspirational security quotes on startup
 - Session-based workflow management
 
 **Workflow**:
 1. Display banner and available commands
 2. Load appropriate persona based on user request
-3. Execute requested command (scan, fuzz, analyze, etc.)
+3. Execute requested command (scan, fuzz, analyse, etc.)
 4. Load analysis guidance or recovery protocols as needed
 5. Provide interactive follow-up and recommendations
 
@@ -765,8 +849,8 @@ python3 raptor_agentic.py \
 **Workflow**:
 1. **Phase 1**: Scan code with Semgrep/CodeQL (`packages/static-analysis/scanner.py`)
 2. **Phase 2**: Exploitability validation (`packages/exploitability_validation/`)
-3. **Phase 3**: Autonomous analysis (`packages/llm_analysis/agent.py`) — full with external LLM, or prep-only when Phase 4 will orchestrate
-4. **Phase 4**: Orchestration (`packages/llm_analysis/orchestrator.py`) — dispatches claude -p sub-agents when no external LLM configured
+3. **Phase 3**: Autonomous analysis (`packages/llm_analysis/agent.py`) -- full with external LLM, or prep-only when Phase 4 will orchestrate
+4. **Phase 4**: Orchestration (`packages/llm_analysis/orchestrator.py`) -- dispatches claude -p sub-agents when no external LLM configured
 
 **Outputs**:
 - `raptor_agentic_report.json` - End-to-end summary
@@ -854,7 +938,7 @@ All package agents follow a consistent CLI pattern:
 - `--policy_groups`: Comma-separated policy groups (e.g., `secrets,owasp`)
 
 **llm_analysis/agent.py**:
-- `--sarif`: SARIF file(s) to analyze (can specify multiple)
+- `--sarif`: SARIF file(s) to analyse (can specify multiple)
 - `--max-findings`: Limit number of findings to process
 - `--no-exploits`: Skip exploit generation
 - `--no-patches`: Skip patch generation
@@ -874,14 +958,14 @@ All package agents follow a consistent CLI pattern:
 **raptor_agentic.py**:
 - `--policy-groups`: Policy groups for scanning
 - `--max-findings`: Limit findings processed
-- `--no-exploits`, `--no-patches`: Control LLM analysis behavior
+- `--no-exploits`, `--no-patches`: Control LLM analysis behaviour
 - `--mode`: `fast` or `thorough`
 
 **raptor_fuzzing.py**:
 - `--binary`: Path to target binary (required)
 - `--duration`: Fuzzing duration in seconds
 - `--parallel`: Number of parallel AFL instances
-- `--max-crashes`: Maximum crashes to analyze
+- `--max-crashes`: Maximum crashes to analyse
 
 ### Help Text Standard
 
@@ -1018,6 +1102,8 @@ We think it useful to include such costings, just so people understand how much 
 - Python 3.10+ (PEP 604 union syntax used at function-definition time)
 - Standard library: pathlib, logging, json, subprocess, argparse
 
+See [dependencies](dependencies.md) for the full tool and package reference.
+
 ### Package-Specific Dependencies
 
 **static-analysis**:
@@ -1090,5 +1176,3 @@ python3 packages/llm_analysis/agent.py --help
 python3 raptor_agentic.py --help
 python3 raptor_fuzzing.py --help
 ```
-
-

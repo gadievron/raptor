@@ -218,7 +218,7 @@ targets get a harness or snapshot step instead. `/binary harness` writes an
 evidence-backed harness spec for the chosen ingress and only emits candidate
 source when the ABI or IOCTL contract is explicit. It does not blag its way from “`memcpy` exists” to “this is
 exploitable”: imports, selectors and call edges stay candidates until
-something mechanical proves more. See `docs/binary-understanding.md`.
+something mechanical proves more. See `docs/binary-analysis.md`.
 
 ---
 
@@ -460,19 +460,27 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 
 ## Documentation
 
+See `docs/README.md` for the full index. Key guides:
+
 | File | Contents |
 |------|----------|
-| `docs/CLAUDE_CODE_USAGE.md` | Complete usage guide for interactive sessions |
-| `docs/PYTHON_CLI.md` | Python CLI reference for scripting and CI |
-| `docs/sca.md` | Software composition analysis reference |
-| `docs/FUZZING_QUICKSTART.md` | Binary fuzzing guide |
-| `docs/ARCHITECTURE.md` | Technical architecture detail |
-| `docs/sandbox.md` | Subprocess sandboxing: threat model, API, configuration |
-| `docs/threat-model.md` | Project threat model feature reference |
-| `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |
-| `docs/DEPENDENCIES.md` | External tools, versions, and licences |
-| `.claude/commands/oss-forensics.md` | OSS forensics investigation guide |
-| `tiers/personas/README.md` | Persona reference |
+| `docs/commands.md` | Complete slash-command reference with every flag |
+| `docs/architecture.md` | Codebase structure and directory tree |
+| `docs/llm.md` | LLM provider configuration, Bedrock, multi-model workflows |
+| `docs/sandbox.md` | Process isolation: profiles, Landlock, namespaces |
+| `docs/validation.md` | Exploitability validation pipeline (stages 0--1) |
+| `docs/static-analysis.md` | Semgrep and Coccinelle rules |
+| `docs/codeql.md` | CodeQL integration and autonomous analysis |
+| `docs/binary-analysis.md` | Binary oracle, `/binary`, exploit feasibility |
+| `docs/fuzzing.md` | AFL++ and libFuzzer |
+| `docs/crash-analysis.md` | Autonomous crash root-cause analysis |
+| `docs/sca.md` | Software composition analysis |
+| `docs/frida.md` | Dynamic instrumentation |
+| `docs/security.md` | RAPTOR's own security model |
+| `docs/threat-model.md` | Per-project threat model feature |
+| `docs/python-cli.md` | Python CLI reference for scripting and CI |
+| `docs/dependencies.md` | External tools, versions, and licences |
+| `tiers/personas/README.md` | Expert persona reference |
 
 ---
 
