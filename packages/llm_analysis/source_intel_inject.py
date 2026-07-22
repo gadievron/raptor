@@ -102,7 +102,9 @@ _SOURCE_INTEL_CWES = frozenset({
 _SI_RESULT_CACHE: Dict[str, Tuple[str, Optional[Any]]] = {}
 _SI_LOCK = threading.RLock()
 
-def prepare_source_intel(repo_path: Path) -> None:
+def prepare_source_intel(
+    repo_path: Path, *, checklist: Optional[Dict[str, Any]] = None,
+) -> None:
     """Pre-seed the source_intel result cache for ``repo_path``.
 
     Called once per orchestrator run, before dispatch starts. Runs
@@ -147,7 +149,7 @@ def prepare_source_intel(repo_path: Path) -> None:
             _SI_RESULT_CACHE[key] = (sig, None)
         return
     try:
-        result = _analyze(repo_path)
+        result = _analyze(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "prepare_source_intel: analyze(%s) failed: %s; "
@@ -178,7 +180,7 @@ def prepare_source_intel(repo_path: Path) -> None:
         # a field. Counts default to 0 when the attribute is absent.
         def _count(attr: str) -> int:
             return len(getattr(result, attr, ()) or ())
-        logger.info(
+        logger.debug(
             "prepare_source_intel: %s ready — attributes=%d, aborts=%d, "
             "allocations=%d, capabilities=%d, lsm_hooks=%d, hazards=%d",
             repo_path,
@@ -287,7 +289,7 @@ def evidence_blocks_for_finding(
     # log lines only on render-failure (debug level) — successful
     # injections rendered silently, making "did source_intel evidence
     # reach the LLM prompt?" unanswerable without code archaeology.
-    logger.info(
+    logger.debug(
         "source_intel evidence injected for finding rule_id=%s "
         "function=%s (%d render lines)",
         rule_id, finding_function or "<unknown>", len(lines),

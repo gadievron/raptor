@@ -482,7 +482,7 @@ def _attach_calibrated_aggregation(
             "fallback_by_reason": dict(fallback_by_reason),
             "total": len(verdicts),
         })
-        logger.info(
+        logger.debug(
             "Calibrated aggregation: %d D–S, %d vote-fallback "
             "[%s] (%d total)",
             n_ds, n_vote, breakdown, len(verdicts),
@@ -519,6 +519,7 @@ def orchestrate(
     deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
     allow_unreachable: bool = False,
+    checklist: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -598,7 +599,7 @@ def orchestrate(
         from packages.llm_analysis.source_intel_inject import (
             prepare_source_intel,
         )
-        prepare_source_intel(repo_path)
+        prepare_source_intel(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
 
@@ -1668,7 +1669,7 @@ def _resolve_cross_family_checker(
     )
     for m in candidates:
         if not same_family(primary_name, m.model_name):
-            logger.info("Cross-family checker: %s (from resolved roles)", m.model_name)
+            logger.debug("Cross-family checker: %s (from resolved roles)", m.model_name)
             return m
 
     return _auto_detect_cross_family_checker(primary_family)
@@ -1912,8 +1913,17 @@ def _merge_results(
             if k not in finding:
                 finding[k] = v
 
-        # Ensure standard fields are set
-        finding["exploitable"] = cc.get("is_exploitable", False)
+        # Ensure standard fields are set.
+        # Invariant: a finding that isn't a true positive cannot be
+        # exploitable. The LLM sometimes contradicts itself (e.g.
+        # is_true_positive=False but is_exploitable=True); enforce
+        # the logical floor here so downstream consumers never see
+        # an impossible verdict combination.
+        _is_tp = cc.get("is_true_positive", True)
+        _is_exp = cc.get("is_exploitable", False)
+        if not _is_tp and _is_exp:
+            _is_exp = False
+        finding["exploitable"] = _is_exp
         finding["exploitability_score"] = cc.get("exploitability_score", 0)
 
         if finding["exploitable"]:

@@ -607,6 +607,9 @@ class AutonomousSecurityAgentV2:
     def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
                  prep_only: bool = False,
                  synthesise_checkers: bool = True,
+                 refine_checkers: bool = True,
+                 generate_exploits: bool = True,
+                 generate_patches: bool = True,
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
                  record_witnesses: bool = True,
@@ -620,6 +623,9 @@ class AutonomousSecurityAgentV2:
         # for variants found across the codebase. Default on; opt out
         # via ``--no-checker-synthesis`` for cost-sensitive runs.
         self.synthesise_checkers = synthesise_checkers
+        self.refine_checkers = refine_checkers
+        self.generate_exploits = generate_exploits
+        self.generate_patches = generate_patches
         # Compile-verify every LLM-emitted exploit by shelling out to
         # gcc in a sandboxed temp dir. Default on; opt out via
         # ``--no-verify-exploits`` for time-sensitive runs. Wall-clock
@@ -1948,7 +1954,9 @@ class AutonomousSecurityAgentV2:
                 from packages.llm_analysis.source_intel_inject import (
                     prepare_source_intel,
                 )
-                prepare_source_intel(self.repo_path)
+                prepare_source_intel(
+                    self.repo_path, checklist=checklist,
+                )
             except Exception as e:  # noqa: BLE001
                 # Surface at INFO so the failure path is visible in
                 # operator logs — gap-#2 verification on /agentic
@@ -2005,23 +2013,25 @@ class AutonomousSecurityAgentV2:
                     logger.info(f"VULNERABILITY {idx}/{len(unique_findings)}")
                     logger.info(f"{'█' * 70}")
 
-                # Attach function metadata from inventory checklist
-                if checklist and not finding.get("metadata"):
+                # Attach function metadata from inventory checklist.
+                # Gate on missing "name" (not missing metadata dict):
+                # upstream parsers may pre-populate metadata with
+                # class/attribute fields but omit the function name,
+                # and synthesis needs name to build a seed.
+                existing_meta = finding.get("metadata") or {}
+                if checklist and not existing_meta.get("name"):
                     fpath = finding.get("file_path") or finding.get("file") or ""
                     fline = finding.get("start_line") if finding.get("start_line") is not None else finding.get("startLine", 0)
                     func = _lookup_function(
                         checklist, fpath, fline,
                         repo_root=str(self.repo_path),
                     )
-                    if func and func.get("metadata"):
-                        finding["metadata"] = dict(func["metadata"])
-                    # If /understand --map enriched the checklist, also surface
-                    # the priority markers so the analysis prompt can mention
-                    # the function's architectural role (entry_point / sink).
-                    # Use ``or {}`` (not setdefault) — finding["metadata"] can
-                    # be explicitly None from upstream SARIF parsers, and
-                    # setdefault would return None in that case, then
-                    # None["priority"] = ... raises TypeError.
+                    if func:
+                        inv_meta = func.get("metadata") or {}
+                        merged = {**existing_meta, **inv_meta}
+                        if func.get("name"):
+                            merged["name"] = func["name"]
+                        finding["metadata"] = merged
                     if func and func.get("priority"):
                         metadata = finding.get("metadata") or {}
                         metadata["priority"] = func["priority"]
@@ -2229,11 +2239,11 @@ class AutonomousSecurityAgentV2:
                         exploitable += 1
 
                         # 2. Generate exploit using LLM
-                        if self.generate_exploit(vuln):
+                        if self.generate_exploits and self.generate_exploit(vuln):
                             exploits_generated += 1
 
                         # 3. Generate patch using LLM (only for exploitable)
-                        if self.generate_patch(vuln):
+                        if self.generate_patches and self.generate_patch(vuln):
                             patches_generated += 1
 
                         # 4. KNighter follow-up: synthesise a checker
@@ -2256,10 +2266,11 @@ class AutonomousSecurityAgentV2:
                                     checklist=checklist,
                                     repo_root=self.repo_path,
                                     llm_client=self.llm,
+                                    refine=self.refine_checkers,
                                 )
                                 variant_annotations += n_variants
                             except Exception:
-                                logger.debug(
+                                logger.warning(
                                     "checker followup error", exc_info=True,
                                 )
                     else:
@@ -2442,11 +2453,18 @@ def main() -> None:
     ap.add_argument(
         "--no-checker-synthesis",
         action="store_true",
-        help="Skip the KNighter follow-up: don't synthesise a "
-             "checker rule per confirmed finding, don't emit "
-             "variant annotations. Use to cut LLM cost on confirmed "
+        help="Skip checker synthesis entirely: don't synthesise a "
+             "rule per confirmed finding, don't emit variant "
+             "annotations. Use to cut LLM cost on confirmed "
              "exploitable findings — at the price of losing variant "
              "discovery.",
+    )
+    ap.add_argument(
+        "--no-checker-refinement",
+        action="store_true",
+        help="Run checker synthesis in single-shot mode instead of "
+             "the iterative FP-elimination loop (up to 5 rounds). "
+             "Faster but rules may have higher false-positive rates.",
     )
     ap.add_argument(
         "--no-verify-exploits",
@@ -2492,6 +2510,16 @@ def main() -> None:
              "beside the curated CVE ones. No effect on a fresh run with "
              "no prior corpus; the opt-out exists for cost control and "
              "byte-for-byte run comparison.",
+    )
+    ap.add_argument(
+        "--no-exploits",
+        action="store_true",
+        help="Skip LLM exploit generation for exploitable findings.",
+    )
+    ap.add_argument(
+        "--no-patches",
+        action="store_true",
+        help="Skip LLM patch generation for exploitable findings.",
     )
     ap.add_argument(
         "--sage-precall",
@@ -2552,6 +2580,12 @@ def main() -> None:
         getattr(args, "aggregate", None),
     ])
 
+    try:
+        from core.llm.log_quiet import quiet_noisy_loggers
+        quiet_noisy_loggers()
+    except ImportError:
+        pass
+
     # Suggest --findings if validation artifacts exist nearby
     if args.sarif and not args.findings:
         out_path = Path(args.out).resolve() if args.out else None
@@ -2582,10 +2616,13 @@ def main() -> None:
         out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
+        refine_checkers=not args.no_checker_refinement,
         verify_exploits=not args.no_verify_exploits,
         judge_intent=not args.no_judge_intent,
         record_witnesses=not args.no_record_witnesses,
         use_verified_exemplars=not args.no_verified_exemplars,
+        generate_exploits=not args.no_exploits,
+        generate_patches=not args.no_patches,
         sage_precall_memories=sage_precall_memories,
     )
 
@@ -2634,9 +2671,12 @@ def main() -> None:
                     out_dir=out_dir,
                     max_parallel=args.max_parallel,
                     max_findings=args.max_findings,
+                    no_exploits=args.no_exploits,
+                    no_patches=args.no_patches,
                     llm_config=llm_config,
                     deep_validate=getattr(args, "deep_validate", False),
                     deep_validate_disabled=getattr(args, "no_deep_validate", False),
+                    checklist=checklist,
                 )
                 if result:
                     return

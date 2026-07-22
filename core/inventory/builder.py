@@ -466,7 +466,7 @@ def build_inventory(
     logger.info(f"Built inventory: {len(files_info)} files, {total_items} items "
                 f"({total_functions} functions, {total_sloc} SLOC, "
                 f"{skipped} skipped, {len(excluded_files)} excluded)")
-    logger.info(f"Saved to: {checklist_file}")
+    logger.debug(f"Saved to: {checklist_file}")
 
     return inventory
 

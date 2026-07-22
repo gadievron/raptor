@@ -1530,6 +1530,17 @@ Examples:
     # Keep original target path for metadata/findings (even if we scan a temp copy)
     original_repo_path = repo_path
 
+    # Clean up stale raptor_git_* dirs leaked by prior runs killed with
+    # SIGKILL (atexit handlers don't fire on SIGKILL).
+    import glob as _glob
+    import shutil as _shutil
+    import tempfile as _tempfile
+    for _stale in _glob.glob(os.path.join(_tempfile.gettempdir(), "raptor_git_*")):
+        try:
+            _shutil.rmtree(_stale)
+        except OSError:
+            pass
+
     # Check for .git directory (required for semgrep)
     git_dir = repo_path / ".git"
     if not git_dir.exists():
@@ -1591,23 +1602,37 @@ Examples:
                         "-c", "user.name=raptor",
                         "-c", "user.email=raptor@local"]
             from core.sandbox import run as sandbox_run
-            result = sandbox_run(
-                ["git"] + git_safe + ["init"], block_network=True,
-                cwd=temp_repo, capture_output=True, text=True, timeout=30, env=env
-            )
+            # Suppress per-call sandbox INFO lines for internal git
+            # housekeeping — the operator already sees the "Creating a
+            # temporary copy" message; 3 repeated sandbox lines are noise.
+            import logging as _logging
+            _sb_log = _logging.getLogger("core.sandbox.context")
+            _sb_prev = _sb_log.level
+            _sb_log.setLevel(_logging.WARNING)
+            try:
+                result = sandbox_run(
+                    ["git"] + git_safe + ["init"], block_network=True,
+                    cwd=temp_repo, capture_output=True, text=True, timeout=30,
+                    env=env, env_caller_filtered=True,
+                )
+                if result.returncode == 0:
+                    sandbox_run(
+                        ["git"] + git_safe + ["add", "."], block_network=True,
+                        cwd=temp_repo, capture_output=True, timeout=60,
+                        env=env, env_caller_filtered=True,
+                    )
+                    sandbox_run(
+                        ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
+                        block_network=True,
+                        cwd=temp_repo, capture_output=True, timeout=60,
+                        env=env, env_caller_filtered=True,
+                    )
+            finally:
+                _sb_log.setLevel(_sb_prev)
             if result.returncode == 0:
-                sandbox_run(
-                    ["git"] + git_safe + ["add", "."], block_network=True,
-                    cwd=temp_repo, capture_output=True, timeout=60, env=env
-                )
-                sandbox_run(
-                    ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
-                    block_network=True,
-                    cwd=temp_repo, capture_output=True, timeout=60, env=env
-                )
                 repo_path = temp_repo
-                print(f"  Temporary git repo created at {temp_repo}")
-                logger.info(f"Using temp git repo: {temp_repo}")
+                print("  Temporary git repo created for scanning")
+                logger.debug(f"Using temp git repo: {temp_repo}")
             else:
                 print(f"  ✗ Failed to initialize git repository: {result.stderr}", file=sys.stderr)
                 logger.error(f"Git init failed: {result.stderr}")
@@ -1671,8 +1696,16 @@ Examples:
     # layering, RaptorConfig mutation, and the no-leak-across-runs
     # guarantee — lives in the shared CLI helper. raptor_codeql.py
     # uses the same call site to keep behaviour aligned.
+    #
+    # Explicit --binary paths resolve early here (Phase 0 mitigation
+    # check needs them). Default autodetect is deferred to the
+    # post-scan call site below — CodeQL may compile the target
+    # (C/C++/Go/Java), leaving build artefacts that autodetect finds.
     from core.analysis.binary_oracle_cli import apply_to_config
-    apply_to_config(args, Path(args.repo))
+    if getattr(args, "binary", None):
+        apply_to_config(args, Path(args.repo))
+    elif getattr(args, "no_binary_oracle", False):
+        apply_to_config(args, Path(args.repo))
 
     workflow_start = time.time()
 
@@ -1779,7 +1812,7 @@ Examples:
         from core.inventory import build_inventory
         if not (out_dir / "checklist.json").exists():
             build_inventory(str(original_repo_path), str(out_dir))
-            logger.info(f"Inventory checklist built: {out_dir / 'checklist.json'}")
+            logger.debug(f"Inventory checklist built: {out_dir / 'checklist.json'}")
     except Exception as e:
         logger.warning(f"Inventory build failed (continuing without metadata): {e}")
 
@@ -1883,12 +1916,20 @@ Examples:
     # (codeql analyzer, /validate post-pass) so they don't re-walk the tree.
     # ========================================================================
     reachability_prepass_result = None
+    scan_inventory = None
+    _checklist_path = out_dir / "checklist.json"
+    if _checklist_path.exists():
+        try:
+            scan_inventory = load_json(_checklist_path)
+        except Exception:
+            pass
     try:
         from core.orchestration import run_reachability_prepass
         reachability_prepass_result = run_reachability_prepass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
             allow_unreachable=getattr(args, "allow_unreachable", False),
+            inventory=scan_inventory,
         )
         if reachability_prepass_result.ran:
             logger.info(
@@ -1973,7 +2014,7 @@ Examples:
             "--out", str(out_dir / "scan"),
             *sandbox_passthrough,
         ]
-        logger.info("Running: Scanning code with Semgrep")
+        logger.debug("Running: Scanning code with Semgrep")
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         # ``semgrep_cmd`` is a list of RAPTOR-constructed argv;
         # env inherits from RAPTOR's own process (the operator's
@@ -2034,7 +2075,7 @@ Examples:
             codeql_cmd.append("--extended")
         if args.codeql_cli:
             codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
-        logger.info("Running: Scanning code with CodeQL")
+        logger.debug("Running: Scanning code with CodeQL")
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         # Explicit ``env=RaptorConfig.get_safe_env()`` — strips
         # DANGEROUS_ENV_VARS (LD_PRELOAD / DYLD_* / GCONV_PATH
@@ -2121,7 +2162,7 @@ Examples:
             # the coverage records — are first-class run artifacts. No transient
             # dir to discover, no copy.
             actual_scan_dir = out_dir / "scan"
-            logger.info(f"Semgrep output in run dir: {actual_scan_dir}")
+            logger.debug(f"Semgrep output in run dir: {actual_scan_dir}")
 
             scan_metrics_file = actual_scan_dir / "scan_metrics.json"
             if scan_metrics_file.exists():
@@ -2524,6 +2565,16 @@ Examples:
         print(f"  Findings entering LLM analysis: {validated_findings}")
 
     # ========================================================================
+    # POST-SCAN: Binary oracle autodetect (deferred from pre-scan)
+    # ========================================================================
+    # Autodetect runs AFTER CodeQL because CodeQL may compile the target
+    # (C/C++/Go/Java), leaving build artefacts that autodetect can find.
+    # Explicit --binary and --no-binary-oracle are handled early (before
+    # Phase 0); this covers the default autodetect + --binary-auto paths.
+    if not getattr(args, "binary", None) and not getattr(args, "no_binary_oracle", False):
+        apply_to_config(args, repo_path)
+
+    # ========================================================================
     # PHASE 3: AUTONOMOUS ANALYSIS
     # ========================================================================
     print("\n" + "=" * 70)
@@ -2586,6 +2637,10 @@ Examples:
         # want annotation side effects (CI / scratch runs) can suppress.
         if args.no_annotations:
             analysis_cmd.append("--no-annotations")
+        if args.no_exploits:
+            analysis_cmd.append("--no-exploits")
+        if args.no_patches:
+            analysis_cmd.append("--no-patches")
         precall_path = out_dir / "sage_precall_scan.json"
         if precall_path.exists():
             analysis_cmd.extend(["--sage-precall", str(precall_path)])
@@ -2664,6 +2719,11 @@ Examples:
     # ========================================================================
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
+    try:
+        from core.llm.log_quiet import quiet_noisy_loggers
+        quiet_noisy_loggers()
+    except ImportError:
+        pass
     orchestration_result = None
     if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
         print("\n" + "=" * 70)
@@ -2701,6 +2761,7 @@ Examples:
                 deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
                 allow_unreachable=getattr(args, "allow_unreachable", False),
+                checklist=scan_inventory,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")

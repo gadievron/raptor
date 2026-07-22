@@ -688,14 +688,14 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         else:
             # TCP-only path (ABI >= 4 or fallback).
             if block_network:
-                logger.info(
+                logger.debug(
                     "Sandbox: use_egress_proxy=True overrides "
                     "block_network=True (net-ns would hide the "
                     "loopback proxy from the child)"
                 )
                 block_network = False
             if allowed_tcp_ports:
-                logger.info(
+                logger.debug(
                     "Sandbox: use_egress_proxy=True overrides "
                     "allowed_tcp_ports=%s with proxy port",
                     allowed_tcp_ports,
@@ -1457,15 +1457,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         cmd_display = escape_nonprintable(
             " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or "<empty cmd>"
         )
-        # Always log so operators can see the effective sandbox config for
-        # every subprocess — previously rlimits-only runs were silent,
-        # making it hard to verify in the field that the sandbox ran at all.
-        # Demoted to DEBUG when only rlimits apply, INFO when any
-        # isolation layer is active.
-        if layers == ["limits"]:
-            logger.debug(f"Sandbox (limits): {cmd_display}")
-        else:
-            logger.info(f"Sandbox ({'+'.join(layers)}): {cmd_display}")
+        logger.debug(f"Sandbox ({'+'.join(layers)}): {cmd_display}")
 
         if need_unshare:
             # --pid --fork: new PID namespace hides host processes from

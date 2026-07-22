@@ -180,6 +180,14 @@ def emit_finding_annotation(
                 metadata["start_line"] = str(line_start)
                 metadata["end_line"] = str(line_end)
 
+        if file_path:
+            fp = Path(file_path)
+            if fp.is_absolute():
+                try:
+                    file_path = str(fp.relative_to(Path(repo_root).resolve()))
+                except ValueError:
+                    return None
+
         ann = Annotation(
             file=file_path,
             function=name,

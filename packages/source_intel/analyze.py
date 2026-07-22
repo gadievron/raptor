@@ -781,6 +781,7 @@ def analyze(
     target: Path,
     rules_dir: Optional[Path] = None,
     timeout_per_rule: int = 180,
+    checklist: Optional[Dict[str, Any]] = None,
 ) -> SourceIntelResult:
     """Run shipped source_intel cocci rules against ``target``.
 
@@ -840,7 +841,7 @@ def analyze(
     # instead of the regex fallback. Best-effort — when inventory
     # build raises, evidence parsing continues with the regex
     # fallback path.
-    _maybe_register_inventory(target)
+    _maybe_register_inventory(target, checklist=checklist)
 
     rules_executed: List[str] = []
     rules_failed: List[Tuple[str, str]] = []
@@ -1752,11 +1753,16 @@ def clear_inventory_cache() -> None:
         _INVENTORY_BY_TARGET.clear()
 
 
-def _maybe_register_inventory(target: Path) -> None:
+def _maybe_register_inventory(
+    target: Path, *, checklist: Optional[Dict[str, Any]] = None,
+) -> None:
     """Best-effort: build the inventory for ``target`` and stash it
     in the module-global cache so subsequent ``_enclosing_function``
     queries route through tree-sitter (real C/C++ AST) instead of
     the regex fallback.
+
+    When ``checklist`` is provided (a pre-built inventory dict from
+    the scan phase), it is registered directly — no rebuild needed.
 
     Failure modes silently fall through (no inventory cached → regex
     fallback handles the queries):
@@ -1767,6 +1773,9 @@ def _maybe_register_inventory(target: Path) -> None:
       * ``build_inventory`` raises (permission errors, malformed
         files) — log at debug level, continue without inventory
     """
+    if checklist is not None:
+        _register_inventory(target, checklist)
+        return
     try:
         from core.inventory import build_inventory
     except ImportError:

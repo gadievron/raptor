@@ -517,7 +517,7 @@ class LLMClient:
         # permission flips / filesystem goes read-only mid-run.
         self._cache_write_failures = 0
 
-        logger.info("LLM Client initialized")
+        logger.debug("LLM Client initialized")
         if self._pinned_model:
             # Caller has signalled it will override the model on every call.
             # Suppress the misleading "Primary: <auto-selected>" and

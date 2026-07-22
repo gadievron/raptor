@@ -323,6 +323,33 @@ class TestEmitFindingAnnotation:
         ann = read_annotation(ann_base, "src/auth.py", "login")
         assert "hash" not in ann.metadata
 
+    def test_absolute_file_path_normalised_to_relative(self, tmp_path):
+        """SARIF findings may carry absolute file_path values;
+        annotation storage requires relative paths."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "src").mkdir()
+        (repo / "src" / "auth.py").write_text(
+            "\n" * 9 + "def login(req):\n    return query(req)\n" * 8
+        )
+        ann_base = tmp_path / "anns"
+        ck = _checklist_with_function()
+        v = StubVuln(
+            file_path=str(repo / "src" / "auth.py"),
+            analysis={
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "test",
+            },
+        )
+        path = emit_finding_annotation(
+            v, base_dir=ann_base, checklist=ck, repo_root=repo,
+        )
+        assert path is not None
+        ann = read_annotation(ann_base, "src/auth.py", "login")
+        assert ann is not None
+        assert ann.metadata["status"] == "finding"
+
     def test_swallows_unexpected_errors(self, tmp_path, monkeypatch):
         """Any exception inside emit must be logged and swallowed —
         annotation failures cannot break /agentic."""

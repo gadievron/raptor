@@ -206,7 +206,7 @@ def build_from_codeql(sarif_path: Path) -> Optional[Dict[str, Any]]:
         # Tool info
         tool = run.get("tool", {})
         driver = tool.get("driver", {})
-        version = version or driver.get("version", "")
+        version = version or driver.get("version") or driver.get("semanticVersion") or ""
         rules.extend(r.get("id", "") for r in driver.get("rules", []))
 
         # Packs
