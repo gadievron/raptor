@@ -40,7 +40,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
 
   sage:
-    image: ghcr.io/l33tdawg/sage:11.10.0
+    image: ghcr.io/l33tdawg/sage:11.11.6
     ports:
       - "8090:8080"
     volumes:
