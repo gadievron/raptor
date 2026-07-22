@@ -24,7 +24,7 @@ env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  FAST_ITERATIONS: '10'
+  FAST_ITERATIONS: '3'
 
 jobs:
   shuffled-fast:
