@@ -39,9 +39,11 @@ _HEADER_EXTENSIONS = frozenset({".h", ".hpp", ".hxx", ".hh", ".h++"})
 _DECL_RE = re.compile(
     r"(?a)"
     r"(?:^|;|\})\s*"
-    r"(?:(?:__attribute__\s*\(\([^)]*\)\)"
+    r"(?:(?:extern|static|inline|const|volatile|unsigned|signed|struct|enum|union"
+    r"|long|short|void|int|char|float|double|size_t|ssize_t|bool|_Bool"
+    r"|__attribute__\s*\(\([^)]*\)\)"
     r"|__declspec\s*\([^)]*\)"
-    r"|\w+"
+    r"|\w+"                        # any identifier (typedefs, macros, types)
     r"|\*)\s+)*"
     r"[*\s]*"
     r"(\w+)"                       # capture: function name
