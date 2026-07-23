@@ -1244,11 +1244,10 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                     " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
                 )
             if strict_env:
-                _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
-                _stripped = [k for k in kwargs["env"] if k in _dangerous]
+                _stripped = [k for k in kwargs["env"] if k in RaptorConfig.DANGEROUS_ENV_VARS]
                 if _stripped:
                     kwargs["env"] = {k: v for k, v in kwargs["env"].items()
-                                     if k not in _dangerous}
+                                     if k not in RaptorConfig.DANGEROUS_ENV_VARS}
                     logger.info(
                         f"Sandbox: strict_env=True — stripped DANGEROUS_ENV_VARS "
                         f"from caller env: {sorted(_stripped)}"

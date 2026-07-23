@@ -11,7 +11,7 @@ import fnmatch
 import hashlib
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
@@ -308,26 +308,33 @@ def build_inventory(
             total_sloc += result.get('sloc', 0)
 
     if parallel and len(file_list) > 10:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {
-                executor.submit(
-                    _process_single_file, fp, target, exclude_patterns,
-                    skip_generated, old_files_by_path, allow_unreachable,
-                    macro_config, build_tus, crate_modules,
-                ): fp
-                for fp in file_list
-            }
+        initargs = (
+            target, exclude_patterns, skip_generated,
+            old_files_by_path, allow_unreachable,
+            macro_config, build_tus, crate_modules,
+        )
+        try:
+            pool = ProcessPoolExecutor(
+                max_workers=MAX_WORKERS,
+                initializer=_init_inventory_worker,
+                initargs=initargs,
+            )
+        except (OSError, RuntimeError):
+            pool = None
+        if pool is None:
+            pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+            submit_fn = lambda fp: pool.submit(  # noqa: E731
+                _process_single_file, fp, target, exclude_patterns,
+                skip_generated, old_files_by_path, allow_unreachable,
+                macro_config, build_tus, crate_modules,
+            )
+        else:
+            submit_fn = lambda fp: pool.submit(  # noqa: E731
+                _process_file_in_worker, fp,
+            )
+        with pool:
+            futures = {submit_fn(fp): fp for fp in file_list}
             for future in as_completed(futures):
-                # Per-future exception isolation: pre-fix a single
-                # worker raising (tree-sitter parser bug, encoding
-                # issue, or any unforeseen extractor error) bubbled
-                # up through ``future.result()`` and killed the
-                # whole ``as_completed`` loop, abandoning every other
-                # in-flight future. The inventory was then partial
-                # without the operator seeing why. Now: the failing
-                # file is logged at WARNING (file path included so
-                # the operator can reproduce), counted as a skip,
-                # and the rest of the pool finishes.
                 fp = futures[future]
                 try:
                     _collect_result(future.result())
@@ -649,6 +656,43 @@ def _collect_source_files(
                 file_list.append(filepath)
 
     return file_list, pruned_dirs
+
+
+_worker_ctx: Dict[str, Any] = {}
+
+
+def _init_inventory_worker(
+    target: Path,
+    exclude_patterns: List[str],
+    skip_generated: bool,
+    old_files: Dict[str, Any],
+    allow_unreachable: bool,
+    macro_config,
+    build_tus,
+    crate_modules,
+) -> None:
+    _worker_ctx["target"] = target
+    _worker_ctx["exclude_patterns"] = exclude_patterns
+    _worker_ctx["skip_generated"] = skip_generated
+    _worker_ctx["old_files"] = old_files
+    _worker_ctx["allow_unreachable"] = allow_unreachable
+    _worker_ctx["macro_config"] = macro_config
+    _worker_ctx["build_tus"] = build_tus
+    _worker_ctx["crate_modules"] = crate_modules
+
+
+def _process_file_in_worker(filepath: Path) -> Optional[Dict[str, Any]]:
+    return _process_single_file(
+        filepath,
+        _worker_ctx["target"],
+        _worker_ctx["exclude_patterns"],
+        _worker_ctx["skip_generated"],
+        _worker_ctx["old_files"],
+        _worker_ctx["allow_unreachable"],
+        _worker_ctx["macro_config"],
+        _worker_ctx["build_tus"],
+        _worker_ctx["crate_modules"],
+    )
 
 
 def _process_single_file(

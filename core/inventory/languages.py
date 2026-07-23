@@ -1,5 +1,6 @@
 """Language detection by file extension."""
 
+import functools
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,7 @@ LANGUAGE_MAP = {
 }
 
 
+@functools.lru_cache(maxsize=64)
 def detect_language(filepath: str) -> Optional[str]:
     """Detect language from file extension."""
     ext = Path(filepath).suffix.lower()

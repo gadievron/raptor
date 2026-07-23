@@ -24,6 +24,8 @@ Primary consumers:
 
 from __future__ import annotations
 
+import functools
+import heapq
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
@@ -233,8 +235,13 @@ def _build_dangerous_set() -> FrozenSet[str]:
     """Merge source-level sinks with C-level sinks from function_taxonomy."""
     combined = set(_SOURCE_LEVEL_SINKS)
     try:
-        from core.function_taxonomy import EXEC_FUNCS
-        combined |= EXEC_FUNCS
+        from core.function_taxonomy import (
+            EXEC_FUNCS,
+            MEMORY_COPY_FUNCS,
+            SCAN_FAMILY_FUNCS,
+            STRING_OVERFLOW_FUNCS,
+        )
+        combined |= EXEC_FUNCS | MEMORY_COPY_FUNCS | SCAN_FAMILY_FUNCS | STRING_OVERFLOW_FUNCS
     except ImportError:
         pass
     return frozenset(combined)
@@ -243,7 +250,7 @@ def _build_dangerous_set() -> FrozenSet[str]:
 DANGEROUS_TARGETS: FrozenSet[str] = _build_dangerous_set()
 
 
-@dataclass
+@dataclass(slots=True)
 class SinkInfo:
     """A mechanically-discovered dangerous sink."""
     file: str
@@ -253,14 +260,14 @@ class SinkInfo:
     direct: bool = True  # True = direct caller, False = transitive
 
 
-@dataclass
+@dataclass(slots=True)
 class ChainHop:
     """One hop in a mechanical call chain toward a dangerous sink."""
     file: str
     function: str
 
 
-@dataclass
+@dataclass(slots=True)
 class TransitiveReach:
     """A function that transitively reaches a dangerous sink."""
     file: str
@@ -270,7 +277,7 @@ class TransitiveReach:
     chain: Optional[List[ChainHop]] = None  # forward path toward sink
 
 
-@dataclass
+@dataclass(slots=True)
 class FrameworkAPI:
     """An autonomously discovered framework API target."""
     name: str            # dotted name (e.g. "luci.http.formvalue")
@@ -278,7 +285,7 @@ class FrameworkAPI:
     files: List[str]     # files that call it (sample)
 
 
-@dataclass
+@dataclass(slots=True)
 class UnreachableVerdict:
     """Per-function verdict for sink unreachability eligibility."""
     file: str
@@ -372,6 +379,11 @@ def _is_dangerous(chain: List[str]) -> Optional[str]:
     """
     if not chain:
         return None
+    return _is_dangerous_cached(tuple(chain))
+
+
+@functools.lru_cache(maxsize=1024)
+def _is_dangerous_cached(chain: Tuple[str, ...]) -> Optional[str]:
     dotted = ".".join(chain)
     if dotted in DANGEROUS_TARGETS:
         return dotted
@@ -603,7 +615,7 @@ def discover_sinks(
         framework_apis.append(FrameworkAPI(
             name=target,
             caller_count=n_callers,
-            files=sorted(target_files[target])[:5],
+            files=heapq.nsmallest(5, target_files[target]),
         ))
     framework_apis.sort(key=lambda f: -f.caller_count)
 

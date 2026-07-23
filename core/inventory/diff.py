@@ -19,10 +19,12 @@ def compare_inventories(old: Dict[str, Any], new: Dict[str, Any]) -> Optional[Di
         )
         return None
 
-    added = sorted(set(new_shas) - set(old_shas))
-    removed = sorted(set(old_shas) - set(new_shas))
+    old_keys = old_shas.keys()
+    new_keys = new_shas.keys()
+    added = sorted(new_keys - old_keys)
+    removed = sorted(old_keys - new_keys)
     modified = sorted(
-        p for p in set(old_shas) & set(new_shas)
+        p for p in old_keys & new_keys
         if old_shas[p] and new_shas[p] and old_shas[p] != new_shas[p]
     )
 

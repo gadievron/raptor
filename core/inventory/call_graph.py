@@ -111,7 +111,7 @@ INDIRECTION_BRACKET_DISPATCH = "bracket_dispatch"  # JS obj[<var>](...) / Py HAN
 INDIRECTION_EVAL = "eval"                        # JS eval / new Function
 
 
-@dataclass
+@dataclass(slots=True)
 class CallSite:
     """One call expression in a file.
 
@@ -169,7 +169,7 @@ class CallSite:
     receiver_type: Optional[str] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class DecoratedFunction:
     """One ``def`` (sync or async) that carries one or more
     decorators. Methods of classes are tracked the same way —
@@ -190,7 +190,7 @@ class DecoratedFunction:
     decorators: List[List[str]] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class ClassDef:
     """One ``class`` definition in a file.
 

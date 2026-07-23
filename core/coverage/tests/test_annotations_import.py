@@ -1,4 +1,4 @@
-"""Tests for importing durable annotations as llm-category coverage."""
+"""Tests for importing durable human-authored annotations as coverage."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _store(tmp_path):
     return CoverageStore(tmp_path / "coverage.json", target="zip:abc")
 
 
-def _ann(base, file, function, status, source="llm"):
+def _ann(base, file, function, status, source="human"):
     write_annotation(
         base,
         Annotation(file=file, function=function, body="note",
@@ -32,13 +32,12 @@ def _ann(base, file, function, status, source="llm"):
     )
 
 
-def test_clean_annotation_becomes_llm_coverage(tmp_path):
+def test_human_clean_annotation_becomes_coverage(tmp_path):
     base = tmp_path / "annotations"
     _ann(base, "a.c", "f1", "clean")
     s = _store(tmp_path)
     n = import_annotations(s, base, _CHECKLIST)
     assert n == 1
-    # f1 now llm-examined over its inventory range, verdict clean.
     assert "annotations" in s.tool_coverage_of_range("a.c", 0, 20)
     assert s.function_verdict("a.c", 0, 20) == "clean"
 
@@ -57,7 +56,6 @@ def test_annotation_for_unknown_function_is_skipped(tmp_path):
     base = tmp_path / "annotations"
     _ann(base, "a.c", "nonexistent", "clean")
     s = _store(tmp_path)
-    # No inventory range and no lines metadata -> skipped.
     assert import_annotations(s, base, _CHECKLIST) == 0
 
 
@@ -66,10 +64,9 @@ def test_lines_metadata_fallback(tmp_path):
     write_annotation(
         base,
         Annotation(file="c.c", function="h", body="",
-                   metadata={"status": "clean", "source": "llm", "lines": "5-9"}),
+                   metadata={"status": "clean", "source": "human", "lines": "5-9"}),
     )
     s = _store(tmp_path)
-    # c.c not in the checklist -> falls back to the lines metadata.
     assert import_annotations(s, base, _CHECKLIST) == 1
     assert "annotations" in s.tool_coverage_of_range("c.c", 5, 9)
 
@@ -77,3 +74,39 @@ def test_lines_metadata_fallback(tmp_path):
 def test_missing_base_dir_is_noop(tmp_path):
     s = _store(tmp_path)
     assert import_annotations(s, tmp_path / "nope", _CHECKLIST) == 0
+
+
+# ── source=human guard (Phase 0c) ────────────────────────────────────
+
+def test_llm_annotation_is_skipped(tmp_path):
+    """LLM-authored annotations must not count as coverage evidence."""
+    base = tmp_path / "annotations"
+    _ann(base, "a.c", "f1", "clean", source="llm")
+    s = _store(tmp_path)
+    assert import_annotations(s, base, _CHECKLIST) == 0
+
+
+def test_no_source_annotation_is_skipped(tmp_path):
+    """Annotations without a source field are treated as non-human."""
+    base = tmp_path / "annotations"
+    write_annotation(
+        base,
+        Annotation(file="a.c", function="f1", body="note",
+                   metadata={"status": "clean"}),
+    )
+    s = _store(tmp_path)
+    assert import_annotations(s, base, _CHECKLIST) == 0
+
+
+def test_mixed_source_only_human_imported(tmp_path):
+    """When human and LLM annotations coexist, only human ones count."""
+    base = tmp_path / "annotations"
+    _ann(base, "a.c", "f1", "clean", source="human")
+    _ann(base, "a.c", "f2", "finding", source="llm")
+    _ann(base, "b.c", "g1", "clean", source="human")
+    s = _store(tmp_path)
+    n = import_annotations(s, base, _CHECKLIST)
+    assert n == 2
+    assert s.function_verdict("a.c", 0, 20) == "clean"
+    assert s.function_verdict("b.c", 0, 10) == "clean"
+    assert s.function_verdict("a.c", 30, 60) == "unexamined"

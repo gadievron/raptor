@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import heapq
 import logging
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -637,7 +638,7 @@ def render_report(
         except (TypeError, ValueError):
             return 0
 
-    top_threats = sorted(model.threats, key=_safe_risk, reverse=True)[:10]
+    top_threats = heapq.nlargest(10, model.threats, key=_safe_risk)
     lines = []
     logo = _read_raptor_logo()
     if logo:
@@ -1295,14 +1296,16 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
         location = entry.get("file") or entry.get("path") or entry.get("location")
         line = entry.get("line")
         trust = entry.get("trust") or entry.get("trust_level")
-        summary = _clip_str(name)
+        parts = [_clip_str(name)]
         if location:
-            summary += f" ({_clip_str(location)})"
-            if line and ":" not in str(location):
-                summary += f":{line}"
+            loc_str = _clip_str(location)
+            if line is not None and ":" not in str(location):
+                parts.append(f" ({loc_str}:{line})")
+            else:
+                parts.append(f" ({loc_str})")
         if trust:
-            summary += f" - {_clip_str(trust)}"
-        out.append(summary)
+            parts.append(f" - {_clip_str(trust)}")
+        out.append("".join(parts))
     return _dedup(out)
 
 
@@ -1341,7 +1344,7 @@ def _summaries_from_unchecked_flows(
             loc = _clip_str(sink.get("file") or "?")
             line = sink.get("line")
             sink_type = _clip_str(sink.get("type") or "sink")
-            sink_label = f"{sink_id} {sink_type} at {loc}{':' + str(line) if line else ''}"
+            sink_label = f"{sink_id} {sink_type} at {loc}{':' + str(line) if line is not None else ''}"
         issue = _clip_str(flow.get("missing_boundary") or flow.get("notes") or "unchecked flow")
         severity = flow.get("severity")
         label = f"{entry_label} -> {sink_label}: {issue}"
@@ -1454,7 +1457,7 @@ def _location(record: dict[str, Any]) -> str:
     if not file:
         return ""
     line = record.get("line")
-    return f"{file}:{line}" if line and ":" not in str(file) else str(file)
+    return f"{file}:{line}" if line is not None and ":" not in str(file) else str(file)
 
 
 def _normalise_severity(value: Any) -> str:
@@ -1583,8 +1586,8 @@ def _mermaid_label(value: Any) -> str:
     # backticks before we apply the Mermaid quote-escape, so the
     # final label can't smuggle a node-terminator + new
     # statement.
-    text = _safe_for_render(value)
-    return text.replace("\\", "\\\\").replace('"', '\\"')[:90]
+    text = _safe_for_render(value)[:90]
+    return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _read_raptor_logo() -> str:

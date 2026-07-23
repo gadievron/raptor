@@ -58,6 +58,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util as _ctypes_util
 import hashlib
+import heapq
 import logging
 import os
 import threading
@@ -514,7 +515,7 @@ def set_cpu_affinity(cpu_count: int) -> int:
         )
     # Pick the lowest-numbered available CPUs so the mask is contiguous
     # starting at 0, matching the persona's `/sys/cpu/online` range.
-    mask = set(sorted(available)[:effective])
+    mask = set(heapq.nsmallest(effective, available))
     os.sched_setaffinity(0, mask)
     return effective
 

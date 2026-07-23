@@ -8,8 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-
 
 def _make_inventory(file_path: str, name: str, frida_observed: bool = True):
     """Build a minimal inventory with one item that has frida metadata."""
@@ -119,7 +117,6 @@ class TestStageInPrecedence:
         assert verdict == "frida_runtime_trace"
 
 
-@pytest.mark.slow
 class TestEnrichWithFridaTraces:
     def test_enriches_checklist_items(self, tmp_path):
         from core.orchestration.reachability_enrichment import enrich_with_frida_traces

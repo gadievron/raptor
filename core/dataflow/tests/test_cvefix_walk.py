@@ -352,8 +352,10 @@ def test_codeql_tunables_from_tuning_resolves_central_defaults(monkeypatch):
         codeql_enabled=True,
         codeql_ram_mb=8192, codeql_threads=12,
         codeql_max_disk_cache_mb=0,
+        joern_enabled=False, joern_heap_mb=1024,
+        joern_cpg_timeout_s=300, joern_query_timeout_s=300,
         max_semgrep_workers=4, max_codeql_workers=2,
-        max_agentic_parallel=3, max_fuzz_parallel=4,
+        max_fuzz_parallel=4,
         max_inventory_workers=4, max_json_memo_mb=128,
     )
     monkeypatch.setattr(core.tuning, "get_tuning", lambda: fake_tuning)
@@ -372,8 +374,10 @@ def test_codeql_tunables_from_tuning_operator_override_wins(monkeypatch):
         codeql_enabled=True,
         codeql_ram_mb=8192, codeql_threads=12,
         codeql_max_disk_cache_mb=0,
+        joern_enabled=False, joern_heap_mb=1024,
+        joern_cpg_timeout_s=300, joern_query_timeout_s=300,
         max_semgrep_workers=4, max_codeql_workers=2,
-        max_agentic_parallel=3, max_fuzz_parallel=4,
+        max_fuzz_parallel=4,
         max_inventory_workers=4, max_json_memo_mb=128,
     )
     monkeypatch.setattr(core.tuning, "get_tuning", lambda: fake_tuning)
