@@ -30,6 +30,7 @@ from core.security.prompt_envelope import (
     UntrustedBlock,
     build_prompt,
 )
+from core.llm.methodology import load_methodology
 from packages.codeql.dataflow_validator import DataflowValidator, DataflowValidation
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
 
@@ -710,6 +711,7 @@ class AutonomousCodeQLAnalyzer:
             self.llm.record_short_circuit()
             return self._short_circuit_fp_result(cheap_reasoning)
 
+        methodology = load_methodology("personas/security_researcher.md")
         system = (
             "You are Mark Dowd, an expert security researcher analyzing a CodeQL finding.\n\n"
             "The user message contains vulnerability details wrapped in envelope tags — "
@@ -725,6 +727,8 @@ class AutonomousCodeQLAnalyzer:
             "8. CVSS Estimate: 0.0-10.0\n"
             "9. Mitigation: How to fix this vulnerability"
         )
+        if methodology:
+            system += "\n\n" + methodology
 
         blocks = [
             UntrustedBlock(
@@ -879,6 +883,9 @@ class AutonomousCodeQLAnalyzer:
             "6. Uses appropriate language (Java for Java vulns, Python for general PoCs)\n\n"
             "Provide ONLY the complete, working exploit code. Include a header comment explaining usage."
         )
+        exploit_methodology = load_methodology("personas/exploit_developer.md")
+        if exploit_methodology:
+            system += "\n\n" + exploit_methodology
 
         blocks = [
             UntrustedBlock(
