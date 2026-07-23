@@ -48,9 +48,13 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     environment:
       - SAGE_HOME=/root/.sage
-      - OLLAMA_URL=http://ollama:11434
+      - SAGE_EMBEDDING_PROVIDER=ollama
+      - SAGE_EMBEDDING_BASE_URL=http://ollama:11434
+      - SAGE_EMBEDDING_MODEL=nomic-embed-text
       - REST_ADDR=0.0.0.0:8080
     healthcheck:
       # ghcr.io/l33tdawg/sage images ship with wget, not curl

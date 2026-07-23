@@ -70,12 +70,13 @@ fi
 
 usage() {
     cat >&2 <<'EOF'
-usage: raptor-sage-setup [--uninstall]
+usage: raptor-sage-setup [install | --uninstall | --status]
 
-  (default)    install SAGE: merge MCP entry, bring up sidecar, seed knowledge.
+  (default)    install SAGE: bring up sidecar, seed, generate MCP entry.
   --uninstall  stop SAGE sidecar and remove its MCP entry (data volumes kept).
+  --status     check whether SAGE is running and report health + embedding mode.
 
-Prereqs: jq, docker, python3, pip-installed sage-agent-sdk.
+Prereqs: jq, docker + docker compose, python3, pip-installed sage-agent-sdk.
 EOF
     exit 2
 }
@@ -120,6 +121,14 @@ for arg in "$@"; do
             MODE=uninstall
             MODE_EXPLICIT=1
             ;;
+        --status|status)
+            if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "status" ]; then
+                echo "raptor-sage-setup: conflicting modes: $arg vs --$MODE" >&2
+                exit 2
+            fi
+            MODE=status
+            MODE_EXPLICIT=1
+            ;;
         -h|--help|help)
             usage
             ;;
@@ -129,6 +138,7 @@ for arg in "$@"; do
             ;;
     esac
 done
+_ORIG_ARGS=("$@")
 
 # Resolve RAPTOR_DIR via symlink chain (same pattern as raptor-cc-trust-check).
 # Hop bound — see raptor-cc-trust-check for the symlink-cycle rationale.
@@ -158,6 +168,64 @@ need() {
         echo "raptor-sage-setup: missing prerequisite: $1" >&2
         exit 3
     }
+}
+
+check_docker() {
+    need docker
+    # docker compose is a plugin, not a subcommand — may be absent even
+    # when docker is installed.
+    if ! docker compose version >/dev/null 2>&1; then
+        echo "raptor-sage-setup: 'docker compose' plugin not found." >&2
+        echo "  Install: https://docs.docker.com/compose/install/" >&2
+        exit 3
+    fi
+    # Daemon must be running. Try docker info; if the user needs sg docker
+    # (group membership rather than direct socket access), re-exec self.
+    if ! docker info >/dev/null 2>&1; then
+        if command -v sg >/dev/null 2>&1 && sg docker -c "docker info" >/dev/null 2>&1; then
+            # Re-exec under sg docker. Build a properly quoted argv
+            # since sg -c takes a single string.
+            local quoted_args=""
+            local a
+            for a in "${_ORIG_ARGS[@]}"; do
+                quoted_args="$quoted_args \"$a\""
+            done
+            exec sg docker -c "\"$0\"$quoted_args"
+        fi
+        echo "raptor-sage-setup: Docker daemon is not running or not accessible." >&2
+        echo "  Start: sudo systemctl start docker" >&2
+        echo "  Or add yourself to the docker group: sudo usermod -aG docker \$USER" >&2
+        exit 3
+    fi
+}
+
+check_compose_file() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        echo "raptor-sage-setup: compose file not found: $COMPOSE_FILE" >&2
+        echo "  Is the RAPTOR checkout complete? Try: git checkout -- core/sage/docker-compose.yml" >&2
+        exit 3
+    fi
+}
+
+check_port() {
+    # Skip if our own containers already hold the port (idempotent re-install).
+    local port="$1" service="$2"
+    local running
+    running=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null || true)
+    [ -n "$running" ] && return 0
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+            echo "raptor-sage-setup: port $port is already in use ($service needs it)." >&2
+            echo "  Check: ss -tlnp | grep :$port" >&2
+            exit 3
+        fi
+    elif command -v lsof >/dev/null 2>&1; then
+        if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+            echo "raptor-sage-setup: port $port is already in use ($service needs it)." >&2
+            echo "  Check: lsof -iTCP:$port" >&2
+            exit 3
+        fi
+    fi
 }
 
 check_sdk() {
@@ -290,8 +358,14 @@ smoke_test_mcp() {
     # The wrapper requires CLAUDECODE or _RAPTOR_TRUSTED to pass its trust-marker
     # check — export CLAUDECODE for the duration of this test.
     local response
+    local timeout_cmd=""
+    if command -v timeout >/dev/null 2>&1; then
+        timeout_cmd="timeout 10"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        timeout_cmd="gtimeout 10"
+    fi
     response=$(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-smoke-test","version":"1.0.0"}}}' \
-        | CLAUDECODE=1 timeout 10 "$MCP_WRAPPER" 2>/dev/null || true)
+        | CLAUDECODE=1 $timeout_cmd "$MCP_WRAPPER" 2>/dev/null || true)
     if printf '%s' "$response" | grep -q '"result"'; then
         echo "MCP smoke test passed."
     else
@@ -474,13 +548,41 @@ disable_sage_env() {
     fi
 }
 
+verify_embeddings() {
+    # Verify SAGE is running with Ollama embeddings rather than hash-based
+    # pseudo-embeddings. Two checks: (1) the container has the env var, (2)
+    # Ollama has the model. No log parsing — env vars and API are stable;
+    # SAGE's zerolog format and ANSI codes are not.
+    local provider
+    provider=$(docker compose -f "$COMPOSE_FILE" exec -T sage \
+        printenv SAGE_EMBEDDING_PROVIDER 2>/dev/null || true)
+    provider=$(printf '%s' "$provider" | tr -d '[:space:]')
+    if [ "$provider" != "ollama" ]; then
+        echo "Warning: SAGE_EMBEDDING_PROVIDER is '${provider:-unset}', expected 'ollama'." >&2
+        echo "  Semantic recall will use hash-based fallback (keyword matching only)." >&2
+        return 0
+    fi
+    local models
+    models=$(docker compose -f "$COMPOSE_FILE" exec -T sage \
+        wget -qO- http://ollama:11434/api/tags 2>/dev/null || true)
+    if printf '%s' "$models" | grep -q 'nomic-embed-text'; then
+        echo "SAGE using Ollama embeddings (nomic-embed-text)."
+    else
+        echo "Warning: nomic-embed-text not found in Ollama." >&2
+        echo "  Run: docker compose -f $COMPOSE_FILE exec ollama ollama pull nomic-embed-text" >&2
+    fi
+}
+
 install_sage() {
     need jq
-    need docker
+    check_docker
     need python3
     need curl
     check_sdk
     check_wrapper
+    check_compose_file
+    check_port 8090 "SAGE REST API"
+    check_port 11435 "Ollama embedding server"
     migrate_sage_home_if_needed
     # `--remove-orphans` so containers from a PREVIOUS
     # compose config (e.g. the operator updated
@@ -492,8 +594,19 @@ install_sage() {
     # errors. Pre-fix bare `up -d` left orphans intact.
     docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
     wait_health
-    python3 "$RAPTOR_DIR/core/sage/scripts/seed_sage_knowledge.py" --sage-url "$SAGE_URL"
-    python3 "$RAPTOR_DIR/core/sage/scripts/register_agents.py" --sage-url "$SAGE_URL"
+    verify_embeddings
+    local seed_script="$RAPTOR_DIR/core/sage/scripts/seed_sage_knowledge.py"
+    local register_script="$RAPTOR_DIR/core/sage/scripts/register_agents.py"
+    if [ -f "$seed_script" ]; then
+        python3 "$seed_script" --sage-url "$SAGE_URL"
+    else
+        echo "Warning: seed script not found: $seed_script" >&2
+    fi
+    if [ -f "$register_script" ]; then
+        python3 "$register_script" --sage-url "$SAGE_URL"
+    else
+        echo "Warning: register script not found: $register_script" >&2
+    fi
     generate_mcp_entry
     enable_sage_env
     smoke_test_mcp
@@ -503,7 +616,7 @@ install_sage() {
 
 uninstall_sage() {
     need jq
-    need docker
+    check_docker
     # `--remove-orphans` so containers from PREVIOUS compose
     # configs (e.g. operator updated core/sage/docker-compose.yml
     # between runs and the old config's containers are still
@@ -522,7 +635,57 @@ uninstall_sage() {
     echo "To wipe volumes: docker compose -f $COMPOSE_FILE down -v --remove-orphans"
 }
 
+status_sage() {
+    check_docker
+    check_compose_file
+    local running
+    running=$(docker compose -f "$COMPOSE_FILE" ps --status running -q sage 2>/dev/null || true)
+    if [ -z "$running" ]; then
+        echo "SAGE is not running."
+        echo "  Start: bin/raptor sage-setup install"
+        return 1
+    fi
+    echo "SAGE is running."
+    # Health
+    local health
+    health=$(curl -sf "$SAGE_URL/health" 2>/dev/null || true)
+    if printf '%s' "$health" | grep -q '"status"'; then
+        echo "  Health: OK"
+    else
+        echo "  Health: unreachable at $SAGE_URL"
+    fi
+    # Embedding mode
+    local provider
+    provider=$(docker compose -f "$COMPOSE_FILE" exec -T sage \
+        printenv SAGE_EMBEDDING_PROVIDER 2>/dev/null || true)
+    provider=$(printf '%s' "$provider" | tr -d '[:space:]')
+    echo "  Embedding: ${provider:-hash (default)}"
+    # Ollama
+    local ollama_running
+    ollama_running=$(docker compose -f "$COMPOSE_FILE" ps --status running -q ollama 2>/dev/null || true)
+    if [ -n "$ollama_running" ]; then
+        local model_count
+        model_count=$(docker compose -f "$COMPOSE_FILE" exec -T ollama \
+            ollama list 2>/dev/null | grep -c 'nomic-embed-text' || true)
+        echo "  Ollama: running (nomic-embed-text: ${model_count:-0} loaded)"
+    else
+        echo "  Ollama: not running"
+    fi
+    # Memory count
+    local mem_count
+    mem_count=$(docker compose -f "$COMPOSE_FILE" exec -T sage \
+        sage-gui status 2>/dev/null | grep -oP 'Memories:\s*\K\d+' || true)
+    [ -n "$mem_count" ] && echo "  Memories: $mem_count"
+    # MCP entry
+    if [ -f "$MCP" ] && jq -e '.mcpServers.sage' "$MCP" >/dev/null 2>&1; then
+        echo "  MCP entry: present in $MCP"
+    else
+        echo "  MCP entry: missing (run install to generate)"
+    fi
+}
+
 case "$MODE" in
     install)   install_sage ;;
     uninstall) uninstall_sage ;;
+    status)    status_sage ;;
 esac
