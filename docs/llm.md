@@ -187,6 +187,17 @@ for the operator CLI.
 - **Schema validity**: every `generate_structured` call records pass/fail under a
   `_structured` decision class.
 
+### Producers
+
+Beyond per-call recording, four producers run at analysis time:
+
+| Producer | What it measures |
+|----------|-----------------|
+| Cross-run stability | Same finding across runs -- flags models whose verdict flips |
+| Cross-family check | Agreement between models from different providers on the same finding |
+| Self-consistency | Same model, same finding, different prompt framings -- catches prompt-sensitive models |
+| Dataflow validation | Alignment between the model's verdict and the mechanical dataflow evidence |
+
 Controlled by `LLMConfig.scorecard_enabled` (default `True`).
 
 ## Cost Management
@@ -216,6 +227,20 @@ Unknown models log a warning and record $0 cost (budget caps silently defeated).
 
 Costs are reported at the end of each run. The scorecard also tracks cumulative
 per-model cost and token usage.
+
+## Rate Limiting
+
+RAPTOR adapts dispatch concurrency to each provider's rate limits.  The
+throttle (`core/llm/throttle.py`) tracks per-model request and token
+rates, backs off on 429 responses, and resumes at the observed
+sustainable rate.  The concurrency controller (`core/llm/concurrency.py`)
+derives `max_parallel` from the model's known RPM (requests per minute),
+so a provider with a 60 RPM cap does not get 16 concurrent requests.
+
+No operator configuration is needed — the defaults adapt automatically.
+If a provider is consistently throttled, RAPTOR logs the effective rate
+at run end.
+
 
 ## Credential Isolation
 

@@ -722,27 +722,14 @@ python3 packages/web/scanner.py \
 - Loaded when errors occur during analysis
 
 #### `tiers/personas/`
-Expert persona specifications for specialised analysis:
-- `binary_exploitation_specialist.md` - Binary exploitation expertise
-- `codeql_analyst.md` - CodeQL query development
-- `codeql_finding_analyst.md` - CodeQL finding analysis
-- `crash_analyst.md` - Crash analysis and triage
-- `exploit_developer.md` - Exploit development
-- `fuzzing_strategist.md` - Fuzzing strategy development
-- `patch_engineer.md` - Secure patch development
-- `penetration_tester.md` - Penetration testing methodology
-- `security_researcher.md` - General security research
+Expert persona specifications for specialised analysis.  Seven personas
+covering crash analysis, exploit development, security research, patch
+engineering, penetration testing, fuzzing strategy, and binary
+exploitation.  The methodology loader (`core/llm/methodology.py`)
+injects persona content into LLM system prompts automatically.
 
-#### `tiers/specialists/`
-- Additional specialist knowledge bases
-- Domain-specific security expertise
-
-**Usage**:
-- Loaded on-demand by `raptor.py` (Claude Code integration)
-- Provides specialised context for different security testing phases
-- Enables persona-based LLM prompting for improved analysis quality
-
-**Design Rationale**: Progressive loading reduces initial context size while providing deep expertise when needed. Persona-based approach allows for specialised prompting tailored to specific security tasks.
+Loaded on-demand -- progressive loading reduces initial context size
+while providing deep expertise when needed.
 
 
 ## Entry Points

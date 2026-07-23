@@ -145,7 +145,7 @@ and deduplicated by resolved absolute path.
 
 ### Rule Inventory
 
-38 semantic patch files under `engine/coccinelle/rules/`, covering
+39 semantic patch files under `engine/coccinelle/rules/`, covering
 C/C++ structural patterns that require control-flow sensitivity:
 
 **Memory safety:**
@@ -179,6 +179,9 @@ C/C++ structural patterns that require control-flow sensitivity:
 
 **Unchecked returns:**
 `unchecked_return`, `unchecked_strtol`
+
+**Format strings:**
+`format_string`
 
 **Miscellaneous:**
 `va_arg_mismatch`, `init_after_register`, `unsafe_list_del`,
