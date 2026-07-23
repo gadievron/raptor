@@ -400,7 +400,7 @@ class LanguageDetector:
 
         # Find extensions found
         extensions_found = {
-            ext for ext in stats["extensions"].keys()
+            ext for ext in stats["extensions"]
             if ext in patterns["extensions"]
         }
 

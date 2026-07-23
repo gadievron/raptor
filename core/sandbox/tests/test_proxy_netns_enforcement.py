@@ -32,9 +32,23 @@ class TestProxyUnixSocket:
     def _proxy(self, tmp_path):
         from core.sandbox.proxy import EgressProxy
         self.proxy = EgressProxy(["example.com"])
-        self.sock_path = str(tmp_path / "test-proxy.sock")
+        # macOS AF_UNIX sun_path limit is 104 bytes; pytest tmp_path
+        # under /private/var/folders/… can exceed that. Use a short
+        # name under /tmp when the default path would be too long.
+        candidate = str(tmp_path / "p.sock")
+        if len(candidate) > 100:
+            import tempfile
+            short_dir = tempfile.mkdtemp(prefix="rpt_")
+            self.sock_path = os.path.join(short_dir, "p.sock")
+            self._short_dir = short_dir
+        else:
+            self.sock_path = candidate
+            self._short_dir = None
         yield
         self.proxy.stop(drain_timeout=0)
+        if self._short_dir:
+            import shutil
+            shutil.rmtree(self._short_dir, ignore_errors=True)
 
     def test_bind_creates_socket_file(self):
         self.proxy.bind_unix(self.sock_path)
@@ -115,13 +129,28 @@ class TestProxyUnixSocket:
 # _proxy_bridge.py: bring_up_loopback + _run_forwarder
 # ---------------------------------------------------------------------------
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning:multiprocessing")
+@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
 class TestProxyBridge:
     """TCP-to-Unix forwarder integration."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
-        self.tmp = tmp_path
+        # Short tmpdir for AF_UNIX path limit on macOS (104 bytes).
+        candidate = str(tmp_path / "r.sock")
+        if len(candidate) > 100:
+            import tempfile
+            self.tmp = Path(tempfile.mkdtemp(prefix="rpt_"))
+            self._short_dir = self.tmp
+        else:
+            self.tmp = tmp_path
+            self._short_dir = None
+        yield
+        if self._short_dir:
+            import shutil
+            shutil.rmtree(str(self._short_dir), ignore_errors=True)
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="os.unshare is Linux-only")
     def test_bring_up_loopback_in_netns(self):
         """bring_up_loopback works inside a fresh netns (requires
         CAP_NET_ADMIN in a user-ns)."""
@@ -240,6 +269,7 @@ class TestProxyNetnsContextWiring:
         self.out = str(tmp_path / "out")
         os.makedirs(self.out, exist_ok=True)
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="netns is Linux-only")
     def test_netns_path_selected_on_low_abi(self):
         """When ABI < 4, sandbox_info reports netns enforcement."""
         from core.sandbox import sandbox

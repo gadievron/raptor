@@ -24,10 +24,6 @@ class TestFormatStartLine:
         assert "C++" in line
         assert "autotools" in line
         assert "c.userspace-daemon" in line
-        # Cost estimate appears as tail clause (the existing
-        # surface — preserved so the budget gate's "$N-M"
-        # framing stays recognisable).
-        assert "estimated" in line
         # One line only — operator visibility, not a wall of
         # text at run start.
         assert "\n" not in line

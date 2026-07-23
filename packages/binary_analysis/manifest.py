@@ -18,7 +18,7 @@ from core.hash import sha256_file
 from packages.fuzzing.target_detector import detect
 
 from ._symbols import strip_import_prefix
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 from .macho import AppBundleMetadata, MachOSlice, inspect_app_bundle, inspect_macho_slices, select_slice
 
 _SCAN_CAP = 64 * 1024 * 1024

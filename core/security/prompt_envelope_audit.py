@@ -85,7 +85,7 @@ _PROMPT_CONSTRUCTION_FILES = (
     # CodeQL
     "packages/codeql/autonomous_analyzer.py",
     "packages/codeql/dataflow_validator.py",
-    "packages/codeql/build_detector.py",
+    "core/build/build_detector.py",
     # Web fuzzer
     "packages/web/fuzzer.py",
     # Autonomous dialogue

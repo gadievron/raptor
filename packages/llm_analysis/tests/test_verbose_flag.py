@@ -99,9 +99,9 @@ class TestVerboseWiring:
             assert all(h.level == logging.WARNING for h in root_console)
             assert root_logger.level == logging.WARNING
         finally:
-            for h, level in zip(console, console_before):
+            for h, level in zip(console, console_before, strict=True):
                 h.setLevel(level)
-            for h, level in zip(root_console, root_console_before):
+            for h, level in zip(root_console, root_console_before, strict=True):
                 h.setLevel(level)
             root_logger.setLevel(root_before)
 

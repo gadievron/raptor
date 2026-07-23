@@ -316,7 +316,7 @@ def enrich_with_caller_context(
             enriched += 1
 
     if enriched:
-        logger.info(
+        logger.debug(
             "reachability_enrichment: enriched %d function(s) with "
             "caller-context fields", enriched,
         )

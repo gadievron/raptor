@@ -66,7 +66,7 @@ def correlate_results(results_by_id: Dict[str, Dict]) -> Dict[str, Any]:
             }
         matrix[fid] = per_model
 
-        verdicts = [a.get("is_exploitable", False) for a in analyses]
+        verdicts = [bool(a.get("is_exploitable")) for a in analyses]
         all_agree = len(set(verdicts)) == 1
 
         if all_agree and verdicts[0]:

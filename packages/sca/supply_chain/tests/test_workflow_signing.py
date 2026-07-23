@@ -63,7 +63,7 @@ def _commit_workflow_unsigned(
     wf_dir = target / ".github" / "workflows"
     wf_dir.mkdir(parents=True, exist_ok=True)
     (wf_dir / name).write_text(body, encoding="utf-8")
-    _git(target, "add", "-A")
+    _git(target, "add", ".github/")
     _git(
         target, "-c", "commit.gpgsign=false",
         "commit", "--no-gpg-sign", "-m", message,
@@ -200,7 +200,7 @@ def _commit_workflow_signed(
     wf_dir = target / ".github" / "workflows"
     wf_dir.mkdir(parents=True, exist_ok=True)
     (wf_dir / name).write_text(body, encoding="utf-8")
-    _git(target, "add", "-A")
+    _git(target, "add", ".github/")
     env = {**os.environ, "GNUPGHOME": gnupghome, "LC_ALL": "C",
            "GPG_TTY": ""}
     result = subprocess.run(

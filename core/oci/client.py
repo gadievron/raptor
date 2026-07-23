@@ -291,7 +291,7 @@ class OciRegistryClient:
                 resp.status_code,
                 f"manifest JSON parse failed for "
                 f"{ref.to_canonical()}: {e}",
-            )
+            ) from e
         content_type = resp.headers.get("Content-Type", "") \
             or resp.headers.get("content-type", "")
         digest = resp.headers.get("Docker-Content-Digest") \
@@ -357,7 +357,7 @@ class OciRegistryClient:
                     resp.status_code,
                     f"tags/list JSON parse failed for "
                     f"{ref.repository}: {e}",
-                )
+                ) from e
             tags = data.get("tags") if isinstance(data, dict) else None
             if not isinstance(tags, list):
                 raise RegistryError(
@@ -498,6 +498,7 @@ class OciRegistryClient:
         # hosts per registry (most are sub-domains of the registry
         # host; explicit list keeps the surface small).
         _validate_realm(registry, realm)
+        self._tokens.pop((realm, service, scope), None)
         token = self._exchange_token(registry, realm, service, scope)
         req_headers["Authorization"] = f"Bearer {token}"
         resp.close()
@@ -565,7 +566,7 @@ class OciRegistryClient:
             raise RegistryError(
                 resp.status_code,
                 f"token exchange at {realm} returned non-JSON: {e}",
-            )
+            ) from e
         # Token may be in ``token`` or ``access_token`` per the
         # registry spec — both must be supported.
         token = payload.get("token") or payload.get("access_token")

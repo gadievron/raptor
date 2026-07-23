@@ -250,7 +250,7 @@ def _hits_for_modules(
     hits: List[Tuple[Path, int, bool]] = []
     seen: set = set()
     for mod in candidates:
-        for known in scan.keys():
+        for known in scan:
             if known == mod or known.startswith(mod + "."):
                 for h in scan[known]:
                     if h not in seen:

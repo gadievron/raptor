@@ -7,9 +7,16 @@
   "permissions": {
     "allow": [
       "Bash(libexec/raptor-agentic *)",
+      "Bash(libexec/raptor-annotate *)",
       "Bash(libexec/raptor-build-checklist *)",
       "Bash(libexec/raptor-coverage-summary *)",
+      "Bash(libexec/raptor-enrich-context-map-ast-view *)",
+      "Bash(libexec/raptor-enrich-context-map-callgraph *)",
+      "Bash(libexec/raptor-enrich-context-map-sinks *)",
+      "Bash(libexec/raptor-enrich-context-map-sites *)",
+      "Bash(libexec/raptor-enrich-flow-trace-ast-view *)",
       "Bash(libexec/raptor-normalize-context-map *)",
+      "Bash(libexec/raptor-pick-strategies *)",
       "Bash(libexec/raptor-project-manager *)",
       "Bash(libexec/raptor-render-diagrams *)",
       "Bash(libexec/raptor-run-feasibility *)",
@@ -19,6 +26,8 @@
       "Bash(libexec/raptor-startup-check *)",
       "Bash(libexec/raptor-threat-model)",
       "Bash(libexec/raptor-threat-model *)",
+      "Bash(libexec/raptor-understand *)",
+      "Bash(libexec/raptor-understand-annotate *)",
       "Bash(libexec/raptor-validate-schema *)",
       "Bash(libexec/raptor-validation-helper *)",
       "Edit(/out/**)"

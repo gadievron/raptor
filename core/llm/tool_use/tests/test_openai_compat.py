@@ -347,6 +347,7 @@ def test_tool_calls_response_normalises_to_toolcalls() -> None:
     assert len(out.content) == 2
     for block, expected_id, expected_x in zip(
         out.content, ["call_1", "call_2"], ["a", "b"],
+        strict=True,
     ):
         assert isinstance(block, ToolCall)
         assert block.id == expected_id

@@ -492,7 +492,7 @@ def _is_compose_file(name: str) -> bool:
     """Match ``compose.yml`` / ``compose.yaml`` /
     ``docker-compose*.yml`` / ``compose.<overlay>.yml``."""
     lower = name.lower()
-    if not (lower.endswith(".yml") or lower.endswith(".yaml")):
+    if not (lower.endswith((".yml", ".yaml"))):
         return False
     if lower.startswith("docker-compose"):
         return True

@@ -38,11 +38,6 @@ from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 logger = get_logger()
 
 
-def _tuning_default(key: str) -> int:
-    from core.tuning import get_tuning
-    return getattr(get_tuning(), key)
-
-
 def _materialise_threat_model_phase(
     *,
     target: Path,
@@ -602,6 +597,11 @@ def run_command_streaming(
         return -1, "", "Timeout"
     except Exception as e:
         logger.error(f"Command failed: {e}")
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
         return -1, "", str(e)
 
 
@@ -934,7 +934,8 @@ def _build_fuzz_phase_summary(fuzzing_result: dict | None, fuzz_out: Path | None
     telemetry = {}
     telemetry_path = fuzzing_result.get("telemetry")
     if telemetry_path:
-        telemetry = load_json(telemetry_path) or {}
+        _raw = load_json(telemetry_path)
+        telemetry = _raw if isinstance(_raw, dict) else {}
     crashes_dir = fuzzing_result.get("crashes_dir")
     crash_paths = []
     if crashes_dir:
@@ -1144,6 +1145,11 @@ Examples:
         action="store_true",
         help="Skip per-finding annotation emission (default: emit)",
     )
+    parser.add_argument(
+        "--max-cost-usd", dest="max_cost_usd", type=float, default=None,
+        help="Per-run USD budget cap; overrides LLMConfig.max_cost_per_scan "
+             "so CostTracker enforces the cap during LLM calls",
+    )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
@@ -1251,7 +1257,7 @@ Examples:
 
     # Orchestration options
     parser.add_argument("--max-parallel", type=int, default=None,
-                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: from tuning.json)")
+                       help="Maximum parallel dispatch threads (0 = auto from model RPM)")
     parser.add_argument("--understand", action="store_true",
                         help="Run /understand --map before scanning for architectural context")
     parser.add_argument(
@@ -1330,7 +1336,7 @@ Examples:
         "--codex-exec",
         action="store_true",
         help="Use authenticated Codex CLI web-login state via `codex exec` "
-             "for Phase 4 analysis. PR2 bridge is analysis-only; exploit, "
+             "for Phase 4 analysis. Analysis-only bridge; exploit, "
              "patch, consensus, judge, aggregate, and group LLM tasks are disabled.",
     )
     model_group = parser.add_argument_group(
@@ -1534,6 +1540,17 @@ Examples:
     # Keep original target path for metadata/findings (even if we scan a temp copy)
     original_repo_path = repo_path
 
+    # Clean up stale raptor_git_* dirs leaked by prior runs killed with
+    # SIGKILL (atexit handlers don't fire on SIGKILL).
+    import glob as _glob
+    import shutil as _shutil
+    import tempfile as _tempfile
+    for _stale in _glob.glob(os.path.join(_tempfile.gettempdir(), "raptor_git_*")):
+        try:
+            _shutil.rmtree(_stale)
+        except OSError:
+            pass
+
     # Check for .git directory (required for semgrep)
     git_dir = repo_path / ".git"
     if not git_dir.exists():
@@ -1595,23 +1612,37 @@ Examples:
                         "-c", "user.name=raptor",
                         "-c", "user.email=raptor@local"]
             from core.sandbox import run as sandbox_run
-            result = sandbox_run(
-                ["git"] + git_safe + ["init"], block_network=True,
-                cwd=temp_repo, capture_output=True, text=True, timeout=30, env=env
-            )
+            # Suppress per-call sandbox INFO lines for internal git
+            # housekeeping — the operator already sees the "Creating a
+            # temporary copy" message; 3 repeated sandbox lines are noise.
+            import logging as _logging
+            _sb_log = _logging.getLogger("core.sandbox.context")
+            _sb_prev = _sb_log.level
+            _sb_log.setLevel(_logging.WARNING)
+            try:
+                result = sandbox_run(
+                    ["git"] + git_safe + ["init"], block_network=True,
+                    cwd=temp_repo, capture_output=True, text=True, timeout=30,
+                    env=env, env_caller_filtered=True,
+                )
+                if result.returncode == 0:
+                    sandbox_run(
+                        ["git"] + git_safe + ["add", "."], block_network=True,
+                        cwd=temp_repo, capture_output=True, timeout=60,
+                        env=env, env_caller_filtered=True,
+                    )
+                    sandbox_run(
+                        ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
+                        block_network=True,
+                        cwd=temp_repo, capture_output=True, timeout=60,
+                        env=env, env_caller_filtered=True,
+                    )
+            finally:
+                _sb_log.setLevel(_sb_prev)
             if result.returncode == 0:
-                sandbox_run(
-                    ["git"] + git_safe + ["add", "."], block_network=True,
-                    cwd=temp_repo, capture_output=True, timeout=60, env=env
-                )
-                sandbox_run(
-                    ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
-                    block_network=True,
-                    cwd=temp_repo, capture_output=True, timeout=60, env=env
-                )
                 repo_path = temp_repo
-                print(f"  Temporary git repo created at {temp_repo}")
-                logger.info(f"Using temp git repo: {temp_repo}")
+                print("  Temporary git repo created for scanning")
+                logger.debug(f"Using temp git repo: {temp_repo}")
             else:
                 print(f"  ✗ Failed to initialize git repository: {result.stderr}", file=sys.stderr)
                 logger.error(f"Git init failed: {result.stderr}")
@@ -1675,8 +1706,16 @@ Examples:
     # layering, RaptorConfig mutation, and the no-leak-across-runs
     # guarantee — lives in the shared CLI helper. raptor_codeql.py
     # uses the same call site to keep behaviour aligned.
+    #
+    # Explicit --binary paths resolve early here (Phase 0 mitigation
+    # check needs them). Default autodetect is deferred to the
+    # post-scan call site below — CodeQL may compile the target
+    # (C/C++/Go/Java), leaving build artefacts that autodetect finds.
     from core.analysis.binary_oracle_cli import apply_to_config
-    apply_to_config(args, Path(args.repo))
+    if getattr(args, "binary", None):
+        apply_to_config(args, Path(args.repo))
+    elif getattr(args, "no_binary_oracle", False):
+        apply_to_config(args, Path(args.repo))
 
     workflow_start = time.time()
 
@@ -1691,6 +1730,10 @@ Examples:
             print(f"\n📚 SAGE: Recalled {len(sage_context)} historical memories for context")
             for mem in sage_context[:3]:
                 print(f"   [{mem['confidence']:.0%}] {mem['content'][:100]}...")
+        try:
+            save_json(out_dir / "sage_precall_scan.json", {"memories": sage_context})
+        except Exception:
+            pass
     except Exception as e:
         logger.debug(f"SAGE pre-scan recall skipped: {e}")
 
@@ -1779,7 +1822,7 @@ Examples:
         from core.inventory import build_inventory
         if not (out_dir / "checklist.json").exists():
             build_inventory(str(original_repo_path), str(out_dir))
-            logger.info(f"Inventory checklist built: {out_dir / 'checklist.json'}")
+            logger.debug(f"Inventory checklist built: {out_dir / 'checklist.json'}")
     except Exception as e:
         logger.warning(f"Inventory build failed (continuing without metadata): {e}")
 
@@ -1883,12 +1926,20 @@ Examples:
     # (codeql analyzer, /validate post-pass) so they don't re-walk the tree.
     # ========================================================================
     reachability_prepass_result = None
+    scan_inventory = None
+    _checklist_path = out_dir / "checklist.json"
+    if _checklist_path.exists():
+        try:
+            scan_inventory = load_json(_checklist_path)
+        except Exception:
+            pass
     try:
         from core.orchestration import run_reachability_prepass
         reachability_prepass_result = run_reachability_prepass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
             allow_unreachable=getattr(args, "allow_unreachable", False),
+            inventory=scan_inventory,
         )
         if reachability_prepass_result.ran:
             logger.info(
@@ -1973,7 +2024,7 @@ Examples:
             "--out", str(out_dir / "scan"),
             *sandbox_passthrough,
         ]
-        logger.info("Running: Scanning code with Semgrep")
+        logger.debug("Running: Scanning code with Semgrep")
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         # ``semgrep_cmd`` is a list of RAPTOR-constructed argv;
         # env inherits from RAPTOR's own process (the operator's
@@ -2034,7 +2085,7 @@ Examples:
             codeql_cmd.append("--extended")
         if args.codeql_cli:
             codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
-        logger.info("Running: Scanning code with CodeQL")
+        logger.debug("Running: Scanning code with CodeQL")
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         # Explicit ``env=RaptorConfig.get_safe_env()`` — strips
         # DANGEROUS_ENV_VARS (LD_PRELOAD / DYLD_* / GCONV_PATH
@@ -2121,11 +2172,13 @@ Examples:
             # the coverage records — are first-class run artifacts. No transient
             # dir to discover, no copy.
             actual_scan_dir = out_dir / "scan"
-            logger.info(f"Semgrep output in run dir: {actual_scan_dir}")
+            logger.debug(f"Semgrep output in run dir: {actual_scan_dir}")
 
             scan_metrics_file = actual_scan_dir / "scan_metrics.json"
             if scan_metrics_file.exists():
                 semgrep_metrics = load_json(scan_metrics_file)
+                if not isinstance(semgrep_metrics, dict):
+                    semgrep_metrics = {}
 
                 print("\n✓ Semgrep scan complete:")
                 print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
@@ -2209,6 +2262,8 @@ Examples:
 
             if codeql_report.exists():
                 codeql_metrics = load_json(codeql_report)
+                if not isinstance(codeql_metrics, dict):
+                    codeql_metrics = {}
 
                 total_findings = codeql_metrics.get('total_findings', 0)
                 sarif_files = codeql_metrics.get('sarif_files', [])
@@ -2273,6 +2328,43 @@ Examples:
                 print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
                 print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
                 print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
+
+                # SAGE: store SCA vulnerability findings for cross-run learning
+                try:
+                    from core.sage.hooks import store_sca_outcomes
+                    sca_findings_path = sca_out / "findings.json"
+                    if sca_findings_path.exists():
+                        import json as _sca_json
+                        sca_data = _sca_json.loads(
+                            sca_findings_path.read_text(encoding="utf-8")
+                        )
+                        sca_sage_outcomes = []
+                        for row in (sca_data if isinstance(sca_data, list) else []):
+                            sca_info = row.get("sca") or {}
+                            if not sca_info.get("name"):
+                                continue
+                            cve_ids = []
+                            if row.get("cve_id"):
+                                cve_ids.append(row["cve_id"])
+                            sca_sage_outcomes.append({
+                                "package_name": sca_info["name"],
+                                "ecosystem": sca_info.get("ecosystem", ""),
+                                "version": sca_info.get("installed_version", ""),
+                                "kind": "vuln",
+                                "verdict": "vulnerable",
+                                "severity": row.get("severity", ""),
+                                "cve_ids": cve_ids,
+                                "detail": row.get("message", "")[:200],
+                            })
+                        if sca_sage_outcomes:
+                            stored = store_sca_outcomes(
+                                repo_path=str(original_repo_path),
+                                outcomes=sca_sage_outcomes[:30],
+                            )
+                            if stored:
+                                print(f"📚 SAGE: Stored {stored} SCA outcomes")
+                except Exception:
+                    logger.debug("SAGE SCA store skipped", exc_info=True)
             else:
                 logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
                 sca_findings_count = 0
@@ -2321,7 +2413,7 @@ Examples:
             normalized_sarif = findings_to_sarif(import_result.findings)
             normalized_path = out_dir / "imported-normalized.sarif"
             import json as _json
-            normalized_path.write_text(_json.dumps(normalized_sarif, indent=2))
+            normalized_path.write_text(_json.dumps(normalized_sarif, indent=2), encoding="utf-8")
             all_sarif_files.append(normalized_path)
         elif not all_sarif_files:
             print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
@@ -2336,14 +2428,11 @@ Examples:
         threat_model_phase.get("generated_candidates", 0)
         if threat_model_phase.get("completed") else 0
     )
-    total_findings = (semgrep_metrics.get('total_findings', 0)
-                      + codeql_metrics.get('total_findings', 0)
-                      + sca_findings_count
-                      + threat_model_findings_count)
     imported_findings_count = import_result.stats.total_imported if import_result else 0
     total_findings = (semgrep_metrics.get('total_findings', 0)
                       + codeql_metrics.get('total_findings', 0)
                       + sca_findings_count
+                      + threat_model_findings_count
                       + imported_findings_count)
     scan_metrics = {
         'total_findings': total_findings,
@@ -2486,6 +2575,16 @@ Examples:
         print(f"  Findings entering LLM analysis: {validated_findings}")
 
     # ========================================================================
+    # POST-SCAN: Binary oracle autodetect (deferred from pre-scan)
+    # ========================================================================
+    # Autodetect runs AFTER CodeQL because CodeQL may compile the target
+    # (C/C++/Go/Java), leaving build artefacts that autodetect can find.
+    # Explicit --binary and --no-binary-oracle are handled early (before
+    # Phase 0); this covers the default autodetect + --binary-auto paths.
+    if not getattr(args, "binary", None) and not getattr(args, "no_binary_oracle", False):
+        apply_to_config(args, repo_path)
+
+    # ========================================================================
     # PHASE 3: AUTONOMOUS ANALYSIS
     # ========================================================================
     print("\n" + "=" * 70)
@@ -2549,6 +2648,10 @@ Examples:
         # want annotation side effects (CI / scratch runs) can suppress.
         if args.no_annotations:
             analysis_cmd.append("--no-annotations")
+        if args.no_exploits:
+            analysis_cmd.append("--no-exploits")
+        if args.no_patches:
+            analysis_cmd.append("--no-patches")
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
@@ -2574,6 +2677,8 @@ Examples:
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
         if analysis_report.exists():
             analysis = load_json(analysis_report)
+            if not isinstance(analysis, dict):
+                analysis = {}
 
             if analysis.get('mode') == 'prep_only':
                 print(f"\n✓ {analysis.get('processed', 0)} findings prepared for analysis")
@@ -2622,6 +2727,11 @@ Examples:
     # ========================================================================
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
+    try:
+        from core.llm.log_quiet import quiet_noisy_loggers
+        quiet_noisy_loggers()
+    except ImportError:
+        pass
     orchestration_result = None
     if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
         print("\n" + "=" * 70)
@@ -2640,14 +2750,13 @@ Examples:
                 aggregate=getattr(args, "aggregate", None),
                 auto_detect=llm_env.external_llm,
             )
-            # Dataflow validation is on by default when CodeQL ran;
-            # `--no-validate-dataflow` opts out entirely. `--deep-validate`
-            # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.
+            if llm_config and getattr(args, "max_cost_usd", None) is not None:
+                llm_config.max_cost_per_scan = args.max_cost_usd
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
                 out_dir=out_dir,
-                max_parallel=args.max_parallel if args.max_parallel is not None else _tuning_default("max_agentic_parallel"),
+                max_parallel=args.max_parallel or 0,
                 max_findings=args.max_findings,
                 no_exploits=args.no_exploits or args.codex_exec,
                 no_patches=args.no_patches or args.codex_exec,
@@ -2659,6 +2768,7 @@ Examples:
                 deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
                 allow_unreachable=getattr(args, "allow_unreachable", False),
+                checklist=scan_inventory,
                 use_codex_exec=args.codex_exec,
             )
         else:
@@ -2891,7 +3001,7 @@ Examples:
                             if args.validate:
                                 validation_smoke = _run_fuzz_validation_smoke(
                                     crash_outputs["findings"],
-                                    Path(args.binary),
+                                    Path(args.binary[0]),
                                     fuzz_out,
                                 )
                                 final_report["outputs"]["fuzzing_validation_run"] = validation_smoke.get("dir")
@@ -2936,6 +3046,29 @@ Examples:
 
         if sage_stored > 0:
             print(f"\n📚 SAGE: Stored {sage_stored} findings for cross-run learning")
+
+        # Store exploit outcomes when exploit generation was attempted
+        if orchestration_result and not getattr(args, "no_exploits", True):
+            from core.sage.hooks import store_exploit_outcomes
+
+            exploit_outcomes = []
+            for f in orchestration_result.get("results", []):
+                if f.get("exploitable") or f.get("has_exploit"):
+                    exploit_outcomes.append({
+                        "finding_id": f.get("finding_id", ""),
+                        "vuln_type": f.get("rule_id", ""),
+                        "cwe_id": f.get("cwe_id", ""),
+                        "file_path": f.get("file_path", ""),
+                        "has_exploit": f.get("has_exploit", False),
+                        "result": "success" if f.get("has_exploit") else "blocked",
+                    })
+            if exploit_outcomes:
+                sage_exploits = store_exploit_outcomes(
+                    repo_path=str(repo_path),
+                    outcomes=exploit_outcomes,
+                )
+                if sage_exploits > 0:
+                    print(f"📚 SAGE: Stored {sage_exploits} exploit outcomes")
     except Exception as e:
         logger.debug(f"SAGE post-scan storage skipped: {e}")
 
@@ -3074,7 +3207,7 @@ Examples:
     if _suppr_path.is_file():
         try:
             _suppr_count = sum(
-                1 for _ in _suppr_path.read_text().splitlines() if _.strip()
+                1 for _ in _suppr_path.read_text(encoding="utf-8").splitlines() if _.strip()
             )
         except OSError:
             _suppr_count = 0
@@ -3385,7 +3518,7 @@ Examples:
 
     md_report = render_report(spec)
     md_path = out_dir / "agentic-report.md"
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_report)
     print(f"   Report: {md_path}")
 
@@ -3684,7 +3817,7 @@ def _postprocess_findings(results):
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except SandboxSetupError as e:
         # Fail loud with the actionable message, not a traceback — the run
         # did NOT analyse anything, so never let it look like a clean pass.

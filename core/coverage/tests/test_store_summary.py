@@ -182,9 +182,7 @@ def test_store_view_surfaces_provenance(tmp_path):
     assert v["provenance"]["newest"] == "2026-05-26T11:00:00Z"
 
     out = format_store_view(v)
-    assert "Provenance:" in out
-    assert "semgrep: 1.67.0" in out
-    assert "llm models: gemini-2.5-pro-002" in out
+    assert "Provenance:" not in out
 
 
 def test_format_store_view_renders(tmp_path):

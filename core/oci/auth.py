@@ -171,10 +171,18 @@ def _from_docker_config(registry: str) -> Optional[BasicCredentials]:
         return None
     # Try a few common matches: exact host, ``https://<host>``,
     # ``https://<host>/v1/`` (legacy Docker Hub form).
-    for key in (registry,
-                f"https://{registry}",
-                f"https://{registry}/v1/",
-                f"https://{registry}/"):
+    probe_keys = [
+        registry,
+        f"https://{registry}",
+        f"https://{registry}/v1/",
+        f"https://{registry}/",
+    ]
+    if registry == "docker.io":
+        probe_keys.extend([
+            "https://index.docker.io/v1/",
+            "index.docker.io",
+        ])
+    for key in probe_keys:
         entry = auths.get(key)
         if isinstance(entry, dict):
             return _entry_to_credentials(entry)

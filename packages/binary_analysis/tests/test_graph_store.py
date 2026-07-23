@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from packages.binary_analysis.evidence import EvidenceTier, make_evidence
+from core.evidence import EvidenceTier, make_evidence
 from packages.binary_analysis.graph_store import (
     BinaryGraphStore,
     SCHEMA_VERSION,

@@ -8,13 +8,14 @@ Public API:
     from core.project import Project, ProjectManager
 """
 
-from .project import Project, ProjectManager
+from .project import Project, ProjectManager, is_project_output_dir
 from .clean import clean_project, plan_clean, execute_clean
 from .report import generate_project_report
 
 __all__ = [
     "Project",
     "ProjectManager",
+    "is_project_output_dir",
     "clean_project",
     "plan_clean",
     "execute_clean",

@@ -60,8 +60,10 @@ Exit codes:
 """
 
 from __future__ import annotations
+import faulthandler
 
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -75,6 +77,10 @@ _RC_WRAPPER_SANDBOX_FAILED = 101
 _RC_WRAPPER_TRUST_MISSING  = 102
 _RC_WRAPPER_ENV_INVALID    = 103
 _RC_WRAPPER_BINARY_MISSING = 104
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (libexec convention) ───────────────
 # Inline before any RAPTOR import (matches raptor-run-sandboxed,

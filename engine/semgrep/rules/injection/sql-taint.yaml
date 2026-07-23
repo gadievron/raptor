@@ -1,0 +1,149 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → database/sql query sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.sql.taint.go
+    message: >-
+      Untrusted data flows into a SQL query. Use parameterised queries
+      (db.Query(sql, args...)) instead of string formatting.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.Query($Q + $X, ...)
+              - pattern: $DB.QueryRow($Q + $X, ...)
+              - pattern: $DB.Exec($Q + $X, ...)
+              - pattern: $DB.QueryContext($CTX2, $Q + $X, ...)
+              - pattern: $DB.QueryRowContext($CTX2, $Q + $X, ...)
+              - pattern: $DB.ExecContext($CTX2, $Q + $X, ...)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: '(?i).*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|WHERE|FROM|INTO|SET|VALUES|JOIN|UNION|GRANT|REVOKE).*'
+    metadata:
+      cwe: ["CWE-89"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "sqli", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → Statement query sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.sql.taint.java
+    message: >-
+      Untrusted data flows into a SQL query via Statement. Use
+      PreparedStatement with parameterised queries instead.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      - pattern-either:
+          # Statement — always string-based, no parameterisation
+          - pattern: (Statement $STMT).executeQuery($Q)
+          - pattern: (Statement $STMT).executeUpdate($Q)
+          - pattern: (Statement $STMT).execute($Q)
+          # String concat into query (catches format patterns)
+          - pattern: (Statement $STMT).executeQuery($Q + $X)
+          - pattern: (Statement $STMT).executeUpdate($Q + $X)
+          - pattern: (Statement $STMT).execute($Q + $X)
+      # JdbcTemplate — focus on $Q prevents FPs on parameterised bind args
+      - patterns:
+          - pattern-either:
+              - pattern: (JdbcTemplate $JT).queryForObject($Q, ...)
+              - pattern: (JdbcTemplate $JT).queryForList($Q, ...)
+              - pattern: (JdbcTemplate $JT).query($Q, ...)
+              - pattern: (JdbcTemplate $JT).update($Q, ...)
+              - pattern: (JdbcTemplate $JT).execute($Q)
+          - focus-metavariable: $Q
+    metadata:
+      cwe: ["CWE-89"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "sqli", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → DB query sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.sql.taint.javascript
+    message: >-
+      Untrusted data flows into a SQL query. Use parameterised queries
+      or prepared statements instead of string interpolation.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      # Named DB libraries — specific enough to avoid non-DB FPs
+      - patterns:
+          - pattern: $KNEX.raw($Q, ...)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: knex.raw($Q, ...)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: sequelize.query($Q, ...)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: $DB.prepare($Q)
+          - focus-metavariable: $Q
+      # String concat in query position — SQL keyword in $Q prevents
+      # FPs on non-SQL .query() calls (cache, search, etc.)
+      - patterns:
+          - pattern-either:
+              - pattern: $CONN.query($Q + $X, ...)
+              - pattern: $POOL.query($Q + $X, ...)
+              - pattern: $CLIENT.query($Q + $X, ...)
+              - pattern: $DB.exec($Q + $X)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: '(?i).*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|WHERE|FROM|INTO|SET|VALUES|JOIN|UNION|GRANT|REVOKE).*'
+    metadata:
+      cwe: ["CWE-89"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "sqli", "taint"]

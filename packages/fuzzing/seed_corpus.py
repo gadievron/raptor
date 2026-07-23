@@ -356,7 +356,10 @@ def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict
     if not manifest_path.is_file():
         raise FileNotFoundError(f"built-in seed corpus manifest missing: {manifest_path}")
 
-    source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"malformed seed corpus manifest: {exc}") from exc
     seeds_config = source_manifest.get("seeds") or []
     if not isinstance(seeds_config, list):
         raise ValueError("built-in seed corpus manifest has invalid seeds list")
@@ -368,9 +371,12 @@ def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict
             continue
 
         name = str(item.get("name") or "").strip()
-        source_rel = Path(str(item.get("path") or ""))
+        path_str = str(item.get("path") or "").strip()
         if not name or "/" in name or "\\" in name or name in {".", ".."}:
             raise ValueError(f"invalid built-in seed name: {name!r}")
+        if not path_str:
+            raise ValueError(f"empty path for built-in seed: {name!r}")
+        source_rel = Path(path_str)
         if source_rel.is_absolute() or ".." in source_rel.parts:
             raise ValueError(f"invalid built-in seed path: {source_rel}")
 
@@ -437,7 +443,7 @@ def _reset_builtin_output(out_dir: Path, seed_names: set[str]) -> None:
         if previous.get("source") == "raptor_builtin_seed_corpus":
             for seed in previous.get("seeds") or []:
                 destination = str(seed.get("destination") or "")
-                if destination and "/" not in destination and "\\" not in destination:
+                if destination and "/" not in destination and "\\" not in destination and ".." not in destination:
                     generated_names.add(destination)
         existing_manifest.unlink()
 

@@ -385,7 +385,7 @@ def _is_simple_literal(node: ast.AST) -> bool:
     if isinstance(node, ast.Dict):
         return all(
             (k is None or _is_simple_literal(k)) and _is_simple_literal(v)
-            for k, v in zip(node.keys, node.values)
+            for k, v in zip(node.keys, node.values, strict=True)
         )
     if isinstance(node, ast.UnaryOp):
         return _is_simple_literal(node.operand)

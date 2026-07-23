@@ -11,8 +11,14 @@ Called by bin/raptor before exec claude. Handles:
 All project operations go through the .active symlink. No env vars set.
 Exit 0 on success (continue to claude), non-zero on abort.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -176,7 +182,7 @@ def main():
         if not active and caller_dir:
             auto_name = _find_project_for(caller_dir)
             if auto_name and _activate(auto_name):
-                (PROJECTS_DIR / ".auto").write_text(auto_name)
+                (PROJECTS_DIR / ".auto").write_text(auto_name, encoding="utf-8")
                 print(f"  Auto-activated project: {auto_name}")
                 return
 

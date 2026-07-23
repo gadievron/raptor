@@ -223,7 +223,7 @@ def _detect_build_systems(
         return out
     try:
         import logging
-        from packages.codeql.build_detector import BuildDetector
+        from core.build.build_detector import BuildDetector
 
         # Drop the per-language probe chatter from the report.
         # BuildDetector uses ``get_logger()`` (no name), which
@@ -237,10 +237,7 @@ def _detect_build_systems(
             def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return not (
-                    msg.startswith("Detecting build system for ")
-                    or msg.startswith("No build system detected for ")
-                    or msg.startswith("✓ Detected ")
-                    or msg.startswith("  Command: ")
+                    msg.startswith(("Detecting build system for ", "No build system detected for ", "✓ Detected ", "  Command: "))
                 )
 
         raptor_logger = logging.getLogger("raptor")

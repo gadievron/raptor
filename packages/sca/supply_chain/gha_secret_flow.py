@@ -830,8 +830,8 @@ def _scan_one_step(
     uses = step.get("uses")
     if isinstance(uses, str):
         action_name = _action_name(uses)
-        is_local = action_name.startswith("./") or action_name.startswith("../")
-        is_reusable_workflow = action_name.endswith(".yml") or action_name.endswith(".yaml")
+        is_local = action_name.startswith(("./", "../"))
+        is_reusable_workflow = action_name.endswith((".yml", ".yaml"))
         # Trust any first-party ``actions/<name>`` action (GitHub's
         # official org).  The ``actions/`` GitHub org is the
         # canonical source of first-party workflow primitives; any

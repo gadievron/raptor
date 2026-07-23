@@ -301,14 +301,20 @@ def _resolve_model_id(client) -> str:
 
 
 def _sanitise_model(m: BaseModel) -> BaseModel:
-    """Apply ``sanitise_string`` to every ``str`` / ``list[str]`` field."""
+    """Apply ``sanitise_string`` to every ``str`` / ``list[str]`` field,
+    recursing into nested Pydantic models and lists thereof."""
     updates: Dict[str, Any] = {}
     for name, field_info in m.__class__.model_fields.items():
         val = getattr(m, name)
         if isinstance(val, str):
             updates[name] = sanitise_string(val, max_chars=1000)
-        elif isinstance(val, list) and val and isinstance(val[0], str):
-            updates[name] = [sanitise_string(s, max_chars=500) for s in val]
+        elif isinstance(val, BaseModel):
+            updates[name] = _sanitise_model(val)
+        elif isinstance(val, list) and val:
+            if isinstance(val[0], str):
+                updates[name] = [sanitise_string(s, max_chars=500) for s in val]
+            elif isinstance(val[0], BaseModel):
+                updates[name] = [_sanitise_model(item) for item in val]
     if updates:
         return m.model_copy(update=updates)
     return m

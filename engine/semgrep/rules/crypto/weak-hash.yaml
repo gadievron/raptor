@@ -28,7 +28,9 @@ rules:
     severity: HIGH
     pattern-either:
       - pattern: md5.New()
+      - pattern: md5.Sum(...)
       - pattern: sha1.New()
+      - pattern: sha1.Sum(...)
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V3.9"]

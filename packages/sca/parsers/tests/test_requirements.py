@@ -137,3 +137,9 @@ def test_unparseable_line_is_skipped(tmp_path: Path) -> None:
     deps = parse(_write(tmp_path, body))
     names = [d.name for d in deps]
     assert names == ["valid"]
+
+
+def test_empty_requirement_value_no_crash(tmp_path: Path) -> None:
+    body = "--requirement=\ndjango==4.2.7\n"
+    deps = parse(_write(tmp_path, body))
+    assert [d.name for d in deps] == ["django"]

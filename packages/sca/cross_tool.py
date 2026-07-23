@@ -78,8 +78,8 @@ def _load_findings(path: Path) -> List[Dict[str, Any]]:
 
 
 def _write_findings(path: Path, findings: List[Dict[str, Any]]) -> None:
-    with open(path, "w") as fh:
-        json.dump(findings, fh, indent=2, default=str)
+    from core.json import save_json
+    save_json(path, findings)
 
 
 def _build_cve_index(

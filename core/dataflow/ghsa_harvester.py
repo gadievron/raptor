@@ -98,14 +98,16 @@ def _iter_advisories(
             continue
         for jp in ydir.rglob("*.json"):
             try:
-                adv = json.loads(jp.read_text())
+                adv = json.loads(jp.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 continue
-            adv_cwes = set(adv.get("database_specific", {}).get("cwe_ids", []))
+            adv_cwes = set(
+                (adv.get("database_specific") or {}).get("cwe_ids") or []
+            )
             if not (adv_cwes & cwes):
                 continue
-            ecos = {a.get("package", {}).get("ecosystem")
-                    for a in adv.get("affected", [])}
+            ecos = {(a.get("package") or {}).get("ecosystem")
+                    for a in adv.get("affected") or []}
             if not (ecos & ecosystems):
                 continue
             yield jp, adv
@@ -128,9 +130,13 @@ def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> Tuple[str, str]:
     deliberately recorded under a single CWE for the trust-witness walk;
     if the same fix is interesting under multiple CWEs, a future
     extension can iterate ``cwes & adv_cwes``."""
-    adv_cwes = sorted(set(adv.get("database_specific", {}).get("cwe_ids", [])) & cwes)
-    adv_ecos = sorted({a.get("package", {}).get("ecosystem")
-                       for a in adv.get("affected", [])} & ecosystems)
+    adv_cwes = sorted(
+        set((adv.get("database_specific") or {}).get("cwe_ids") or []) & cwes
+    )
+    adv_ecos = sorted(
+        {(a.get("package") or {}).get("ecosystem")
+         for a in adv.get("affected") or []} & ecosystems
+    )
     return adv_cwes[0], adv_ecos[0]
 
 

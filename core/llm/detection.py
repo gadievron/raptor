@@ -138,7 +138,6 @@ def _get_available_ollama_models() -> List[str]:
     # the env var. Per-call cost is negligible (string check).
     ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
 
-    _ollama_checked = True
     try:
         # ``ollama_url`` is validated via ``_validate_ollama_url``
         # (line 82); operator-config-supplied + scheme-locked.
@@ -146,11 +145,13 @@ def _get_available_ollama_models() -> List[str]:
         if response.status_code == 200:
             data = response.json()
             _cached_ollama_models = [model['name'] for model in data.get('models', [])]
+            _ollama_checked = True
             return _cached_ollama_models
     except Exception as e:
         ollama_display = RaptorConfig.OLLAMA_HOST if _host_is_local(RaptorConfig.OLLAMA_HOST) else '[REMOTE-OLLAMA]'
         logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
     _cached_ollama_models = []
+    _ollama_checked = True
     return []
 
 
@@ -266,7 +267,7 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
     })
 
     try:
-        with open(old_config) as f:
+        with open(old_config, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         if not data or not isinstance(data.get('model_list'), list):
@@ -465,7 +466,8 @@ def _read_config_models() -> list:
             return []
 
         return _apply_anthropic_resolution(model_list)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"detection: model list parse failed, returning []: {e}")
         return []
 
 

@@ -208,7 +208,7 @@ def run_rule(
             returncode=-1,
         )
 
-    rule_text = rule.read_text()
+    rule_text = rule.read_text(encoding="utf-8")
     needs_harness = RESULT_PREFIX not in rule_text and "script:python" not in rule_text
 
     # If the rule needs harness injection, the modified text has to

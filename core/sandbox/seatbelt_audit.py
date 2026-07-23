@@ -110,7 +110,7 @@ _LOG_LINE_RE = re.compile(
 # Map SBPL action prefixes to the RAPTOR sandbox-summary type taxonomy
 # (matches Linux tracer's _NAME_TO_TYPE mapping).
 def _action_to_type(action: str) -> str:
-    if action.startswith("file-write") or action.startswith("file-mknod"):
+    if action.startswith(("file-write", "file-mknod")):
         return "write"
     if action.startswith("file-read"):
         return "read"

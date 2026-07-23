@@ -6,9 +6,7 @@ public shape so :func:`core.dataflow.sanitizer_catalog.match_sanitizers_in_cfg`,
 Phase 11) :func:`core.analysis.sanitizer_cut.evaluate_finding` can
 consume the C/C++ CFG with the same interface as the Python one.
 
-Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`). The
-Phase 8 decision doc at ``docs/phase-8-substrate-spike/DECISION.md``
-explains why.
+Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`).
 
 Scope — control-flow constructs handled:
 
@@ -752,6 +750,9 @@ class _CPPCFGBuilder:
         # switch context stack: (break_target, fallthrough-from-prev-case)
         # The break target is the join AFTER the switch.
         self._switch_stack: List[CPPCFGNode] = []
+        # Unified break-target stack tracks nesting order so break
+        # targets the innermost enclosing loop or switch.
+        self._break_stack: List[CPPCFGNode] = []
         # Goto resolution: collect (goto_node, label_text) for a
         # post-pass once all labels are known. Conservative: every
         # labeled_statement with a matching label receives an edge
@@ -942,10 +943,12 @@ class _CPPCFGBuilder:
         self._link_many(incoming, header)
         after_loop: List[CPPCFGNode] = [header]
         self._loop_stack.append((header, header))
+        self._break_stack.append(header)
         body = stmt.child_by_field_name("body")
         body_out = self._build_stmts(body, [header]) if body is not None else []
         for tail in body_out:
             self._link(tail, header)
+        self._break_stack.pop()
         self._loop_stack.pop()
         return after_loop
 
@@ -990,9 +993,11 @@ class _CPPCFGBuilder:
         else:
             step_node = header   # continue == loop back to header
         self._loop_stack.append((header, step_node))
+        self._break_stack.append(header)
         body_out = self._build_stmts(body, [header]) if body is not None else []
         for tail in body_out:
             self._link(tail, step_node)
+        self._break_stack.pop()
         self._loop_stack.pop()
         return [header]
 
@@ -1020,6 +1025,7 @@ class _CPPCFGBuilder:
         # have something to point at. We use the first body node as
         # the loop "header" for continue.
         self._loop_stack.append((tail, tail))
+        self._break_stack.append(tail)
         body_out = self._build_stmts(body, incoming) if body is not None else list(incoming)
         # Body falls through to tail (the cond test)
         self._link_many(body_out, tail)
@@ -1042,6 +1048,7 @@ class _CPPCFGBuilder:
         ]
         for cand in body_entry_candidates:
             self._link(tail, cand)
+        self._break_stack.pop()
         self._loop_stack.pop()
         return [tail]
 
@@ -1062,6 +1069,7 @@ class _CPPCFGBuilder:
             label="switch-join",
         )
         self._switch_stack.append(join)
+        self._break_stack.append(join)
         body = stmt.child_by_field_name("body")
         # Walk the body's children, grouping consecutive stmts by
         # case label. Each case_statement becomes a "branch" entry
@@ -1090,7 +1098,7 @@ class _CPPCFGBuilder:
         # Now build each case.
         prev_out: List[CPPCFGNode] = []
         outs: List[CPPCFGNode] = []
-        for labels, group in zip(case_entries, case_groups):
+        for labels, group in zip(case_entries, case_groups, strict=True):
             # case label node(s) — model as one node per label.
             entry: List[CPPCFGNode] = [header] + prev_out
             for label_stmt in labels:
@@ -1118,6 +1126,7 @@ class _CPPCFGBuilder:
         )
         if not has_default:
             self._link(header, join)
+        self._break_stack.pop()
         self._switch_stack.pop()
         return [join]
 
@@ -1126,12 +1135,8 @@ class _CPPCFGBuilder:
             kind="stmt", lineno=stmt.start_point[0] + 1, label="break",
         )
         self._link_many(incoming, node)
-        # Prefer the switch break target if we're inside one; otherwise
-        # the loop break target.
-        if self._switch_stack:
-            self._link(node, self._switch_stack[-1])
-        elif self._loop_stack:
-            self._link(node, self._loop_stack[-1][0])
+        if self._break_stack:
+            self._link(node, self._break_stack[-1])
         return []
 
     def _build_continue(self, stmt, incoming):

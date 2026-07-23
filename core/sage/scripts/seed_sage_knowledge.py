@@ -430,7 +430,7 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     try:
         # See register_agents.py for on_chain_height rationale — same
         # SAGE 6.6.0 type-mismatch fix; on_chain_height still present
-        # on AgentRegistration as of SAGE 8.4.2.
+        # on AgentRegistration as of SAGE 11.9.2.
         reg = await client.register_agent("raptor-seed")
         height = getattr(reg, "on_chain_height", None)
         print(f"Registered as raptor-seed (on-chain height {height})")
@@ -460,7 +460,7 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
         return_exceptions=True,
     )
     results = []
-    for mem, r in zip(all_memories, raw_results):
+    for mem, r in zip(all_memories, raw_results, strict=True):
         if isinstance(r, BaseException):
             label = getattr(mem, "label", str(mem))
             results.append((label, f"failed: {type(r).__name__}: {r}"))

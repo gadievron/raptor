@@ -35,7 +35,7 @@ class TestAnnotationsInCoverage(unittest.TestCase):
             metadata={"source": "human", "status": "clean"}))
         write_annotation(ann, Annotation(
             file="src/foo.py", function="beta", body="bug",
-            metadata={"source": "llm", "status": "finding"}))
+            metadata={"source": "human", "status": "finding"}))
         rec = build_from_annotations(ann)
         assert rec is not None
         write_record(run_dir, rec, tool_name="annotations")

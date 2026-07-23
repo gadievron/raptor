@@ -84,12 +84,12 @@ def from_sarif_result(
 
     steps: List[Step] = []
     for loc_wrapper in locations:
-        loc = loc_wrapper.get("location", {})
-        physical_loc = loc.get("physicalLocation", {})
-        region = physical_loc.get("region", {})
-        artifact = physical_loc.get("artifactLocation", {})
+        loc = loc_wrapper.get("location") or {}
+        physical_loc = loc.get("physicalLocation") or {}
+        region = physical_loc.get("region") or {}
+        artifact = physical_loc.get("artifactLocation") or {}
 
-        message_text = loc.get("message", {}).get("text") or ""
+        message_text = (loc.get("message") or {}).get("text") or ""
         steps.append(
             Step(
                 file_path=artifact.get("uri", ""),

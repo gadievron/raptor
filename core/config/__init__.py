@@ -448,7 +448,7 @@ class RaptorConfig:
     #   3. Belt + braces inside get_safe_env() — if the allowlist is ever
     #      widened (e.g., a new `SSH_*` prefix) the overlay still strips
     #      the specific known-bad names.
-    DANGEROUS_ENV_VARS = [
+    DANGEROUS_ENV_VARS = frozenset([
         # Shell/tool-eval vectors
         "TERMINAL",        # Shell-evaluated by command lookup utilities
         "BROWSER",         # Shell-evaluated by open/xdg-open
@@ -634,7 +634,7 @@ class RaptorConfig:
                                # uninitialised-memory disclosure ABI.
         # Note: TERM is NOT stripped — it's read as a string (terminfo lookup),
         # not shell-evaluated. Stripping it breaks colour output in git/grep/etc.
-    ]
+    ])
 
     # Git Configuration
     #
@@ -807,9 +807,12 @@ class RaptorConfig:
                 env[name] = value
         # Belt + braces: strip anything dangerous that somehow made it
         # through (either allowlisted explicitly or matching a prefix).
-        if not preserve_proxy:
-            env = strip_env_vars(env, RaptorConfig.PROXY_ENV_VARS)
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
+        if preserve_proxy:
+            for pv in RaptorConfig.PROXY_ENV_VARS:
+                val = os.environ.get(pv)
+                if val is not None:
+                    env[pv] = val
         # F102: restore PYTHONUSERBASE AFTER the dangerous-var strip
         # for callers that opted in (e.g. semgrep scanner spawn).
         # Take the value verbatim from os.environ — do NOT invent

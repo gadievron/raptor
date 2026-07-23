@@ -101,7 +101,9 @@ def discover_codeql_databases(out_dir: Path) -> Dict[str, Path]:
     if report_path.is_file():
         try:
             import json
-            data = json.loads(report_path.read_text())
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
             for lang, info in (data.get("databases_created") or {}).items():
                 if not isinstance(info, dict) or not info.get("success"):
                     continue
@@ -408,9 +410,15 @@ def validate_dataflow_claims(
         "n_deep_validate_auto_enabled": 0,
     }
 
-    # Master kill-switch — bail before doing any work.
+    # Master kill-switches — bail before doing any work.
     try:
         from core.config import RaptorConfig
+        if not RaptorConfig.CODEQL_ENABLED:
+            logger.info(
+                "dataflow validation skipped: CODEQL_ENABLED is False",
+            )
+            metrics["skipped_reason"] = "codeql_disabled"
+            return metrics
         if not RaptorConfig.IRIS_TIER1_ENABLED:
             logger.info(
                 "dataflow validation skipped: IRIS_TIER1_ENABLED is False",
@@ -485,6 +493,55 @@ def validate_dataflow_claims(
         logger.info("dataflow validation skipped: CodeQL adapter unavailable")
         metrics["skipped_reason"] = "adapter_unavailable"
         return metrics
+
+    # ── Tier 1 batch pre-pass ──────────────────────────────────────────
+    # Collect all prebuilt query paths that the per-finding loop would
+    # invoke individually, then run them in a single JVM invocation per
+    # adapter. Saves ~4-6s of JVM+DB overhead per additional query.
+    tier1_batch: Dict[str, ToolEvidence] = {}
+    _batch_by_adapter: Dict[str, set] = {}
+    for _f in findings:
+        _fid = _f.get("finding_id")
+        if not _fid or _fid not in results_by_id:
+            continue
+        if not _eligible_for_validation(_f, results_by_id[_fid]):
+            continue
+        _adapter = _pick_adapter_for_finding(_f, adapters)
+        if _adapter is None:
+            continue
+        _lang = _finding_language(_f)
+        _cwe = (_f.get("cwe_id") or "").upper().strip()
+        if not _cwe:
+            _cwe = (infer_cwe_from_rule_id(_f.get("rule_id", "")) or "").upper().strip()
+        if _lang and _cwe:
+            _qp = discover_prebuilt_query(_lang, _cwe)
+            if _qp is not None:
+                _adapter_key = _adapter.name + ":" + str(getattr(_adapter, "_database_path", ""))
+                _batch_by_adapter.setdefault(_adapter_key, set()).add(str(_qp))
+    # Run one batch per adapter (typically just one).
+    _adapter_lookup = {}
+    for lang, a in adapters.items():
+        _akey = a.name + ":" + str(getattr(a, "_database_path", ""))
+        _adapter_lookup[_akey] = a
+    for _akey, _qpaths in _batch_by_adapter.items():
+        _a = _adapter_lookup.get(_akey)
+        if _a is None:
+            continue
+        _n = len(_qpaths)
+        if _n < 2:
+            continue
+        if progress_callback:
+            progress_callback(f"Batch-running {_n} prebuilt CodeQL queries")
+        _batch_results = _a.run_prebuilt_queries_batch(
+            [Path(p) for p in _qpaths],
+        )
+        tier1_batch.update(_batch_results)
+    if tier1_batch:
+        logger.debug(
+            "Tier 1 batch pre-pass: %d queries across %d adapter(s)",
+            sum(len(v) for v in _batch_by_adapter.values()),
+            len(_batch_by_adapter),
+        )
 
     # Within-run cache: two findings with the same claim+target+function+cwe
     # produce the same Hypothesis hash and the same validation result.
@@ -568,6 +625,7 @@ def validate_dataflow_claims(
             result, tier_used = _validate_one_hypothesis(
                 hypothesis, finding, adapter, llm_client,
                 deep_validate=effective_deep_validate,
+                tier1_batch=tier1_batch,
             )
         except Exception as e:  # never let a single validation crash the loop
             logger.warning(
@@ -813,7 +871,7 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
         if ve_block:
             untrusted_inner.append(ve_block)
     except Exception:
-        pass
+        logger.warning("exemplar lookup failed for %s", rule_id, exc_info=True)
 
     parts = list(trusted_parts)
     if untrusted_inner:
@@ -1022,6 +1080,7 @@ def _validate_one_hypothesis(
     llm_client: Any,
     *,
     deep_validate: bool = False,
+    tier1_batch: Optional[Dict[str, ToolEvidence]] = None,
 ) -> "tuple[ValidationResult, str]":
     """Run a hypothesis through Tier 1 → Tier 2 → Tier 3 in order.
 
@@ -1093,7 +1152,11 @@ def _validate_one_hypothesis(
                     adapter_db,
                 )
             else:
-                ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
+                _qp_key = str(prebuilt_path)
+                if tier1_batch and _qp_key in tier1_batch:
+                    ev = tier1_batch[_qp_key]
+                else:
+                    ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
                 verdict = _verdict_from_prebuilt(
                     ev, finding, prebuilt_path, codeql_db=adapter_db,
                 )
@@ -1645,7 +1708,7 @@ def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
     needle = file_path.lstrip("/")
     # Step 1: full-path suffix match (preferred — unambiguous)
     for entry in indexed:
-        if entry.endswith(needle) or entry.endswith("/" + needle):
+        if entry.endswith((needle, "/" + needle)):
             return entry
     # Step 2: basename fallback
     basename = Path(needle).name
@@ -1871,7 +1934,7 @@ def _function_in_codeql_inventory(
     for entry_file, entry_fn in inventory:
         if entry_fn != fn:
             continue
-        if entry_file.endswith(needle) or entry_file.endswith("/" + needle):
+        if entry_file.endswith((needle, "/" + needle)):
             return True
     # Basename fallback — same trade-off as Layer 1
     basename = Path(needle).name
@@ -1945,10 +2008,12 @@ def _any_match_at_finding_location(
     that's on the line above).
     """
     target_file = (finding.get("file_path") or finding.get("file") or "")
-    target_line = int(finding.get("start_line") or finding.get("line") or 0)
+    try:
+        target_line = int(finding.get("start_line") or finding.get("line") or 0)
+    except (ValueError, TypeError):
+        target_line = 0
     if not target_file:
-        # Without a target line we can't location-match; assume any
-        # match supports the finding (same file at minimum).
+        # No file to location-match; assume any match supports the finding.
         return bool(matches)
 
     target_basename = Path(target_file).name
@@ -1958,7 +2023,10 @@ def _any_match_at_finding_location(
             continue
         if Path(m_file).name != target_basename:
             continue
-        m_line = int(m.get("line") or 0)
+        try:
+            m_line = int(m.get("line") or 0)
+        except (ValueError, TypeError):
+            m_line = 0
         if target_line == 0 or abs(m_line - target_line) <= 5:
             return True
     return False
@@ -2405,7 +2473,7 @@ def run_validation_pass(
             cross = None
         if cross is not None:
             validation_model = cross
-            logger.info(
+            logger.debug(
                 "dataflow validation: cross-family checker = %s",
                 getattr(cross, "model_name", "?"),
             )

@@ -184,6 +184,19 @@ def compose_proxy_hosts(target: "Optional[Path]" = None) -> list:
     hosts = list(SCA_ALLOWED_HOSTS)
     seen = set(hosts)
 
+    # LLM API hosts — SCA pipeline stages (optimise, whatif, etc.)
+    # use LLM calls. Include the well-known provider API hosts so
+    # the egress proxy permits model-resolution and inference.
+    try:
+        from core.llm.egress import derive_allowlist
+        from core.llm.config import LLMConfig
+        for h in derive_allowlist(LLMConfig()):
+            if h not in seen:
+                hosts.append(h)
+                seen.add(h)
+    except Exception:                               # noqa: BLE001
+        pass
+
     # Operator-supplied private-registry overrides (Artifactory /
     # Nexus / GHE / etc.) — env-var-driven. Always consulted, with
     # or without ``target``, since overrides are operator-level

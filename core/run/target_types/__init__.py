@@ -33,8 +33,6 @@ Each ``<name>.yml`` carries::
 
   pipeline:
     recommended: [understand-map, scan-with-codeql, agentic-with-validate]
-    estimated_cost_usd:  [25, 50]
-    estimated_time_min:  [40, 75]
 
   budget_defaults:
     typical_findings_count:  25
@@ -117,9 +115,6 @@ class CatalogEntry:
     attack_surface_low: Tuple[str, ...] = field(default_factory=tuple)
     pipeline_recommended: Tuple[str, ...] = field(default_factory=tuple)
 
-    # Cost / time hints — pairs (low, high) USD / minutes
-    estimated_cost_usd: Tuple[float, float] = (0.0, 0.0)
-    estimated_time_min: Tuple[int, int] = (0, 0)
     typical_findings_count: int = 0
     typical_cost_per_run_usd: float = 0.0
 
@@ -145,9 +140,6 @@ class CatalogEntry:
         def _t(seq):
             return tuple(seq) if seq else tuple()
 
-        cost_pair = pipeline.get("estimated_cost_usd") or [0.0, 0.0]
-        time_pair = pipeline.get("estimated_time_min") or [0, 0]
-
         return cls(
             name=data["name"],
             description=data.get("description", "").strip(),
@@ -160,12 +152,10 @@ class CatalogEntry:
             attack_surface_high=_t(surface.get("high_priority_dirs")),
             attack_surface_low=_t(surface.get("low_priority_dirs")),
             pipeline_recommended=_t(pipeline.get("recommended")),
-            estimated_cost_usd=(float(cost_pair[0]), float(cost_pair[1])),
-            estimated_time_min=(int(time_pair[0]), int(time_pair[1])),
-            typical_findings_count=int(budget.get("typical_findings_count", 0)),
+            typical_findings_count=int(budget.get("typical_findings_count") or 0),
             typical_cost_per_run_usd=float(
-                budget.get("typical_cost_per_run_usd", 0)),
-            version=int(data.get("version", 1)),
+                budget.get("typical_cost_per_run_usd") or 0),
+            version=int(data.get("version") or 1),
         )
 
 
@@ -184,12 +174,12 @@ def _load_one(yml_path: Path) -> Optional[CatalogEntry]:
     best-effort so a single broken entry doesn't break the loader
     for all consumers."""
     try:
-        text = yml_path.read_text()
+        text = yml_path.read_text(encoding="utf-8")
         data = yaml.safe_load(text)
         if not isinstance(data, dict):
             return None
         return CatalogEntry.from_dict(data)
-    except (OSError, yaml.YAMLError, ValueError):
+    except (OSError, yaml.YAMLError, ValueError, IndexError, TypeError):
         return None
 
 

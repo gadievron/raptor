@@ -86,6 +86,7 @@ def _verdicts_for_built_demo(built_demo: Path):
 
 
 @pytest.mark.parametrize("name,expected", sorted(EXPECTED_VERDICTS.items()))
+@pytest.mark.slow
 def test_classify_matches_expected_verdict(_verdicts_for_built_demo,
                                             name: str, expected: str) -> None:
     """Each ground-truth function classifies to its predicted verdict."""
@@ -98,6 +99,7 @@ def test_classify_matches_expected_verdict(_verdicts_for_built_demo,
     )
 
 
+@pytest.mark.slow
 def test_classify_carries_build_id_and_path(built_demo: Path) -> None:
     """Every witness records its provenance so multi-binary results can be
     attributed correctly and stale-build mismatch can be spotted."""
@@ -107,6 +109,7 @@ def test_classify_carries_build_id_and_path(built_demo: Path) -> None:
     assert w.binary_path == str(built_demo)
 
 
+@pytest.mark.slow
 def test_unknown_source_name_is_absent(built_demo: Path) -> None:
     """A name not present in the binary at all classifies as ``absent`` —
     the DCE end of the spectrum, no special-case needed for missing names."""
@@ -208,6 +211,7 @@ def test_enrich_skips_non_native_items(built_demo: Path) -> None:
     assert "binary_oracle" not in py_item.get("metadata", {})
 
 
+@pytest.mark.slow
 def test_enrich_writes_inventory_summary(built_demo: Path) -> None:
     """Top-level summary with ``earns_suppression: True`` — earned by the
     Inc 3 precision corpus (841/841 absent verdicts correct across 5
@@ -255,6 +259,7 @@ def test_enrich_is_idempotent(built_demo: Path) -> None:
 # Adversarial-review regression tests (2026-05-30)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_enrich_does_not_crash_on_metadata_none(built_demo: Path) -> None:
     """Inventory item with ``metadata: None`` (vs missing) — ``setdefault``
     would return None and the next assignment crash. Initialise explicitly."""
@@ -292,6 +297,7 @@ def _clang_built_demo(tmp_path_factory):
     return work / "demo"
 
 
+@pytest.mark.slow
 def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> None:
     """clang emits ``(indexed string: 0xN): name`` where gcc emits
     ``(indirect string, offset: 0xN): name``. Parser must read both —
@@ -305,6 +311,7 @@ def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> Non
     assert v["live_called"].classification == "symbol_present"
 
 
+@pytest.mark.slow
 def test_classifier_handles_cpp_mangled_symbols(tmp_path: Path) -> None:
     """nm emits mangled C++ symbols; the source side has unmangled names.
     Without ``nm --demangle`` every C++ method would classify ``absent``.
@@ -395,6 +402,7 @@ def test_classifier_falls_back_to_symbol_only_on_stripped_binary(
     assert verdicts["nonexistent"].classification == "absent"
 
 
+@pytest.mark.slow
 def test_inventory_earns_suppression_downgrades_for_stripped(
     tmp_path: Path, built_demo: Path,
 ) -> None:
@@ -474,6 +482,7 @@ def test_reach_witness_does_not_fire_sound_witness_on_symbol_only(
     assert binary_oracle_absent(inv_mixed, "x.c", "foo") is False
 
 
+@pytest.mark.slow
 def test_classifier_resolves_symlinked_binary(tmp_path: Path,
                                                 built_demo: Path) -> None:
     """A symlink to the binary should classify the same as the binary
@@ -537,6 +546,7 @@ def test_classifier_treats_internal_linkage_with_low_pc_as_present(
         f"internal-linkage helper misclassified — {classifications}")
 
 
+@pytest.mark.slow
 def test_classifier_qualifies_cpp_methods_with_namespace(
     tmp_path: Path,
 ) -> None:
@@ -679,6 +689,7 @@ def test_build_inventory_swallows_enrichment_errors(
         assert bo["counts"].get("classified", 0) == 0
 
 
+@pytest.mark.slow
 def test_enrich_combines_multi_binary_verdicts_with_alive_in_any_wins(
     tmp_path: Path,
 ) -> None:
@@ -822,6 +833,7 @@ def _planted_unrelated_binary(tmp_path_factory):
     return binary
 
 
+@pytest.mark.slow
 def test_enrich_drops_unrelated_binary_below_source_coverage_floor(
     _planted_unrelated_binary,
 ) -> None:

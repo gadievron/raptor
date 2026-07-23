@@ -83,7 +83,7 @@ def _echo_flow_md(output_dir: Path, cve_id: str, quiet: bool) -> None:
             return
     else:
         try:
-            body = flow_md_path.read_text()
+            body = flow_md_path.read_text(encoding="utf-8")
         except OSError:
             return
     typer.echo("")
@@ -232,7 +232,7 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
     failures here are not allowed to break the CLI's exit-code path."""
     try:
         text = markdown.render_failure(cve_id, error_class, error_text)
-        (output_dir / f"{cve_id}.md").write_text(text)
+        (output_dir / f"{cve_id}.md").write_text(text, encoding="utf-8")
         typer.echo(f"wrote {output_dir / f'{cve_id}.md'}")
     except Exception as exc:  # noqa: BLE001 — never block the CLI on report-write
         import logging as _logging
@@ -472,9 +472,10 @@ def run(
         osv_path = output_dir / f"{cve_id}.osv.json"
         md_path = output_dir / f"{cve_id}.md"
         osv_path.write_text(
-            json.dumps(osv_schema.render(result.bundle, root_cause=rc), indent=2) + "\n"
+            json.dumps(osv_schema.render(result.bundle, root_cause=rc), indent=2) + "\n",
+            encoding="utf-8",
         )
-        md_path.write_text(markdown.render(result.bundle, root_cause=rc))
+        md_path.write_text(markdown.render(result.bundle, root_cause=rc), encoding="utf-8")
         if pipeline_slot[0] is not None:
             _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                 ok=True, error_class="PASS",

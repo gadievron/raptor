@@ -11,7 +11,7 @@ from core.hash import sha256_file
 from core.json import load_json
 from packages.fuzzing.crash_collector import CrashCollector
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 

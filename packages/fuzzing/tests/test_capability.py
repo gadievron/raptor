@@ -5,8 +5,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from packages.fuzzing.capability import (
     CapabilityReport,
     _check_macos_afl_shmem,
@@ -55,12 +53,6 @@ class TestCapabilityReport(unittest.TestCase):
 
 
 class TestProbe(unittest.TestCase):
-    # Real ``probe()`` shells out to shutil.which + subprocess for each
-    # candidate fuzzer/sanitiser toolchain; on CI runners without a
-    # warmed apt cache this exceeds the 10s default-tier budget.
-    # Runtime is genuine I/O against the host toolchain, not a mock
-    # gap — nightly tier is the correct home.
-    @pytest.mark.slow
     def test_probe_returns_report(self):
         report = probe()
         self.assertIsInstance(report, CapabilityReport)

@@ -1,7 +1,7 @@
 """Top-level ``/describe`` report — composes target shape +
-tool readiness + catalog defaults preview + cost estimate
-into a single operator-facing description (``DescribeReport``)
-plus renderers (text + JSON).
+tool readiness + catalog defaults preview into a single
+operator-facing description (``DescribeReport``) plus
+renderers (text + JSON).
 
 **Scope contract — read-only describe, no execution.**
 
@@ -24,7 +24,6 @@ What /describe DOES surface:
 * Target-specific tool gaps — CodeQL build deps, coccinelle
   language applicability, binary-oracle artefact presence.
   Per-target. Host-level checks live in /doctor.
-* Cost estimate — from #21 estimator.
 
 When the operator is ready to act, they run ``raptor.py
 agentic`` / ``codeql`` / ``scan`` etc. — those commands have
@@ -95,7 +94,7 @@ def build_describe_report(
     shape = infer_target_shape(target_path)
     checks = check_tool_readiness(shape)
     preview = _target_type_defaults(shape)
-    estimate = _estimate_summary(target_path)
+    estimate = _scorecard_estimate(target_path)
     return DescribeReport(
         target_shape=shape,
         tool_checks=checks,
@@ -103,6 +102,29 @@ def build_describe_report(
         estimate_summary=estimate,
         archive_label=archive_label,
     )
+
+
+def _scorecard_estimate(target_path: Path) -> Optional[str]:
+    """Return a one-line scorecard-derived estimate, or None."""
+    try:
+        from core.run.target_types import load as _load_catalog
+        from core.run.estimator import estimate_from_scorecard, format_estimate
+        from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+
+        entry = _load_catalog(target_path)
+        n = entry.typical_findings_count if entry else 0
+        if n <= 0:
+            return None
+        model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+        if not model:
+            return None
+        est = estimate_from_scorecard(model, n)
+        if est is None:
+            return None
+        text = format_estimate(est)
+        return text or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -143,26 +165,6 @@ def _target_type_defaults(
         pipeline_names=pipeline,
     )
 
-
-def _estimate_summary(target_path: Path) -> Optional[str]:
-    """One-line cost+time estimate from the existing #21
-    estimator. None when no catalog match / estimator data."""
-    try:
-        from core.run.estimator import estimate_run, format_estimate
-        est = estimate_run(target_path)
-        if est is None:
-            return None
-        full = format_estimate(est)
-        if not full:
-            return None
-        # Strip the estimator's "Expected: " prefix and "(target
-        # type: ...)" suffix — the /describe renderer wraps the
-        # value in "Cost estimate: ..." and the target type is
-        # already named in the header.
-        full = full.removeprefix("Expected: ")
-        return full.split(" (target type:", 1)[0]
-    except Exception:  # noqa: BLE001
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +401,7 @@ def format_text(report: DescribeReport) -> str:
     lines.append("For host-level setup, run `raptor doctor`.")
     lines.append(
         f"To start analysis, run `raptor.py agentic --repo "
-        f"{s.target_path}` (prints same estimate at start; "
-        f"runs sandboxed)."
+        f"{s.target_path}` (runs sandboxed)."
     )
 
     return "\n".join(lines)

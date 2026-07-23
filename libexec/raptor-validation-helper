@@ -10,10 +10,16 @@ Stages 0 and 1 compose generic tools (lifecycle, checklist, coverage, diagrams)
 with validation-specific logic (bridge, stage merging, report generation).
 Stages A-F do per-stage merging, validation, and schema hints.
 """
+import faulthandler
 import re
+import signal
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -232,6 +238,29 @@ def _apply_stage_file(workdir, stage_letter):
                     by_id[fid] = staged_finding
                     applied += 1
 
+        # Propagate ruling.status → status so get_display_status
+        # picks up the Stage D verdict instead of the stale Stage A
+        # value (not_disproven / poc_success).
+        # final_status is only set for values in the Stage E enum
+        # (confirmed / exploitable); ruled_out is NOT a valid
+        # final_status value — it flows via ruling.status instead.
+        _RULING_TO_FINAL = {
+            "confirmed": "confirmed",
+            "exploitable": "exploitable",
+        }
+        for finding in container.get("findings", []):
+            ruling = finding.get("ruling")
+            if isinstance(ruling, dict):
+                rs = ruling.get("status", "")
+                if rs in ("confirmed", "ruled_out", "exploitable"):
+                    finding["status"] = rs
+                final = _RULING_TO_FINAL.get(rs)
+                if final:
+                    finding["final_status"] = final
+            # Empty cvss_vector fails schema pattern; normalise to None
+            if finding.get("cvss_vector") == "":
+                finding["cvss_vector"] = None
+
         # Copy top-level metadata (but NOT findings or updates — those are handled above)
         for key, value in staged.items():
             if key not in ("stage", "updates", "findings"):
@@ -334,17 +363,6 @@ def _build_standalone_pocs(target, build_dir):
 
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    compiler = "gcc"
-    try:
-        _sp.run([compiler, "--version"], capture_output=True, check=True)
-    except (FileNotFoundError, _sp.CalledProcessError):
-        compiler = "cc"
-        try:
-            _sp.run([compiler, "--version"], capture_output=True, check=True)
-        except (FileNotFoundError, _sp.CalledProcessError):
-            print("No C compiler found — skipping PoC build", file=sys.stderr)
-            return
-
     # Sandbox the compile invocations. Pre-fix `_sp.run(cmd)`
     # spawned the compiler with the operator's full env and no
     # filesystem isolation. Two failure modes:
@@ -376,8 +394,18 @@ def _build_standalone_pocs(target, build_dir):
         _safe_env = RaptorConfig.get_safe_env()
     except ImportError:
         _sandbox_run = None
-        import os as _os
-        _safe_env = _os.environ.copy()
+        _safe_env = os.environ.copy()
+
+    compiler = "gcc"
+    try:
+        _sp.run([compiler, "--version"], capture_output=True, check=True, env=_safe_env)
+    except (FileNotFoundError, _sp.CalledProcessError):
+        compiler = "cc"
+        try:
+            _sp.run([compiler, "--version"], capture_output=True, check=True, env=_safe_env)
+        except (FileNotFoundError, _sp.CalledProcessError):
+            print("No C compiler found — skipping PoC build", file=sys.stderr)
+            return
 
     built = 0
     for source in sources:
@@ -489,7 +517,8 @@ def prepare_B(workdir, target=None):
             if f1.get("status") == "disproven" or f2.get("status") == "disproven":
                 continue
             same_func = (f1.get("file") == f2.get("file")
-                         and f1.get("function") == f2.get("function"))
+                         and f1.get("function") == f2.get("function")
+                         and f1.get("vuln_type") == f2.get("vuln_type"))
             nearby = (f1.get("file") == f2.get("file")
                       and f1.get("vuln_type") == f2.get("vuln_type")
                       and abs(f1.get("line", 0) - f2.get("line", 0)) <= 5)
@@ -945,11 +974,16 @@ def _discover_executables(target):
     can't actually exec it.
     """
     import subprocess as _sp
+    try:
+        from core.config import RaptorConfig
+        _env = RaptorConfig.get_safe_env()
+    except Exception:
+        _env = os.environ.copy()
     result = {}
     try:
         proc = _sp.run(
             ["find", target, "-executable", "-type", "f"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30, env=_env
         )
         # GNU find returns rc=0 on success; BSD find with
         # `-executable` errors out (rc!=0, stderr "find: -executable:
@@ -958,7 +992,7 @@ def _discover_executables(target):
         if proc.returncode != 0 or "unknown primary" in (proc.stderr or "").lower():
             proc = _sp.run(
                 ["find", target, "-type", "f", "-perm", "+111"],
-                capture_output=True, text=True, timeout=30
+                capture_output=True, text=True, timeout=30, env=_env
             )
         # Track collisions on stem. Pre-fix `result[p.stem] = str(p)`
         # silently OVERWROTE earlier entries when two binaries
@@ -1304,7 +1338,8 @@ def prepare_bridge(workdir, target=None):
 
 
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
-              sanitizer_cut_mode=None, sanitizer_cut_parity_log=None):
+              sanitizer_cut_mode=None, sanitizer_cut_parity_log=None,
+              findings_path=None):
     """Stage 0: start lifecycle, build checklist, bridge understand output."""
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
@@ -1355,6 +1390,16 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
     # marked "running" indefinitely. Subsequent operator runs
     # of `/project status` listed the orphan as in-progress;
     # `coverage-summary` skipped it; cleanup never fired.
+    # SAGE recall: pull prior validation verdicts + methodology before analysis.
+    try:
+        from core.sage.hooks import recall_context_for_validation
+        sage_memories = recall_context_for_validation(target)
+        if sage_memories:
+            from core.json import save_json
+            save_json(out_dir / "sage_precall_validation.json", sage_memories)
+    except Exception:
+        pass
+
     from core.run.metadata import fail_run
     try:
         # Snapshot understand hashes before the rebuild overwrites checklist.json.
@@ -1370,6 +1415,15 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         checklist = build_checklist(target, str(out_dir))
 
         (out_dir / "build").mkdir(exist_ok=True)
+
+        if findings_path:
+            import shutil
+            dest = out_dir / "findings.json"
+            shutil.copy2(findings_path, dest)
+            from core.json import load_json
+            pre_findings = load_json(dest)
+            n = len(pre_findings.get("findings", [])) if pre_findings else 0
+            print(f"Pre-existing findings: {n} from {Path(findings_path).name}")
 
         if not no_bridge:
             _bridge_understand_output(out_dir, checklist, target,
@@ -1423,6 +1477,26 @@ def prepare_1(workdir, target=None, model=None):
     except Exception:
         pass
 
+    # SAGE store: persist validation verdicts + disproven hypotheses for cross-run learning.
+    try:
+        from core.json import load_json
+        findings_data = load_json(Path(workdir) / "findings.json")
+        if findings_data:
+            from core.sage.hooks import store_validation_verdicts, store_validation_disproven
+            findings_list = findings_data.get("findings", [])
+            summary = findings_data.get("summary", {})
+            resolved_target = findings_data.get("target_path", target or "")
+            if findings_list:
+                store_validation_verdicts(resolved_target, findings_list, summary)
+            disproven_path = Path(workdir) / "disproven.json"
+            if disproven_path.exists():
+                disproven_data = load_json(disproven_path)
+                disproven_list = disproven_data.get("disproven", []) if disproven_data else []
+                if disproven_list:
+                    store_validation_disproven(resolved_target, disproven_list)
+    except Exception:
+        pass
+
     # Diagrams
     try:
         from packages.diagram import render_and_write
@@ -1450,6 +1524,9 @@ def prepare_1(workdir, target=None, model=None):
     try:
         entry = harness_model_entry(model)
         manifest = {"models": [entry]} if entry else None
+    except Exception:
+        manifest = None
+    try:
         complete_run(Path(workdir), manifest=manifest)
     except Exception as e:
         print(f"⚠️  Lifecycle error: {e}", file=sys.stderr)
@@ -1474,7 +1551,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]
@@ -1496,6 +1573,15 @@ def main():
         if idx + 1 < len(args):
             model = args[idx + 1]
     no_bridge = "--no-bridge" in args
+    findings_path = None
+    if "--findings" in args:
+        idx = args.index("--findings")
+        if idx + 1 < len(args):
+            findings_path = args[idx + 1]
+            if not Path(findings_path).is_file():
+                print(f"ERROR: findings file not found: {findings_path}",
+                      file=sys.stderr)
+                sys.exit(1)
 
     # Sanitizer-cut mode (review #4, PR #794). Stage 0 resolves +
     # persists it; later stages reload it. None means "not passed".
@@ -1514,7 +1600,8 @@ def main():
     if stage == "0":
         prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge,
                   sanitizer_cut_mode=sanitizer_cut_mode,
-                  sanitizer_cut_parity_log=sanitizer_cut_parity_log)
+                  sanitizer_cut_parity_log=sanitizer_cut_parity_log,
+                  findings_path=findings_path)
         return
 
     # All other stages need a workdir

@@ -15,7 +15,7 @@ import logging
 
 from core.json import load_json
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 

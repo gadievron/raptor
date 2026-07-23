@@ -147,7 +147,7 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
                 result = pipeline.run(cve_id, Path(tmp))
                 osv = osv_schema.render(result.bundle)
                 (out / f"{cve_id}.osv.json").write_text(
-                    json.dumps(osv, indent=2) + "\n"
+                    json.dumps(osv, indent=2) + "\n", encoding="utf-8",
                 )
                 consensus = result.bundle.consensus or {}
                 ext_agree = result.bundle.extraction_agreement or {}
@@ -271,7 +271,7 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
     try:
         from cve_diff.report.markdown import render_failure
         text = render_failure(cve_id, error_class, error_text)
-        (output_dir / f"{cve_id}.md").write_text(text)
+        (output_dir / f"{cve_id}.md").write_text(text, encoding="utf-8")
     except Exception as exc:  # noqa: BLE001 — report write must not abort bench
         import logging as _logging
         _logging.getLogger(__name__).debug(
@@ -656,7 +656,7 @@ def bench(
             _sample_text = _sf.read(_MAX_SAMPLE_BYTES + 1)
     except OSError as e:
         typer.echo(f"bench: cannot read sample {sample}: {e}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
     if len(_sample_text) > _MAX_SAMPLE_BYTES:
         typer.echo(
             f"bench: sample {sample} exceeds {_MAX_SAMPLE_BYTES} bytes — "
@@ -664,7 +664,11 @@ def bench(
             err=True,
         )
         raise typer.Exit(code=1)
-    payload = json.loads(_sample_text)
+    try:
+        payload = json.loads(_sample_text)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"bench: sample {sample} is not valid JSON: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     # Pre-fix `payload["cves"]` and `c["cve_id"]` raised KeyError
     # / TypeError on malformed sample files — the operator saw an
     # opaque traceback instead of a structured "sample is missing

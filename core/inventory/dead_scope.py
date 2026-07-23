@@ -236,6 +236,10 @@ def _match_brace(source: str, open_pos: int) -> "int | None":
     while i < n:
         c = source[i]
         if c in "\"'`":
+            if c == "'" and i + 1 < n and source[i + 1].isalpha():
+                if i + 2 >= n or source[i + 2] != "'":
+                    i += 1
+                    continue
             j = _skip_string(source, i)
             if j is None:
                 return None
@@ -246,6 +250,19 @@ def _match_brace(source: str, open_pos: int) -> "int | None":
             if nl == -1:
                 return None
             i = nl + 1
+            continue
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            i += 2
+            bc_depth = 1
+            while i < n and bc_depth > 0:
+                if source[i] == "/" and i + 1 < n and source[i + 1] == "*":
+                    bc_depth += 1
+                    i += 2
+                elif source[i] == "*" and i + 1 < n and source[i + 1] == "/":
+                    bc_depth -= 1
+                    i += 2
+                else:
+                    i += 1
             continue
         if c == "{":
             depth += 1

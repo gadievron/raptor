@@ -60,11 +60,18 @@ or ``feasible: null`` verdict is reported via the JSON body, not via
 exit status — the LLM caller inspects ``feasible``.
 """
 import argparse
+import faulthandler
 import json
+import signal
 import sys
 from pathlib import Path
 
 # libexec/<this> -> repo root
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
 # ─── trust-marker check (do not import; inline by design) ───
 import os
 if not (os.environ.get("CLAUDECODE")
@@ -106,7 +113,7 @@ def _resolve_from_trace(args) -> "tuple[list, str | None] | int":
         return _err(f"attack-paths.json not found: {ap_path}")
 
     try:
-        paths = json.loads(ap_path.read_text())
+        paths = json.loads(ap_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         return _err(f"failed to read {ap_path}: {e}")
 

@@ -16,8 +16,14 @@ Usage:
 If <dir> is omitted, uses the active project.
 Accepts: project output dir, run dir, target path, or project name.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -33,6 +39,10 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+
+import logging  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 def _is_project_dir(d: Path) -> bool:
@@ -91,8 +101,8 @@ def _resolve_dir(path_arg: str):
         p = mgr.load(path_arg)
         if p:
             return p, None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("project load failed for %s: %s", path_arg, exc)
 
     # Try target path → project
     try:
@@ -100,8 +110,8 @@ def _resolve_dir(path_arg: str):
         project = mgr.find_project_for_target(str(target_dir))
         if project:
             return project, None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("find_project_for_target failed: %s", exc)
 
     if target_dir.exists():
         return None, None
@@ -115,8 +125,8 @@ def _resolve_active_project():
         name = mgr.get_active()
         if name:
             return mgr.load(name)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("active project resolution failed: %s", exc)
     return None
 
 
@@ -360,22 +370,22 @@ def main():
 
     if mark_targets or unmark_targets:
         run_dir = None
+        project = None
         if args:
-            _, run_dir = _resolve_dir(args[0])
+            project, run_dir = _resolve_dir(args[0])
             if not run_dir:
                 d = Path(args[0])
                 if d.exists() and _is_run_dir(d):
                     run_dir = d
         if not run_dir:
-            # Use most recent run from active project
-            p = _resolve_active_project()
+            p = project or _resolve_active_project()
             if p:
                 try:
                     dirs = p.get_run_dirs(sweep=False)
                     if dirs:
                         run_dir = dirs[0]
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("get_run_dirs failed: %s", exc)
         if mark_targets:
             _cmd_mark(mark_targets, run_dir)
         if unmark_targets:

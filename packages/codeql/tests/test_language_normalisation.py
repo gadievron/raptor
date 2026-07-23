@@ -110,7 +110,7 @@ class TestExplicitLanguagesNormalised:
             seen_languages.append(lang)
             return None
         def fake_no_build(lang):
-            from packages.codeql.build_detector import BuildSystem
+            from core.build.build_detector import BuildSystem
             return BuildSystem(
                 type="no-build", command="", working_dir=tmp_path,
                 env_vars={}, confidence=1.0, detected_files=[],
@@ -171,7 +171,7 @@ class TestSmallTargetRetry:
 
         agent.build_detector.detect_build_system.return_value = None
         agent.build_detector.synthesise_build_command.return_value = None
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         agent.build_detector.generate_no_build_config.return_value = (
             BuildSystem(
                 type="no-build", command="", working_dir=tmp_path,
@@ -220,7 +220,7 @@ class TestSmallTargetRetry:
         )
         agent.build_detector.detect_build_system.return_value = None
         agent.build_detector.synthesise_build_command.return_value = None
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         agent.build_detector.generate_no_build_config.return_value = (
             BuildSystem(
                 type="no-build", command="", working_dir=tmp_path,

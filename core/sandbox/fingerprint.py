@@ -58,6 +58,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util as _ctypes_util
 import hashlib
+import heapq
 import logging
 import os
 import threading
@@ -390,7 +391,7 @@ def _derive_uptime_and_processes() -> tuple[int, int]:
 
 def _write(path: Path, content: str) -> str:
     """Helper: write content, return absolute path as str."""
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return str(path)
 
 
@@ -401,7 +402,7 @@ def _read_host_cpu_flags() -> str:
     Empty string on failure — handled gracefully by build_persona.
     """
     try:
-        with open("/proc/cpuinfo") as f:
+        with open("/proc/cpuinfo", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("flags"):
                     _, _, value = line.partition(":")
@@ -419,7 +420,7 @@ def _trim_proc_version() -> str:
              becomes "Linux version 6.8.0-49-generic\\n"
     """
     try:
-        with open("/proc/version") as f:
+        with open("/proc/version", encoding="utf-8") as f:
             raw = f.read().strip()
     except OSError:
         return "Linux version unknown\n"
@@ -514,7 +515,7 @@ def set_cpu_affinity(cpu_count: int) -> int:
         )
     # Pick the lowest-numbered available CPUs so the mask is contiguous
     # starting at 0, matching the persona's `/sys/cpu/online` range.
-    mask = set(sorted(available)[:effective])
+    mask = set(heapq.nsmallest(effective, available))
     os.sched_setaffinity(0, mask)
     return effective
 

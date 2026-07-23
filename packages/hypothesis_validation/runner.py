@@ -287,14 +287,15 @@ def _build_evaluate_prompt(hypothesis: Hypothesis, evidence: ToolEvidence) -> st
     matches_block = ""
     if evidence.matches:
         sample = evidence.matches[:5]
-        matches_block = "Matches (first 5):\n"
+        parts = ["Matches (first 5):\n"]
         for i, m in enumerate(sample):
             file = _neutralize_forged_tags(str(m.get("file", "?")))
             line = m.get("line", 0)
             msg = _neutralize_forged_tags(str(m.get("message", "")))
-            matches_block += f"  [{i}] {file}:{line} {msg}\n"
+            parts.append(f"  [{i}] {file}:{line} {msg}\n")
         if len(evidence.matches) > 5:
-            matches_block += f"  ... and {len(evidence.matches) - 5} more\n"
+            parts.append(f"  ... and {len(evidence.matches) - 5} more\n")
+        matches_block = "".join(parts)
 
     error_block = (
         f"Error: {_neutralize_forged_tags(evidence.error)}\n"

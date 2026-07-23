@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from packages.codeql.build_detector import BuildSystem
+from core.build.build_detector import BuildSystem
 from packages.codeql.database_manager import DatabaseManager
 
 

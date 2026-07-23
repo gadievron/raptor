@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from core.smt_solver import BVProfile
-from packages.codeql.smt_path_validator import (
+from core.smt_solver.path_feasibility import (
     PathCondition,
     check_path_feasibility,
 )
@@ -22,6 +22,7 @@ from packages.codeql.smt_path_validator import (
 # packages/codeql/dataflow_validator.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from core.llm.methodology import load_methodology
 from core.dataflow.evidence_renderer import render_evidence_for_prompt
 from core.dataflow.sanitizer_evidence import SanitizerEvidence
 from core.llm.task_types import TaskType
@@ -814,6 +815,7 @@ class DataflowValidator:
             repo_root=repo_path,
         )
 
+        dataflow_methodology = load_methodology("personas/security_researcher.md")
         system = (
             "You are an expert security researcher analyzing dataflow vulnerabilities.\n\n"
             "The user message contains dataflow path details from a CodeQL finding, "
@@ -827,6 +829,8 @@ class DataflowValidator:
             "5. Bypass Strategy: If there are barriers, how can they be bypassed?\n"
             "6. Prerequisites: What conditions must be met for successful exploitation?"
         )
+        if dataflow_methodology:
+            system += "\n\n" + dataflow_methodology
 
         blocks = []
         if dataflow.message:

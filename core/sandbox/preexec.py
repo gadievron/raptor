@@ -130,7 +130,7 @@ def _load_user_limits() -> dict:
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
             # against a malformed config file.
-            data = json.loads(_CONFIG_PATH.read_text())
+            data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 # Accept non-negative ints; 0 is a valid "skip this rlimit"
                 # sentinel (see _set_limits guards: `if mem > 0:` etc.).
@@ -190,10 +190,7 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
     """
     landlock_fn = None
     if (writable_paths or allowed_tcp_ports) and check_landlock_available():
-        # Ensure at least /tmp is writable — processes need temp files
-        effective_paths = list(writable_paths) if writable_paths else ["/tmp"]
-        if "/tmp" not in effective_paths:
-            effective_paths.append("/tmp")
+        effective_paths = list(writable_paths) if writable_paths else []
         landlock_fn = _make_landlock_preexec(effective_paths, allowed_tcp_ports,
                                              readable_paths=readable_paths)
 

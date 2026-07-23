@@ -8,6 +8,7 @@ generic ``core.json.cache`` location.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -366,32 +367,21 @@ def test_reaper_skipped_when_sentinel_is_fresh(
     )
 
 
-def test_reaper_runs_when_sentinel_is_stale(
-    tmp_path: Path, monkeypatch,
-) -> None:
+def test_reaper_runs_when_sentinel_is_stale(tmp_path: Path) -> None:
     """When the sentinel's mtime is older than the rate-limit window,
-    the reaper must run again."""
-    JsonCache(root=tmp_path)
+    the reaper must run again — verified by checking the sentinel's
+    mtime is updated to ~now after construction."""
     sentinel = tmp_path / ".reap_last_run"
-    # Make the sentinel old enough to fall outside the rate-limit
-    # window (default 3600s; backdate by 2 hours for safety).
+    sentinel.touch()
     old = time.time() - 7200
-    import os as _os
-    _os.utime(sentinel, (old, old))
+    os.utime(sentinel, (old, old))
 
-    from core.json import cache as cache_mod
-    calls: list = []
-    original = cache_mod._iter_tempfile_candidates
-
-    def spy(root, **kwargs):
-        calls.append(str(root))
-        return original(root, **kwargs)
-
-    monkeypatch.setattr(cache_mod, "_iter_tempfile_candidates", spy)
+    before = time.time()
     JsonCache(root=tmp_path)
-    cache_walks = [c for c in calls if str(tmp_path) in c]
-    assert len(cache_walks) == 1, (
-        f"reaper did not run on stale sentinel: {cache_walks}"
+    new_mtime = sentinel.stat().st_mtime
+    assert new_mtime >= before - 1, (
+        f"reaper did not update sentinel on stale mtime: "
+        f"sentinel_mtime={new_mtime:.1f}, expected>={before - 1:.1f}"
     )
 
 

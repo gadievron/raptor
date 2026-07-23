@@ -80,7 +80,10 @@ _SECRET_QUERY_KEYS = {
     "private_key",
 }
 
-_SECRET_FIELD_SUFFIXES = ("_token", "-token", "_secret", "-secret", "_key", "-key")
+_SECRET_FIELD_SUFFIXES = (
+    "_token", "-token", "_secret", "-secret", "_key", "-key",
+    "_password", "-password", "_passwd", "-passwd", "_pwd", "-pwd",
+)
 
 
 def is_secret_field_name(name: object) -> bool:

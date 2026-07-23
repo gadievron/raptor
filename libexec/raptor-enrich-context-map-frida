@@ -11,11 +11,17 @@ frida evidence exists.
 """
 
 from __future__ import annotations
+import faulthandler
 
 import json
 import os
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE")
@@ -49,7 +55,7 @@ def main() -> int:
         return 0
 
     try:
-        ctx = json.loads(ctx_path.read_text())
+        ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         print(f"✗ Cannot read context-map: {e}", file=sys.stderr)
         return 1
@@ -59,7 +65,7 @@ def main() -> int:
     checklist_path = workdir / "checklist.json"
     if checklist_path.is_file():
         try:
-            cl = json.loads(checklist_path.read_text())
+            cl = json.loads(checklist_path.read_text(encoding="utf-8"))
             target_path = cl.get("target_path")
         except (json.JSONDecodeError, OSError):
             pass
@@ -67,7 +73,8 @@ def main() -> int:
     result = enrich_context_map_with_frida(
         ctx, search_dirs, target_path=target_path)
     if result != ctx:
-        ctx_path.write_text(json.dumps(result, indent=2) + "\n")
+        from core.json import save_json
+        save_json(ctx_path, result)
         enriched = sum(
             1 for ep in result.get("entry_points", [])
             if ep.get("runtime_confirmed")

@@ -201,11 +201,11 @@ def iter_inventory_functions(
         path = fe.get("path")
         if not path:
             continue
-        for fn in fe.get("items", fe.get("functions", [])):
+        for fn in fe.get("items", fe.get("functions", [])) or []:
             yield (
                 path,
                 fn.get("name"),
-                fn.get("line_start", 0),
+                fn.get("line_start") or 0,
                 fn.get("line_end"),
                 fn.get("kind", "function"),
             )

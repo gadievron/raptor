@@ -19,7 +19,7 @@ import hashlib
 from collections import deque
 from typing import Any
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 
 _MAX_PATH_DEPTH = 6
 

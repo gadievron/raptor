@@ -77,6 +77,9 @@ Find all dangerous operations:
 - Network requests with user-controlled URLs (SSRF candidates)
 - Template rendering with user data
 - Cryptographic operations (especially key material handling)
+- LDAP injection (`DirContext.search`, `LdapContext` with string-concatenated filters)
+- JNDI lookup (`InitialContext.lookup`, `Context.lookup` with user-controlled names)
+- XXE (`DocumentBuilderFactory`, `SAXParserFactory`, `XMLInputFactory` without disabling external entities)
 
 For each: record file path, line number, and what data reaches it.
 
@@ -337,6 +340,28 @@ catalog) with mechanical ground truth. Limitation: reverse
 reachability is intra-file only (same-file call edges); cross-file
 call chains are visible to the LLM but not to this enricher.
 Idempotent. Skip if `$WORKDIR/checklist.json` lacks `target_path`.
+
+**[MAP-5g] Enrich sinks with target-mitigation context (optional)**
+
+When `--binary <path>` was supplied, augment each sink under `sinks[]`
+with a `mitigation_context` blob describing which classical exploitation
+primitives (`arbitrary_write`, `%n write`, `got_overwrite`, `.fini_array`,
+`hook_overwrite`, `stack_smash`) the target's build actually permits
+given its NX / RELRO tier / canary / FORTIFY / glibc-`%n`-disabled
+state. Each entry carries a `priority_hint` combining primitive
+availability with the sink's CWE.
+
+```bash
+libexec/raptor-enrich-context-map-mitigation "$WORKDIR"
+```
+
+Opt-in — no-op when no binary path is available. Additive — sinks are
+never dropped, only enriched. Namespaced under `source:
+"exploit_feasibility.analyze_binary"` so parallel enrichers can coexist.
+Tri-state honest — `format_n_write: null` means CONDITIONAL, distinct
+from `false`; consumers must not collapse `null` to `false`. Cache-keyed
+on `(binary_sha256, build_flags_source, schema_version)` — one
+`analyze_binary` call per run. Idempotent.
 
 **[MAP-6] Record Coverage**
 

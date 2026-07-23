@@ -17,10 +17,17 @@ Stop checks the marker: present → fail, absent → complete.
 The LLM's explicit complete/fail always takes priority (status is
 already not-running, so hooks skip).
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]  # raptor/
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
 # ─── trust-marker check (do not import; inline by design) ───
 import os
 if not (os.environ.get("CLAUDECODE")
@@ -107,7 +114,7 @@ def main():
     # against the wrong (stale) state.
     try:
         from core.config import RaptorConfig
-        configured_out = Path(RaptorConfig.DEFAULT_OUTPUT_BASE)
+        configured_out = RaptorConfig.get_out_dir()
         if configured_out.is_dir() and configured_out not in scan_dirs:
             scan_dirs.append(configured_out)
     except Exception:
@@ -130,7 +137,7 @@ def main():
                 meta_path = d / RUN_METADATA_FILE
                 if not meta_path.exists():
                     continue
-                meta = json.loads(meta_path.read_text())
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
             if (meta.get("status") != STATUS_RUNNING

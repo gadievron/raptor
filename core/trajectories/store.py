@@ -61,7 +61,11 @@ def _truncate(text: str) -> str:
     )
 
 
-def serialize_messages(messages: Iterable[Message]) -> list[TrajectoryStep]:
+def serialize_messages(
+    messages: Iterable[Message],
+    *,
+    per_turn_tokens: Iterable[tuple[int, int]] | None = None,
+) -> list[TrajectoryStep]:
     """Turn a ToolLoopResult.messages list into TrajectoryStep dicts.
 
     Each Message becomes one step; iteration index counts assistant
@@ -70,7 +74,14 @@ def serialize_messages(messages: Iterable[Message]) -> list[TrajectoryStep]:
     Tool result content is truncated at :data:`_MAX_TEXT_LEN` per
     block so a runaway tool (e.g. a `read_file` on a 100 MB file)
     can't blow up the trajectory size unbounded.
+
+    ``per_turn_tokens`` is an optional sequence of ``(input_tokens,
+    output_tokens)`` tuples, one entry per assistant turn in
+    ``messages`` (user-turn tokens don't exist — they're not model
+    turns). When supplied, the tuples fill the per-step token
+    fields; when missing / too short, tokens default to 0.
     """
+    tokens_iter = iter(per_turn_tokens) if per_turn_tokens is not None else None
     steps: list[TrajectoryStep] = []
     iteration = 0
     for msg in messages:
@@ -92,12 +103,21 @@ def serialize_messages(messages: Iterable[Message]) -> list[TrajectoryStep]:
                     "content": _truncate(block.content),
                     "is_error": block.is_error,
                 })
+        in_tokens = 0
+        out_tokens = 0
+        if msg.role == "assistant" and tokens_iter is not None:
+            try:
+                in_tokens, out_tokens = next(tokens_iter)
+            except StopIteration:
+                pass
         steps.append(TrajectoryStep(
             iteration=iteration,
             role=msg.role,
             text_blocks=text_blocks,
             tool_calls=tool_calls,
             tool_results=tool_results,
+            input_tokens=int(in_tokens),
+            output_tokens=int(out_tokens),
         ))
         # Count iterations on assistant turns — that's "model turn N".
         if msg.role == "assistant":
@@ -216,7 +236,7 @@ def iter_trajectory_json(
         if not candidate.is_file():
             continue
         try:
-            raw = candidate.read_text()
+            raw = candidate.read_text(encoding="utf-8")
             parsed = json.loads(raw)
         except (OSError, json.JSONDecodeError) as e:
             _log.warning(

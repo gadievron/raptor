@@ -30,6 +30,11 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
+from core.sage.hooks import (
+    format_sage_memories_for_prompt,
+    recall_context_for_codeql_build,
+    store_codeql_build_reliability,
+)
 from packages.codeql.agent import CodeQLAgent
 from packages.codeql.autonomous_analyzer import AutonomousCodeQLAnalyzer
 
@@ -99,6 +104,10 @@ def run_autonomous_workflow(args):
             logger.error("--build-command requires exactly one language")
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
+    sage_rows = recall_context_for_codeql_build(repo_path=args.repo, languages=languages)
+    sage_build_ctx = format_sage_memories_for_prompt(sage_rows)
+    if sage_build_ctx:
+        logger.info("SAGE CodeQL build recall (methodology domain):\n%s", sage_build_ctx[:4000])
 
     # PHASE 1: CodeQL Scanning
     logger.info("\n" + "=" * 70)
@@ -116,7 +125,8 @@ def run_autonomous_workflow(args):
         build_commands=build_commands,
         force_db_creation=args.force,
         use_extended=args.extended,
-        min_files=args.min_files
+        min_files=args.min_files,
+        sage_build_recall=sage_build_ctx or None,
     )
 
     if not scan_result.success:
@@ -183,8 +193,11 @@ def run_autonomous_workflow(args):
         run = runs[0]
         results = run.get("results", [])
 
-        # Analyze findings (up to max_findings)
-        findings_to_analyze = results[:args.max_findings]
+        # Analyze findings (up to max_findings across all SARIF files)
+        remaining = args.max_findings - total_analyzed
+        if remaining <= 0:
+            break
+        findings_to_analyze = results[:remaining]
         logger.info(f"Analyzing {len(findings_to_analyze)} findings...")
 
         from core.reporting.formatting import display_rule_id
@@ -241,6 +254,15 @@ def run_autonomous_workflow(args):
 
     summary_file = agent.out_dir / "autonomous_summary.json"
     save_json(summary_file, summary)
+    # Future-agent note: post-run reliability memory is additive only; failures
+    # inside SAGE hooks must not fail the CodeQL workflow.
+    store_codeql_build_reliability(
+        repo_path=args.repo,
+        languages=languages or [],
+        build_command=args.build_command or "auto",
+        auto_detect_outcome="success",
+        analyses_completed=total_analyzed,
+    )
 
     logger.info(f"\n✓ Autonomous analysis summary saved: {summary_file}")
 

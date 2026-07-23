@@ -50,6 +50,8 @@ class SynthesisedRule:
     rule_id: str
     body: str
     rationale: str = ""  # LLM's explanation of what the rule looks for
+    test_positive: str = ""  # minimal vulnerable snippet the rule must match
+    test_negative: str = ""  # minimal safe snippet the rule must NOT match
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,7 @@ class CheckerSynthesisResult:
     rule: Optional[SynthesisedRule] = None
     rule_path: Optional[Path] = None
     positive_control: bool = False
+    dual_control: bool = False
     matches: List[Match] = field(default_factory=list)
     triage: List[MatchTriage] = field(default_factory=list)
     capped: bool = False
@@ -123,6 +126,7 @@ class CheckerSynthesisResult:
             ),
             "rule_path": str(self.rule_path) if self.rule_path else None,
             "positive_control": self.positive_control,
+            "dual_control": self.dual_control,
             "matches": [
                 {
                     "file": m.file, "line": m.line,

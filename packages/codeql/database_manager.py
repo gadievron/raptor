@@ -36,7 +36,7 @@ from core.logging import get_logger
 from core.git.clone import safe_git_command
 from core.git import get_safe_git_env
 from core.sandbox import SandboxSetupError
-from packages.codeql.build_detector import BuildSystem
+from core.build.build_detector import BuildSystem
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
@@ -718,7 +718,7 @@ class DatabaseManager:
             return DatabaseResult(
                 success=False,
                 language=language,
-                database_path="",
+                database_path=None,
                 metadata=None,
                 errors=[
                     f"working_dir {working_dir!r} lacks execute permission "
@@ -783,7 +783,7 @@ class DatabaseManager:
                 os.close(fd)
                 build_script = Path(script_name)
                 try:
-                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
+                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n", encoding="utf-8")
                     # 0o500 (read+execute, no write) for parity with
                     # `build_detector.py:871`'s synthesised-script mode
                     # — TOCTOU mitigation: a separate process can't
@@ -815,6 +815,7 @@ class DatabaseManager:
                 block_network=True,
                 cwd=working_dir,
                 env=env,
+                env_caller_filtered=True,
                 tool_paths=self._sandbox_tool_paths(),
                 # Audit JSONL home (only used when --audit is engaged).
                 # Decoupled from output= because the build subprocess
@@ -847,7 +848,7 @@ class DatabaseManager:
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
                 logger.error(f"✗ Database creation failed for {language}")
-                logger.error(result.stderr[:500])
+                logger.error((result.stderr or "")[:500])
                 # Cleanup partial staging on build failure — no point keeping
                 # broken DBs around to confuse future cache lookups (they
                 # never reach canonical anyway since promote is gated on
@@ -1300,7 +1301,7 @@ def main():
     # Create build system object if command provided
     build_system = None
     if args.build_command:
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         build_system = BuildSystem(
             type="custom",
             command=args.build_command,

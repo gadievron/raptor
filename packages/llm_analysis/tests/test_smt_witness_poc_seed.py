@@ -359,7 +359,7 @@ class TestSmtPathValidatorAnonMap:
     when it bubbles up to /exploit."""
 
     def _check(self, condition_text):
-        from packages.codeql.smt_path_validator import (
+        from core.smt_solver.path_feasibility import (
             check_path_feasibility, PathCondition,
         )
         from core.smt_solver.config import BV_C_UINT64

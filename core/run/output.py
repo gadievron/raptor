@@ -79,8 +79,8 @@ def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
             project = mgr.load(active_name)
             if project:
                 return project.output_dir, project.name, project.target
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("active project resolution failed: %s", exc)
 
     return None
 

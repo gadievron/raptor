@@ -71,7 +71,7 @@ def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
     except ImportError:
         return False
     try:
-        data = yaml.safe_load(lock.read_text()) or {}
+        data = yaml.safe_load(lock.read_text(encoding="utf-8")) or {}
     except Exception:
         return False
     deps = (data.get("dependencies") or {})

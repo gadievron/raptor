@@ -259,14 +259,20 @@ def _set_rlimits(limits: dict) -> None:
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
         except (ValueError, OSError):
             warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CPU setrlimit failed -- cpu cap not applied\n")
-    # RLIMIT_CORE is unconditional — coredumps are always suppressed
-    # (no operator-tunable equivalent of memory_mb/file_mb/cpu_seconds).
-    # No surrounding `if … > 0:` is needed; the structure differs from
-    # the three siblings above only because the input doesn't.
+    # RLIMIT_CORE is unconditional — coredumps are always suppressed.
+    # Fail-closed: without RLIMIT_CORE=0 the kernel may write a core
+    # dump containing the full address-space (including secrets the
+    # process read under Landlock's permissive default read policy).
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ValueError, OSError):
-        warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CORE setrlimit failed -- coredump suppression relies on kernel core_pattern\n")
+    except (ValueError, OSError) as exc:
+        _errno = getattr(exc, "errno", 0) or 0
+        try:
+            os.write(2, b"RAPTOR: _spawn: RLIMIT_CORE setrlimit failed "
+                     b"(errno=%d), exiting\n" % _errno)
+        except OSError:
+            pass
+        os._exit(99)
 
 
 def _kill_and_reap(pid: int) -> None:
@@ -648,26 +654,6 @@ def run_sandboxed(
             _writable = []
             for p in (writable_paths or ()):
                 _writable.append(_osp.abspath(p))
-            # Honour ``$TMPDIR`` when set (macOS CI, custom dev
-            # environments, ``TMPDIR=/data/tmp`` on space-constrained
-            # build hosts) — pre-fix the hardcoded ``/tmp`` caused
-            # audit's write-intent allowlist to never match the
-            # sandboxed child's actual tempfile location on those
-            # systems, so legitimate ``tempfile.mkstemp()`` writes
-            # were over-reported as would-be-blocked.
-            #
-            # Threat model: ``$TMPDIR`` is read from the auditor's
-            # environment, which the codebase treats as trusted
-            # (``RaptorConfig.get_safe_env()`` strips the
-            # shell-eval vars, and TMPDIR is honored by every
-            # libc/stdlib path anyway). If a future attacker chain
-            # leaks a tainted ``TMPDIR`` into the auditor we have
-            # a wider problem than the audit allowlist. Document
-            # the explicit dependency so a future refactor can
-            # decide to pin via ``RaptorConfig`` if the threat
-            # model tightens.
-            import tempfile as _tempfile
-            _writable.append(_tempfile.gettempdir())
             if output:
                 _writable.append(_osp.abspath(output))
             _read_allow = list(_writable)
@@ -870,9 +856,7 @@ def run_sandboxed(
         # can invoke in the child.
         landlock_fn = None
         if writable_paths or allowed_tcp_ports:
-            effective_paths = list(writable_paths) if writable_paths else ["/tmp"]
-            if "/tmp" not in effective_paths:
-                effective_paths.append("/tmp")
+            effective_paths = list(writable_paths) if writable_paths else []
             landlock_fn = _make_landlock_preexec(
                 effective_paths,
                 list(allowed_tcp_ports) if allowed_tcp_ports else None,
@@ -1751,8 +1735,8 @@ def run_sandboxed(
                     remaining = (deadline - time.monotonic()) if deadline else None
                     if remaining is not None and remaining <= 0:
                         _kill_and_reap(child_pid)
-                        out_str = stdout_buf.decode() if text else stdout_buf
-                        err_str = stderr_buf.decode() if text else stderr_buf
+                        out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
+                        err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str
                         )
@@ -1785,8 +1769,8 @@ def run_sandboxed(
                         break
                     if time.monotonic() > deadline:
                         _kill_and_reap(child_pid)
-                        out_str = (stdout_buf or b"").decode() if text else stdout_buf
-                        err_str = (stderr_buf or b"").decode() if text else stderr_buf
+                        out_str = (stdout_buf or b"").decode("utf-8", errors="replace") if text else stdout_buf
+                        err_str = (stderr_buf or b"").decode("utf-8", errors="replace") if text else stderr_buf
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str
                         )
@@ -1794,7 +1778,12 @@ def run_sandboxed(
             else:
                 _, status = os.waitpid(child_pid, 0)
         except ChildProcessError:
-            status = 0
+            # Child already reaped (ECHILD) — real exit status lost.
+            # Synthesise SIGKILL (raw wait-status 9) so downstream
+            # returncode is -9, not 0 (false success).
+            logger.warning("waitpid: child %d already reaped (ECHILD); "
+                           "exit status unknown", child_pid)
+            status = 9
     finally:
         # Drain + close the exec-status pipe FIRST so status_r is reclaimed
         # even if a cleanup step below raises — an unclosed status_r leaks
@@ -1836,8 +1825,8 @@ def run_sandboxed(
     # close-on-exec, gone before the target runs.
     stdout_out = stderr_out = None
     if capture_output:
-        stdout_out = stdout_buf.decode() if text else stdout_buf
-        stderr_out = stderr_buf.decode() if text else stderr_buf
+        stdout_out = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
+        stderr_out = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
 
     cp = subprocess.CompletedProcess(
         args=list(cmd),

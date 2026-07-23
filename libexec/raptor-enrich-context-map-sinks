@@ -15,8 +15,14 @@ Runs as MAP-5f, after forward-reachable (MAP-5b). Idempotent — safe to
 re-run. Best-effort: missing checklist / no call graphs skip silently.
 """
 import argparse
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -105,7 +111,8 @@ def main() -> int:
     else:
         print(
             "raptor-enrich-context-map-sinks: no entries enriched "
-            "(no call graphs built or no dangerous calls found)"
+            "(no call graphs built or no dangerous calls found)",
+            file=sys.stderr,
         )
     return 0
 

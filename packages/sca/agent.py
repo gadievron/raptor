@@ -43,8 +43,6 @@ from typing import Optional, Sequence
 _REPO = Path(__file__).resolve().parents[2]  # raptor-sca repo root
 sys.path.insert(0, str(_REPO))
 
-from packages.sca.api import analyse  # noqa: E402
-
 logger = logging.getLogger(__name__)
 
 
@@ -130,6 +128,12 @@ def run_sca_subprocess(
     from core.config import RaptorConfig
     from core.sandbox import run as sandbox_run
 
+    # Ensure output_dir exists before Landlock setup — the sandbox
+    # registers a writable rule by opening the path as a directory fd.
+    # If it doesn't exist, the rule silently fails and every write
+    # inside the child gets EACCES.
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     cmd: list = [
         sys.executable, str(agent_path),
         "--repo", str(target),
@@ -137,13 +141,13 @@ def run_sca_subprocess(
         *sandbox_args,
     ]
 
-    # Wrap sandbox_run in a TimeoutExpired catch. The function's
-    # return-type contract is ``(returncode, stdout, stderr)`` —
-    # pre-fix a TimeoutExpired exception escaped past the call
-    # site and surfaced to callers as an unhandled traceback when
-    # the docstring promised a tuple. Convert to a synthetic-
-    # failure tuple so callers' ``if rc != 0`` paths fire
-    # predictably.
+    # The child's import chain (core.coverage.schema → core.logging →
+    # RaptorLogger → ensure_directories) writes structured audit logs
+    # to LOG_DIR. Include it in the sandbox's writable surface so the
+    # child doesn't get EACCES on the first log emit.
+    log_dir = RaptorConfig.LOG_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         result = sandbox_run(
             cmd,
@@ -152,13 +156,9 @@ def run_sca_subprocess(
             caller_label="sca-agent",
             target=str(target),
             output=str(output_dir),
-            # ``env if env is not None`` — pre-fix ``env or`` truthy-tested,
-            # so an EXPLICIT ``env={}`` (caller's "spawn with empty env"
-            # signal) got replaced with the default safe env because
-            # ``{}`` is falsy. The empty-env intent was silently
-            # overridden — sandbox children inherited the caller-default
-            # RAPTOR env when caller had specifically asked for nothing.
+            writable_paths=[str(log_dir)],
             env=env if env is not None else RaptorConfig.get_safe_env(),
+            env_caller_filtered=True,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -201,6 +201,8 @@ def _compose_proxy_hosts(target: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def main(argv=None) -> int:
+    from packages.sca.api import analyse
+
     ap = argparse.ArgumentParser(description="RAPTOR SCA agent")
     ap.add_argument("--repo", required=True, help="Target project root")
     ap.add_argument("--out", required=True, help="Output directory")
@@ -278,7 +280,7 @@ def _run_sandboxed(
         raise RuntimeError(
             "sca.agent: --sandbox requested but core.sandbox.context "
             "is not importable; refusing to run unsandboxed"
-        )
+        ) from None
 
     with sandbox(
         target=str(target),
@@ -291,7 +293,8 @@ def _run_sandboxed(
         audit_verbose=audit_verbose,
         audit_run_dir=str(output_dir) if audit else None,
     ):
-        return analyse(
+        from packages.sca.api import analyse as _analyse
+        return _analyse(
             target=target, output_dir=output_dir,
             offline=offline, no_cache=no_cache, sarif_dirs=sarif_dirs,
         )

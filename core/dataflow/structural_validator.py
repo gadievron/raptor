@@ -145,10 +145,11 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
     if ".." in raw:
         return None
     p = Path(raw)
+    repo_resolved = repo_path.resolve()
     if p.is_absolute():
         try:
             resolved = p.resolve()
-            if not str(resolved).startswith(str(repo_path.resolve())):
+            if not resolved.is_relative_to(repo_resolved):
                 return None
         except (OSError, ValueError):
             return None
@@ -156,7 +157,7 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
             return resolved
         return None
     candidate = (repo_path / p).resolve()
-    if not str(candidate).startswith(str(repo_path.resolve())):
+    if not candidate.is_relative_to(repo_resolved):
         return None
     if candidate.exists():
         return candidate
@@ -205,7 +206,7 @@ def _find_enclosing_function(
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
                 return f.name
     except Exception:
-        pass
+        logger.debug("function-at-line lookup failed", exc_info=True)
     return None
 
 
@@ -275,6 +276,11 @@ def _identify_sanitizer_calls(
     return found
 
 
+_BRANCH_GUARD_RE = re.compile(
+    r'^\s*(?:if|elif|else\s+if|while|for)\s*[\(]?\s*(.+?)\s*[\)]?\s*[:{]?\s*$'
+)
+
+
 def _extract_branch_guards_from_content(
     content: str,
     line: int,
@@ -290,9 +296,6 @@ def _extract_branch_guards_from_content(
     if line < 1 or line > len(lines):
         return guards
 
-    _if_re = re.compile(
-        r'^\s*(?:if|elif|else\s+if|while|for)\s*[\(]?\s*(.+?)\s*[\)]?\s*[:{]?\s*$'
-    )
     scan_start = max(0, line - 30)
     indent_at_line = len(lines[line - 1]) - len(lines[line - 1].lstrip()) if line <= len(lines) else 0
 
@@ -302,7 +305,7 @@ def _extract_branch_guards_from_content(
         src_line = lines[i]
         indent = len(src_line) - len(src_line.lstrip())
         if indent < indent_at_line:
-            m = _if_re.match(src_line)
+            m = _BRANCH_GUARD_RE.match(src_line)
             if m:
                 cond = m.group(1).strip()
                 if cond and len(cond) < 200:

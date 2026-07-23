@@ -29,7 +29,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
-_default_log = logging.getLogger(__name__).debug
+_logger = logging.getLogger(__name__)
+
+
+def _default_log(value: object, default: object) -> None:
+    _logger.debug("coerce fallback: %r → %r", value, default)
 
 
 def to_int_safe(
@@ -52,7 +56,7 @@ def to_int_safe(
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         (on_error or _default_log)(value, default)
         return default
 
@@ -68,7 +72,7 @@ def to_float_safe(
         return default
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         (on_error or _default_log)(value, default)
         return default
 

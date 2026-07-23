@@ -3,7 +3,11 @@ rules:
     message: AES-ECB is insecure. Use AEAD modes like GCM. Verify migration plan.
     languages: [java, kotlin]
     severity: HIGH
-    pattern: Cipher.getInstance("AES/ECB/PKCS5Padding")
+    patterns:
+      - pattern: Cipher.getInstance($ALGO)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: "\"AES/ECB/.*\""
     metadata:
       cwe: ["CWE-327"]
       asvs: ["V3.11"]

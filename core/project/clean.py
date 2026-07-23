@@ -158,7 +158,7 @@ def execute_clean(plan: Dict[str, Any]) -> None:
                 raise RuntimeError(
                     f"execute_clean refusing to rmtree {d!r}: resolved "
                     f"path {real!r} escapes containment root {common!r}"
-                )
+                ) from None
         shutil.rmtree(d)
 
 

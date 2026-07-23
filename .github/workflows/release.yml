@@ -83,7 +83,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.name }}
           REPO: ${{ github.repository }}
         run: |
-          python3 .github/scripts/changelog-generator --raw --repo "${REPO}" "${TAG}" > /tmp/changelog.md
+          python3 .github/scripts/changelog-generator --top 20 --repo "${REPO}" "${TAG}" > /tmp/changelog.md
           cat /tmp/changelog.md
           echo "file=/tmp/changelog.md" >> "$GITHUB_OUTPUT"
 

@@ -203,6 +203,11 @@ def build_profile(*,
     # write temp files keep working — matches the Linux Landlock
     # default of /tmp in writable_paths.
     write_exceptions: list = ["/private/tmp"]
+    # Device nodes that must always be writable — sh, python, and
+    # most Unix tools redirect to /dev/null; /dev/tty is needed for
+    # interactive prompts. Use (literal ...) not (subpath ...) so
+    # "/dev/null_evil" doesn't match.
+    _write_dev_literals: list = ["/dev/null", "/dev/tty"]
     out_real = _realpath_or_none(output)
     if out_real:
         write_exceptions.append(out_real)
@@ -247,12 +252,15 @@ def build_profile(*,
             # This matches Linux Landlock's writable_paths list
             # behaviour. `require-any` is a multi-arg combinator —
             # unlike `require-not` which is unary.
-            subpath_any = " ".join(
+            subpath_clauses = " ".join(
                 f"(subpath {_quote_sbpl(p)})" for p in write_exceptions
+            )
+            literal_clauses = " ".join(
+                f"(literal {_quote_sbpl(p)})" for p in _write_dev_literals
             )
             parts.append(
                 f"(deny file-write* (require-not (require-any "
-                f"{subpath_any})))"
+                f"{subpath_clauses} {literal_clauses})))"
             )
 
     # --- Filesystem read restriction (only when explicitly requested) ---

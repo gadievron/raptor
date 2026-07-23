@@ -196,12 +196,20 @@ class CapabilityFingerprint:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CapabilityFingerprint":
+        try:
+            schema_ver = int(data.get("schema_version", 0))
+        except (ValueError, TypeError):
+            schema_ver = 0
+        try:
+            bits_val = int(data.get("bits", 0))
+        except (ValueError, TypeError):
+            bits_val = 0
         return cls(
-            schema_version=int(data.get("schema_version", 0)),
+            schema_version=schema_ver,
             binary_path=str(data.get("binary_path", "")),
             binary_sha256=str(data.get("binary_sha256", "")),
             arch=str(data.get("arch", "")),
-            bits=int(data.get("bits", 0)),
+            bits=bits_val,
             binary_format=str(data.get("binary_format", "")),
             capability_buckets={
                 str(k): list(v) for k, v in (

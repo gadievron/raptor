@@ -18,12 +18,18 @@ Usage::
 """
 
 from __future__ import annotations
+import faulthandler
 
 import json
 import os
+import signal
 import sys
 import tempfile
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE")
@@ -443,7 +449,7 @@ check("stripped binary verdicts carry tier=symbol_only",
 print("\n=== 12. Sandbox + corpus driver harness ===")
 # Verify the sandbox-aware corpus driver path imports cleanly + the
 # wiring is in place. Don't actually run the corpus build (slow).
-from core.inventory.binary_oracle_corpora import REGISTRY
+from core.analysis.binary_oracle_corpora import REGISTRY
 check("registry contains all 7 corpora",
       len(REGISTRY) == 7,
       f"got {len(REGISTRY)}: {sorted(REGISTRY.keys())}")

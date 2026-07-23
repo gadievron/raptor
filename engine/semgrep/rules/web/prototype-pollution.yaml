@@ -1,0 +1,80 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa sources → deep merge sinks
+  # CWE-1321: Prototype Pollution via user-controlled object merged into
+  # application objects.
+  # ---------------------------------------------------------------------------
+  - id: raptor.web.prototype-pollution.taint.javascript
+    message: >-
+      Untrusted data flows into a deep merge operation. An attacker can
+      inject __proto__ or constructor.prototype properties to pollute
+      Object.prototype, potentially leading to RCE or auth bypass.
+      Validate input keys or use Object.create(null) as the target.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+          # JSON.parse of request body — common intermediate
+          - pattern: JSON.parse(...)
+    pattern-sinks:
+      # lodash merge / defaultsDeep — focus on $INPUT (the source object)
+      - patterns:
+          - pattern: lodash.merge($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      - patterns:
+          - pattern: _.merge($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      - patterns:
+          - pattern: lodash.defaultsDeep($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      - patterns:
+          - pattern: _.defaultsDeep($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      # Object.assign — shallow but still pollutes if __proto__ is a key
+      - patterns:
+          - pattern: Object.assign($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      # jQuery deep extend
+      - patterns:
+          - pattern: $.extend(true, $TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      # deepmerge library
+      - patterns:
+          - pattern: deepmerge($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      - patterns:
+          - pattern: merge($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+      # hoek.merge (hapi ecosystem)
+      - patterns:
+          - pattern: Hoek.merge($TARGET, $INPUT, ...)
+          - focus-metavariable: $INPUT
+    metadata:
+      cwe: ["CWE-1321"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "web", "prototype-pollution", "taint"]

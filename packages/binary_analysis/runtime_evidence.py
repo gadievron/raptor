@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 

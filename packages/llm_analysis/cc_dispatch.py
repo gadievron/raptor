@@ -229,7 +229,7 @@ def write_debug(
         debug_dir.mkdir(parents=True, exist_ok=True)
         safe_id = _safe_id(finding_id)
         debug_file = debug_dir / f"cc_{safe_id}.txt"
-        debug_file.write_text(f"STDOUT:\n{stdout or '(empty)'}\n\nSTDERR:\n{stderr or '(empty)'}")
+        debug_file.write_text(f"STDOUT:\n{stdout or '(empty)'}\n\nSTDERR:\n{stderr or '(empty)'}", encoding="utf-8")
         result["cc_debug_file"] = f"debug/cc_{safe_id}.txt"
     except OSError:
         pass

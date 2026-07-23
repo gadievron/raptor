@@ -1,0 +1,182 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → XML parser sinks (XXE)
+  # ---------------------------------------------------------------------------
+  - id: raptor.xml.xxe.taint.python
+    message: >-
+      Untrusted data flows into an XML parser that resolves external entities.
+      Use defusedxml or set resolve_entities=False on lxml parsers.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: flask.request.data
+          - pattern: flask.request.get_data(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+          # File reads (XML from uploaded files / disk)
+          - pattern: $F.read()
+    pattern-sinks:
+      # lxml — resolves external entities by default.
+      # pattern-not-inside excludes calls that pass a safe parser
+      # (resolve_entities=False) — the sanitizer on the parser object
+      # itself does not work in taint mode because it is not on the
+      # data-flow path.
+      - patterns:
+          - pattern: lxml.etree.parse($SRC, ...)
+          - pattern-not-inside: |
+              ...
+              $P = lxml.etree.XMLParser(..., resolve_entities=False, ...)
+              ...
+              lxml.etree.parse($SRC, $P)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: lxml.etree.fromstring($SRC, ...)
+          - pattern-not-inside: |
+              ...
+              $P = lxml.etree.XMLParser(..., resolve_entities=False, ...)
+              ...
+              lxml.etree.fromstring($SRC, $P)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: etree.parse($SRC, ...)
+          - pattern-not-inside: |
+              ...
+              $P = etree.XMLParser(..., resolve_entities=False, ...)
+              ...
+              etree.parse($SRC, $P)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: etree.fromstring($SRC, ...)
+          - pattern-not-inside: |
+              ...
+              $P = etree.XMLParser(..., resolve_entities=False, ...)
+              ...
+              etree.fromstring($SRC, $P)
+          - focus-metavariable: $SRC
+      # xml.etree.ElementTree — vulnerable with custom parser
+      - patterns:
+          - pattern: xml.etree.ElementTree.parse($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: ET.parse($SRC, ...)
+          - focus-metavariable: $SRC
+      # xml.sax — parses entities by default
+      - patterns:
+          - pattern: xml.sax.parseString($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: xml.sax.parse($SRC, ...)
+          - focus-metavariable: $SRC
+      # xml.dom.minidom
+      - patterns:
+          - pattern: xml.dom.minidom.parseString($SRC)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: minidom.parseString($SRC)
+          - focus-metavariable: $SRC
+      # xml.dom.pulldom
+      - patterns:
+          - pattern: xml.dom.pulldom.parseString($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: pulldom.parseString($SRC, ...)
+          - focus-metavariable: $SRC
+    pattern-sanitizers:
+      # defusedxml — safe replacement
+      - pattern: defusedxml.parse(...)
+      - pattern: defusedxml.fromstring(...)
+      - pattern: defusedxml.ElementTree.parse(...)
+      - pattern: defusedxml.ElementTree.fromstring(...)
+      - pattern: defusedxml.minidom.parseString(...)
+      - pattern: defusedxml.sax.parseString(...)
+      # lxml safe parser configuration
+      - pattern: lxml.etree.XMLParser(..., resolve_entities=False, ...)
+      - pattern: etree.XMLParser(..., resolve_entities=False, ...)
+    metadata:
+      cwe: ["CWE-611"]
+      owasp_top_10: ["A5:2021-Security Misconfiguration"]
+      tags: ["security", "xml", "xxe", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → XML parser sinks (XXE)
+  # ---------------------------------------------------------------------------
+  - id: raptor.xml.xxe.taint.java
+    message: >-
+      Untrusted data flows into an XML parser without XXE protections.
+      Disable external entity processing by setting
+      XMLConstants.FEATURE_SECURE_PROCESSING or disallowing doctype
+      declarations on the factory.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          - pattern: (HttpServletRequest $REQ).getInputStream()
+          - pattern: (HttpServletRequest $REQ).getReader()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      # DocumentBuilder.parse — vulnerable unless factory is hardened
+      - patterns:
+          - pattern: (DocumentBuilder $DB).parse($SRC)
+          - focus-metavariable: $SRC
+      # SAXParser.parse
+      - patterns:
+          - pattern: (SAXParser $SP).parse($SRC, ...)
+          - focus-metavariable: $SRC
+      # XMLReader.parse
+      - patterns:
+          - pattern: (XMLReader $XR).parse($SRC)
+          - focus-metavariable: $SRC
+      # Transformer — can process external entities from source
+      - patterns:
+          - pattern: (Transformer $T).transform(new StreamSource($SRC), ...)
+          - focus-metavariable: $SRC
+      # XMLInputFactory.createXMLStreamReader
+      - patterns:
+          - pattern: (XMLInputFactory $F).createXMLStreamReader($SRC)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: (XMLInputFactory $F).createXMLStreamReader($NAME, $SRC)
+          - focus-metavariable: $SRC
+    pattern-sanitizers:
+      # Factory-level hardening — semgrep cannot track factory→builder
+      # assignment, but presence of these calls in the same function is
+      # a strong signal that the parser is safe.
+      - pattern: $FACTORY.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+      - pattern: $FACTORY.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+      - pattern: $FACTORY.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+      - pattern: $FACTORY.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
+    metadata:
+      cwe: ["CWE-611"]
+      owasp_top_10: ["A5:2021-Security Misconfiguration"]
+      tags: ["security", "xml", "xxe", "taint"]

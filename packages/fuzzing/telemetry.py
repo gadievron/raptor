@@ -225,7 +225,7 @@ class FuzzingTelemetry:
         with self._lock:
             self.stats.started = time.time()
             self.stats.last_path_at = self.stats.started
-            self._events_fp = self.events_path.open("a", buffering=1)
+            self._events_fp = self.events_path.open("a", buffering=1, encoding="utf-8")
             self._emit(FuzzEvent(
                 kind="campaign_start",
                 timestamp=self.stats.started,

@@ -542,7 +542,7 @@ class JsonCache:
                     "written_at": envelope.written_at,
                     "ttl_seconds": envelope.ttl_seconds,
                     "value": envelope.value,
-                }, fh)
+                }, fh, allow_nan=False)
             tmp.replace(path)
         except (OSError, TypeError, ValueError) as e:
             # OSError: disk full, permission denied, etc.

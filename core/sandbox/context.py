@@ -6,6 +6,7 @@ handles per-call kwarg validation, and attaches structured sandbox_info
 to each result.
 """
 
+import errno
 import logging
 import os
 import shutil
@@ -687,14 +688,14 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         else:
             # TCP-only path (ABI >= 4 or fallback).
             if block_network:
-                logger.info(
+                logger.debug(
                     "Sandbox: use_egress_proxy=True overrides "
                     "block_network=True (net-ns would hide the "
                     "loopback proxy from the child)"
                 )
                 block_network = False
             if allowed_tcp_ports:
-                logger.info(
+                logger.debug(
                     "Sandbox: use_egress_proxy=True overrides "
                     "allowed_tcp_ports=%s with proxy port",
                     allowed_tcp_ports,
@@ -868,7 +869,8 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # verified the sandboxed program doesn't need /tmp to start —
         # ``python3 -S`` exploits don't write pyc cache, but a normal
         # ``python3`` import will.
-        writable_paths = [] if exclude_tmp_baseline else ["/tmp"]
+        import tempfile as _tempfile
+        writable_paths = [] if exclude_tmp_baseline else [_tempfile.gettempdir()]
         if output:
             # Absolutize: a relative path like "out/foo" fails Landlock
             # open in the mount-ns child after pivot_root (the new
@@ -1242,11 +1244,10 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                     " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
                 )
             if strict_env:
-                _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
-                _stripped = [k for k in kwargs["env"] if k in _dangerous]
+                _stripped = [k for k in kwargs["env"] if k in RaptorConfig.DANGEROUS_ENV_VARS]
                 if _stripped:
                     kwargs["env"] = {k: v for k, v in kwargs["env"].items()
-                                     if k not in _dangerous}
+                                     if k not in RaptorConfig.DANGEROUS_ENV_VARS}
                     logger.info(
                         f"Sandbox: strict_env=True — stripped DANGEROUS_ENV_VARS "
                         f"from caller env: {sorted(_stripped)}"
@@ -1455,15 +1456,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         cmd_display = escape_nonprintable(
             " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or "<empty cmd>"
         )
-        # Always log so operators can see the effective sandbox config for
-        # every subprocess — previously rlimits-only runs were silent,
-        # making it hard to verify in the field that the sandbox ran at all.
-        # Demoted to DEBUG when only rlimits apply, INFO when any
-        # isolation layer is active.
-        if layers == ["limits"]:
-            logger.debug(f"Sandbox (limits): {cmd_display}")
-        else:
-            logger.info(f"Sandbox ({'+'.join(layers)}): {cmd_display}")
+        logger.debug(f"Sandbox ({'+'.join(layers)}): {cmd_display}")
 
         if need_unshare:
             # --pid --fork: new PID namespace hides host processes from
@@ -2214,7 +2207,14 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                             _denv = dict(_dk.get("env") if _dk.get("env") is not None else os.environ)
                             _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
                             _dk["env"] = _denv
-                            result = subprocess.run(full_cmd, **_dk)
+                            try:
+                                result = subprocess.run(full_cmd, **_dk)
+                            except OSError as _ebadf:
+                                if _ebadf.errno != errno.EBADF:
+                                    raise
+                                result = subprocess.CompletedProcess(
+                                    full_cmd, returncode=-9,
+                                )
                         finally:
                             for _dfd in (_death_r, _death_w):
                                 try:
@@ -2222,11 +2222,18 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                 except OSError:
                                     pass
                     else:
-                        result = subprocess.run(
-                            full_cmd,
-                            start_new_session=_start_new_session,
-                            **kwargs,
-                        )
+                        try:
+                            result = subprocess.run(
+                                full_cmd,
+                                start_new_session=_start_new_session,
+                                **kwargs,
+                            )
+                        except OSError as _ebadf:
+                            if _ebadf.errno != errno.EBADF:
+                                raise
+                            result = subprocess.CompletedProcess(
+                                full_cmd, returncode=-9,
+                            )
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)

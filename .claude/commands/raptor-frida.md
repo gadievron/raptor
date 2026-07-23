@@ -80,7 +80,7 @@ Artefacts:
   - Add the module with: `python3 -m pip install --user --break-system-packages frida`.
 - **Target:** for remote / mobile targets, run the matching `frida-server`. Bind to `0.0.0.0:27042` (default builds bind to localhost only - `raptor doctor` won't tell you this, but `metadata.json` will record the connect failure).
 
-See `docs/frida/QUICKSTART.md`, `docs/frida/SETUP_MACOS.md`, `docs/frida/SETUP_LINUX.md`.
+See `docs/frida.md`.
 
 ## Failure Modes
 

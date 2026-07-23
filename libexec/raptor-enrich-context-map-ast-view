@@ -13,8 +13,14 @@ Best-effort: missing checklist / inventory build failure / unresolved
 host functions log warnings but never abort the run.
 """
 import argparse
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -92,7 +98,8 @@ def main() -> int:
         print(
             "raptor-enrich-context-map-ast-view: no entries enriched "
             "(no entry_points/sinks fields, all hosts unresolvable, or "
-            "inventory build skipped)"
+            "inventory build skipped)",
+            file=sys.stderr,
         )
     return 0
 

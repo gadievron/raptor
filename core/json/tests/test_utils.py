@@ -223,5 +223,91 @@ class TestSaveJson(unittest.TestCase):
             self.assertIn(data["writer"], range(8))
 
 
+class TestOrjsonBackend(unittest.TestCase):
+    """Verify load/save work with both stdlib json and orjson backends."""
+
+    def test_load_roundtrip_stdlib(self):
+        import core.json.utils as u
+        saved = u._orjson
+        try:
+            u._orjson = None
+            with TemporaryDirectory() as d:
+                p = Path(d) / "data.json"
+                p.write_text('{"a": 1, "b": [2, 3]}')
+                self.assertEqual(load_json(p), {"a": 1, "b": [2, 3]})
+        finally:
+            u._orjson = saved
+
+    def test_save_roundtrip_stdlib(self):
+        import core.json.utils as u
+        saved = u._orjson
+        try:
+            u._orjson = None
+            with TemporaryDirectory() as d:
+                p = Path(d) / "out.json"
+                save_json(p, {"x": 1, "path": Path("/tmp")})
+                result = json.loads(p.read_text())
+                self.assertEqual(result["x"], 1)
+                self.assertEqual(result["path"], "/tmp")
+        finally:
+            u._orjson = saved
+
+    def test_load_roundtrip_orjson(self):
+        import core.json.utils as u
+        if u._orjson is None:
+            self.skipTest("orjson not installed")
+        with TemporaryDirectory() as d:
+            p = Path(d) / "data.json"
+            p.write_text('{"a": 1, "b": [2, 3]}')
+            self.assertEqual(load_json(p), {"a": 1, "b": [2, 3]})
+
+    def test_save_roundtrip_orjson(self):
+        import core.json.utils as u
+        if u._orjson is None:
+            self.skipTest("orjson not installed")
+        with TemporaryDirectory() as d:
+            p = Path(d) / "out.json"
+            save_json(p, {"x": 1, "path": Path("/tmp")})
+            result = json.loads(p.read_text())
+            self.assertEqual(result["x"], 1)
+            self.assertEqual(result["path"], "/tmp")
+
+    def test_non_finite_rejected_both_backends(self):
+        import core.json.utils as u
+        for backend_name, override in [("stdlib", None), ("orjson", u._orjson)]:
+            saved = u._orjson
+            try:
+                u._orjson = override
+                with TemporaryDirectory() as d:
+                    p = Path(d) / "nan.json"
+                    p.write_text('{"val": NaN}')
+                    result = load_json(p)
+                    self.assertIsNone(result, f"NaN should be rejected ({backend_name})")
+            finally:
+                u._orjson = saved
+
+    def test_allow_non_finite_falls_back_to_stdlib(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "nan.json"
+            p.write_text('{"val": NaN}')
+            result = load_json(p, allow_non_finite=True)
+            self.assertIsNotNone(result)
+
+    def test_save_datetime_both_backends(self):
+        import core.json.utils as u
+        dt = datetime(2026, 1, 15, 12, 0, 0)
+        for override in [None, u._orjson]:
+            saved = u._orjson
+            try:
+                u._orjson = override
+                with TemporaryDirectory() as d:
+                    p = Path(d) / "dt.json"
+                    save_json(p, {"ts": dt})
+                    result = json.loads(p.read_text())
+                    self.assertIn("2026", result["ts"])
+            finally:
+                u._orjson = saved
+
+
 if __name__ == "__main__":
     unittest.main()

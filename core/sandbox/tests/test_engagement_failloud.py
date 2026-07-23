@@ -13,10 +13,16 @@ the error names the explicit operator escape hatch. RAPTOR never silently
 downgrades.
 """
 
+import sys
+
 import pytest
 
 from core.sandbox import SandboxSetupError, check_unshare_engages, sandbox
 from core.sandbox import state
+
+_linux_only = pytest.mark.skipif(
+    sys.platform != "linux", reason="unshare engagement is Linux-only",
+)
 
 
 def _poison(flags, reason="unshare: Operation not permitted"):
@@ -24,6 +30,7 @@ def _poison(flags, reason="unshare: Operation not permitted"):
     state._unshare_engage_cache[tuple(flags)] = (False, reason)
 
 
+@_linux_only
 class TestEngagementGateRaises:
     def test_block_network_engagement_failure_raises(self):
         # The gate probes --user --pid --fork --ipc --net when block_network.

@@ -13,11 +13,18 @@ older Claude Code versions and direct/manual callers.
 
 No project env vars are set — the .active symlink is the only source of truth.
 """
+import faulthandler
 import os
+import signal
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -65,7 +72,7 @@ def generate_banner():
         # Non-fatal — write a minimal banner
         output_file = REPO_ROOT / ".startup-output"
         try:
-            output_file.write_text(f"RAPTOR startup error: {e}\n")
+            output_file.write_text(f"RAPTOR startup error: {e}\n", encoding="utf-8")
         except OSError:
             pass
 

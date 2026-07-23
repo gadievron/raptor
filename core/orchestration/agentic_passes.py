@@ -42,7 +42,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from core.json import load_json, save_json
 from core.sandbox import run_untrusted_networked
@@ -517,16 +517,16 @@ def _run_validate_postpass_unsafe(
                 caller_label="agentic-validate",
             )
         except subprocess.TimeoutExpired:
-            _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")
             lifecycle_settled = True
+            _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")
             logger.warning("validate post-pass timed out after %ds", _POSTPASS_TIMEOUT_S)
             return PostpassResult(ran=False, selected_count=len(selected),
                                   validate_dir=validate_dir,
                                   skipped_reason=f"timeout after {_POSTPASS_TIMEOUT_S}s",
                                   duration_s=time.time() - t0)
         except OSError as e:
-            _fail_lifecycle(validate_dir, f"launch failed: {e}")
             lifecycle_settled = True
+            _fail_lifecycle(validate_dir, f"launch failed: {e}")
             logger.warning("validate post-pass failed to launch: %s", e)
             return PostpassResult(ran=False, selected_count=len(selected),
                                   validate_dir=validate_dir,
@@ -534,8 +534,8 @@ def _run_validate_postpass_unsafe(
                                   duration_s=time.time() - t0)
 
         if proc.returncode != 0:
-            _fail_lifecycle(validate_dir, f"subprocess returned {proc.returncode}")
             lifecycle_settled = True
+            _fail_lifecycle(validate_dir, f"subprocess returned {proc.returncode}")
             logger.warning("validate post-pass returned %d", proc.returncode)
             return PostpassResult(ran=False, selected_count=len(selected),
                                   validate_dir=validate_dir,
@@ -552,8 +552,8 @@ def _run_validate_postpass_unsafe(
                               duration_s=time.time() - t0)
 
     except Exception:
-        _fail_lifecycle(validate_dir, "unexpected exception")
         lifecycle_settled = True
+        _fail_lifecycle(validate_dir, "unexpected exception")
         raise
     finally:
         if not lifecycle_settled:
@@ -980,6 +980,7 @@ def run_reachability_prepass(
     agentic_out_dir: Path,
     *,
     allow_unreachable: bool = False,
+    inventory: Optional[Dict[str, Any]] = None,
 ) -> "ReachabilityPrepassResult":
     """Always-on companion to ``run_understand_prepass``.
 
@@ -1014,22 +1015,21 @@ def run_reachability_prepass(
             duration_s=time.time() - t0,
         )
 
-    # Build the inventory once. Cached on the result so the
-    # agentic launcher can hand it to /validate + codeql.
-    try:
-        from core.inventory.builder import build_inventory
-        import tempfile
-        with tempfile.TemporaryDirectory() as td:
-            inventory = build_inventory(str(target), td)
-    except Exception as e:                          # noqa: BLE001
-        logger.debug(
-            "reachability prepass: inventory build failed (%s)", e,
-        )
-        return ReachabilityPrepassResult(
-            ran=False,
-            skipped_reason="inventory build failed",
-            duration_s=time.time() - t0,
-        )
+    if inventory is None:
+        try:
+            from core.inventory.builder import build_inventory
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(str(target), td)
+        except Exception as e:                      # noqa: BLE001
+            logger.debug(
+                "reachability prepass: inventory build failed (%s)", e,
+            )
+            return ReachabilityPrepassResult(
+                ran=False,
+                skipped_reason="inventory build failed",
+                duration_s=time.time() - t0,
+            )
 
     try:
         from core.orchestration.reachability_enrichment import (
@@ -1060,7 +1060,7 @@ def run_reachability_prepass(
         if marked or enriched_caller_ctx:
             save_json(checklist_path, checklist)
     except Exception:                               # noqa: BLE001
-        logger.debug(
+        logger.warning(
             "reachability prepass: enrichment failed",
             exc_info=True,
         )
@@ -1247,4 +1247,5 @@ def _threat_model_prompt_block(target: Path) -> str:
         from core.threat_model import threat_model_prompt_block
         return threat_model_prompt_block(target)
     except Exception:
+        logger.warning("threat model context unavailable for %s", target, exc_info=True)
         return ""

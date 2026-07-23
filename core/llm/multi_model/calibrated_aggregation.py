@@ -229,7 +229,7 @@ def calibrate_results(
                 aggregation_method=method,
                 aggregation_fallback_reason=reason,
                 converged=converged,
-                model_reliabilities=ds_reliabilities[fid],
+                model_reliabilities=ds_reliabilities[fid] if converged else [],
             )
 
     # Step 3: vote fallback for everything else.

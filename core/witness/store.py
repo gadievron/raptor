@@ -236,7 +236,7 @@ class WitnessStore:
             try:
                 data = json.loads(manifest.read_text(encoding="utf-8"))
                 yield Witness.from_dict(data)
-            except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError, OSError) as exc:
                 logger.warning(
                     "WitnessStore: skipping malformed manifest %s: %s",
                     manifest, exc,

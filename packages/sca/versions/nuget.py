@@ -24,7 +24,7 @@ def compare(a: str, b: str) -> int:
         pa.append(0)
     while len(pb) < max_len:
         pb.append(0)
-    for x, y in zip(pa, pb):
+    for x, y in zip(pa, pb, strict=True):
         if x != y:
             return -1 if x < y else 1
     # Pre-release: empty wins over non-empty (release > pre-release).
@@ -65,7 +65,7 @@ def _split(version: str) -> Tuple[List[int], List[str]]:
 def _cmp_prerelease(a: List[str], b: List[str]) -> int:
     """SemVer pre-release comparison: per-segment, numeric < non-numeric;
     longer wins on tie."""
-    for sa, sb in zip(a, b):
+    for sa, sb in zip(a, b, strict=False):
         a_is_num = sa.isdigit()
         b_is_num = sb.isdigit()
         if a_is_num and b_is_num:

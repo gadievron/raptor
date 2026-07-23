@@ -108,7 +108,7 @@ def _run(argv: List[str], timeout: int = 60) -> str:
         return ""
     if proc.returncode != 0:
         logger.debug("binary_oracle: %s rc=%s stderr=%s",
-                     argv[0], proc.returncode, proc.stderr[:200])
+                     argv[0], proc.returncode, (proc.stderr or "")[:200])
     return proc.stdout or ""
 
 
@@ -476,7 +476,7 @@ def _demangle_linkage_names(linkage_names: Iterable[str]) -> Dict[str, str]:
     lines = proc.stdout.splitlines()
     if len(lines) != len(seen):
         return {}
-    return dict(zip(seen, lines))
+    return dict(zip(seen, lines, strict=True))
 
 
 # DIE tags that introduce a C++ name-scope; subprogram DIEs nested under

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from core.git.clone import (
     clone_repository, fetch_commit, get_safe_git_env, ls_remote,
+    safe_git_command,
 )
 from core.git.validate import validate_repo_url
 
@@ -48,5 +49,6 @@ __all__ = [
     "fetch_commit",
     "get_safe_git_env",
     "ls_remote",
+    "safe_git_command",
     "validate_repo_url",
 ]

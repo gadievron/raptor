@@ -6,7 +6,7 @@ from core.inventory.extractors import (
     FunctionInfo, FunctionMetadata,
     PythonExtractor, JavaExtractor, CExtractor, GoExtractor,
     JavaScriptExtractor, LuaExtractor,
-    extract_functions, _TS_AVAILABLE, _get_ts_languages,
+    extract_functions, extract_items, _TS_AVAILABLE, _get_ts_languages,
 )
 
 
@@ -208,6 +208,23 @@ class TestCRegexExtractor:
         funcs = CExtractor().extract("t.c", code)
         assert funcs[0].metadata.visibility is None
 
+    def test_knr_with_macro(self):
+        code = (
+            "int ZEXPORT inflate(strm, flush)\n"
+            "z_streamp strm;\n"
+            "int flush;\n"
+            "{\n"
+            "    int x = 0;\n"
+            "    return x;\n"
+            "}\n"
+        )
+        funcs = CExtractor().extract("inflate.c", code)
+        names = [f.name for f in funcs]
+        assert "inflate" in names
+        fn = next(f for f in funcs if f.name == "inflate")
+        assert fn.line_end is not None
+        assert fn.line_end > fn.line_start
+
 
 class TestGoRegexExtractor:
 
@@ -329,6 +346,30 @@ class TestTreeSitter:
         if not funcs[0].metadata.parameters:
             pytest.skip("tree-sitter-c build does not expose parameter nodes")
         assert len(funcs[0].metadata.parameters) > 0
+
+    def test_c_knr_macro_repair(self):
+        code = (
+            "int ZEXPORT inflate(strm, flush)\n"
+            "z_streamp strm;\n"
+            "int flush;\n"
+            "{\n"
+            "    int x = 0;\n"
+            "    return x;\n"
+            "}\n"
+            "\n"
+            "int ZEXPORT inflateEnd(strm)\n"
+            "z_streamp strm;\n"
+            "{\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        items = extract_items("inflate.c", "c", code)
+        funcs = [i for i in items if i.kind == "function"]
+        names = {f.name: f for f in funcs}
+        assert "inflate" in names, f"inflate not found; got {[f.name for f in funcs]}"
+        assert names["inflate"].line_end > names["inflate"].line_start
+        assert "inflateEnd" in names, f"inflateEnd not found; got {[f.name for f in funcs]}"
+        assert names["inflateEnd"].line_end > names["inflateEnd"].line_start
 
     def test_go_exported(self):
         code = "func Public() {\n}\nfunc private() {\n}\n"

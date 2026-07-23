@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 def _get_items(file_info):
     """Read code items from a file entry. Handles both old and new format."""
-    return file_info.get("items", file_info.get("functions", []))
+    return file_info.get("items", file_info.get("functions", [])) or []
 
 
 def update_coverage(
@@ -69,7 +69,7 @@ def update_coverage(
             key = (path, cls, name)
             legacy_key = (path, "", name)
             if key in checked_set or legacy_key in checked_set:
-                checked_by = func.get('checked_by', [])
+                checked_by = func.get('checked_by') or []
                 if source_label not in checked_by:
                     checked_by.append(source_label)
                 func['checked_by'] = checked_by
@@ -98,7 +98,7 @@ def get_coverage_stats(inventory: Dict[str, Any]) -> Dict[str, Any]:
                 by_kind[kind] = {"total": 0, "checked": 0}
             by_kind[kind]["total"] += 1
 
-            checked_by = item.get('checked_by', [])
+            checked_by = item.get('checked_by') or []
             if checked_by:
                 checked += 1
                 by_kind[kind]["checked"] += 1
@@ -128,13 +128,13 @@ def format_coverage_summary(inventory: Dict[str, Any]) -> str:
     """
     stats = get_coverage_stats(inventory)
     total_files = inventory.get('total_files', 0)
-    excluded = len(inventory.get('excluded_files', []))
+    excluded = len(inventory.get('excluded_files') or [])
     sloc = stats.get('total_sloc', 0)
 
     # Inventory line: files, SLOC, items by kind
     _PLURALS = {"function": "functions", "global": "globals", "macro": "macros", "class": "classes"}
     kind_parts = []
-    for kind, counts in sorted(stats.get('by_kind', {}).items()):
+    for kind, counts in sorted((stats.get('by_kind') or {}).items()):
         label = _PLURALS.get(kind, kind + "s")
         kind_parts.append(f"{counts['total']} {label}")
     items_str = ", ".join(kind_parts) if kind_parts else f"{stats['total_items']} items"

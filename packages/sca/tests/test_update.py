@@ -232,6 +232,54 @@ def test_requirements_txt_pep503_normalisation(tmp_path: Path) -> None:
     assert "==1.0.1" in proposed.read_text()
 
 
+def test_requirements_txt_prose_comment_not_mangled(tmp_path: Path) -> None:
+    """A comment that mentions a package name as prose (not a pin)
+    must not be rewritten — regression for the '# pytest pinned
+    exactly: ...' mangling bug."""
+    req = tmp_path / "requirements-dev.txt"
+    req.write_text(
+        "# pytest pinned exactly: the root pytest.ini uses importlib\n"
+        "pytest==9.0.3\n",
+        encoding="utf-8",
+    )
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="pytest",
+        version="9.0.3", fixed_version="9.1.1",
+        manifest=req,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out)])
+    proposed = list((out / "proposed").rglob("requirements-dev.txt"))[0]
+    body = proposed.read_text()
+    assert "pytest==9.1.1" in body
+    assert "# pytest pinned exactly:" in body
+
+
+def test_requirements_txt_bare_commented_dep_gets_pinned(tmp_path: Path) -> None:
+    """A bare ``# pytest`` (no version, no trailing prose) is a
+    commented-out dep — the rewriter should pin it so uncommenting
+    yields the safe version."""
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "# pytest is an optional dep\n"
+        "# pytest\n"
+        "pytest==9.0.3\n",
+        encoding="utf-8",
+    )
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="pytest",
+        version="9.0.3", fixed_version="9.1.1",
+        manifest=req,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out)])
+    proposed = list((out / "proposed").rglob("requirements.txt"))[0]
+    body = proposed.read_text()
+    assert "pytest==9.1.1" in body
+    assert "# pytest is an optional dep" in body
+    assert "# pytest==9.1.1" in body
+
+
 # ---------------------------------------------------------------------------
 # pyproject.toml rewriter
 # ---------------------------------------------------------------------------

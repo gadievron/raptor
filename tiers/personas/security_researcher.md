@@ -195,6 +195,31 @@ Recommended action:
 
 ---
 
+## CodeQL Dataflow Paths
+
+The same 4-step framework applies to CodeQL dataflow findings. Additional
+considerations for dataflow-specific analysis:
+
+**Path completeness:** CodeQL reports source → intermediate steps → sink.
+Verify each step is reachable in real execution — CodeQL can report
+paths through dead branches or test-only code.
+
+**Sanitiser placement:** Check whether sanitisers appear in ALL paths
+from source to sink, not just the one CodeQL reported. Multiple routes
+to the same sink can bypass a sanitiser on the reported path.
+
+**CWE mapping:** Use the CWE classification to focus analysis.
+CodeQL's CWE tags are generally accurate but the severity depends on
+context — a CWE-79 (XSS) in an admin-only endpoint differs from one
+on a public form.
+
+**False positive patterns specific to CodeQL:**
+- Hardcoded source values reported as tainted (constant strings)
+- Framework-provided sanitisation not recognised by CodeQL's model
+- Test/example code included in the scan scope
+
+---
+
 ## Usage Examples
 
 **Request:** "Use security researcher persona to validate finding #42"

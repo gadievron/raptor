@@ -15,8 +15,14 @@ missing) rather than raising, so this no-ops cleanly on those targets and
 adds a cocci pass only where C/C++ source is present.
 """
 import argparse
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -123,7 +129,8 @@ def main() -> int:
         suffix = f" ({reason})" if reason else ""
         print(
             "raptor-enrich-context-map-sites: no ownership/privilege sites "
-            f"detected{suffix}"
+            f"detected{suffix}",
+            file=sys.stderr,
         )
     return 0
 

@@ -15,8 +15,14 @@ single unparseable trace file all log warnings but never abort
 the run (other trace files in the same run continue to enrich).
 """
 import argparse
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -87,7 +93,8 @@ def main() -> int:
     if not trace_files:
         print(
             "raptor-enrich-flow-trace-ast-view: no flow-trace-*.json "
-            "files in directory; nothing to enrich"
+            "files in directory; nothing to enrich",
+            file=sys.stderr,
         )
         return 0
 
@@ -121,7 +128,8 @@ def main() -> int:
             f"raptor-enrich-flow-trace-ast-view: no steps enriched "
             f"across {len(trace_files)} trace file(s) "
             "(no steps with resolvable definitions, or inventory "
-            "build skipped)"
+            "build skipped)",
+            file=sys.stderr,
         )
     return 0
 

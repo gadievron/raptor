@@ -6,8 +6,14 @@ Usage: raptor-run-feasibility <binary_path> <findings.json> <output_dir> [--vuln
 Runs analyze_binary once, saves exploit context, then maps constraints
 to all findings that reference this binary. Updates findings.json in place.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -98,7 +104,7 @@ def main():
             print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock", file=sys.stderr)
 
         findings_data = load_json(findings_path)
-        if not findings_data:
+        if findings_data is None:
             print("✗ Cannot load findings", file=sys.stderr)
             sys.exit(1)
 
@@ -111,14 +117,14 @@ def main():
         ]
 
         if not group:
-            print(f"No findings reference binary: {binary_path}")
+            print(f"No findings reference binary: {binary_path}", file=sys.stderr)
             return
 
         # Determine vuln_type from first finding if not specified
         if not vuln_type:
             vuln_type = group[0].get("vuln_type", "")
 
-        print(f"Analyzing {binary_path} ({len(group)} finding(s), vuln_type={vuln_type})")
+        print(f"Analyzing {binary_path} ({len(group)} finding(s), vuln_type={vuln_type})", file=sys.stderr)
 
         from packages.exploit_feasibility import (
             save_exploit_context,
@@ -128,13 +134,13 @@ def main():
 
         # Run analysis and save context in one call (avoids duplicate analysis)
         context_file = save_exploit_context(binary_path, output_dir=output_dir, vuln_type=vuln_type)
-        print(f"  Context saved: {context_file}")
+        print(f"  Context saved: {context_file}", file=sys.stderr)
 
         # Load context for mapping
         constraints = load_exploit_context(context_file)
         result = constraints
-        print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}")
-        print("  Mapping per-finding verdicts (vuln-type-aware)...")
+        print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}", file=sys.stderr)
+        print("  Mapping per-finding verdicts (vuln-type-aware)...", file=sys.stderr)
         mapped = map_findings_to_constraints(
             [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
             constraints,
@@ -165,7 +171,7 @@ def main():
                     "binary_path": binary_path,
                     "impact": assessment.impact,
                 }
-                print(f"  {finding['id']}: {assessment.verdict}")
+                print(f"  {finding['id']}: {assessment.verdict}", file=sys.stderr)
 
         # --- Empirical mitigation map (PR #609 consumer) ---
         # Only attempt when ``--target`` was supplied — without a
@@ -182,7 +188,7 @@ def main():
             )
 
         save_json(findings_path, findings_data)
-        print(f"Updated {len(mapped)} finding(s)")
+        print(f"Updated {len(mapped)} finding(s)", file=sys.stderr)
     finally:
         try:
             fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_UN)
@@ -318,14 +324,16 @@ def _enrich_with_empirical_mitigation_map(
         print(
             f"  {finding['id']}: empirical: "
             f"fired={summary['bug_fired_under']} "
-            f"blocked={summary['blocked_under']}"
+            f"blocked={summary['blocked_under']}",
+            file=sys.stderr,
         )
         enriched += 1
 
     if enriched:
         print(
             f"  Empirical mitigation map: enriched {enriched}/"
-            f"{len(group)} finding(s)"
+            f"{len(group)} finding(s)",
+            file=sys.stderr,
         )
 
 

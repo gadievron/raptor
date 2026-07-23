@@ -189,7 +189,7 @@ class Project:
             if not meta_file.exists():
                 continue
             meta = load_json(meta_file)
-            if meta and meta.get("status") == "running":
+            if isinstance(meta, dict) and meta.get("status") == "running":
                 running.append((meta.get("timestamp", ""), d, meta.get("session_pid")))
 
         if not running:
@@ -318,10 +318,10 @@ class ProjectManager:
         """Load a project by name. Returns None if not found or name invalid."""
         # Reject traversal attempts — load is called with user input
         project_file = (self.projects_dir / f"{name}.json").resolve()
-        if not str(project_file).startswith(str(self.projects_dir.resolve()) + "/"):
+        if not project_file.is_relative_to(self.projects_dir.resolve()):
             return None
         data = load_json(project_file)
-        if data is None:
+        if not isinstance(data, dict):
             return None
         return Project.from_dict(data)
 
@@ -330,7 +330,7 @@ class ProjectManager:
         projects = []
         for f in sorted(self.projects_dir.glob("*.json")):
             data = load_json(f)
-            if data:
+            if isinstance(data, dict):
                 projects.append(Project.from_dict(data))
         return projects
 
@@ -360,7 +360,7 @@ class ProjectManager:
             home = Path.home().resolve()
             if (output == home or output == Path("/")
                     or len(output.parts) < 3
-                    or str(home).startswith(str(output) + "/")):
+                    or home.is_relative_to(output)):
                 raise ValueError(f"Refusing to delete suspicious path: {output}")
             expected_base = DEFAULT_OUTPUT_BASE.resolve()
             try:
@@ -370,7 +370,7 @@ class ProjectManager:
                     f"Refusing to delete output path {output} outside the "
                     f"expected base {expected_base}. Use --no-purge or "
                     f"clean the directory by hand."
-                )
+                ) from None
             shutil.rmtree(project.output_path)
             logger.info(f"Deleted output directory: {project.output_dir}")
 
@@ -630,3 +630,30 @@ class ProjectManager:
             if project.content_id == content_id:
                 return project
         return None
+
+
+def is_project_output_dir(directory: Path) -> bool:
+    """Check whether *directory* is a managed project output directory.
+
+    Returns True when *directory* matches any known project's
+    ``output_dir``, or falls under the default project output base
+    (``out/projects/``). This is used to decide whether sibling
+    directories should share state (strategy weights, project context,
+    learnings). When False, sibling enumeration must validate each
+    sibling's target path to prevent cross-project contamination.
+    """
+    resolved = directory.resolve()
+    default_base = DEFAULT_OUTPUT_BASE.resolve()
+    try:
+        resolved.relative_to(default_base)
+        return True
+    except ValueError:
+        pass
+    try:
+        mgr = ProjectManager()
+        for project in mgr.list_projects():
+            if project.output_path.resolve() == resolved:
+                return True
+    except Exception:
+        pass
+    return False

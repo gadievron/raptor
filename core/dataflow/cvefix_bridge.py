@@ -280,14 +280,15 @@ def _format_path(result: dict) -> str:
     cfs = result.get("codeFlows", [])
     if not cfs:
         return ""
-    steps = cfs[0].get("threadFlows", [{}])[0].get("locations", [])
+    tflows = cfs[0].get("threadFlows") or []
+    steps = tflows[0].get("locations", []) if tflows else []
     rows = []
     for loc in steps:
-        node = loc.get("location", {})
-        phys = node.get("physicalLocation", {})
-        uri = phys.get("artifactLocation", {}).get("uri", "?")
-        line = phys.get("region", {}).get("startLine", "?")
-        msg = node.get("message", {}).get("text", "")
+        node = loc.get("location") or {}
+        phys = node.get("physicalLocation") or {}
+        uri = (phys.get("artifactLocation") or {}).get("uri", "?")
+        line = (phys.get("region") or {}).get("startLine", "?")
+        msg = (node.get("message") or {}).get("text", "")
         rows.append(f"  {Path(uri).name}:{line}  {msg}")
     if not rows:
         return ""
@@ -326,7 +327,7 @@ def _extract_proposal(
                 src = repo_root / _norm_uri(raw_uri)
                 if not src.is_file():
                     continue
-                lines = src.read_text(errors="replace").splitlines()
+                lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
                 snippet = lines[line - 1].strip() if 0 < line <= len(lines) else raw_uri
                 if len(lines) <= _SMALL_FILE:
                     body = "\n".join(lines)
@@ -343,15 +344,17 @@ def _extract_proposal(
                 other_diffs = _git_diff_other_files(
                     repo_root, pair.parent_hash, pair.fix_hash, raw_uri)
                 path = _format_path(res)
-                context = body
+                context_parts = [body]
                 if diff:
-                    context += "\n\n# fix diff (the change that added the sanitizer):\n" + diff
+                    context_parts.append("\n\n# fix diff (the change that added the sanitizer):\n" + diff)
                 if other_diffs:
-                    context += ("\n\n# other fix-touched files (the validator "
-                                "may live in a helper or middleware):\n"
-                                + other_diffs)
+                    context_parts.append(
+                        "\n\n# other fix-touched files (the validator "
+                        "may live in a helper or middleware):\n"
+                        + other_diffs)
                 if path:
-                    context += "\n\n" + path
+                    context_parts.append("\n\n" + path)
+                context = "".join(context_parts)
                 proposal = BarrierProposal(
                     sink_class=sink_class,
                     finding_id=f"{pair.cve_id}:{pair.cwe}:{Path(raw_uri).name}:{line}",

@@ -17,9 +17,15 @@ Exit code 0 on success, 1 on validation errors, 2 on missing file.
 On success, records file hash in <dir>/.validated so the prep script
 can skip re-validation if the file hasn't changed.
 """
+import faulthandler
 import hashlib
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -60,7 +66,7 @@ def _read_validated(directory):
     vfile = Path(directory) / ".validated"
     result = {}
     if vfile.exists():
-        for line in vfile.read_text().splitlines():
+        for line in vfile.read_text(encoding="utf-8").splitlines():
             if ":" in line:
                 name, h = line.split(":", 1)
                 result[name.strip()] = h.strip()
@@ -73,7 +79,7 @@ def _write_validated(directory, filename, filehash):
     existing = _read_validated(directory)
     existing[filename] = filehash
     lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
-    vfile.write_text("\n".join(lines) + "\n")
+    vfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _validate_stage_file(data, filename):
@@ -194,7 +200,7 @@ def main():
         return
 
     # Normalise vuln_types before validating findings
-    if schema_type == "findings":
+    if schema_type == "findings" and isinstance(data, dict):
         from core.schema_constants import normalise_vuln_type
         changed = False
         for f in data.get("findings", []):

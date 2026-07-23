@@ -25,7 +25,6 @@ class TestLoadTuning(unittest.TestCase):
         t = load_tuning(Path("/nonexistent/tuning.json"))
         self.assertEqual(t.max_semgrep_workers, 4)
         self.assertEqual(t.max_codeql_workers, 2)
-        self.assertEqual(t.max_agentic_parallel, 3)
         self.assertEqual(t.max_fuzz_parallel, 4)
 
     def test_empty_file_returns_defaults(self):
@@ -43,7 +42,6 @@ class TestLoadTuning(unittest.TestCase):
                 "codeql_threads": 2,
                 "max_semgrep_workers": 8,
                 "max_codeql_workers": 4,
-                "max_agentic_parallel": 6,
                 "max_fuzz_parallel": 4,
             }))
             t = load_tuning(p)
@@ -51,7 +49,6 @@ class TestLoadTuning(unittest.TestCase):
             self.assertEqual(t.codeql_threads, 2)
             self.assertEqual(t.max_semgrep_workers, 8)
             self.assertEqual(t.max_codeql_workers, 4)
-            self.assertEqual(t.max_agentic_parallel, 6)
             self.assertEqual(t.max_fuzz_parallel, 4)
 
     def test_auto_resolves_ram(self):
@@ -361,7 +358,7 @@ class TestTuningFrozen(unittest.TestCase):
             codeql_ram_mb=8192, codeql_threads=8,
             codeql_max_disk_cache_mb=0,
             max_semgrep_workers=4, max_codeql_workers=2,
-            max_agentic_parallel=3, max_fuzz_parallel=1,
+            max_fuzz_parallel=1,
             max_inventory_workers=4,
             max_json_memo_mb=256,
         )

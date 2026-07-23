@@ -11,7 +11,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from .evidence import EvidenceRecord, EvidenceTier
+from core.evidence import EvidenceRecord, EvidenceTier
 
 
 def build_validation_handoff(

@@ -95,7 +95,7 @@ def _resolve_child(parent_file: Path, mod_name: str,
 
 def _file_mods(file: Path) -> List[Tuple[Optional[str], str]]:
     try:
-        text = _strip_comments(file.read_text(errors="replace"))
+        text = _strip_comments(file.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return []
     return [(m.group(1), m.group(2)) for m in _MOD_DECL.finditer(text)]

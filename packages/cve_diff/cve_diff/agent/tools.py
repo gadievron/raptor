@@ -320,8 +320,9 @@ def _deterministic_hints_impl(cve_id: str) -> str:
                     sha = ev.get("fixed") or ""
                     if sha and repo_slug:
                         hints.append({"slug": repo_slug, "sha": sha, "source": "osv_affected_fixed"})
-    except HttpError:
-        pass
+    except HttpError as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("OSV hint fetch failed for %s: %s", cve_id, exc)
     # NVD
     nvd_payload = _nvd.get_payload(cve_id)
     if nvd_payload:

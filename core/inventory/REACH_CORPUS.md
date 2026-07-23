@@ -1,6 +1,6 @@
 # Reachability corpora
 
-The reachability audit harness (`core/inventory/reach_audit.py`,
+The reachability audit harness (`core/analysis/reach_audit.py`,
 `audit_corpus`) measures classification accuracy against a labelled tree.
 It is corpus-agnostic — point it at any directory plus a label map. Three
 roles, with three corpora:

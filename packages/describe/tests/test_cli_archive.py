@@ -158,8 +158,9 @@ class TestArchiveHandling:
         assert rc == 0, err_buf.getvalue()
 
         after = set(sys_tmp.glob("raptor-describe-*"))
-        assert after == before, (
-            f"temp extract dirs leaked: {after - before}"
+        leaked = after - before
+        assert not leaked, (
+            f"temp extract dirs leaked: {leaked}"
         )
 
 
@@ -204,6 +205,13 @@ class TestArchiveCacheHit:
             active.unlink()
         active.symlink_to("_t.json")
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(
+            "core.project.project.PROJECTS_DIR", proj_dir,
+        )
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project",
+            lambda: (str(project_out), "_t", "/tmp"),
+        )
 
     def test_cache_hit_skips_extraction(
         self, tmp_path, monkeypatch,
@@ -258,9 +266,10 @@ class TestArchiveCacheHit:
         assert rc == 0, err_buf.getvalue()
 
         after = set(sys_tmp.glob("raptor-describe-*"))
-        assert after == before, (
+        leaked = after - before
+        assert not leaked, (
             "cache hit must NOT create a tmp extract dir; "
-            f"new tmp dirs: {after - before}"
+            f"new tmp dirs: {leaked}"
         )
         assert "Source: archive proj.tar.gz" in out_buf.getvalue()
         assert "c.userspace-daemon" in out_buf.getvalue()

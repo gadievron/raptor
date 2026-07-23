@@ -233,7 +233,7 @@ def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
         # Go modules: ``pkg:golang/<host>/<owner>/<repo>@<version>``
         # → the FULL path is the import path; keep it intact.
         name = path
-    elif ecosystem == "npm" and (path.startswith("%40") or path.startswith("@")):
+    elif ecosystem == "npm" and (path.startswith(("%40", "@"))):
         name = "@" + path[3:] if path.startswith("%40") else path
     elif ecosystem == "Packagist" and "/" in path:
         # Composer/Packagist names are ``vendor/package`` (two-segment).

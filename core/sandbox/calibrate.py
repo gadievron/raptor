@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from core.atomic_fs import write_text_atomically
+from core.hash import sha256_file as _sha256_file
 
 
 logger = logging.getLogger(__name__)
@@ -165,17 +166,6 @@ class SandboxProfile:
 # ---------------------------------------------------------------------------
 
 
-def _sha256_file(path: Path) -> str:
-    """sha256 of file content, streamed so large binaries don't
-    OOM. 64KiB blocks balance syscall overhead vs memory."""
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(65536)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _env_signature(env_keys: Iterable[str]) -> str:

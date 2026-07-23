@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
@@ -28,11 +29,11 @@ from .models import (
 )
 from .prompts import (
     SYNTHESIS_SCHEMA,
-    SYNTHESIS_SYSTEM,
     TRIAGE_SCHEMA,
     TRIAGE_SYSTEM,
     build_synthesis_prompt,
     build_triage_prompt,
+    synthesis_system_for_engine,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,6 @@ def _run_semgrep(
         # SemgrepFinding has attribute access — file, line, etc.
         path = getattr(f, "file", "") or ""
         line = int(getattr(f, "line", 0) or 0)
-        message = getattr(f, "message", "") or ""
         # Normalise to repo-relative when possible.
         rel = path
         try:
@@ -182,8 +182,7 @@ def _run_semgrep(
                 rel = str(p.relative_to(target_resolved))
         except (ValueError, OSError):
             rel = path
-        matches.append(Match(file=rel, line=line,
-                             snippet=str(message)[:500]))
+        matches.append(Match(file=rel, line=line, snippet=""))
     errors: List[str] = list(result.errors or [])
     return matches, errors
 
@@ -202,7 +201,7 @@ def _run_coccinelle(
         try:
             rel = str(Path(path).relative_to(target.resolve())) \
                 if Path(path).is_absolute() else path
-        except ValueError:
+        except (ValueError, OSError):
             rel = path
         matches.append(Match(file=rel, line=int(line),
                              snippet=str(snippet)[:500]))
@@ -245,13 +244,16 @@ def _propose_rule(
         prior_fps=prior_fps,
     )
     try:
-        data = llm(prompt, SYNTHESIS_SCHEMA, SYNTHESIS_SYSTEM)
+        data = llm(prompt, SYNTHESIS_SCHEMA,
+                   synthesis_system_for_engine(engine))
     except Exception as e:
         return None, f"llm error: {e}"
     if not isinstance(data, dict):
         return None, "llm returned non-dict response"
     body = data.get("rule_body")
     rationale = data.get("rationale", "") or ""
+    test_positive = data.get("test_positive", "") or ""
+    test_negative = data.get("test_negative", "") or ""
     if not isinstance(body, str) or not body.strip():
         return None, "llm response missing 'rule_body'"
     if len(body.encode("utf-8")) > _RULE_BODY_MAX_BYTES:
@@ -267,6 +269,8 @@ def _propose_rule(
         rule_id=_make_rule_id(seed, attempt),
         body=body,
         rationale=rationale,
+        test_positive=str(test_positive),
+        test_negative=str(test_negative),
     ), None
 
 
@@ -286,10 +290,56 @@ def _positive_control(
     return False, errors
 
 
+def _fixture_ext(seed: SeedBug, engine: str) -> str:
+    """File extension for dual-control test fixtures."""
+    if engine == "coccinelle":
+        return ".c"
+    return Path(seed.file).suffix or ".c"
+
+
+def _dual_control(
+    rule: SynthesisedRule, rule_path: Path, engine: str, ext: str,
+) -> Tuple[bool, List[str]]:
+    """Run the rule against LLM-generated positive and negative test
+    fixtures. Both must be present; the rule must match the positive
+    and must NOT match the negative."""
+    if not rule.test_positive or not rule.test_negative:
+        return False, ["dual control: LLM did not emit test fixtures"]
+
+    errors: List[str] = []
+    dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
+
+    with tempfile.TemporaryDirectory(prefix="raptor_dc_") as tmp:
+        tmp_path = Path(tmp)
+        pos_file = tmp_path / f"test_positive{ext}"
+        neg_file = tmp_path / f"test_negative{ext}"
+        pos_file.write_text(rule.test_positive, encoding="utf-8")
+        neg_file.write_text(rule.test_negative, encoding="utf-8")
+
+        pos_matches, pos_errors = _run_engine(dummy, rule_path, pos_file)
+        errors.extend(pos_errors)
+        if not pos_matches:
+            errors.append(
+                "dual control: rule did not match positive test fixture"
+            )
+            return False, errors
+
+        neg_matches, neg_errors = _run_engine(dummy, rule_path, neg_file)
+        errors.extend(neg_errors)
+        if neg_matches:
+            errors.append(
+                f"dual control: rule matched negative test fixture "
+                f"({len(neg_matches)} hit(s) — rule is too broad)"
+            )
+            return False, errors
+
+    return True, errors
+
+
 def _is_seed_match(seed: SeedBug, m: Match) -> bool:
     """Identify a match that IS the seed bug (so we can drop it
     from the variant list)."""
-    if Path(m.file).name != Path(seed.file).name:
+    if m.file != seed.file:
         return False
     return seed.line_start <= m.line <= seed.line_end
 
@@ -411,7 +461,47 @@ def synthesise_and_run(
         ok, run_errors = _positive_control(seed, rule_path, repo_root, engine)
         result.errors.extend(f"attempt {attempt}: {e}" for e in run_errors)
         if ok:
-            break
+            # Dual control: validate against LLM-generated test
+            # fixtures before trusting the rule on the real target.
+            ext = _fixture_ext(seed, engine)
+            if rule.test_positive and rule.test_negative:
+                dc_ok, dc_errors = _dual_control(
+                    rule, rule_path, engine, ext,
+                )
+                result.errors.extend(
+                    f"attempt {attempt}: {e}" for e in dc_errors
+                )
+                if dc_ok:
+                    result.dual_control = True
+                    logger.debug(
+                        "dual control passed for %s (positive "
+                        "matched, negative clean)",
+                        seed.file,
+                    )
+                    break
+                dc_reason = " ".join(
+                    e for e in dc_errors
+                    if e.startswith("dual control:")
+                )
+                logger.debug(
+                    "dual control failed for %s attempt %d: %s",
+                    seed.file, attempt, dc_reason,
+                )
+                feedback = (
+                    "The rule matched the seed bug (positive control "
+                    "passed) but failed the dual control gate. "
+                    + dc_reason
+                )
+                rule = None
+                rule_path = None
+                continue
+            else:
+                logger.warning(
+                    "dual control skipped: LLM did not emit test "
+                    "fixtures for %s",
+                    seed.file,
+                )
+                break
         # Positive control failed — retry if we still have budget.
         result.errors.append(
             f"attempt {attempt}: rule did not match seed at "

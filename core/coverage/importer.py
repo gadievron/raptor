@@ -134,7 +134,7 @@ def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
         path = fe.get("path")
         if not path:
             continue
-        for fn in fe.get("items", fe.get("functions", [])):
+        for fn in fe.get("items", fe.get("functions", [])) or []:
             lo = fn.get("line_start")
             if lo is None:
                 continue
@@ -276,15 +276,14 @@ def import_annotations(
     checklist: Dict[str, Any],
     tool: str = "annotations",
 ) -> int:
-    """Import durable per-function annotations as llm-category coverage.
+    """Import durable human-authored annotations as coverage evidence.
 
-    Annotations (``core.annotations``) are project-level and survive
-    ``/project clean``, so importing them keeps retained *reviews* counting
-    even after the run dirs that produced them are gone. A ``clean`` status
-    -> clean coverage; ``finding`` / ``suspicious`` -> a linked finding so the
-    function reads ``open``. Function line ranges come from the inventory
-    (file+name), falling back to the annotation's ``lines`` metadata; an
-    annotation that resolves to neither is skipped. Returns the count.
+    Only ``source=human`` annotations are imported — LLM-authored
+    annotations are not coverage evidence (LLM review state is tracked
+    by the review journal instead).  Annotations survive ``/project
+    clean``, so importing them keeps retained operator reviews counting
+    even after the run dirs that produced them are gone.  A ``finding``
+    / ``suspicious`` status creates a linked finding.  Returns the count.
     """
     base_dir = Path(base_dir)
     if not base_dir.exists():
@@ -296,7 +295,7 @@ def import_annotations(
         path = fe.get("path")
         if not path:
             continue
-        for it in fe.get("items", fe.get("functions", [])):
+        for it in fe.get("items", fe.get("functions", [])) or []:
             name = it.get("name")
             if name:
                 lo = it.get("line_start")
@@ -305,6 +304,8 @@ def import_annotations(
 
     imported = 0
     for ann in iter_all_annotations(base_dir):
+        if ann.metadata.get("source") != "human":
+            continue
         rng = ranges.get((ann.file, ann.function)) or _parse_lines(
             ann.metadata.get("lines")
         )
@@ -384,7 +385,7 @@ def _function_ranges(checklist: Dict[str, Any]) -> Dict[tuple, tuple]:
         path = fe.get("path")
         if not path:
             continue
-        for it in fe.get("items", fe.get("functions", [])):
+        for it in fe.get("items", fe.get("functions", [])) or []:
             name = it.get("name")
             lo = it.get("line_start")
             if name and lo is not None:

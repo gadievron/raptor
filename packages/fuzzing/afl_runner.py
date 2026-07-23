@@ -52,6 +52,7 @@ class AFLRunner:
         deterministic: bool = False,
         custom_mutator: Optional[Path] = None,
         seed_profile: str = "default",
+        extra_afl_flags: Optional[List[str]] = None,
     ):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
@@ -93,6 +94,7 @@ class AFLRunner:
         self.check_sanitizers = check_sanitizers
         self.recompile_guide = recompile_guide
         self.use_showmap = use_showmap
+        self.extra_afl_flags = list(extra_afl_flags or [])
 
         # AFL++ advanced features
         self.cmplog_binary = Path(cmplog_binary).resolve() if cmplog_binary else None
@@ -148,7 +150,7 @@ class AFLRunner:
             logger.warning("AFL validation timed out - AFL may be slow to start")
         except Exception as e:
             logger.warning(f"AFL validation failed: {e}")
-            raise RuntimeError(f"AFL++ validation failed: {e}")
+            raise RuntimeError(f"AFL++ validation failed: {e}") from e
 
     def _create_default_corpus(self) -> Path:
         """Create minimal default corpus if none provided.
@@ -253,7 +255,7 @@ class AFLRunner:
                 logger.warning("AFL --help command timed out")
             except FileNotFoundError:
                 logger.error("afl-fuzz not found in PATH")
-                raise RuntimeError("AFL++ not installed")
+                raise RuntimeError("AFL++ not installed") from None
             except Exception as e:
                 logger.warning(f"AFL compatibility check failed: {e}")
 
@@ -448,8 +450,12 @@ class AFLRunner:
             stdout_path = log_dir / f"{instance_name}.stdout.log"
             stderr_path = log_dir / f"{instance_name}.stderr.log"
             stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
-            stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
-            (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n")
+            try:
+                stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
+            except BaseException:
+                stdout_fp.close()
+                raise
+            (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
 
             try:
                 from core.sandbox.preexec import set_pdeathsig
@@ -461,7 +467,7 @@ class AFLRunner:
                     env=afl_env,
                     preexec_fn=set_pdeathsig(),
                 )
-            except Exception:
+            except BaseException:
                 stdout_fp.close()
                 stderr_fp.close()
                 raise
@@ -816,6 +822,10 @@ class AFLRunner:
         # Dictionary if provided
         if self.dict_path and self.dict_path.exists():
             cmd.extend(["-x", str(self.dict_path)])
+
+        # Optional SAGE-derived or operator-supplied AFL++ flags (before ``--``).
+        if self.extra_afl_flags:
+            cmd.extend(self.extra_afl_flags)
 
         # Target binary
         cmd.append("--")

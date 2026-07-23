@@ -946,13 +946,16 @@ class EgressProxy:
                 except (OSError, asyncio.TimeoutError):
                     pass
             # Both done in this iteration with failures? Wait the rest.
+            last_err: Optional[Exception] = None
             for t in pending:
                 try:
                     result = await t
                     return result
                 except (OSError, asyncio.TimeoutError) as e:
-                    last = e
-            raise last
+                    last_err = e
+            raise last_err if last_err is not None else OSError(
+                "all dual-stack attempts failed"
+            )
         finally:
             # Best-effort: ensure no task is left dangling. Tasks that
             # already returned a result are no-op'd on cancel; in-flight
@@ -1091,7 +1094,7 @@ class EgressProxy:
                     f"proxy bound to non-loopback {bound_host!r} — refusing to serve"
                 )
             self.port = bound_port
-            logger.info(
+            logger.debug(
                 f"egress proxy listening on 127.0.0.1:{self.port} "
                 f"(allowlist: {sorted(self._allowed_hosts)})"
             )

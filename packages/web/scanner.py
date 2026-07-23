@@ -19,6 +19,11 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.logging import get_logger
 from core.llm.providers import LLMProvider
 from core.run.safe_io import safe_run_mkdir
+from core.sage.hooks import (
+    format_sage_memories_for_prompt,
+    recall_context_for_web_scan,
+    store_web_payload_effectiveness,
+)
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.ffuf import FfufConfig, FfufRunner
@@ -66,6 +71,13 @@ class WebScanner:
             Scan results with findings
         """
         logger.info("Starting autonomous web security scan")
+        sage_rows = recall_context_for_web_scan(
+            repo_path=self.base_url,
+            target_fingerprint=self.base_url,
+        )
+        sage_web_text = format_sage_memories_for_prompt(sage_rows)
+        if self.fuzzer:
+            self.fuzzer.set_sage_prior_recall(sage_web_text, sage_rows)
 
         # Phase 1: Discovery
         logger.info("Phase 1: Web Discovery and Crawling")
@@ -96,7 +108,7 @@ class WebScanner:
             # large crawls, the cross-product can be N×M; the
             # fuzzer's own per-call rate limiting bounds the
             # wall time.
-            target_urls = list(crawl_results.get('discovered_urls') or [self.base_url])
+            target_urls = sorted(self.crawler.discovered_urls) or [self.base_url]
             for target_url in target_urls:
                 for param in crawl_results['discovered_parameters']:
                     findings = self.fuzzer.fuzz_parameter(
@@ -131,6 +143,18 @@ class WebScanner:
 
         logger.info(f"Web scan complete. Found {len(fuzzing_findings)} potential vulnerabilities")
         logger.info(f"Report saved to {report_file}")
+        # Future-agent note: store a concise summary signal; avoid persisting
+        # raw payload bodies or sensitive URL params.
+        store_web_payload_effectiveness(
+            repo_path=self.base_url,
+            target_fingerprint=self.base_url,
+            payload_class="mixed",
+            evidence_class="response_delta",
+            effectiveness=1.0 if fuzzing_findings else 0.0,
+            attempts=max(1, len(crawl_results.get("discovered_parameters", []))),
+            signals=len(fuzzing_findings),
+            notes=f"vulnerability_types={sorted({f.get('type', 'unknown') for f in fuzzing_findings})}",
+        )
 
         return report
 

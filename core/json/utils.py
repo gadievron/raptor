@@ -15,6 +15,24 @@ from core.atomic_fs import write_text_atomically
 
 logger = logging.getLogger(__name__)
 
+try:
+    import orjson as _orjson
+except ImportError:
+    _orjson = None
+
+
+def _loads(text: str, *, parse_constant=None, allow_non_finite: bool = False) -> Any:
+    """Parse JSON text, using orjson when available for speed."""
+    if _orjson is not None and not allow_non_finite:
+        return _orjson.loads(text)
+    return json.loads(text, parse_constant=parse_constant)
+
+
+def _orjson_default(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    return str(obj)
+
 
 def _reject_non_finite(token: str) -> Any:
     """`parse_constant` callback rejecting JSON5-ish ``NaN``/``Infinity``.
@@ -73,14 +91,16 @@ def load_json(
         return None
     parse_constant = None if allow_non_finite else _reject_non_finite
     if strict:
-        return json.loads(
+        return _loads(
             p.read_text(encoding="utf-8-sig"),
             parse_constant=parse_constant,
+            allow_non_finite=allow_non_finite,
         )
     try:
-        return json.loads(
+        return _loads(
             p.read_text(encoding="utf-8-sig"),
             parse_constant=parse_constant,
+            allow_non_finite=allow_non_finite,
         )
     except (json.JSONDecodeError, ValueError, OSError, RecursionError) as e:
         # Pre-fix this returned None silently. Operators investigating
@@ -158,7 +178,7 @@ def load_json_with_comments(path: Union[str, Path]) -> Optional[Any]:
         stripped = _strip_json_comments(text)
         if not stripped.strip():
             return None
-        return json.loads(stripped, parse_constant=_reject_non_finite)
+        return _loads(stripped, parse_constant=_reject_non_finite)
     except (json.JSONDecodeError, ValueError, OSError, RecursionError) as e:
         logger.warning("load_json_with_comments: failed to parse %s: %s", p, e)
         return None
@@ -197,5 +217,12 @@ def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
               the mode is installed on the tempfile before rename — no
               chmod-after-rename window.
     """
-    content = json.dumps(data, indent=2, cls=_RaptorEncoder) + "\n"
+    if _orjson is not None:
+        content = _orjson.dumps(
+            data,
+            option=_orjson.OPT_INDENT_2 | _orjson.OPT_NON_STR_KEYS,
+            default=_orjson_default,
+        ).decode("utf-8") + "\n"
+    else:
+        content = json.dumps(data, indent=2, cls=_RaptorEncoder, allow_nan=False) + "\n"
     write_text_atomically(path, content, mode=mode, tmp_prefix=".~savejson-")

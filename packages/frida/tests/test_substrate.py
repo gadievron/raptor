@@ -157,7 +157,6 @@ def test_bb_coverage_template_exists():
 def test_drcov_payload_written_to_file(tmp_path: Path):
     """Exercise the runner's _message_cb drcov write path end-to-end
     by firing a _drcov message through a FakeScript during run()."""
-    import threading
     from packages.frida import runner
     from packages.frida.tests.test_runner import (
         FakeDevice, FakeScript, _fake_frida,
@@ -177,10 +176,10 @@ def test_drcov_payload_written_to_file(tmp_path: Path):
     original_load = FakeScript.load
     def load_and_fire_drcov(self):
         original_load(self)
-        threading.Timer(0.01, lambda: self.fire(
+        self.fire(
             {"type": "send", "payload": {"_drcov": True, "bb_count": 1}},
             data=drcov_bytes,
-        )).start()
+        )
     FakeScript.load = load_and_fire_drcov
     try:
         result = runner.run(cfg, frida_mod_override=fake)

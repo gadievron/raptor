@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""SAGE recall/store for /understand runs.
+
+Usage:
+    libexec/raptor-understand-sage recall <output_dir> --target <path> [--languages python,c]
+    libexec/raptor-understand-sage store  <output_dir> --target <path>
+
+recall: queries SAGE for prior attack surface knowledge and saves
+        sage_precall_understand.json in the output dir.
+
+store:  reads context-map.json, flow-trace-*.json, variants.json from
+        the output dir and stores summaries in SAGE for cross-run learning.
+
+Both are best-effort: SAGE unavailable → exit 0 silently.
+"""
+
+import faulthandler
+import signal
+import sys
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def _recall(out_dir: Path, target: str, languages: list[str] | None) -> None:
+    from core.sage.hooks import recall_context_for_map
+    memories = recall_context_for_map(target, languages=languages)
+    if memories:
+        from core.json import save_json
+        save_json(out_dir / "sage_precall_understand.json", memories)
+        print(f"SAGE: recalled {len(memories)} prior memories", file=sys.stderr)
+
+
+def _store(out_dir: Path, target: str) -> None:
+    from core.sage.hooks import (
+        store_map_results,
+        store_trace_result,
+        store_hunt_results,
+    )
+
+    # context-map.json → store_map_results
+    cm_path = out_dir / "context-map.json"
+    if cm_path.exists():
+        from core.json import load_json
+        context_map = load_json(cm_path)
+        if context_map:
+            store_map_results(target, context_map)
+            print("SAGE: stored context map", file=sys.stderr)
+
+    # flow-trace-*.json → store_trace_result (one per trace)
+    for trace_path in sorted(out_dir.glob("flow-trace-*.json")):
+        try:
+            from core.json import load_json
+            trace = load_json(trace_path)
+            if trace:
+                store_trace_result(target, trace)
+                print(f"SAGE: stored {trace_path.name}", file=sys.stderr)
+        except Exception:
+            pass
+
+    # variants.json → store_hunt_results
+    var_path = out_dir / "variants.json"
+    if var_path.exists():
+        from core.json import load_json
+        variants = load_json(var_path)
+        if variants:
+            store_hunt_results(target, variants)
+            print("SAGE: stored variant hunt results", file=sys.stderr)
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="SAGE recall/store for /understand",
+    )
+    parser.add_argument("action", choices=["recall", "store"])
+    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--languages", default=None,
+                        help="Comma-separated language list (recall only)")
+    args = parser.parse_args()
+
+    if not args.output_dir.is_dir():
+        print(f"output_dir does not exist: {args.output_dir}", file=sys.stderr)
+        return 1
+
+    try:
+        if args.action == "recall":
+            langs = args.languages.split(",") if args.languages else None
+            _recall(args.output_dir, args.target, langs)
+        else:
+            _store(args.output_dir, args.target)
+    except Exception:
+        # Best-effort — SAGE failures never break the pipeline.
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

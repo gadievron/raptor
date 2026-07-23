@@ -28,7 +28,7 @@ def read_logo(version: str = "") -> str:
     path = _ASSETS / "raptor-offset"
     if not path.exists():
         return ""
-    text = path.read_text().rstrip()
+    text = path.read_text(encoding="utf-8").rstrip()
     if version:
         label = "v" + version.lstrip("v")
 
@@ -45,7 +45,7 @@ def read_random_quote() -> str:
     """Pick a random quote from the hackers-8ball file."""
     path = _ASSETS / "hackers-8ball"
     if path.exists():
-        lines = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         if lines:
             # Decorative banner quote — non-cryptographic.
             return random.choice(lines)  # nosemgrep: crypto.prng.random-module.python

@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Stage E SMT verb: CWE-839 signed comparison bypass via negative value.
+
+Usage:
+  raptor-smt-check-negative-bypass --value VAR --limit LIMIT
+                                    [--comparison OP] [--profile NAME]
+                                    [--guard 'condition' ...]
+
+Checks whether a signed variable can be negative and bypass an
+unsigned comparison guard.  The canonical kernel pattern:
+
+  if (msg_qbytes > rlim)         // unsigned comparison
+      return -EPERM;
+  msq->q_qbytes = msg_qbytes;   // negative value stored
+
+``--value`` is the suspect variable (must be atomic identifier).
+``--limit`` is the comparison bound (identifier or numeric literal).
+``--comparison`` is the guard's operator (default: ``>``).
+``--profile`` must be signed (default: ``int32``).
+
+Output: JSON to stdout matching validate_path's shape.
+
+  feasible=true   negative bypass IS reachable
+  feasible=false  guards prevent negative values
+  feasible=null   Z3 unavailable / unencodable
+"""
+import argparse
+import faulthandler
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.exploit_feasibility.smt_verbs import check_negative_bypass
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-check-negative-bypass",
+        description="SMT verb for CWE-839 signed comparison bypass.",
+    )
+    p.add_argument("--value", required=True,
+                   help="Suspect signed variable (atomic identifier)")
+    p.add_argument("--limit", required=True,
+                   help="Comparison bound (identifier or literal)")
+    p.add_argument("--comparison", default=">",
+                   choices=[">", ">=", "<", "<="],
+                   help="Guard comparison operator (default: >)")
+    p.add_argument("--profile", default="int32",
+                   help="Bitvector profile (default: int32, must be signed)")
+    p.add_argument("--guard", action="append", default=[],
+                   help="Additional path condition (repeat for each)")
+    # Accept --source and --function for compatibility with sweep runner
+    p.add_argument("--source", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--function", default=None, help=argparse.SUPPRESS)
+    args = p.parse_args()
+
+    try:
+        result = check_negative_bypass(
+            args.value,
+            args.limit,
+            comparison=args.comparison,
+            profile=args.profile,
+            guards=args.guard,
+        )
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-check-negative-bypass: {e}", file=sys.stderr)
+        return 2
+
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

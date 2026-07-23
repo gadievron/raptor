@@ -1,26 +1,30 @@
 rules:
+  # ---------------------------------------------------------------------------
+  # Java / Kotlin — MAC computed on plaintext while also encrypting it.
+  # CWE-353 / CWE-310: the MAC must cover the ciphertext, not the plaintext.
+  #
+  # NOTE: A companion "mac-after-decrypt" rule was removed because
+  # Cipher.doFinal is used for both encryption and decryption, making it
+  # impossible to distinguish Decrypt-then-MAC (bad) from Encrypt-then-MAC
+  # (correct) without type/mode information.  That rule had a structural FP
+  # on every correct Encrypt-then-MAC call site.
+  # ---------------------------------------------------------------------------
   - id: raptor.crypto.flow.mac-on-plaintext-after-encrypt.java
-    message: MAC is computed on plaintext while also encrypting. Prefer Encrypt-then-MAC of ciphertext. Verify with test vectors.
+    message: >-
+      MAC is computed on the same data passed to Cipher.doFinal rather than
+      on the ciphertext output.  Prefer Encrypt-then-MAC of ciphertext.
+      Verify with test vectors.
     languages: [java, kotlin]
     severity: HIGH
-    patterns:
+    pattern-either:
       - pattern: |
           $T1 $CT = $CIPHER.doFinal($PT);
-      - pattern: |
+          ...
           $MAC.doFinal($PT);
-    metadata:
-      cwe: ["CWE-353","CWE-310"]
-      asvs: ["V3.11"]
-
-  - id: raptor.crypto.flow.mac-after-decrypt.java
-    message: MAC verification is performed after decryption. Verify MAC before decryption.
-    languages: [java, kotlin]
-    severity: HIGH
-    patterns:
       - pattern: |
-          $T2 $PT = $CIPHER.doFinal($CT);
-      - pattern: |
-          $MAC.doFinal($PT);
+          $T1 $CT = $CIPHER.doFinal($PT);
+          ...
+          $T2 $TAG = $MAC.doFinal($PT);
     metadata:
       cwe: ["CWE-353","CWE-310"]
       asvs: ["V3.11"]

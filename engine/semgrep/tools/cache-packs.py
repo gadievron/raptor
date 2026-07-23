@@ -82,11 +82,11 @@ def fetch_pack(pack_id: str) -> bytes:
             raise SystemExit(
                 f"  FAILED: {pack_id} — response is YAML but PyYAML "
                 f"is not installed on this machine"
-            )
+            ) from None
         except Exception as exc:
             raise SystemExit(
                 f"  FAILED: {pack_id} — could not parse response: {exc}"
-            )
+            ) from exc
 
     return json.dumps(parsed, separators=(",", ":")).encode()
 

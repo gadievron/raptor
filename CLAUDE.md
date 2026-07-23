@@ -274,7 +274,7 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 
 **Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
 
-**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
 
 **Source attribution:** Every annotation carries `metadata.source=human` or `metadata.source=llm`. LLM-driven writes pass `overwrite=respect-manual` so a manual operator note is never silently clobbered. Operators using `/annotate add` set `source=human` by default.
 
@@ -386,7 +386,7 @@ The verdict flows through the existing reachability chokepoint: /codeql + /agent
 - `libexec/raptor-binary-oracle-e2e` — single-invocation audit that builds a real C target and walks 15 consumer surfaces (54 assertions). No LLM calls. Run via `bin/raptor` or `CLAUDECODE=1 libexec/...`.
 - `libexec/raptor-binary-oracle-precision --corpus <name>` — re-measure absent-precision on any corpus driver (synthetic/zlib/libsodium/snappy/leveldb/regex-rust/zstd_holdout). Report includes per-corpus cross-tab (classifier × gcov live/dead), aggregate with rule-of-three UB, n-concentration dominator detection, and the toolchain block (cc/gcov/llvm-cov versions) so the precision number is reproducible.
 
-**Skill location**: `core/inventory/binary_oracle.py` (classifier), `core/inventory/binary_oracle_autodetect.py` (auto-detect), `core/inventory/binary_oracle_precision.py` (measurement harness — `libexec/raptor-binary-oracle-precision` CLI shim runs it). Design + validation writeup: `~/design/binary-oracle-reachability.md` §9-11.
+**Skill location**: `core/analysis/binary_oracle.py` (classifier), `core/analysis/binary_oracle_autodetect.py` (auto-detect), `core/analysis/binary_oracle_precision.py` (measurement harness — `libexec/raptor-binary-oracle-precision` CLI shim runs it). Design + validation writeup: `~/design/binary-oracle-reachability.md` §9-11.
 
 ---
 

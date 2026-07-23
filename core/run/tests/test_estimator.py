@@ -1,158 +1,156 @@
-"""Tests for ``core/run/estimator.py`` — the catalog-driven
-cost-and-time estimator (QoL #21)."""
+"""Tests for ``core/run/estimator.py`` — scorecard-derived
+cost-and-time estimator."""
 
 from __future__ import annotations
 
+import json
+
 from core.run.estimator import (
     RunEstimate,
-    estimate_run,
+    estimate_from_scorecard,
     format_estimate,
 )
 
 
-class TestEstimateRun:
-    """End-to-end: target path → catalog detect → estimate. Uses
-    the real shipped catalog YAMLs so test failures point at real
-    drift between substrate + catalog data."""
+class TestEstimateFromScorecard:
+    """Scorecard-derived estimates use real per-model call history."""
 
-    def test_none_target_returns_none(self):
-        assert estimate_run(None) is None
+    def _write_scorecard(self, path, model, calls, cost_usd, latency_ms_sum):
+        data = {
+            "version": 2,
+            "models": {
+                model: {
+                    "analysis": {
+                        "first_seen_at": "2026-01-01T00:00:00Z",
+                        "last_seen_at": "2026-06-01T00:00:00Z",
+                        "model_version": model,
+                        "policy_override": "auto",
+                        "events": {},
+                        "calls": calls,
+                        "cost_usd": cost_usd,
+                        "tokens": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "latency_ms_sum": latency_ms_sum,
+                        "latency_ms_max": 0,
+                    },
+                },
+            },
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
 
-    def test_empty_target_returns_none(self, tmp_path):
-        # Empty tree → catalog falls back to ``generic`` →
-        # ``generic`` has zero-valued estimate pairs in the shipped
-        # YAML? Actually generic ships ``[10, 30]`` cost +
-        # ``[15, 45]`` time. Verify it returns a populated estimate
-        # for the generic case (the no-detect fallback IS a useful
-        # signal).
-        est = estimate_run(tmp_path)
-        assert est is not None
-        assert est.target_type == "generic"
-        assert est.cost_high == 30
-        assert est.time_high == 45
-
-    def test_c_userspace_daemon_target(self, tmp_path):
-        # Build a tree matching c.userspace-daemon detection.
-        (tmp_path / "configure.ac").write_text("")
-        (tmp_path / "Makefile.am").write_text("")
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "main.c").write_text("")
-        est = estimate_run(tmp_path)
-        assert est is not None
-        assert est.target_type == "c.userspace-daemon"
-        # YAML: estimated_cost_usd: [25, 50], estimated_time_min: [40, 75]
-        assert est.cost_low == 25
-        assert est.cost_high == 50
-        assert est.time_low == 40
-        assert est.time_high == 75
-
-    def test_python_web_app_target(self, tmp_path):
-        (tmp_path / "manage.py").write_text("")
-        (tmp_path / "settings.py").write_text("")
-        (tmp_path / "urls.py").write_text("")
-        est = estimate_run(tmp_path)
-        assert est is not None
-        assert est.target_type == "python.web-app"
-        # YAML: estimated_cost_usd: [15, 35], estimated_time_min: [30, 60]
-        assert est.cost_high == 35
-        assert est.time_high == 60
-
-
-class TestEstimateRunFailureModes:
-    """Substrate must NEVER break the lifecycle. Any exception
-    from the catalog layer → ``None`` return → renderer prints
-    nothing → operator's run proceeds."""
-
-    def test_catalog_load_exception_returns_none(self, monkeypatch, tmp_path):
-        import core.run.target_types as tt
-        def _boom(_path):
-            raise RuntimeError("catalog corrupted")
-        monkeypatch.setattr(tt, "load", _boom)
-        assert estimate_run(tmp_path) is None
-
-    def test_nonexistent_target_path_returns_none_silently(self, tmp_path):
-        # Path doesn't exist → catalog returns ``generic`` (which
-        # has data); but operator presumably wants the estimate
-        # for the REAL target. We can't distinguish "doesn't
-        # exist" from "exists but empty" cleanly without an extra
-        # stat call. Document the actual behaviour: returns the
-        # generic estimate. (Operator gets a useful baseline; no
-        # surprise crash.)
-        est = estimate_run(tmp_path / "does-not-exist")
-        # Either generic (current behaviour) or None — both are
-        # acceptable signals. Just assert no crash + plausible
-        # shape.
-        assert est is None or est.target_type == "generic"
-
-    def test_zero_valued_catalog_estimate_returns_none(self, monkeypatch, tmp_path):
-        # Construct a synthetic catalog entry with all-zero
-        # estimate pairs (a catalog author who hasn't filled in
-        # cost/time yet). Estimator returns None — renderer
-        # prints nothing.
-        from core.run.target_types import CatalogEntry
-        import core.run.target_types as tt
-        empty_entry = CatalogEntry(
-            name="hypothetical.no-estimates",
-            estimated_cost_usd=(0.0, 0.0),
-            estimated_time_min=(0, 0),
+    def test_returns_none_when_no_scorecard(self, tmp_path):
+        sc_path = tmp_path / "nonexistent.json"
+        est = estimate_from_scorecard(
+            "test-model", 20, scorecard_path=sc_path,
         )
-        monkeypatch.setattr(tt, "load", lambda _p: empty_entry)
-        assert estimate_run(tmp_path) is None
+        assert est is None
+
+    def test_returns_none_when_too_few_calls(self, tmp_path):
+        sc_path = tmp_path / "sc.json"
+        self._write_scorecard(sc_path, "test-model", 3, 0.30, 30000)
+        est = estimate_from_scorecard(
+            "test-model", 20, scorecard_path=sc_path,
+        )
+        assert est is None
+
+    def test_returns_none_for_zero_findings(self, tmp_path):
+        sc_path = tmp_path / "sc.json"
+        self._write_scorecard(sc_path, "test-model", 100, 10.0, 500000)
+        est = estimate_from_scorecard(
+            "test-model", 0, scorecard_path=sc_path,
+        )
+        assert est is None
+
+    def test_returns_estimate_with_sufficient_data(self, tmp_path):
+        sc_path = tmp_path / "sc.json"
+        self._write_scorecard(sc_path, "test-model", 100, 10.0, 500000)
+        est = estimate_from_scorecard(
+            "test-model", 20, max_parallel=1, scorecard_path=sc_path,
+        )
+        assert est is not None
+        assert est.source == "scorecard"
+        assert est.cost_low > 0
+        assert est.cost_high > est.cost_low
+        assert est.time_low > 0
+
+    def test_parallelism_reduces_time(self, tmp_path):
+        sc_path = tmp_path / "sc.json"
+        self._write_scorecard(sc_path, "test-model", 100, 10.0, 500000)
+        est_1 = estimate_from_scorecard(
+            "test-model", 20, max_parallel=1, scorecard_path=sc_path,
+        )
+        est_3 = estimate_from_scorecard(
+            "test-model", 20, max_parallel=3, scorecard_path=sc_path,
+        )
+        assert est_1 is not None
+        assert est_3 is not None
+        assert est_3.time_high < est_1.time_high
+
+    def test_cost_unaffected_by_parallelism(self, tmp_path):
+        sc_path = tmp_path / "sc.json"
+        self._write_scorecard(sc_path, "test-model", 100, 10.0, 500000)
+        est_1 = estimate_from_scorecard(
+            "test-model", 20, max_parallel=1, scorecard_path=sc_path,
+        )
+        est_3 = estimate_from_scorecard(
+            "test-model", 20, max_parallel=3, scorecard_path=sc_path,
+        )
+        assert est_1 is not None
+        assert est_3 is not None
+        assert est_1.cost_low == est_3.cost_low
+        assert est_1.cost_high == est_3.cost_high
+
+    def test_unknown_model_returns_none(self, tmp_path):
+        sc_path = tmp_path / "sc.json"
+        self._write_scorecard(sc_path, "test-model", 100, 10.0, 500000)
+        est = estimate_from_scorecard(
+            "other-model", 20, scorecard_path=sc_path,
+        )
+        assert est is None
 
 
 class TestFormatEstimate:
     """Renderer: None → empty string; populated → operator-facing
-    one-liner. Format is consumed by both raptor.py and
-    libexec/raptor-run-lifecycle; tested here so a format change
-    surfaces in one place."""
+    one-liner."""
 
     def test_none_returns_empty_string(self):
         assert format_estimate(None) == ""
 
-    def test_range_estimate_renders_dollar_dash_dollar(self):
+    def test_scorecard_source_renders_model_name(self):
         est = RunEstimate(
-            cost_low=25, cost_high=50, time_low=40, time_high=75,
-            target_type="c.userspace-daemon",
+            cost_low=2, cost_high=4, time_low=5, time_high=8,
+            target_type="claude-opus-4-7 (scorecard)", source="scorecard",
         )
         s = format_estimate(est)
-        assert s == (
-            "Expected: $25-$50, 40-75 min "
-            "(target type: c.userspace-daemon)"
-        )
+        assert "from scorecard" in s
+        assert "claude-opus-4-7" in s
 
     def test_collapsed_range_renders_single_value(self):
-        # When the catalog author shipped a point estimate (low ==
-        # high), don't render the redundant ``$30-$30`` shape.
         est = RunEstimate(
             cost_low=30, cost_high=30, time_low=60, time_high=60,
-            target_type="some.point-estimate",
+            target_type="test-model (scorecard)",
         )
         s = format_estimate(est)
-        assert s == (
-            "Expected: $30, 60 min (target type: some.point-estimate)"
-        )
+        assert s == "Expected: $30, 60 min (test-model, from scorecard)"
 
     def test_cost_only_renders_without_time(self):
-        # Catalog entry filled in cost but not time — render just
-        # the cost half; don't print ``, 0 min``.
         est = RunEstimate(
             cost_low=10, cost_high=20, time_low=0, time_high=0,
-            target_type="cost-only",
+            target_type="test-model (scorecard)",
         )
         s = format_estimate(est)
-        assert s == "Expected: $10-$20 (target type: cost-only)"
+        assert s == "Expected: $10-$20 (test-model, from scorecard)"
 
     def test_time_only_renders_without_cost(self):
         est = RunEstimate(
             cost_low=0, cost_high=0, time_low=15, time_high=30,
-            target_type="time-only",
+            target_type="test-model (scorecard)",
         )
         s = format_estimate(est)
-        assert s == "Expected: 15-30 min (target type: time-only)"
+        assert s == "Expected: 15-30 min (test-model, from scorecard)"
 
     def test_both_zero_returns_empty_string(self):
-        # Defensive: shouldn't happen (estimate_run filters this
-        # to None), but the renderer doesn't crash on it.
         est = RunEstimate(
             cost_low=0, cost_high=0, time_low=0, time_high=0,
             target_type="both-zero",

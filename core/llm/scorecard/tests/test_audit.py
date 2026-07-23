@@ -171,11 +171,12 @@ def test_event_type_breakdown_isolates_primary(tmp_path):
     partitions cleanly by event type."""
     path = tmp_path / "mixed.json"
     sc = ModelScorecard(path)
-    # 100 cheap_short_circuit events → would be green on its own
-    for i in range(10):
+    # 11 cheap_short_circuit events per cell → clears the N≥10 threshold
+    # (kept small: each record_event is a full flock+read+write cycle)
+    for i in range(3):
         _populate(sc, model=f"m{i}",
                   decision_class=f"codeql:py/rule-{i}",
-                  event_type=EventType.CHEAP_SHORT_CIRCUIT, n=100)
+                  event_type=EventType.CHEAP_SHORT_CIRCUIT, n=11)
     # No multi_model_consensus events
     report = audit_mod.audit(path)
     # Verdict is no-data because primary event type is empty.
@@ -184,7 +185,7 @@ def test_event_type_breakdown_isolates_primary(tmp_path):
         s for s in report.event_type_summaries
         if s.event_type == EventType.CHEAP_SHORT_CIRCUIT
     )
-    assert cheap.cells_at_thresholds[100] == 10
+    assert cheap.cells_at_thresholds[10] == 3
     primary = next(
         s for s in report.event_type_summaries
         if s.event_type == EventType.MULTI_MODEL_CONSENSUS

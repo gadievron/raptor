@@ -4,12 +4,13 @@ Extracts functions, globals, macros, and classes from source files.
 AST-based for Python, tree-sitter when available, regex fallback.
 
 Security metadata (decorators, annotations, visibility, types) is captured
-in FunctionMetadata. See docs/design-inventory-metadata.md for design rationale.
+in FunctionMetadata.
 """
 
 import ast
 import re
 import logging
+import threading
 import warnings
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -71,7 +72,6 @@ class FunctionMetadata:
     """Security-relevant metadata extracted from function definitions.
 
     Language-agnostic — same fields for all languages, language-specific values.
-    See docs/design-inventory-metadata.md for field semantics.
     """
     class_name: Optional[str] = None
     visibility: Optional[str] = None      # public/private/protected/static/exported/extern
@@ -393,7 +393,7 @@ class JavaScriptExtractor:
             if len(line) > self._MAX_JS_LINE:
                 continue
             stripped = line.lstrip()
-            if stripped.startswith('//') or stripped.startswith('/*'):
+            if stripped.startswith(('//', '/*')):
                 continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
@@ -553,7 +553,7 @@ class CExtractor:
             line = lines[i]
 
             stripped = line.strip()
-            if stripped.startswith('#') or stripped.startswith('//'):
+            if stripped.startswith(('#', '//')):
                 i += 1
                 continue
 
@@ -590,7 +590,7 @@ class CExtractor:
                             ))
                             seen.add(name)
                             break
-                        if fwd.startswith('#') or fwd.startswith('//'):
+                        if fwd.startswith(('#', '//')):
                             continue
                         if not fwd:
                             continue
@@ -1158,14 +1158,13 @@ except ImportError:
     _TS_AVAILABLE = False
 
 
-# Per-language Parser cache. Pre-cache, ``TreeSitterExtractor(lang)``
-# constructed a fresh ``TSParser(ts_language)`` on every instance —
-# which is per-file in ``_extract_with_tree_sitter``. The grammar
-# is immutable across the program's lifetime so a single Parser
-# per language can be reused across every parse. Cache by the
-# language NAME (not Language object identity) because
-# ``_ts_language`` wraps a new Language per call.
-_TS_PARSER_BY_LANG: Dict[str, Any] = {}
+# Per-language Parser cache.  tree-sitter's Parser holds C-side
+# mutable state (internal parse stack) — NOT thread-safe for
+# concurrent ``.parse()`` calls.  The inventory builder fans out
+# via ThreadPoolExecutor, so a shared module-level dict would hand
+# the same Parser to multiple workers simultaneously.
+# ``threading.local`` gives every thread its own dict of parsers.
+_TS_PARSER_LOCAL = threading.local()
 
 
 def _ts_language(lang: str):
@@ -1221,20 +1220,21 @@ def _ts_language(lang: str):
 
 
 def _ts_parser_for(lang: str):
-    """Return a cached ``TSParser`` for ``lang``, or None if the
-    grammar isn't installed. Mirrors ``_get_ts_parser`` in
-    ``core/inventory/call_graph.py`` but keyed by language NAME so
-    repeated ``TreeSitterExtractor(lang)`` constructions across
-    many files share one Parser per grammar.
+    """Return a per-thread cached ``TSParser`` for ``lang``, or None
+    if the grammar isn't installed.
     """
-    cached = _TS_PARSER_BY_LANG.get(lang)
+    cache: Dict[str, Any] = getattr(_TS_PARSER_LOCAL, "parsers", None)  # type: ignore[assignment]
+    if cache is None:
+        cache = {}
+        _TS_PARSER_LOCAL.parsers = cache
+    cached = cache.get(lang)
     if cached is not None:
         return cached
     ts_lang = _ts_language(lang)
     if ts_lang is None:
         return None
     parser = TSParser(ts_lang)
-    _TS_PARSER_BY_LANG[lang] = parser
+    cache[lang] = parser
     return parser
 
 
@@ -1307,6 +1307,7 @@ class TreeSitterExtractor:
             except Exception as e:
                 logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
                 return []  # Caller will fall back to regex extractor
+        self._source_lines = content.splitlines(True)
         functions = []
         self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
         return functions
@@ -1599,6 +1600,11 @@ class TreeSitterExtractor:
         sibling of the translation_unit root, not inside a
         function_definition. Find the name and estimate the end line by
         scanning forward for the matching compound_statement.
+
+        K&R style with macros (``int ZEXPORT inflate(strm, flush)``)
+        additionally fragments the body: the opening ``{`` becomes a
+        bare token instead of a compound_statement. In that case, fall
+        back to brace-depth counting via CExtractor._find_end_brace.
         """
         seen_names = {f.name for f in functions}
         name = None
@@ -1608,13 +1614,19 @@ class TreeSitterExtractor:
                 break
         if not name or name in seen_names or name in CExtractor.KEYWORDS:
             return
-        # Estimate end: scan siblings for the next compound_statement
-        # (the function body `{ ... }`).
         end_line = decl_node.start_point[0] + 1
         sib = decl_node.next_sibling
         while sib is not None:
             if sib.type == "compound_statement":
                 end_line = sib.end_point[0] + 1
+                break
+            if sib.type == "{":
+                brace_line = sib.start_point[0]
+                found = CExtractor._find_end_brace(
+                    self._source_lines, brace_line,
+                )
+                if found:
+                    end_line = found
                 break
             if sib.type in ("function_definition", "function_declarator",
                             "preproc_include", "preproc_define"):
@@ -2232,8 +2244,8 @@ def extract_items(filepath: str, language: str, content: str,
             extractor = TreeSitterExtractor(language)
             tree = extractor.parser.parse(content.encode())
             ts_parsed = True
-        except (RuntimeError, Exception):
-            pass
+        except Exception:
+            logger.debug("tree-sitter parse failed, will use regex", exc_info=True)
 
     if tree is not None:
         # Cache tree for reuse by count_sloc
@@ -2274,6 +2286,37 @@ def extract_items(filepath: str, language: str, content: str,
             items = [i for i in items if i.kind != KIND_FUNCTION]
             extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
             items.extend(extractor.extract(filepath, content))
+
+    # C/C++ repair pass: tree-sitter fragmentation from unknown macros
+    # (ZEXPORT, ZLIB_INTERNAL, etc.) can leave functions with broken
+    # line_end (== line_start) or miss functions entirely (swallowed by
+    # cascading parse errors). Use the regex extractor to fill gaps.
+    if ts_parsed and language in ("c", "cpp"):
+        ts_funcs = {i.name for i in items if i.kind == KIND_FUNCTION}
+        broken = {
+            i.name for i in items
+            if i.kind == KIND_FUNCTION
+            and i.line_end is not None
+            and i.line_end <= i.line_start
+        }
+        if broken or True:
+            regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+            regex_funcs = regex_ext.extract(filepath, content)
+            regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
+            for i, item in enumerate(items):
+                if item.kind == KIND_FUNCTION and item.name in broken:
+                    repair = regex_by_name.get(item.name)
+                    if repair and repair.line_end and repair.line_end > repair.line_start:
+                        items[i] = FunctionInfo(
+                            name=item.name,
+                            line_start=item.line_start,
+                            line_end=repair.line_end,
+                            signature=item.signature or repair.signature,
+                            metadata=item.metadata or repair.metadata,
+                        )
+            for name, rfn in regex_by_name.items():
+                if name not in ts_funcs:
+                    items.append(rfn)
 
     # C/C++ macro extraction (regex — tree-sitter doesn't parse preprocessor)
     if language in ("c", "cpp"):
@@ -2712,7 +2755,7 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
                 comment_lines = _count_comment_lines_ts(tree.root_node)
                 return max(0, total - blank - comment_lines)
         except Exception:
-            pass
+            logger.debug("tree-sitter SLOC count failed, falling back to regex", exc_info=True)
 
     # Regex fallback
     comment_lines = _count_comment_lines_regex(content, language)
@@ -2799,8 +2842,6 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
                     i = j + 2
             # Count the line iff it starts inside a block, starts
             # with `//`, or starts with `/*`.
-            if (entered_in_block
-                or stripped.startswith("//")
-                or stripped.startswith("/*")):
+            if (entered_in_block or stripped.startswith(("//", "/*"))):
                 count += 1
     return count

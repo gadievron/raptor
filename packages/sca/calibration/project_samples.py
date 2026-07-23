@@ -790,45 +790,52 @@ def _collect_one(
         # a fetch-by-SHA approach since ``--branch`` rejects them.
         _is_sha = bool(re.fullmatch(r"[0-9a-fA-F]{40}", sample.git_ref))
         from core.config import RaptorConfig
+        from core.git.clone import safe_git_command
         from core.sandbox.preexec import set_pdeathsig
         _env = RaptorConfig.get_safe_env()
         _pre = set_pdeathsig()
         try:
             if _is_sha:
                 subprocess.run(
-                    ["git", "init", str(clone_root)],
+                    safe_git_command("init", str(clone_root)),
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
                     env=_env, preexec_fn=_pre,
                 )
                 subprocess.run(
-                    ["git", "-C", str(clone_root), "remote", "add",
-                     "origin", sample.repo_url],
+                    safe_git_command(
+                        "-C", str(clone_root), "remote", "add",
+                        "origin", sample.repo_url,
+                    ),
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
                     env=_env, preexec_fn=_pre,
                 )
                 subprocess.run(
-                    ["git", "-C", str(clone_root), "fetch",
-                     "--depth", "1", "origin", sample.git_ref],
+                    safe_git_command(
+                        "-C", str(clone_root), "fetch",
+                        "--depth", "1", "origin", sample.git_ref,
+                    ),
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
                     env=_env, preexec_fn=_pre,
                 )
                 subprocess.run(
-                    ["git", "-C", str(clone_root), "checkout",
-                     "FETCH_HEAD"],
+                    safe_git_command(
+                        "-C", str(clone_root), "checkout",
+                        "FETCH_HEAD",
+                    ),
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
                     env=_env, preexec_fn=_pre,
                 )
             else:
                 subprocess.run(
-                    [
-                        "git", "clone", "--depth", "1",
+                    safe_git_command(
+                        "clone", "--depth", "1",
                         "--branch", sample.git_ref,
                         sample.repo_url, str(clone_root),
-                    ],
+                    ),
                     check=True, capture_output=True, text=True,
                     timeout=git_clone_timeout,
                     env=_env, preexec_fn=_pre,

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-14T07:46:21Z",
+    "fetched_at": "2026-07-21T08:07:28Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -8232,6 +8232,13 @@
       "ransomware_use": true,
       "vendor": "NextGen Healthcare"
     },
+    "CVE-2023-4346": {
+      "date_added": "2026-07-15",
+      "kev": true,
+      "product": "KNX Protocol Connection Authorization Option 1",
+      "ransomware_use": false,
+      "vendor": "KNX Association"
+    },
     "CVE-2023-43770": {
       "date_added": "2024-02-12",
       "kev": true,
@@ -10920,6 +10927,20 @@
       "ransomware_use": false,
       "vendor": "Ivanti"
     },
+    "CVE-2026-15409": {
+      "date_added": "2026-07-14",
+      "kev": true,
+      "product": "SMA1000 Appliances",
+      "ransomware_use": false,
+      "vendor": "SonicWall"
+    },
+    "CVE-2026-15410": {
+      "date_added": "2026-07-14",
+      "kev": true,
+      "product": "SMA1000 Appliances",
+      "ransomware_use": false,
+      "vendor": "SonicWall"
+    },
     "CVE-2026-1603": {
       "date_added": "2026-03-09",
       "kev": true,
@@ -11144,6 +11165,13 @@
       "ransomware_use": false,
       "vendor": "Fortinet"
     },
+    "CVE-2026-25089": {
+      "date_added": "2026-07-16",
+      "kev": true,
+      "product": "FortiSandbox",
+      "ransomware_use": false,
+      "vendor": "Fortinet"
+    },
     "CVE-2026-25108": {
       "date_added": "2026-02-24",
       "kev": true,
@@ -11284,6 +11312,13 @@
       "ransomware_use": false,
       "vendor": "Google"
     },
+    "CVE-2026-39808": {
+      "date_added": "2026-07-16",
+      "kev": true,
+      "product": "FortiSandbox",
+      "ransomware_use": false,
+      "vendor": "Fortinet"
+    },
     "CVE-2026-39987": {
       "date_added": "2026-04-23",
       "kev": true,
@@ -11353,6 +11388,13 @@
       "product": "SharePoint Server",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-46817": {
+      "date_added": "2026-07-15",
+      "kev": true,
+      "product": "E-Business Suite",
+      "ransomware_use": false,
+      "vendor": "Oracle"
     },
     "CVE-2026-48027": {
       "date_added": "2026-05-27",
@@ -11431,6 +11473,20 @@
       "ransomware_use": false,
       "vendor": "Langflow"
     },
+    "CVE-2026-56155": {
+      "date_added": "2026-07-14",
+      "kev": true,
+      "product": "Active Directory Federation Services",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
+    "CVE-2026-56164": {
+      "date_added": "2026-07-14",
+      "kev": true,
+      "product": "SharePoint Server",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-56290": {
       "date_added": "2026-07-07",
       "kev": true,
@@ -11444,6 +11500,13 @@
       "product": "Forms",
       "ransomware_use": false,
       "vendor": "Balbooa"
+    },
+    "CVE-2026-58644": {
+      "date_added": "2026-07-16",
+      "kev": true,
+      "product": "SharePoint",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
     },
     "CVE-2026-6973": {
       "date_added": "2026-05-07",

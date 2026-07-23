@@ -1,0 +1,228 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → template-from-string sinks (SSTI)
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ssti.taint.python
+    message: >-
+      Untrusted data flows into a template constructor or from_string API.
+      User-controlled template source is code execution via SSTI. Use
+      render_template with a file path and pass user data as context variables.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      # Jinja2 — Template() from string
+      - patterns:
+          - pattern: jinja2.Template($SRC)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: Template($SRC)
+          - focus-metavariable: $SRC
+      # Jinja2 — Environment.from_string()
+      - patterns:
+          - pattern: $ENV.from_string($SRC)
+          - focus-metavariable: $SRC
+      # Flask render_template_string (also covered in XSS, but SSTI is
+      # the higher-severity classification)
+      - patterns:
+          - pattern: render_template_string($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: flask.render_template_string($SRC, ...)
+          - focus-metavariable: $SRC
+      # Mako
+      - patterns:
+          - pattern: mako.template.Template($SRC)
+          - focus-metavariable: $SRC
+      # Django template from string
+      - patterns:
+          - pattern: django.template.Template($SRC)
+          - focus-metavariable: $SRC
+    metadata:
+      cwe: ["CWE-1336"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ssti", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → template.Parse sinks (SSTI)
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ssti.taint.go
+    message: >-
+      Untrusted data flows into template.Parse(). Both text/template and
+      html/template allow arbitrary actions when the template source is
+      attacker-controlled. Load templates from files, not user input.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      # text/template and html/template — Parse from user input
+      - patterns:
+          - pattern: $TPL.Parse($SRC)
+          - focus-metavariable: $SRC
+      # template.Must(template.New("").Parse(...))
+      - patterns:
+          - pattern: template.Must($TPL.Parse($SRC))
+          - focus-metavariable: $SRC
+    metadata:
+      cwe: ["CWE-1336"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ssti", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → template engine sinks (SSTI)
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ssti.taint.java
+    message: >-
+      Untrusted data flows into a template engine as template source.
+      User-controlled templates allow arbitrary code execution. Load
+      templates from files, not user input.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      # Freemarker — Template from reader containing user input
+      - patterns:
+          - pattern: new Template($NAME, new StringReader($SRC), ...)
+          - focus-metavariable: $SRC
+      # Velocity — evaluate with user-controlled template string
+      - patterns:
+          - pattern: Velocity.evaluate($CTX, $W, $TAG, $SRC)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: (VelocityEngine $VE).evaluate($CTX, $W, $TAG, $SRC)
+          - focus-metavariable: $SRC
+      # Thymeleaf — process with user-controlled template name/source
+      - patterns:
+          - pattern: (TemplateEngine $TE).process($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: (SpringTemplateEngine $TE).process($SRC, ...)
+          - focus-metavariable: $SRC
+    metadata:
+      cwe: ["CWE-1336"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ssti", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → template sinks (SSTI)
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ssti.taint.javascript
+    message: >-
+      Untrusted data flows into a template engine as template source.
+      User-controlled templates allow arbitrary code execution. Load
+      templates from files, not user input.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      # EJS — render from string
+      - patterns:
+          - pattern: ejs.render($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: ejs.compile($SRC, ...)
+          - focus-metavariable: $SRC
+      # Pug — render from string
+      - patterns:
+          - pattern: pug.render($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: pug.compile($SRC, ...)
+          - focus-metavariable: $SRC
+      # Handlebars — compile from string
+      - patterns:
+          - pattern: Handlebars.compile($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: Handlebars.precompile($SRC, ...)
+          - focus-metavariable: $SRC
+      # Nunjucks — renderString from user input
+      - patterns:
+          - pattern: nunjucks.renderString($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: $NUNJUCKS.renderString($SRC, ...)
+          - focus-metavariable: $SRC
+      # dot.js / underscore templates
+      - patterns:
+          - pattern: doT.template($SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern: $UNDERSCORE.template($SRC, ...)
+          - focus-metavariable: $SRC
+    metadata:
+      cwe: ["CWE-1336"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ssti", "taint"]

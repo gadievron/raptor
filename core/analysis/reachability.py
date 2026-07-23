@@ -226,6 +226,7 @@ class _FunctionCalledIndex:
 # already used by ``callers_of`` / ``callees_of``.
 _FN_CALLED_INDEX_CACHE: Dict[int, Tuple[Dict[str, Any], _FunctionCalledIndex]] = {}
 _FN_CALLED_INDEX_CACHE_MAX = 8
+_FN_CALLED_INDEX_CACHE_LOCK = threading.Lock()
 
 # Inverse index for ``binary_oracle_absent`` / ``binary_call_edge_present``
 # lookups — without it, each accessor call walks every file × every item
@@ -237,6 +238,7 @@ _BO_ITEM_INDEX_CACHE: Dict[
     int, Tuple[Dict[str, Any], Dict[str, Dict[str, List[Dict[str, Any]]]]],
 ] = {}
 _BO_ITEM_INDEX_CACHE_MAX = 8
+_BO_ITEM_INDEX_CACHE_LOCK = threading.Lock()
 
 
 def _build_bo_item_index(
@@ -270,16 +272,18 @@ def _get_bo_item_index(
     inventory: Dict[str, Any],
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     inv_id = id(inventory)
-    cached = _BO_ITEM_INDEX_CACHE.get(inv_id)
-    if cached is not None and cached[0] is inventory:
-        return cached[1]
-    if cached is not None:
-        _BO_ITEM_INDEX_CACHE.pop(inv_id, None)
+    with _BO_ITEM_INDEX_CACHE_LOCK:
+        cached = _BO_ITEM_INDEX_CACHE.get(inv_id)
+        if cached is not None and cached[0] is inventory:
+            return cached[1]
+        if cached is not None:
+            _BO_ITEM_INDEX_CACHE.pop(inv_id, None)
     idx = _build_bo_item_index(inventory)
-    _BO_ITEM_INDEX_CACHE[inv_id] = (inventory, idx)
-    if len(_BO_ITEM_INDEX_CACHE) > _BO_ITEM_INDEX_CACHE_MAX:
-        oldest = next(iter(_BO_ITEM_INDEX_CACHE))
-        _BO_ITEM_INDEX_CACHE.pop(oldest, None)
+    with _BO_ITEM_INDEX_CACHE_LOCK:
+        _BO_ITEM_INDEX_CACHE[inv_id] = (inventory, idx)
+        if len(_BO_ITEM_INDEX_CACHE) > _BO_ITEM_INDEX_CACHE_MAX:
+            oldest = next(iter(_BO_ITEM_INDEX_CACHE))
+            _BO_ITEM_INDEX_CACHE.pop(oldest, None)
     return idx
 
 
@@ -356,17 +360,18 @@ def _get_function_called_index(
     inventory: Dict[str, Any],
 ) -> _FunctionCalledIndex:
     inv_id = id(inventory)
-    cached = _FN_CALLED_INDEX_CACHE.get(inv_id)
-    if cached is not None and cached[0] is inventory:
-        return cached[1]
-    if cached is not None:
-        # id reuse after GC — drop the stale entry.
-        _FN_CALLED_INDEX_CACHE.pop(inv_id, None)
+    with _FN_CALLED_INDEX_CACHE_LOCK:
+        cached = _FN_CALLED_INDEX_CACHE.get(inv_id)
+        if cached is not None and cached[0] is inventory:
+            return cached[1]
+        if cached is not None:
+            _FN_CALLED_INDEX_CACHE.pop(inv_id, None)
     idx = _build_function_called_index(inventory)
-    _FN_CALLED_INDEX_CACHE[inv_id] = (inventory, idx)
-    if len(_FN_CALLED_INDEX_CACHE) > _FN_CALLED_INDEX_CACHE_MAX:
-        oldest = next(iter(_FN_CALLED_INDEX_CACHE))
-        _FN_CALLED_INDEX_CACHE.pop(oldest, None)
+    with _FN_CALLED_INDEX_CACHE_LOCK:
+        _FN_CALLED_INDEX_CACHE[inv_id] = (inventory, idx)
+        if len(_FN_CALLED_INDEX_CACHE) > _FN_CALLED_INDEX_CACHE_MAX:
+            oldest = next(iter(_FN_CALLED_INDEX_CACHE))
+            _FN_CALLED_INDEX_CACHE.pop(oldest, None)
     return idx
 
 
@@ -2058,7 +2063,7 @@ def _candidate_qualified_names(
             candidates.append(f"{package_name}.{fn_name}")
 
     # Python path-based heuristic.
-    if file_path.endswith(".py") or file_path.endswith(".pyi"):
+    if file_path.endswith((".py", ".pyi")):
         base = file_path
         for suffix in (".pyi", ".py"):
             if base.endswith(suffix):
@@ -2307,15 +2312,11 @@ def module_aborts_on_load(
     if not file_path:
         return None
     normalised = file_path.replace("\\", "/")
-    for file_record in inventory.get("files", []):
-        if not isinstance(file_record, dict):
-            continue
-        rec_path = file_record.get("path")
-        if not isinstance(rec_path, str):
-            continue
-        if rec_path.replace("\\", "/") == normalised:
-            abort = file_record.get("module_aborts_on_load")
-            return abort if isinstance(abort, dict) else None
+    index = _files_by_path(inventory)
+    file_record = index.get(normalised)
+    if file_record is not None:
+        abort = file_record.get("module_aborts_on_load")
+        return abort if isinstance(abort, dict) else None
     return None
 
 
@@ -2337,21 +2338,17 @@ def build_excluded(
     hard-suppress.
 
     The returned dict carries ``line`` (constraint location, display-only)
-    and ``summary`` (e.g. ``"//go:build ignore"``). Path-keyed lookup, no
-    index build — mirrors :func:`module_aborts_on_load`.
+    and ``summary`` (e.g. ``"//go:build ignore"``). Path-keyed lookup via
+    :func:`_files_by_path` — O(1) instead of O(files) per call.
     """
     if not file_path:
         return None
     normalised = file_path.replace("\\", "/")
-    for file_record in inventory.get("files", []):
-        if not isinstance(file_record, dict):
-            continue
-        rec_path = file_record.get("path")
-        if not isinstance(rec_path, str):
-            continue
-        if rec_path.replace("\\", "/") == normalised:
-            rec = file_record.get("build_excluded")
-            return rec if isinstance(rec, dict) else None
+    index = _files_by_path(inventory)
+    file_record = index.get(normalised)
+    if file_record is not None:
+        rec = file_record.get("build_excluded")
+        return rec if isinstance(rec, dict) else None
     return None
 
 
@@ -2407,9 +2404,10 @@ def binary_call_edge_present(
     for item in candidates:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
-            return False
+            continue
         edges = meta.get("binary_oracle_edges")
-        return bool(edges)
+        if edges:
+            return True
     return False
 
 
@@ -2533,13 +2531,14 @@ def binary_oracle_absent(
             )]
         else:
             candidates = candidates[:1]
+    any_confirmed = False
     for item in candidates:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
-            return False
+            continue
         bo = meta.get("binary_oracle")
         if not isinstance(bo, dict):
-            return False
+            continue
         if bo.get("classification") != "absent":
             return False
         # Soundness gate (E1 stripped-binary fallback + adversarial
@@ -2555,8 +2554,8 @@ def binary_oracle_absent(
         if any(isinstance(b, dict) and b.get("tier") != "full"
                for b in per_binary):
             return False
-        return True
-    return False
+        any_confirmed = True
+    return any_confirmed
 
 
 def is_lexically_dead(
@@ -3092,7 +3091,8 @@ def _nested_function_keys(items: List[Dict[str, Any]]) -> "frozenset":
 
 def _item_is_entry(item: Dict[str, Any], language: str,
                    library_mode: bool = False,
-                   nested_keys: "frozenset" = frozenset()) -> bool:
+                   nested_keys: "frozenset" = frozenset(),
+                   header_api: "frozenset | None" = None) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
     separately off the adjacency index.)
@@ -3105,6 +3105,10 @@ def _item_is_entry(item: Dict[str, Any], language: str,
     one; those functions fall through to UNCERTAIN and the caller's
     existing 1-hop NOT_CALLED logic, leaving their behavior unchanged.
     ``main`` and framework dispatch are entries in every language.
+
+    When ``header_api`` is provided (a frozenset of function names declared
+    in public C/C++ headers), it replaces the non-static heuristic: only
+    functions declared in a public header are treated as entry points.
     """
     name = item.get("name") or ""
     if name == "main":
@@ -3155,12 +3159,8 @@ def _item_is_entry(item: Dict[str, Any], language: str,
         return False
     vis = (item.get("metadata") or {}).get("visibility")
     if p.visibility_entry == "non_static":
-        # External linkage = potential entry from another TU. NOTE: a
-        # ``static`` function whose ADDRESS is stored in a non-static /
-        # exported object (an ops/vtable dispatch table) is externally
-        # reachable too, but the call graph doesn't track address-taking —
-        # such functions can read NO_PATH_FROM_ENTRY. Surface-only keeps this
-        # from silencing them; tracking address-of is a substrate follow-up.
+        if header_api is not None:
+            return (item.get("name") or "") in header_api
         return vis != "static"
     if p.visibility_entry == "go_exported":
         return vis == "exported" or name[:1].isupper()
@@ -3188,25 +3188,33 @@ def _item_is_entry(item: Dict[str, Any], language: str,
 
 _ENTRY_SET_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset"]] = {}
 _ENTRY_SET_CACHE_MAX = 8
+_ENTRY_SET_CACHE_LOCK = threading.Lock()
 
 _FILES_BY_PATH_CACHE: Dict[int, Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]] = {}
 _FILES_BY_PATH_CACHE_MAX = 8
+_FILES_BY_PATH_CACHE_LOCK = threading.Lock()
+
+_ENTRY_REACHABLE_CACHE_MAX = 8
+_ENTRY_REACHABLE_CACHE_LOCK = threading.Lock()
 
 
 def _files_by_path(inventory: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Path-keyed view of ``inventory["files"]`` — O(1) lookup per file.
 
     Cached per-inventory by ``id``; identity-checked on read so a fresh
-    inventory at the same address rebuilds the index. Used by the
-    file-scoped helpers (``_file_language``, ``_file_python_exports``,
-    ``_file_masks_target``, ``_is_nested_function``) which were each
-    doing an O(files) linear scan per call — the entry-reachability
-    path walks the reverse closure and pays this cost per node.
+    inventory at the same address rebuilds the index. Thread-safe via
+    ``_FILES_BY_PATH_CACHE_LOCK`` (same pattern as ``_INDEX_CACHE_LOCK``).
+    Used by the file-scoped helpers (``_file_language``,
+    ``_file_python_exports``, ``_file_masks_target``,
+    ``_is_nested_function``) which were each doing an O(files) linear
+    scan per call — the entry-reachability path walks the reverse
+    closure and pays this cost per node.
     """
     inv_id = id(inventory)
-    cached = _FILES_BY_PATH_CACHE.get(inv_id)
-    if cached is not None and cached[0] is inventory:
-        return cached[1]
+    with _FILES_BY_PATH_CACHE_LOCK:
+        cached = _FILES_BY_PATH_CACHE.get(inv_id)
+        if cached is not None and cached[0] is inventory:
+            return cached[1]
     index: Dict[str, Dict[str, Any]] = {}
     for fr in inventory.get("files", []):
         if not isinstance(fr, dict):
@@ -3217,9 +3225,10 @@ def _files_by_path(inventory: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     # FIFO eviction (matches the sibling ``_ENTRY_SET_CACHE`` pattern):
     # drop the oldest entry when full, instead of wiping every entry —
     # keeps the cache useful under multi-inventory pipelines.
-    if len(_FILES_BY_PATH_CACHE) >= _FILES_BY_PATH_CACHE_MAX:
-        _FILES_BY_PATH_CACHE.pop(next(iter(_FILES_BY_PATH_CACHE)))
-    _FILES_BY_PATH_CACHE[inv_id] = (inventory, index)
+    with _FILES_BY_PATH_CACHE_LOCK:
+        if len(_FILES_BY_PATH_CACHE) >= _FILES_BY_PATH_CACHE_MAX:
+            _FILES_BY_PATH_CACHE.pop(next(iter(_FILES_BY_PATH_CACHE)))
+        _FILES_BY_PATH_CACHE[inv_id] = (inventory, index)
     return index
 
 
@@ -3227,13 +3236,13 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
     """Set of InternalFunction entry points (visibility/linkage model +
     framework dispatch). Cached per-inventory by identity."""
     inv_id = id(inventory)
-    cached = _ENTRY_SET_CACHE.get(inv_id)
-    if cached is not None and cached[0] is inventory:
-        return cached[1]
-    # Library mode (opt-in, set by build_inventory): treat exported/public
-    # symbols as entry points — for scanning a library whose API is reachable
-    # by consumers. Off by default (an app's dead public fns stay surfaced).
+    with _ENTRY_SET_CACHE_LOCK:
+        cached = _ENTRY_SET_CACHE.get(inv_id)
+        if cached is not None and cached[0] is inventory:
+            return cached[1]
     library_mode = bool(inventory.get("treat_exports_as_entries"))
+    header_api_raw = inventory.get("header_api")
+    header_api = frozenset(header_api_raw) if header_api_raw else None
     entries: Set[InternalFunction] = set()
     for fr in inventory.get("files", []):
         if not isinstance(fr, dict):
@@ -3241,10 +3250,6 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
         lang = fr.get("language") or ""
         path = fr.get("path") or ""
         items = fr.get("items", []) or []
-        # Compute the set of nested-closure (name, line_start) tuples
-        # ONCE per file — passed to _item_is_entry so the python_public
-        # branch can reject nested defs that the extractor flattened
-        # into top-level items.
         nested_keys = _nested_function_keys(items)
         for item in items:
             if not isinstance(item, dict):
@@ -3252,7 +3257,8 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
             if item.get("kind", "function") != "function":
                 continue
             if _item_is_entry(item, lang, library_mode=library_mode,
-                              nested_keys=nested_keys):
+                              nested_keys=nested_keys,
+                              header_api=header_api):
                 entries.add(InternalFunction(
                     file_path=path, name=item.get("name") or "",
                     line=int(item.get("line_start") or 0),
@@ -3261,9 +3267,10 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
     entries |= idx.framework_callable
     entries |= idx.framework_registered
     frozen = frozenset(entries)
-    _ENTRY_SET_CACHE[inv_id] = (inventory, frozen)
-    if len(_ENTRY_SET_CACHE) > _ENTRY_SET_CACHE_MAX:
-        _ENTRY_SET_CACHE.pop(next(iter(_ENTRY_SET_CACHE)), None)
+    with _ENTRY_SET_CACHE_LOCK:
+        _ENTRY_SET_CACHE[inv_id] = (inventory, frozen)
+        if len(_ENTRY_SET_CACHE) > _ENTRY_SET_CACHE_MAX:
+            _ENTRY_SET_CACHE.pop(next(iter(_ENTRY_SET_CACHE)), None)
     return frozen
 
 
@@ -3289,9 +3296,10 @@ def _entry_reachable_set(
     membership is O(1) and the prepass can query every function cheaply.
     """
     inv_id = id(inventory)
-    cached = _ENTRY_REACHABLE_CACHE.get(inv_id)
-    if cached is not None and cached[0] is inventory:
-        return cached[1], cached[2]
+    with _ENTRY_REACHABLE_CACHE_LOCK:
+        cached = _ENTRY_REACHABLE_CACHE.get(inv_id)
+        if cached is not None and cached[0] is inventory:
+            return cached[1], cached[2]
     entries = _entry_functions(inventory)
     fc = forward_closure(
         inventory, entries, max_depth=_ENTRY_CLOSURE_MAX_DEPTH,
@@ -3301,9 +3309,12 @@ def _entry_reachable_set(
         n for n in fc.nodes if isinstance(n, InternalFunction)
     )
     frozen = frozenset(reachable)
-    _ENTRY_REACHABLE_CACHE[inv_id] = (inventory, frozen, fc.truncated)
-    if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_SET_CACHE_MAX:
-        _ENTRY_REACHABLE_CACHE.pop(next(iter(_ENTRY_REACHABLE_CACHE)), None)
+    with _ENTRY_REACHABLE_CACHE_LOCK:
+        _ENTRY_REACHABLE_CACHE[inv_id] = (inventory, frozen, fc.truncated)
+        if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_REACHABLE_CACHE_MAX:
+            _ENTRY_REACHABLE_CACHE.pop(
+                next(iter(_ENTRY_REACHABLE_CACHE)), None,
+            )
     return frozen, fc.truncated
 
 
@@ -3528,6 +3539,8 @@ def entry_reachability(
                           target_module=target_module):
         return "uncertain"
     rc = reverse_closure(inventory, target, max_depth=max_depth)
+    if rc.truncated:
+        return "uncertain"
     for fn in rc.nodes:
         if isinstance(fn, InternalFunction) and _file_masks_target(
             inventory, fn.file_path, target.name,
@@ -4044,7 +4057,7 @@ def enclosing_function(
         # before our line. Same line_start-greatest-match
         # heuristic the substrate uses for nested-def
         # disambiguation.
-        if isinstance(line_end, int) and line_end >= 0 and line_end < line:
+        if isinstance(line_end, int) and line_end > 0 and line_end < line:
             continue
         if best is None or item["line_start"] > best["line_start"]:
             best = item

@@ -167,7 +167,7 @@ def discover_aliases(target: Path) -> DiscoveryResult:
                 continue
             headers_seen += 1
             try:
-                text = _join_continuations(entry.read_text(errors="replace"))
+                text = _join_continuations(entry.read_text(encoding="utf-8", errors="replace"))
             except OSError:
                 continue
             for m in _DEFINE_RE.finditer(text):
@@ -248,10 +248,9 @@ def _resolve_expansion(
             return token
         if token not in macros:
             return token
-        # Recurse, marking this token as visited so cycles bottom out.
-        visited.add(token)
         return _resolve_expansion(
-            macros[token], macros, depth=depth + 1, visited=visited,
+            macros[token], macros, depth=depth + 1,
+            visited=visited | {token},
         )
 
     return _TOKEN_NAME_RE.sub(_replace_token, expansion)
@@ -305,7 +304,7 @@ def _count_usage(target: Path, names: Set[str]) -> Dict[str, int]:
 
     for entry in _iter_source_files(target):
         try:
-            text = entry.read_text(errors="replace")
+            text = entry.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for line in text.split("\n"):

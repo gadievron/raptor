@@ -2,16 +2,11 @@
 
 A single line emitted at run START — operator gets confirmation
 RAPTOR understood the target shape BEFORE any LLM cost or
-analysis time burns. Pre-fix the start surfaced only the
-catalog cost estimate ("Expected: $25-$50, 40-75 min …") which
-told the operator NOTHING about whether RAPTOR detected the
-right languages, build system, target type. The richer line
-closes that loop.
+analysis time burns.
 
 Format::
 
-    Analyzing C++ (95%, 47k LOC), autotools, c.userspace-daemon —
-    $25-$50, 40-75 min estimated
+    Target: C++ (95%, 47k LOC), autotools, c.userspace-daemon
 
 * Primary language + share + LOC (the dominant signal — answers
   "did RAPTOR think this is C++?")
@@ -19,8 +14,6 @@ Format::
   manifest?")
 * Catalog target type (answers "did the catalog match? was it
   the right type?")
-* Cost + time estimate (the existing surface, preserved as a
-  tail clause so the budget gate's information stays surfaced)
 
 Any missing piece is omitted rather than rendered as "unknown" —
 keep the line compact when signals are sparse, since the
@@ -73,25 +66,44 @@ def format_start_line(target_path: Path) -> Optional[str]:
     if shape.target_type and not shape.target_type.endswith("generic"):
         parts.append(shape.target_type)
 
-    head_str = ", ".join(parts) if parts else None
+    if not parts:
+        return None
 
-    # Cost estimate — preserve the existing format so the budget
-    # gate's "Expected" framing is recognisable; "estimated" tail
-    # word ties it to the new richer head.
-    estimate_str = _format_compact_estimate(target_path)
+    line = f"Target: {', '.join(parts)}"
 
-    # "Target:" not "Analyzing": this line emits at run start,
-    # BEFORE any tool actually runs. "Analyzing" implies the
-    # LLM is already burning tokens which is misleading; "Target:"
-    # accurately frames it as the operator-facing shape RAPTOR
-    # detected before kicking off the work.
-    if head_str and estimate_str:
-        return f"Target: {head_str} — {estimate_str} estimated"
-    if head_str:
-        return f"Target: {head_str}"
-    if estimate_str:
-        return f"Expected: {estimate_str}"
-    return None
+    # Scorecard-derived cost/time estimate (when data exists).
+    est_str = _scorecard_estimate_clause(target_path, shape.target_type)
+    if est_str:
+        line = f"{line}  {est_str}"
+
+    return line
+
+
+def _scorecard_estimate_clause(
+    target_path: Path, target_type: Optional[str],
+) -> Optional[str]:
+    """Return a compact estimate string from scorecard data, or None."""
+    try:
+        from core.run.target_types import load as _load_catalog
+        from core.run.estimator import estimate_from_scorecard, format_estimate
+        from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+
+        entry = _load_catalog(target_path)
+        n_findings = entry.typical_findings_count if entry else 0
+        if n_findings <= 0:
+            return None
+
+        model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+        if not model:
+            return None
+
+        est = estimate_from_scorecard(model, n_findings)
+        if est is None:
+            return None
+
+        return format_estimate(est)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _short_loc(n: int) -> str:
@@ -102,26 +114,6 @@ def _short_loc(n: int) -> str:
         return f"{round(n / 1_000)}k"
     return str(n)
 
-
-def _format_compact_estimate(target_path: Path) -> Optional[str]:
-    """Compact "$25-$50, 40-75 min" form — drops the "Expected:"
-    prefix + the "(target type: …)" suffix that
-    ``core.run.estimator.format_estimate`` adds (we already
-    name the target type in the head clause). None on
-    estimator failure / no catalog match.
-    """
-    try:
-        from core.run.estimator import estimate_run, format_estimate
-        est = estimate_run(target_path)
-        if est is None:
-            return None
-        full = format_estimate(est)
-        if not full:
-            return None
-        full = full.removeprefix("Expected: ")
-        return full.split(" (target type:", 1)[0]
-    except Exception:  # noqa: BLE001
-        return None
 
 
 __all__ = ["format_start_line"]

@@ -184,7 +184,7 @@ def _parse_input_format(
 
 
 def _parse_sarif(finding: Mapping[str, Any]) -> Union[_ParsedFinding, ResolutionFailure]:
-    rule_tags = finding.get("properties", {}).get("tags", [])
+    rule_tags = (finding.get("properties") or {}).get("tags") or []
     cwe = ""
     from core.cve.cwe import format_cwe
     for tag in rule_tags:
@@ -210,11 +210,11 @@ def _parse_sarif(finding: Mapping[str, Any]) -> Union[_ParsedFinding, Resolution
 
     src_phys = _sarif_physical_location(locations[0])
     sink_phys = _sarif_physical_location(locations[-1])
-    src_region = src_phys.get("region", {})
-    sink_region = sink_phys.get("region", {})
+    src_region = src_phys.get("region") or {}
+    sink_region = sink_phys.get("region") or {}
     file = (
-        src_phys.get("artifactLocation", {}).get("uri", "")
-        or sink_phys.get("artifactLocation", {}).get("uri", "")
+        (src_phys.get("artifactLocation") or {}).get("uri", "")
+        or (sink_phys.get("artifactLocation") or {}).get("uri", "")
     )
     if not file:
         return ResolutionFailure(reason="sarif: no artifactLocation.uri")
@@ -241,14 +241,14 @@ def _sarif_physical_location(loc_entry: Mapping[str, Any]) -> Mapping[str, Any]:
     """SARIF threadFlow locations wrap ``physicalLocation`` inside
     either a top-level ``location`` field or directly."""
     inner = loc_entry.get("location", loc_entry)
-    return inner.get("physicalLocation", {})
+    return inner.get("physicalLocation") or {}
 
 
 def _parse_semgrep(
     finding: Mapping[str, Any],
 ) -> Union[_ParsedFinding, ResolutionFailure]:
-    extra = finding.get("extra", {})
-    cwes = extra.get("metadata", {}).get("cwe", [])
+    extra = finding.get("extra") or {}
+    cwes = (extra.get("metadata") or {}).get("cwe") or []
     cwe = ""
     if isinstance(cwes, str):
         cwes = [cwes]
@@ -268,17 +268,17 @@ def _parse_semgrep(
     if not file:
         return ResolutionFailure(reason="semgrep: no path")
 
-    trace = extra.get("dataflow_trace", {})
+    trace = extra.get("dataflow_trace") or {}
     src_line = _semgrep_extract_line(trace.get("taint_source"))
-    if not src_line:
-        src_line = finding.get("start", {}).get("line", 0)
+    if src_line is None:
+        src_line = (finding.get("start") or {}).get("line", 0)
     sink_line = _semgrep_extract_line(trace.get("taint_sink"))
-    if not sink_line:
-        sink_line = finding.get("end", {}).get("line", 0) or finding.get(
-            "start", {},
+    if sink_line is None:
+        sink_line = (finding.get("end") or {}).get("line", 0) or (
+            finding.get("start") or {}
         ).get("line", 0)
 
-    if not src_line or not sink_line:
+    if src_line is None or sink_line is None:
         return ResolutionFailure(
             reason="semgrep: missing source or sink line",
         )
@@ -303,12 +303,12 @@ def _semgrep_extract_line(trace: Any) -> Optional[int]:
     if isinstance(trace, dict):
         loc = trace.get("location", {})
         line = loc.get("start", {}).get("line")
-        if line:
+        if line is not None:
             return line
         # Some semgrep shapes have the line at the top of the trace
         start = trace.get("start", {})
         line = start.get("line") if isinstance(start, dict) else None
-        if line:
+        if line is not None:
             return line
     if isinstance(trace, list) and trace:
         return _semgrep_extract_line(trace[0])
@@ -337,9 +337,9 @@ def _detect_language(file_path: str) -> str:
         return "python"
     if p.endswith(".java"):
         return "java"
-    if p.endswith(".jsx") or p.endswith(".js"):
+    if p.endswith((".jsx", ".js")):
         return "javascript"
-    if p.endswith(".tsx") or p.endswith(".ts"):
+    if p.endswith((".tsx", ".ts")):
         return "typescript"
     if p.endswith((".c", ".h")):
         return "c"

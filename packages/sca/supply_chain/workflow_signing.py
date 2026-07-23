@@ -229,13 +229,14 @@ def _git_log_signatures(
     """Return ``[(sha, sig_status, author_name, author_email, subject), ...]``
     for the most-recent ``_MAX_COMMITS_WALKED`` commits touching
     ``paths``. Empty list on any git failure."""
-    cmd = [
-        "git", "-C", str(target), "log",
+    from core.git.clone import safe_git_command
+    cmd = safe_git_command(
+        "-C", str(target), "log",
         f"--max-count={_MAX_COMMITS_WALKED}",
         "--no-merges",
         "--format=%H|%G?|%an|%ae|%s",
         "--",
-    ]
+    )
     cmd.extend(paths)
     try:
         from core.config import RaptorConfig

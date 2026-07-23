@@ -137,7 +137,7 @@ def resolve_template(name: str) -> Path:
     try:
         candidate.relative_to(root)
     except ValueError:
-        raise ValueError(f"template path escaped templates dir: {name!r}")
+        raise ValueError(f"template path escaped templates dir: {name!r}") from None
     if not candidate.is_file():
         raise FileNotFoundError(f"template not found: {name}")
     return candidate

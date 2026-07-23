@@ -303,8 +303,7 @@ def run_sandboxed(cmd: List[str], *,
         child_env = dict(env)
         if strict_env:
             from core.config import RaptorConfig
-            _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
-            child_env = {k: v for k, v in child_env.items() if k not in _dangerous}
+            child_env = {k: v for k, v in child_env.items() if k not in RaptorConfig.DANGEROUS_ENV_VARS}
     else:
         from core.config import RaptorConfig
         child_env = RaptorConfig.get_safe_env()

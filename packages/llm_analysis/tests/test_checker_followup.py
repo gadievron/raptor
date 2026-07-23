@@ -2,22 +2,24 @@
 
 Stubbed LLM + stubbed checker_synthesis so tests don't need an LLM
 provider or scanner binaries. The point is to verify the wiring:
-seed-from-vuln, function-name resolution, annotation emission,
-triage-aware filtering, and best-effort exception handling.
+seed-from-vuln, function-name resolution, checker-matches.jsonl
+emission, triage-aware filtering, and best-effort exception handling.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
 from packages.llm_analysis.checker_followup import (
-    _build_variant_body,
+    CHECKER_MATCHES_FILE,
     _llm_callable_from_client,
     _resolve_match_function,
     _seed_from_vuln,
-    emit_variant_annotations_for_finding,
+    emit_variant_matches_for_finding,
 )
 
 
@@ -41,8 +43,6 @@ class StubVuln:
 
 
 class StubLLMClient:
-    """Minimal stub matching ``LLMClient.generate_structured`` signature."""
-
     def __init__(self, responses=None):
         self._responses = list(responses or [])
 
@@ -56,8 +56,6 @@ class StubLLMClient:
 
 
 class _NoLLMClient:
-    """A client that doesn't expose ``generate_structured`` — e.g.
-    the prep-only ClaudeCodeProvider."""
     pass
 
 
@@ -77,6 +75,14 @@ def _checklist(file_path="src/v.py", name="variant_fn",
             }
         ]
     }
+
+
+def _load_matches(out_dir: Path) -> list[dict]:
+    path = out_dir / CHECKER_MATCHES_FILE
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    return [json.loads(line) for line in lines]
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +126,26 @@ class TestSeedFromVuln:
         seed = _seed_from_vuln(v)
         assert "scanner msg" in seed.reasoning
 
+    def test_absolute_path_normalised_to_relative(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        v = StubVuln(
+            file_path=str(repo / "src" / "auth.py"),
+            metadata={"name": "login"},
+        )
+        seed = _seed_from_vuln(v, repo_root=repo)
+        assert seed is not None
+        assert seed.file == "src/auth.py"
+
+    def test_absolute_path_outside_repo_returns_none(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        v = StubVuln(
+            file_path="/elsewhere/auth.py",
+            metadata={"name": "login"},
+        )
+        assert _seed_from_vuln(v, repo_root=repo) is None
+
 
 class TestLLMCallableFromClient:
     def test_returns_callable_for_real_client(self):
@@ -136,7 +162,6 @@ class TestLLMCallableFromClient:
     def test_swallows_llm_exception(self):
         c = StubLLMClient(responses=[RuntimeError("transport error")])
         callable = _llm_callable_from_client(c)
-        # Returns None when the underlying client raises.
         assert callable("p", {}, "s") is None
 
 
@@ -164,16 +189,14 @@ class TestResolveMatchFunction:
 
 
 # ---------------------------------------------------------------------------
-# emit_variant_annotations_for_finding — full pipeline
+# emit_variant_matches_for_finding — full pipeline
 # ---------------------------------------------------------------------------
 
 
 def _patch_synth(monkeypatch, *, rule, matches, triage=()):
-    """Replace ``synthesise_and_run`` with a fixture that returns a
-    canned ``CheckerSynthesisResult``."""
-    from packages.checker_synthesis import (
-        CheckerSynthesisResult,
-    )
+    """Replace ``synthesise_and_run`` and ``synthesise_with_refinement``
+    with a fixture that returns a canned ``CheckerSynthesisResult``."""
+    from packages.checker_synthesis import CheckerSynthesisResult
 
     def _fake(*args, **kwargs):
         return CheckerSynthesisResult(
@@ -184,30 +207,25 @@ def _patch_synth(monkeypatch, *, rule, matches, triage=()):
             positive_control=True,
         )
 
-    # synthesise_and_run is imported lazily inside the function.
-    # Patch the symbol that the helper imports.
     import packages.checker_synthesis as cs_mod
     monkeypatch.setattr(cs_mod, "synthesise_and_run", _fake)
+    monkeypatch.setattr(cs_mod, "synthesise_with_refinement", _fake)
 
 
-class TestEmitVariantAnnotations:
-    def test_emits_one_annotation_per_match(self, tmp_path, monkeypatch):
+class TestEmitVariantMatches:
+    def test_emits_one_match_record(self, tmp_path, monkeypatch):
         from packages.checker_synthesis import Match, SynthesisedRule
-        from core.annotations import iter_all_annotations
 
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(
             engine="semgrep", rule_id="auth.0", body="r",
             rationale="catches f-string SQL into execute",
         )
-        # Variant in another function in another file.
         matches = [Match(file="src/v.py", line=5)]
-
-        # Plant the inventory entry that resolves the match's function.
         ck = _checklist()
         _patch_synth(monkeypatch, rule=rule, matches=matches)
 
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v,
             out_dir=tmp_path,
             checklist=ck,
@@ -216,24 +234,22 @@ class TestEmitVariantAnnotations:
         )
         assert n == 1
 
-        anns = list(iter_all_annotations(tmp_path / "annotations"))
-        assert len(anns) == 1
-        ann = anns[0]
-        assert ann.function == "variant_fn"
-        assert ann.metadata["status"] == "suspicious"
-        assert ann.metadata["source"] == "llm"
-        assert ann.metadata["variant_of_function"] == "login"
-        assert ann.metadata["variant_of_file"] == "src/auth.py"
-        assert ann.metadata["rule_id"] == "auth.0"
-        assert ann.metadata["engine"] == "semgrep"
-        assert ann.metadata["cwe"] == "CWE-89"
-        assert "Candidate variant" in ann.body
+        records = _load_matches(tmp_path)
+        assert len(records) == 1
+        rec = records[0]
+        assert rec["file"] == "src/v.py"
+        assert rec["line"] == 5
+        assert rec["function"] == "variant_fn"
+        assert rec["seed_file"] == "src/auth.py"
+        assert rec["seed_function"] == "login"
+        assert rec["rule_id"] == "auth.0"
+        assert rec["engine"] == "semgrep"
+        assert rec["cwe"] == "CWE-89"
 
     def test_triage_filters_false_positives(self, tmp_path, monkeypatch):
         from packages.checker_synthesis import (
             Match, MatchTriage, SynthesisedRule,
         )
-        from core.annotations import iter_all_annotations
 
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(
@@ -244,9 +260,9 @@ class TestEmitVariantAnnotations:
         matches = [m_variant, m_fp]
         triage = [
             MatchTriage(match=m_variant, status="variant",
-                         reasoning="same shape"),
+                        reasoning="same shape"),
             MatchTriage(match=m_fp, status="false_positive",
-                         reasoning="different sink"),
+                        reasoning="different sink"),
         ]
         ck = {
             "files": [
@@ -264,18 +280,17 @@ class TestEmitVariantAnnotations:
         _patch_synth(monkeypatch, rule=rule,
                      matches=matches, triage=triage)
 
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v,
             out_dir=tmp_path,
             checklist=ck,
             repo_root=tmp_path,
             llm_client=StubLLMClient(),
         )
-        # variant kept, false_positive dropped.
         assert n == 1
-        anns = list(iter_all_annotations(tmp_path / "annotations"))
-        assert len(anns) == 1
-        assert anns[0].function == "variant_fn"
+        records = _load_matches(tmp_path)
+        assert len(records) == 1
+        assert records[0]["function"] == "variant_fn"
 
     def test_triage_uncertain_kept(self, tmp_path, monkeypatch):
         from packages.checker_synthesis import (
@@ -287,7 +302,7 @@ class TestEmitVariantAnnotations:
         triage = [MatchTriage(match=m, status="uncertain", reasoning="?")]
         _patch_synth(monkeypatch, rule=rule,
                      matches=[m], triage=triage)
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
@@ -303,15 +318,15 @@ class TestEmitVariantAnnotations:
         triage = [MatchTriage(match=m, status="skipped", reasoning="budget")]
         _patch_synth(monkeypatch, rule=rule,
                      matches=[m], triage=triage)
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
         assert n == 0
 
     def test_returns_zero_when_no_seed(self, tmp_path):
-        v = StubVuln(metadata={})  # no function name
-        n = emit_variant_annotations_for_finding(
+        v = StubVuln(metadata={})
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
@@ -319,7 +334,7 @@ class TestEmitVariantAnnotations:
 
     def test_returns_zero_when_no_llm(self, tmp_path):
         v = StubVuln(metadata={"name": "login"})
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=_NoLLMClient(),
         )
@@ -328,7 +343,7 @@ class TestEmitVariantAnnotations:
     def test_returns_zero_when_no_rule(self, tmp_path, monkeypatch):
         v = StubVuln(metadata={"name": "login"})
         _patch_synth(monkeypatch, rule=None, matches=[])
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
@@ -339,28 +354,30 @@ class TestEmitVariantAnnotations:
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(engine="semgrep", rule_id="x", body="r")
         _patch_synth(monkeypatch, rule=rule, matches=[])
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
         assert n == 0
 
-    def test_returns_zero_when_match_has_no_inventory_entry(
+    def test_match_without_inventory_still_recorded(
         self, tmp_path, monkeypatch,
     ):
-        """Match in a file that's not in the checklist — function name
-        unresolvable, annotation skipped silently."""
+        """Match in a file not in the checklist — function is None
+        but the match is still recorded in JSONL (function is optional
+        context, not a gate for JSONL unlike annotations)."""
         from packages.checker_synthesis import Match, SynthesisedRule
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(engine="semgrep", rule_id="x", body="r")
-        # Match in an unrelated file.
         m = Match(file="src/not_in_inventory.py", line=5)
         _patch_synth(monkeypatch, rule=rule, matches=[m])
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
-        assert n == 0
+        assert n == 1
+        records = _load_matches(tmp_path)
+        assert records[0]["function"] is None
 
     def test_synthesis_exception_swallowed(self, tmp_path, monkeypatch):
         v = StubVuln(metadata={"name": "login"})
@@ -370,42 +387,155 @@ class TestEmitVariantAnnotations:
             raise RuntimeError("simulated synth failure")
 
         monkeypatch.setattr(cs_mod, "synthesise_and_run", boom)
-        # Must not raise.
-        n = emit_variant_annotations_for_finding(
+        monkeypatch.setattr(cs_mod, "synthesise_with_refinement", boom)
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
         assert n == 0
 
+    def test_refine_true_calls_refinement(self, tmp_path, monkeypatch):
+        """refine=True must route to synthesise_with_refinement."""
+        from packages.checker_synthesis import (
+            CheckerSynthesisResult, SynthesisedRule, Match,
+        )
+        import packages.checker_synthesis as cs_mod
+
+        called = {"and_run": False, "with_refinement": False}
+
+        def _result(seed):
+            return CheckerSynthesisResult(
+                seed=seed,
+                rule=SynthesisedRule(
+                    engine="semgrep", rule_id="t.0", body="r",
+                ),
+                matches=[Match(file="src/v.py", line=5)],
+                positive_control=True,
+            )
+
+        def _track_and_run(*a, **kw):
+            called["and_run"] = True
+            return _result(kw.get("seed") or a[0])
+
+        def _track_with_refinement(*a, **kw):
+            called["with_refinement"] = True
+            return _result(kw.get("seed") or a[0])
+
+        monkeypatch.setattr(cs_mod, "synthesise_and_run", _track_and_run)
+        monkeypatch.setattr(
+            cs_mod, "synthesise_with_refinement", _track_with_refinement,
+        )
+
+        v = StubVuln(metadata={"name": "login"})
+        emit_variant_matches_for_finding(
+            v, out_dir=tmp_path, checklist=_checklist(),
+            repo_root=tmp_path, llm_client=StubLLMClient(),
+            refine=True,
+        )
+        assert called["with_refinement"], "refine=True did not call refinement"
+        assert not called["and_run"], "refine=True should not call single-shot"
+
+    def test_refine_false_calls_single_shot(self, tmp_path, monkeypatch):
+        """refine=False must route to synthesise_and_run."""
+        from packages.checker_synthesis import (
+            CheckerSynthesisResult, SynthesisedRule, Match,
+        )
+        import packages.checker_synthesis as cs_mod
+
+        called = {"and_run": False, "with_refinement": False}
+
+        def _result(seed):
+            return CheckerSynthesisResult(
+                seed=seed,
+                rule=SynthesisedRule(
+                    engine="semgrep", rule_id="t.0", body="r",
+                ),
+                matches=[Match(file="src/v.py", line=5)],
+                positive_control=True,
+            )
+
+        def _track_and_run(*a, **kw):
+            called["and_run"] = True
+            return _result(kw.get("seed") or a[0])
+
+        def _track_with_refinement(*a, **kw):
+            called["with_refinement"] = True
+            return _result(kw.get("seed") or a[0])
+
+        monkeypatch.setattr(cs_mod, "synthesise_and_run", _track_and_run)
+        monkeypatch.setattr(
+            cs_mod, "synthesise_with_refinement", _track_with_refinement,
+        )
+
+        v = StubVuln(metadata={"name": "login"})
+        emit_variant_matches_for_finding(
+            v, out_dir=tmp_path, checklist=_checklist(),
+            repo_root=tmp_path, llm_client=StubLLMClient(),
+            refine=False,
+        )
+        assert called["and_run"], "refine=False did not call single-shot"
+        assert not called["with_refinement"], \
+            "refine=False should not call refinement"
+
+    def test_output_is_valid_jsonl(self, tmp_path, monkeypatch):
+        from packages.checker_synthesis import Match, SynthesisedRule
+        v = StubVuln(metadata={"name": "login"})
+        rule = SynthesisedRule(
+            engine="semgrep", rule_id="auth.0", body="r",
+            rationale="test rationale",
+        )
+        matches = [
+            Match(file="src/v.py", line=5, snippet="code1"),
+            Match(file="src/v.py", line=8, snippet="code2"),
+        ]
+        ck = _checklist()
+        _patch_synth(monkeypatch, rule=rule, matches=matches)
+        n = emit_variant_matches_for_finding(
+            v, out_dir=tmp_path, checklist=ck,
+            repo_root=tmp_path, llm_client=StubLLMClient(),
+        )
+        assert n == 2
+        path = tmp_path / CHECKER_MATCHES_FILE
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 2
+        for line in lines:
+            data = json.loads(line)
+            assert "file" in data
+            assert "rule_id" in data
+            assert data["rationale"] == "test rationale"
+
 
 # ---------------------------------------------------------------------------
-# Adversarial: hostile inputs in the seed → annotation pipeline
+# Adversarial: hostile inputs in the seed → JSONL pipeline
 # ---------------------------------------------------------------------------
 
 
 class TestAdversarial:
-    def test_hostile_seed_function_sanitised_in_metadata(
+    def test_hostile_seed_function_produces_valid_jsonl(
         self, tmp_path, monkeypatch,
     ):
-        """A vuln whose function name contains HTML-comment delimiters
-        would corrupt the on-disk metadata format if not sanitised. The
-        sanitiser strips ``-->`` from metadata values."""
+        """A vuln whose function name contains special chars must not
+        corrupt the JSONL line structure. JSON escaping handles this
+        natively (unlike the old annotation metadata format)."""
         from packages.checker_synthesis import Match, SynthesisedRule
         v = StubVuln(metadata={"name": "login-->evil"})
         rule = SynthesisedRule(engine="semgrep", rule_id="x", body="r")
         _patch_synth(monkeypatch, rule=rule,
                      matches=[Match(file="src/v.py", line=5)])
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
         assert n == 1
-        from core.annotations import iter_all_annotations
-        ann = list(iter_all_annotations(tmp_path / "annotations"))[0]
-        # ``-->`` stripped from metadata value.
-        assert "-->" not in ann.metadata["variant_of_function"]
+        path = tmp_path / CHECKER_MATCHES_FILE
+        lines = path.read_text().strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["seed_function"] == "login-->evil"
 
-    def test_hostile_rule_id_sanitised(self, tmp_path, monkeypatch):
+    def test_hostile_rule_id_produces_valid_jsonl(self, tmp_path, monkeypatch):
+        """Control characters in rule_id must not break JSONL line
+        structure — json.dumps escapes them during serialisation."""
         from packages.checker_synthesis import Match, SynthesisedRule
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(
@@ -415,55 +545,13 @@ class TestAdversarial:
         )
         _patch_synth(monkeypatch, rule=rule,
                      matches=[Match(file="src/v.py", line=5)])
-        n = emit_variant_annotations_for_finding(
+        n = emit_variant_matches_for_finding(
             v, out_dir=tmp_path, checklist=_checklist(),
             repo_root=tmp_path, llm_client=StubLLMClient(),
         )
         assert n == 1
-        from core.annotations import iter_all_annotations
-        ann = list(iter_all_annotations(tmp_path / "annotations"))[0]
-        assert "\n" not in ann.metadata["rule_id"]
-        assert "\x00" not in ann.metadata["rule_id"]
-
-
-# ---------------------------------------------------------------------------
-# Body composition
-# ---------------------------------------------------------------------------
-
-
-class TestBuildVariantBody:
-    def test_includes_seed_location(self):
-        from packages.checker_synthesis import (
-            Match, SeedBug, SynthesisedRule,
-        )
-        seed = SeedBug(
-            file="src/auth.py", function="login",
-            line_start=10, line_end=20,
-            cwe="CWE-89", reasoning="r",
-        )
-        rule = SynthesisedRule(
-            engine="semgrep", rule_id="auth.0", body="...",
-            rationale="rationale here",
-        )
-        m = Match(file="src/v.py", line=5,
-                   snippet="cursor.execute(f'...')")
-        body = _build_variant_body(seed, rule, m)
-        assert "src/auth.py:10-20" in body
-        assert "login" in body
-        assert "rationale here" in body
-        assert "CWE-89" in body
-        assert "auth.0" in body
-        assert "cursor.execute" in body
-
-    def test_no_snippet_no_snippet_section(self):
-        from packages.checker_synthesis import (
-            Match, SeedBug, SynthesisedRule,
-        )
-        seed = SeedBug(
-            file="x", function="f", line_start=1, line_end=2,
-            cwe="", reasoning="",
-        )
-        rule = SynthesisedRule(engine="semgrep", rule_id="r", body="b")
-        m = Match(file="src/v.py", line=5)  # no snippet
-        body = _build_variant_body(seed, rule, m)
-        assert "Match snippet" not in body
+        path = tmp_path / CHECKER_MATCHES_FILE
+        lines = path.read_text().strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["rule_id"] == "hostile\nrule\x00id"

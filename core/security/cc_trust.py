@@ -365,9 +365,7 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                 # nor SAGE's (SAGE_URL could redirect to a poisoned memory
                 # server, SAGE_ENABLED could silently turn on persistent
                 # memory the user didn't intend, etc.).
-                if (key_upper in dangerous_upper
-                        or key_upper.startswith("RAPTOR_")
-                        or key_upper.startswith("SAGE_")):
+                if (key_upper in dangerous_upper or key_upper.startswith(("RAPTOR_", "SAGE_"))):
                     k = _truncate(key_str, limit=40)
                     fs.findings.append(Finding(f"env {k}", _truncate(str(env_val)), True))
     except Exception:
@@ -515,6 +513,8 @@ def _render_scan_report(target: Path, scans, any_blocking: bool,
         except ValueError:
             rel = fs.path
         print(f"  {_safe(str(rel))}")
+        if not fs.findings:
+            continue
         label_w = max(len(f.label) for f in fs.findings) + 2
         for f in fs.findings:
             print(f"    {f.label:<{label_w}}{f.value}")

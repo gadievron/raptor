@@ -319,6 +319,118 @@ class CodeQLAdapter(ToolAdapter):
             summary=summary,
         )
 
+    def run_prebuilt_queries_batch(
+        self,
+        query_paths: List[Path],
+        *,
+        timeout: int = 600,
+        env: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, ToolEvidence]:
+        """Run multiple prebuilt queries in a single JVM invocation.
+
+        Returns a dict keyed by str(query_path) → ToolEvidence.
+        Saves ~4-6s of JVM+DB overhead per additional query beyond the first.
+        """
+        if not query_paths:
+            return {}
+
+        unique_paths = list(dict.fromkeys(str(p) for p in query_paths))
+
+        if not self._codeql_bin or not self._database_path or not self._database_path.exists():
+            err = "codeql/database unavailable"
+            return {
+                qp: ToolEvidence(tool=self.name, rule=qp, success=False, error=err)
+                for qp in unique_paths
+            }
+
+        if env is None:
+            from core.config import RaptorConfig
+            env = RaptorConfig.get_safe_env()
+
+        runner = (
+            make_sandbox_runner(
+                target=self._database_path,
+                output=self._database_path,
+            )
+            if self._sandbox else subprocess.run
+        )
+
+        for qp in unique_paths:
+            _ensure_pack_installed(Path(qp), self._codeql_bin, runner, env)
+
+        try:
+            with TemporaryDirectory(prefix="codeql_batch_") as tmp:
+                sarif_path = Path(tmp) / "result.sarif"
+                cmd = [
+                    self._codeql_bin,
+                    "database", "analyze",
+                    str(self._database_path),
+                    *unique_paths,
+                    "--format=sarif-latest",
+                    f"--output={sarif_path}",
+                    "--no-rerun",
+                ]
+                CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
+                try:
+                    proc = runner(
+                        cmd, capture_output=True, text=True,
+                        timeout=timeout, env=env,
+                    )
+                except subprocess.TimeoutExpired:
+                    return {
+                        qp: ToolEvidence(
+                            tool=self.name, rule=qp, success=False,
+                            error=f"codeql batch timeout after {timeout}s",
+                        )
+                        for qp in unique_paths
+                    }
+                except OSError as e:
+                    return {
+                        qp: ToolEvidence(
+                            tool=self.name, rule=qp, success=False,
+                            error=f"failed to invoke codeql: {e}",
+                        )
+                        for qp in unique_paths
+                    }
+
+                if proc.returncode != 0 or not sarif_path.exists():
+                    err = (proc.stderr or proc.stdout or "").strip()
+                    return {
+                        qp: ToolEvidence(
+                            tool=self.name, rule=qp, success=False,
+                            error=err[:500] or f"codeql returned {proc.returncode}",
+                        )
+                        for qp in unique_paths
+                    }
+
+                all_matches = _parse_sarif(sarif_path)
+        except OSError as e:
+            return {
+                qp: ToolEvidence(
+                    tool=self.name, rule=qp, success=False,
+                    error=f"workspace setup failed: {e}",
+                )
+                for qp in unique_paths
+            }
+
+        results: Dict[str, ToolEvidence] = {}
+        for qp in unique_paths:
+            n = len(all_matches)
+            files = sorted({m["file"] for m in all_matches if m.get("file")})
+            if n:
+                summary = f"{n} match{'es' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}"
+            else:
+                summary = "no matches"
+            results[qp] = ToolEvidence(
+                tool=self.name,
+                rule=qp,
+                success=True,
+                matches=all_matches,
+                summary=summary,
+            )
+
+        return results
+
     def run(
         self,
         rule: str,
@@ -377,8 +489,8 @@ class CodeQLAdapter(ToolAdapter):
                 query_file = pack_dir / "query.ql"
                 qlpack = pack_dir / "qlpack.yml"
 
-                query_file.write_text(rule)
-                qlpack.write_text(_qlpack_yaml(rule))
+                query_file.write_text(rule, encoding="utf-8")
+                qlpack.write_text(_qlpack_yaml(rule), encoding="utf-8")
 
                 # See note in run_prebuilt_query — `output=` is
                 # required so codeql can write to its IMB cache

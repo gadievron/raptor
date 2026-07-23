@@ -90,7 +90,17 @@ class DispatchTask:
         """System prompt for this task."""
         return None
 
-    def process_result(self, item: Dict[str, Any], result: DispatchResult) -> Dict[str, Any]:
+    def budget_tokens_for_model(self, model) -> int:
+        """Context budget for user content (prompt) given a model.
+
+        Returns 0 (no shedding) by default.  Subclasses that use
+        prompt-budget shedding override this.
+        """
+        return 0
+
+    def process_result(
+        self, item: Dict[str, Any], result: DispatchResult,
+    ) -> Dict[str, Any]:
         """Post-process a single result. Default: return result dict with metadata."""
         out = dict(result.result)
         if result.cost > 0:
@@ -116,7 +126,10 @@ class DispatchTask:
         return out
 
     def finalize(self, results: List[Dict], prior_results: dict) -> List[Dict]:
-        """Post-dispatch processing. Default: no-op. Override for consensus verdicts, etc."""
+        """Post-dispatch processing. Default: no-op.
+
+        Override for consensus verdicts, etc.
+        """
         return results
 
     def get_item_id(self, item: Dict[str, Any]) -> str:
@@ -227,7 +240,8 @@ def dispatch_task(
     Args:
         task: DispatchTask subclass defining what to dispatch.
         items: Raw items (findings, groups, etc) — task.select_items filters them.
-        dispatch_fn: Callable(prompt, schema, system_prompt, temperature, model) → DispatchResult.
+        dispatch_fn: Callable(prompt, schema, system_prompt,
+            temperature, model) -> DispatchResult.
         role_resolution: Model role resolution dict from resolve_model_roles().
         prior_results: Results from earlier tasks, keyed by item ID.
         cost_tracker: CostTracker for budget enforcement.
@@ -275,23 +289,22 @@ def dispatch_task(
         # (CC path) — should_skip_phase handles unknown.
         named_models = [m for m in models if m is not None]
         if named_models:
-            # cost_tracker.estimate_call_cost returns USD per call
-            # for the named model; pick the model with the highest
-            # estimated rate.
             try:
                 model_name = max(
                     named_models,
-                    key=lambda m: cost_tracker.estimate_call_cost(m.model_name),
+                    key=lambda m: cost_tracker.estimate_cost(
+                        1, model_name=m.model_name,
+                    ),
                 ).model_name
             except (AttributeError, TypeError):
-                # Older cost trackers without estimate_call_cost
-                # — fall back to the primary's rate. Same behaviour
-                # as pre-fix for that case.
                 model_name = named_models[0].model_name
         else:
             model_name = ""
         total_calls = len(selected) * len(models)
-        if cost_tracker.should_skip_phase(total_calls, model_name, task.budget_cutoff, task.name):
+        skip = cost_tracker.should_skip_phase(
+            total_calls, model_name, task.budget_cutoff, task.name,
+        )
+        if skip:
             print(f"\n  {task.name}: skipped ({len(selected)} items) — "
                   f"budget > {int(task.budget_cutoff * 100)}%"
                   f"; raise --max-cost to include")
@@ -303,28 +316,52 @@ def dispatch_task(
         for item in selected:
             work.append((model, item))
 
-    total = len(work)
     print(f"\n  {task.name}: {len(selected)} items"
           + (f" x {len(models)} models" if len(models) > 1 else "")
           + f" (max {max_parallel} parallel)")
 
-    results = []
+    start = time.monotonic()
+    system_prompt = task.get_system_prompt()
+    profile_name = task.get_profile_name()
+
+    from core.llm.concurrency import read_throttle_cooldown_s
+    from core.llm.throttle import AdaptiveThrottle
+    _throttle = AdaptiveThrottle(
+        max_parallel, cooldown_s=read_throttle_cooldown_s(),
+    )
+
+    try:  # guarantees _throttle.close() on any exit path
+        return _dispatch_inner(
+            task, work, selected, dispatch_fn, cost_tracker,
+            max_parallel, prefilter_fn, prior_results, _throttle,
+            start, system_prompt, profile_name,
+        )
+    finally:
+        if _throttle.signal_count:
+            logger.info(
+                "dispatch throttle: %d 429 signals, effective=%d/%d",
+                _throttle.signal_count, _throttle.effective_workers,
+                _throttle.max_workers,
+            )
+        _throttle.close()
+
+
+def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
+    task, work, selected, dispatch_fn, cost_tracker,
+    max_parallel, prefilter_fn, prior_results, _throttle,
+    start, system_prompt, profile_name,
+):
+    from core.security.prompt_telemetry import defense_telemetry
+    from core.security.prompt_input_preflight import preflight
+
+    total = len(work)
     completed = 0
     running_cost = 0.0
+    results = []
     abort = False
-    # Per-model state — see error path for the rationale (auth
-    # and consecutive-error tracking moved from global counters
-    # to per-model so a single bad credential or model-specific
-    # failure burst doesn't kill peer models' work).
     _per_model_auth_fail: set = set()
     _per_model_dead: set = set()
     _per_model_state: Dict[str, Dict[str, int]] = {}
-    start = time.monotonic()
-    system_prompt = task.get_system_prompt()
-
-    from core.security.prompt_telemetry import defense_telemetry
-    from core.security.prompt_input_preflight import preflight
-    profile_name = task.get_profile_name()
 
     import threading as _th
     # Key by (item_id, model_key) tuple — NOT just item_id. With N
@@ -340,6 +377,7 @@ def dispatch_task(
     # completion.
     _nonces: dict[tuple, str] = {}
     _nonces_lock = _th.Lock()
+    task._tls_budget = _th.local()
 
     def _model_key(m) -> str:
         """Stable hashable identity for a model object — same
@@ -368,6 +406,7 @@ def dispatch_task(
                             duration=0.0,
                             quality=1.0,
                         )
+                task._tls_budget.tokens = task.budget_tokens_for_model(m)
                 prompt = task.build_prompt(it)
                 nonce = task.get_last_nonce()
                 if nonce:
@@ -377,7 +416,8 @@ def dispatch_task(
                 pf = preflight(prompt, corpora=_DISPATCH_CORPORA, strict=True)
                 defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
-                return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)
+                with _throttle.acquire_sync():
+                    return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)
 
             future = executor.submit(_do_one)
             futures[future] = (model, item)
@@ -392,7 +432,7 @@ def dispatch_task(
             try:
                 dispatch_result = future.result()
                 processed = task.process_result(item, dispatch_result)
-                processed["finding_id"] = item_id  # Authoritative — overrides any LLM-set value
+                processed["finding_id"] = item_id
                 processed["_quality"] = getattr(dispatch_result, "quality", 1.0)
                 item_cost = processed.get("cost_usd", 0)
                 running_cost += item_cost
@@ -400,7 +440,9 @@ def dispatch_task(
                 # Reset this model's consecutive-failure counter
                 # — successful response means we're not in a
                 # death spiral for this model.
-                pm = _per_model_state.setdefault(model_key, {"consec": 0, "completed": 0})
+                pm = _per_model_state.setdefault(
+                    model_key, {"consec": 0, "completed": 0},
+                )
                 pm["completed"] += 1
                 pm["consec"] = 0
 
@@ -409,7 +451,11 @@ def dispatch_task(
                     nonce = _nonces.pop((item_id, model_key), "")
                 if nonce and profile_name:
                     raw = ""
-                    if hasattr(dispatch_result, "result") and isinstance(dispatch_result.result, dict):
+                    has_dict = (
+                        hasattr(dispatch_result, "result")
+                        and isinstance(dispatch_result.result, dict)
+                    )
+                    if has_dict:
                         raw = dispatch_result.result.get("content", "")
                     raw_text = raw or str(dispatch_result.result)
                     defense_telemetry.record_response(
@@ -464,11 +510,17 @@ def dispatch_task(
                     score = processed.get("exploitability_score")
                     ruling = processed.get("ruling")
                     try:
-                        status = f"exploitable ({float(score):.2f})" if exploitable else "not exploitable"
+                        if exploitable:
+                            status = f"exploitable ({float(score):.2f})"
+                        else:
+                            status = "not exploitable"
                     except (ValueError, TypeError):
                         status = "exploitable" if exploitable else "not exploitable"
                     # Show short ruling labels (enum values), not long-form text
-                    valid_rulings = {"false_positive", "unreachable", "test_code", "dead_code", "mitigated"}
+                    valid_rulings = {
+                        "false_positive", "unreachable",
+                        "test_code", "dead_code", "mitigated",
+                    }
                     if ruling and ruling in valid_rulings and not exploitable:
                         status = ruling.replace("_", " ")
                 else:
@@ -478,8 +530,12 @@ def dispatch_task(
                     cost_str = f"  ${float(cost):.2f}" if cost else ""
                 except (ValueError, TypeError):
                     cost_str = ""
-                print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
-                      f"{display} {status}{cost_str}")
+                prefix = (
+                    f"  [{completed}/{total} "
+                    f"{_format_elapsed(elapsed)} "
+                    f"${running_cost:.2f}]"
+                )
+                print(f"{prefix} {display} {status}{cost_str}")
 
             except Exception as e:
                 err_str = str(e)
@@ -489,8 +545,12 @@ def dispatch_task(
                                 "error_type": error_type,
                                 "analysed_by": model_name})
                 display = task.get_item_display(item)
-                print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
-                      f"{display} FAILED — {err_str}")
+                prefix = (
+                    f"  [{completed}/{total} "
+                    f"{_format_elapsed(elapsed)} "
+                    f"${running_cost:.2f}]"
+                )
+                print(f"{prefix} {display} FAILED — {err_str}")
 
                 # Record schema failure telemetry (skip auth/network errors)
                 if error_type not in ("auth", "timeout") and profile_name:
@@ -535,7 +595,11 @@ def dispatch_task(
                     _per_model_auth_fail.add(model_key)
                     distinct_models = {_model_key(m) for m, _ in work}
                     if _per_model_auth_fail >= distinct_models:
-                        print("\n  ✗ All models hit auth/billing errors — aborting remaining", file=sys.stderr)
+                        print(
+                            "\n  All models hit auth/billing"
+                            " errors — aborting remaining",
+                            file=sys.stderr,
+                        )
                         abort = True
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
@@ -543,7 +607,11 @@ def dispatch_task(
                         # Single-model auth failure — keep dispatching
                         # to other models. Surface the per-model
                         # failure but don't kill peers.
-                        print(f"  ⚠️  model {model_key} auth-failed; continuing with other models", file=sys.stderr)
+                        print(
+                            f"  (model {model_key} auth-failed;"
+                            " continuing with other models)",
+                            file=sys.stderr,
+                        )
 
                 # Per-model consecutive_errors. Pre-fix the global
                 # counter triggered "3 consecutive failures" abort
@@ -557,13 +625,19 @@ def dispatch_task(
                 # specific model has 3 consecutive failures
                 # AND every result for this model has been a
                 # failure.
-                pm = _per_model_state.setdefault(model_key, {"consec": 0, "completed": 0})
+                pm = _per_model_state.setdefault(
+                    model_key, {"consec": 0, "completed": 0},
+                )
                 pm["completed"] += 1
                 pm["consec"] += 1
                 if pm["consec"] >= 3 and pm["completed"] == pm["consec"]:
-                    print(f"\n  Model {model_key}: {pm['consec']} consecutive failures — "
-                          "stopping dispatch to this model (others continue)",
-                          file=sys.stderr)
+                    print(
+                        f"\n  Model {model_key}:"
+                        f" {pm['consec']} consecutive"
+                        " failures — stopping dispatch"
+                        " to this model (others continue)",
+                        file=sys.stderr,
+                    )
                     _per_model_dead.add(model_key)
                     distinct_models = {_model_key(m) for m, _ in work}
                     if _per_model_dead >= distinct_models:
@@ -576,9 +650,11 @@ def dispatch_task(
         for item in selected:
             item_id = task.get_item_id(item)
             if item_id not in completed_ids:
-                results.append({"finding_id": item_id, "error": "aborted (auth failure)"})
+                results.append({
+                    "finding_id": item_id,
+                    "error": "aborted (auth failure)",
+                })
 
     # Finalize (e.g. consensus verdict rules)
     results = task.finalize(results, prior_results)
-
     return results

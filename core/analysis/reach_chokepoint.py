@@ -249,7 +249,7 @@ def record_suppression(
         }
         if extra:
             record.update(extra)
-        with (out_dir / "suppressions.jsonl").open("a") as f:
+        with (out_dir / "suppressions.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
     except OSError as e:
         logger.debug(

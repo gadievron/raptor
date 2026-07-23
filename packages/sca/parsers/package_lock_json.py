@@ -120,7 +120,7 @@ def _direct_names_from_root(root_entry: Dict[str, Any]) -> Set[str]:
     for key, _scope in _ROOT_KEY_SCOPE:
         block = root_entry.get(key)
         if isinstance(block, dict):
-            names.update(k for k in block.keys() if isinstance(k, str))
+            names.update(k for k in block if isinstance(k, str))
     return names
 
 
@@ -186,7 +186,7 @@ def _parse_v1(data: Dict[str, Any], path: Path) -> List[Dependency]:
     # arrays. Per-entry "dev" / "optional" flags drive scope.
     root_deps = data.get("dependencies", {})
     if isinstance(root_deps, dict):
-        for name in root_deps.keys():
+        for name in root_deps:
             if isinstance(name, str):
                 direct_names.add(name)
         _walk_v1(root_deps, path, depth=0, direct_names=direct_names, out=out)

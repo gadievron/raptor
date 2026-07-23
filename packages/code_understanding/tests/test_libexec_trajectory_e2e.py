@@ -77,7 +77,7 @@ def _fake_provider_responding_with_empty_variants():
             try:
                 t = next(self._iter)
             except StopIteration:
-                raise AssertionError("fake provider exhausted")
+                raise AssertionError("fake provider exhausted") from None
             content = [
                 ToolCall(id=f"c{i}", name=name, input=inp)
                 for i, (name, inp) in enumerate(t.tool_calls)
