@@ -21,7 +21,7 @@ Act on findings: cve-diff, exploit, patch.
 Present results: annotate, diagram, scorecard.
 
 **Project**
-Manage work: project, version.
+Manage work: project, sage, version.
 
 After the groups, on a separate line: `- /create-skill — Save approaches as reusable skills (alpha)`
 
