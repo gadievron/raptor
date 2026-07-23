@@ -60,6 +60,12 @@ Pinned versions are in `requirements.txt`. Install with
 | google-genai | Apache 2.0 | Google Gemini native SDK |
 | botocore | Apache 2.0 | AWS Bedrock SigV4 signing (parent-only, not needed for bearer-token auth) |
 | beautifulsoup4 | MIT | HTML parsing (web scanning) |
+| orjson | Apache 2.0 / MIT | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
+| certifi | MPL 2.0 | Consistent TLS CA bundle across platforms |
+| wcwidth | MIT | Wide-character-aware terminal column alignment |
+| pwntools | MIT | Binary exploit analysis (ELF parsing, gadget search) |
+| r2pipe | LGPL v3 | Python bridge for radare2 |
+| atheris | Apache 2.0 | Coverage-guided Python fuzzing engine |
 | z3-solver | MIT | SMT-based constraint analysis (one-gadget feasibility, path validation) |
 | tree-sitter + grammars | MIT | Rich inventory metadata (decorators, typed params) |
 | sage-agent-sdk | -- | SAGE persistent memory |
