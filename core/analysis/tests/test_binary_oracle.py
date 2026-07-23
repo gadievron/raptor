@@ -99,6 +99,7 @@ def test_classify_matches_expected_verdict(_verdicts_for_built_demo,
     )
 
 
+@pytest.mark.slow
 def test_classify_carries_build_id_and_path(built_demo: Path) -> None:
     """Every witness records its provenance so multi-binary results can be
     attributed correctly and stale-build mismatch can be spotted."""
@@ -308,6 +309,7 @@ def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> Non
     assert v["live_called"].classification == "symbol_present"
 
 
+@pytest.mark.slow
 def test_classifier_handles_cpp_mangled_symbols(tmp_path: Path) -> None:
     """nm emits mangled C++ symbols; the source side has unmangled names.
     Without ``nm --demangle`` every C++ method would classify ``absent``.
@@ -398,6 +400,7 @@ def test_classifier_falls_back_to_symbol_only_on_stripped_binary(
     assert verdicts["nonexistent"].classification == "absent"
 
 
+@pytest.mark.slow
 def test_inventory_earns_suppression_downgrades_for_stripped(
     tmp_path: Path, built_demo: Path,
 ) -> None:
@@ -540,6 +543,7 @@ def test_classifier_treats_internal_linkage_with_low_pc_as_present(
         f"internal-linkage helper misclassified — {classifications}")
 
 
+@pytest.mark.slow
 def test_classifier_qualifies_cpp_methods_with_namespace(
     tmp_path: Path,
 ) -> None:
