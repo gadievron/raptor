@@ -23,7 +23,7 @@ _HEADER_EXTENSIONS = frozenset({".h", ".hh", ".hpp", ".hxx"})
 #          ZEXTERN int ZEXPORT crc32(uLong crc, ...) {
 _FUNC_DEF_RE = re.compile(
     r"^[ \t]*"
-    r"(?:(?:static|inline|extern|__attribute__\s*\(\([^)]*\)\)|\w+)\s+)*"
+    r"(?:(?:__attribute__\s*\(\([^)]*\)\)|\w+)\s+)*"
     r"(\w+)\s*\([^)]*\)\s*\{",
     re.MULTILINE,
 )
