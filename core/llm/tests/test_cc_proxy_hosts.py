@@ -674,7 +674,7 @@ class TestBuildDetectorMigration:
         from core.build import build_detector
         src = inspect.getsource(build_detector)
         assert "proxy_hosts_for_cc_dispatch" in src, (
-            "packages/codeql/build_detector.py must route the "
+            "core/build/build_detector.py must route the "
             "claude-build-detect proxy_hosts through "
             "core.llm.cc_proxy_hosts so calibrate-aware policy "
             "applies (Bedrock/Vertex/Foundry support, override "

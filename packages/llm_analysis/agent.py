@@ -1955,32 +1955,119 @@ class AutonomousSecurityAgentV2:
         )
         return converted
 
-    def _emit_finding_annotation(
+    def _emit_journal_entry(
         self, vuln: "VulnerabilityContext",
         checklist: Optional[Dict[str, Any]],
-    ) -> Optional[Path]:
-        """Emit a per-function annotation for ``vuln`` after analysis
-        completes. Best-effort — any exception is logged at DEBUG and
-        swallowed so annotation failures cannot break the analysis loop.
+    ) -> bool:
+        """Emit a ``ReviewJournalEntry`` for ``vuln`` after analysis.
 
-        Returns the annotation path on success, or ``None`` if the
-        emit was skipped (no checklist, no inventory match, manual
-        annotation already present, or an error was swallowed).
-        Caller can use the return value for telemetry.
+        Best-effort — any exception is logged and swallowed so journal
+        failures cannot break the analysis loop.
+
+        Returns True if an entry was written, False otherwise.
         """
         try:
-            from packages.llm_analysis.annotation_emit import (
-                emit_finding_annotation,
+            from core.coverage.journal import (
+                ReviewJournalEntry, append_entry, now_iso,
             )
-            return emit_finding_annotation(
-                vuln,
-                base_dir=self.out_dir / "annotations",
-                checklist=checklist,
-                repo_root=self.repo_path,
+            from core.inventory.lookup import lookup_function
+            from core.annotations import compute_function_hash
+
+            file_path = getattr(vuln, "file_path", None)
+            start_line = getattr(vuln, "start_line", None)
+            if not file_path or not start_line or not checklist:
+                return False
+
+            func = lookup_function(
+                checklist, file_path, int(start_line),
+                repo_root=str(self.repo_path),
             )
+            if not func or not func.get("name"):
+                return False
+
+            name = func["name"]
+            vuln.function_name = name
+            line_start = func.get("line_start")
+            line_end = func.get("line_end")
+
+            analysis = getattr(vuln, "analysis", None) or {}
+            verdict = self._derive_verdict(analysis)
+            body = self._build_journal_body(vuln)
+
+            source_hash = ""
+            if file_path and line_start and line_end:
+                src = (Path(self.repo_path) / file_path).resolve()
+                if src.is_relative_to(Path(self.repo_path).resolve()):
+                    source_hash = compute_function_hash(
+                        src, line_start, line_end,
+                    ) or ""
+
+            model_name = None
+            if self.llm_config and self.llm_config.primary_model:
+                model_name = self.llm_config.primary_model.model_name
+
+            run_id = self.out_dir.name
+
+            entry = ReviewJournalEntry(
+                ts=now_iso(),
+                run_id=run_id,
+                file=file_path,
+                function=name,
+                verdict=verdict,
+                source_hash=source_hash,
+                line_start=line_start or 0,
+                line_end=line_end,
+                cwe=getattr(vuln, "cwe_id", None),
+                body=body,
+                model=model_name,
+                evidence_tools=[getattr(vuln, "tool", None) or "unknown"],
+            )
+            append_entry(self.out_dir, entry)
+            return True
         except Exception:
-            logger.debug("annotation emit error", exc_info=True)
-            return None
+            logger.debug("journal entry emit error", exc_info=True)
+            return False
+
+    @staticmethod
+    def _derive_verdict(analysis: Optional[Dict[str, Any]]) -> str:
+        """Map the analysis dict's verdict bools to the journal
+        verdict enum."""
+        if not analysis:
+            return "error"
+        is_tp = analysis.get("is_true_positive")
+        if is_tp is False:
+            return "clean"
+        if is_tp is True:
+            return "finding" if analysis.get("is_exploitable") else "suspicious"
+        return "error"
+
+    @staticmethod
+    def _build_journal_body(vuln) -> str:
+        """Compose the journal entry body from the LLM's reasoning."""
+        parts: list[str] = []
+        analysis = getattr(vuln, "analysis", None) or {}
+
+        reasoning = analysis.get("reasoning") or analysis.get("explanation")
+        if reasoning:
+            parts.append(str(reasoning).strip())
+
+        severity = analysis.get("severity_assessment")
+        if severity:
+            parts.append(f"Severity: {severity}")
+
+        if getattr(vuln, "has_dataflow", False):
+            dv = analysis.get("dataflow_validation") or {}
+            if dv:
+                fp = dv.get("false_positive")
+                if fp is not None:
+                    parts.append(f"Dataflow validation: false_positive={fp}")
+
+        if not parts:
+            message = getattr(vuln, "message", None)
+            if message:
+                parts.append(f"Scanner message: {message}")
+
+        return "\n\n".join(parts)
 
     def _resolve_prefer_globs(
         self, operator_globs: Optional[List[str]],
@@ -1996,17 +2083,16 @@ class AutonomousSecurityAgentV2:
         findings_path: str = None,
         max_findings: int = 10,
         checklist: Dict[str, Any] = None,
-        emit_annotations: bool = True,
+        emit_journal: bool = True,
         prefer_globs: Optional[List[str]] = None,
         exclude_globs: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Process findings with full LLM-powered autonomous workflow.
 
-        ``emit_annotations``: when False, skip the per-finding
-        annotation emit and the end-of-run coverage record. Useful
-        for operators who want analysis without the side effect of
-        modifying the annotation tree (e.g. CI runs that compare
-        scanner output rather than persist review state).
+        ``emit_journal``: when False, skip the per-finding journal
+        entry emit and the end-of-run coverage record. Useful for
+        operators who want analysis without persisting review state
+        (e.g. CI runs that compare scanner output).
 
         ``prefer_globs``: optional list of fnmatch globs against each
         finding's ``file_path``. Matching findings sort to the front
@@ -2177,8 +2263,8 @@ class AutonomousSecurityAgentV2:
         patches_generated = 0
         dataflow_validated = 0
         false_positives_found = 0
-        annotations_emitted = 0
-        variant_annotations = 0
+        journal_entries_emitted = 0
+        variant_matches = 0
         # D-1 fixture-detection pre-flight metrics. Counts of
         # findings the pre-flight saw and how it ruled. Surfaced
         # in the autonomous report so operators can see whether
@@ -2299,9 +2385,8 @@ class AutonomousSecurityAgentV2:
                         )
                         if verdict.likely_test_harness == "true":
                             # Synthesise a deterministic clean
-                            # analysis. _derive_status (in
-                            # annotation_emit) maps
-                            # is_true_positive=False to status=
+                            # analysis. _derive_verdict maps
+                            # is_true_positive=False to verdict=
                             # clean automatically; the
                             # ``fixture_demotion`` tag flags the
                             # reason for the operator's review.
@@ -2336,9 +2421,9 @@ class AutonomousSecurityAgentV2:
                 if fixture_skipped_this:
                     analyzed += 1
                     fixture_skipped_llm_calls += 1
-                    if emit_annotations:
-                        if self._emit_finding_annotation(vuln, checklist):
-                            annotations_emitted += 1
+                    if emit_journal:
+                        if self._emit_journal_entry(vuln, checklist):
+                            journal_entries_emitted += 1
                     continue  # skip LLM analyze + exploit + patch
 
                 # 0b. Reachability chokepoint — SOUND, corpus-earned
@@ -2365,11 +2450,7 @@ class AutonomousSecurityAgentV2:
                         fn = (finding.get("function")
                               or (finding.get("metadata") or {}).get(
                                   "function_name", ""))
-                        line_no = int(
-                            finding.get("start_line")
-                            if finding.get("start_line") is not None
-                            else finding.get("startLine", 0) or 0
-                        )
+                        line_no = int(finding.get("line") or 0)
                         decision = check_suppress(
                             checklist=checklist,
                             file_path=rel, function_name=fn,
@@ -2403,12 +2484,7 @@ class AutonomousSecurityAgentV2:
                                     verdict=verdict, reason=reason,
                                 )
                             except Exception:  # noqa: BLE001
-                                logger.debug(
-                                    "record_suppression failed for %s",
-                                    finding.get("finding_id")
-                                    or finding.get("id"),
-                                    exc_info=True,
-                                )
+                                pass
                     except Exception as e:  # noqa: BLE001
                         logger.debug(
                             "reachability pre-flight failed on %s: %s",
@@ -2419,20 +2495,25 @@ class AutonomousSecurityAgentV2:
                 if reach_skipped_this:
                     analyzed += 1
                     reachability_skipped_llm_calls += 1
-                    if emit_annotations:
-                        if self._emit_finding_annotation(vuln, checklist):
-                            annotations_emitted += 1
+                    if emit_journal:
+                        if self._emit_journal_entry(vuln, checklist):
+                            journal_entries_emitted += 1
                     continue  # skip LLM analyze + exploit + patch
 
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
-                    if emit_annotations:
-                        if self._emit_finding_annotation(vuln, checklist):
-                            annotations_emitted += 1
+                    if emit_journal:
+                        if self._emit_journal_entry(vuln, checklist):
+                            journal_entries_emitted += 1
 
                     # Track dataflow validation
-                    if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
+                    has_dv = (
+                        vuln.has_dataflow
+                        and vuln.analysis
+                        and "dataflow_validation" in vuln.analysis
+                    )
+                    if has_dv:
                         dataflow_validated += 1
                         validation = vuln.analysis['dataflow_validation']
                         if validation.get('false_positive'):
@@ -2451,19 +2532,19 @@ class AutonomousSecurityAgentV2:
 
                         # 4. KNighter follow-up: synthesise a checker
                         # rule for the confirmed pattern, run across
-                        # the codebase, emit suspicious annotations
-                        # for variant matches. One bug → N candidate
+                        # the codebase, record variant matches in
+                        # checker-matches.jsonl. One bug → N candidate
                         # variants. Best-effort — failures don't break
                         # the analysis loop.
                         if (
-                            emit_annotations
+                            emit_journal
                             and getattr(self, "synthesise_checkers", True)
                         ):
                             try:
                                 from packages.llm_analysis.checker_followup import (
-                                    emit_variant_annotations_for_finding,
+                                    emit_variant_matches_for_finding,
                                 )
-                                n_variants = emit_variant_annotations_for_finding(
+                                n_variants = emit_variant_matches_for_finding(
                                     vuln,
                                     out_dir=self.out_dir,
                                     checklist=checklist,
@@ -2471,7 +2552,7 @@ class AutonomousSecurityAgentV2:
                                     llm_client=self.llm,
                                     refine=self.refine_checkers,
                                 )
-                                variant_annotations += n_variants
+                                variant_matches += n_variants
                             except Exception:
                                 logger.warning(
                                     "checker followup error", exc_info=True,
@@ -2498,8 +2579,9 @@ class AutonomousSecurityAgentV2:
         # Get LLM stats from client (aggregates all provider stats)
         llm_stats = self.llm.get_stats()
 
-        # Determine mode: full (external LLM did analysis) or prep_only (mechanical prep,
-        # Claude Code or manual review handles reasoning)
+        # Determine mode: full (external LLM did analysis)
+        # or prep_only (mechanical prep, Claude Code or
+        # manual review handles reasoning)
         is_prep_only = isinstance(self.llm, ClaudeCodeProvider)
 
         report = {
@@ -2512,8 +2594,8 @@ class AutonomousSecurityAgentV2:
             "patches_generated": patches_generated,
             "dataflow_validated": dataflow_validated,
             "false_positives_caught": false_positives_found,
-            "annotations_emitted": annotations_emitted,
-            "variant_annotations": variant_annotations,
+            "journal_entries_emitted": journal_entries_emitted,
+            "variant_matches": variant_matches,
             "fixture_detection_metrics": {
                 "prep_outcomes": fixture_prep_outcomes,
                 "skipped_llm_calls": fixture_skipped_llm_calls,
@@ -2527,21 +2609,23 @@ class AutonomousSecurityAgentV2:
         report_file = self.out_dir / "autonomous_analysis_report.json"
         save_json(report_file, report)
 
-        # Emit a coverage record from the annotations tree, so
+        # Emit a coverage record from the review journal, so
         # ``raptor-coverage-summary`` picks them up as reviewed
         # functions. Best-effort — coverage record failures should
-        # not break the analysis report. Skipped when annotation
+        # not break the analysis report. Skipped when journal
         # emission was suppressed.
-        if emit_annotations:
+        if emit_journal:
             try:
                 from core.coverage.record import (
-                    build_from_annotations, write_record,
+                    build_from_journal, write_record,
                 )
-                ann_record = build_from_annotations(self.out_dir / "annotations")
-                if ann_record:
-                    write_record(self.out_dir, ann_record, tool_name="annotations")
+                journal_record = build_from_journal(self.out_dir)
+                if journal_record:
+                    write_record(
+                        self.out_dir, journal_record, tool_name="journal",
+                    )
             except Exception:
-                logger.debug("annotation coverage record failed", exc_info=True)
+                logger.debug("journal coverage record failed", exc_info=True)
 
         if is_prep_only:
             logger.debug(f"Prep complete: {len(unique_findings)} findings")
@@ -2551,15 +2635,15 @@ class AutonomousSecurityAgentV2:
             logger.info(f"✓ Exploitable: {exploitable} vulnerabilities")
             logger.info(f"✓ Exploits generated: {exploits_generated}")
             logger.info(f"✓ Patches generated: {patches_generated}")
-            if annotations_emitted > 0:
+            if journal_entries_emitted > 0:
                 logger.info(
-                    f"✓ Annotations emitted: {annotations_emitted} "
-                    f"(in {self.out_dir / 'annotations'})"
+                    f"✓ Journal entries: {journal_entries_emitted} "
+                    f"(in {self.out_dir / 'review-journal.jsonl'})"
                 )
-            if variant_annotations > 0:
+            if variant_matches > 0:
                 logger.info(
-                    f"✓ Checker-synthesised variants: {variant_annotations} "
-                    f"(suspicious annotations from KNighter follow-up)"
+                    f"✓ Checker-synthesised variants: {variant_matches} "
+                    f"(in {self.out_dir / 'checker-matches.jsonl'})"
                 )
             if fixture_skipped_llm_calls > 0:
                 logger.info(
@@ -2624,9 +2708,16 @@ def main() -> None:
     )
     ap.add_argument("--repo", required=True, help="Repository path")
     ap.add_argument("--sarif", nargs="+", help="SARIF files")
-    ap.add_argument("--findings", help="Validated findings.json from exploitability validation pipeline")
+    ap.add_argument(
+        "--findings",
+        help="Validated findings.json from exploitability "
+             "validation pipeline",
+    )
     ap.add_argument("--out", help="Output directory")
-    ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
+    ap.add_argument(
+        "--max-findings", type=int, default=10,
+        help="Max findings to process",
+    )
     ap.add_argument(
         "--prefer", action="append", default=None, metavar="GLOB",
         help=(
@@ -2646,12 +2737,17 @@ def main() -> None:
             "--exclude-dir '**/tests/*'``"
         ),
     )
-    ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
     ap.add_argument(
-        "--no-annotations",
+        "--checklist",
+        help="Inventory checklist.json for function "
+             "metadata lookup",
+    )
+    ap.add_argument(
+        "--no-journal",
         action="store_true",
-        help="Skip per-finding annotation emission and the "
-             "annotation-derived coverage record",
+        dest="no_journal",
+        help="Skip per-finding journal entry emission and the "
+             "journal-derived coverage record",
     )
     ap.add_argument(
         "--no-checker-synthesis",
@@ -2715,6 +2811,15 @@ def main() -> None:
              "byte-for-byte run comparison.",
     )
     ap.add_argument(
+        "--prep-only", action="store_true",
+        help="Skip LLM analysis; produce structured "
+             "findings for external orchestration",
+    )
+    ap.add_argument(
+        "--max-parallel", type=int, default=0,
+        help="Max parallel dispatch threads (0 = auto from model RPM)",
+    )
+    ap.add_argument(
         "--no-exploits",
         action="store_true",
         help="Skip LLM exploit generation for exploitable findings.",
@@ -2729,9 +2834,6 @@ def main() -> None:
         metavar="PATH",
         help='JSON file with {"memories": [...]} from SAGE pre-scan recall',
     )
-    ap.add_argument("--prep-only", action="store_true",
-                    help="Skip LLM analysis; produce structured findings for external orchestration")
-    ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
 
     model_group = ap.add_argument_group(
         "multi-model analysis",
@@ -2815,8 +2917,7 @@ def main() -> None:
     # When role flags are present, force prep-only then hand off to orchestrator
     prep_only = args.prep_only or _has_role_flags
     agent = AutonomousSecurityAgentV2(
-        repo_path,
-        out_dir,
+        repo_path, out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
         refine_checkers=not args.no_checker_refinement,
@@ -2840,19 +2941,25 @@ def main() -> None:
             logger.warning(f"Could not load checklist: {args.checklist}")
 
     # Process findings - route based on input type
-    emit_annotations = not args.no_annotations
+    emit_journal = not args.no_journal
     if args.findings:
-        report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings,
-                                        checklist=checklist,
-                                        emit_annotations=emit_annotations,
-                                        prefer_globs=args.prefer,
-                                        exclude_globs=args.exclude_dir)
+        report = agent.process_findings(
+            findings_path=args.findings,
+            max_findings=args.max_findings,
+            checklist=checklist,
+            emit_journal=emit_journal,
+            prefer_globs=args.prefer,
+            exclude_globs=args.exclude_dir,
+        )
     else:
-        report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
-                                        checklist=checklist,
-                                        emit_annotations=emit_annotations,
-                                        prefer_globs=args.prefer,
-                                        exclude_globs=args.exclude_dir)
+        report = agent.process_findings(
+            sarif_paths=args.sarif,
+            max_findings=args.max_findings,
+            checklist=checklist,
+            emit_journal=emit_journal,
+            prefer_globs=args.prefer,
+            exclude_globs=args.exclude_dir,
+        )
 
     # Orchestrated path: role flags → prep then parallel dispatch
     if _has_role_flags and report.get("mode") == "prep_only":
@@ -2883,7 +2990,7 @@ def main() -> None:
                 )
                 if result:
                     return
-        print("\n  ✗ Orchestration skipped — check model/API key configuration", file=sys.stderr)
+        print("\n  Orchestration skipped — check model/API key configuration")
         return
 
     if report.get('mode') != 'prep_only':

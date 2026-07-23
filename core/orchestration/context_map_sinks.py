@@ -71,7 +71,7 @@ def enrich_with_sink_discovery(
     modified += _merge_framework_apis(context_map, result)
 
     # 4. Populate the simple `sinks` array for consumers that don't
-    # read `sink_details`
+    # read `sink_details` (e.g. audit orchestrator's sink-reachability gate)
     modified += _populate_sinks_array(context_map, result)
 
     # 5. Add the summary to context_map root (always counts as modified
@@ -227,7 +227,8 @@ def _populate_sinks_array(
     """Populate the simple ``sinks`` array from discovery results.
 
     The ``sinks`` array uses a flat format (file, function, target, direct)
-    that downstream consumers read directly.  Includes BOTH the caller function (which calls the
+    that consumers like the audit orchestrator's sink-reachability gate
+    read directly.  Includes BOTH the caller function (which calls the
     dangerous target) AND the dangerous target itself — so any function
     that calls e.g. ``strcpy`` is transitively reachable to a sink.
 

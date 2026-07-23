@@ -1,7 +1,7 @@
 """Prompt budget: estimate token cost and shed low-priority sections.
 
-Reusable across any prompt-assembly site — /agentic analysis bundles,
-tool-use loop preambles.  The estimator uses the
+Reusable across any prompt-assembly site — /audit context, /agentic
+analysis bundles, tool-use loop preambles.  The estimator uses the
 same 4-chars-per-token heuristic as ``providers.estimate_tokens``
 (intentionally over-estimates; the safe direction).
 
