@@ -87,7 +87,7 @@ jobs:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -m slow core packages --durations=25
+          python -m pytest -m slow core packages -q --durations=25
 
       - name: Run integration tests (retry once on external outage)
         env:

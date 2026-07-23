@@ -129,6 +129,8 @@ class TestProxyUnixSocket:
 # _proxy_bridge.py: bring_up_loopback + _run_forwarder
 # ---------------------------------------------------------------------------
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning:multiprocessing")
+@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
 class TestProxyBridge:
     """TCP-to-Unix forwarder integration."""
 

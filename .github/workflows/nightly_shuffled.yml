@@ -62,7 +62,7 @@ jobs:
             rc=0
             RAPTOR_RANDOMISE_TESTS="$seed" \
               python -m pytest core packages \
-              --durations=25 --tb=short \
+              -q --durations=25 --tb=short \
               --junitxml="$RUNNER_TEMP/fast-iter-${i}.xml" \
               || rc=$?
             echo "::endgroup::"
