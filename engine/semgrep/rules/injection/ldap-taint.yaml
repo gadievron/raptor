@@ -1,0 +1,146 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → LDAP search filter sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ldap.taint.python
+    message: >-
+      Untrusted data flows into an LDAP search filter. Use
+      ldap.filter.escape_filter_chars() or ldap3.utils.conv.escape_filter_chars()
+      to sanitise user input before embedding it in filter strings.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      # python-ldap — search_s / search_st / search_ext_s
+      # Filter argument is at index 2 (0=base, 1=scope, 2=filterstr)
+      - patterns:
+          - pattern: $CONN.search_s($BASE, $SCOPE, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $CONN.search_st($BASE, $SCOPE, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $CONN.search_ext_s($BASE, $SCOPE, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $CONN.search($BASE, $SCOPE, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      # ldap3 — Connection.search
+      - patterns:
+          - pattern: $CONN.search($BASE, $FILTER, ...)
+          - focus-metavariable: $FILTER
+    pattern-sanitizers:
+      - pattern: ldap.filter.escape_filter_chars(...)
+      - pattern: escape_filter_chars(...)
+    metadata:
+      cwe: ["CWE-90"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ldap", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → DirContext search filter sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ldap.taint.java
+    message: >-
+      Untrusted data flows into an LDAP search filter. Use
+      parameterised search filters with javax.naming.directory.SearchControls
+      or escape special LDAP characters before embedding in filter strings.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      # DirContext.search with filter string
+      - patterns:
+          - pattern: (DirContext $CTX).search($NAME, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: (InitialDirContext $CTX).search($NAME, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: (LdapContext $CTX).search($NAME, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: (InitialLdapContext $CTX).search($NAME, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      # Spring LdapTemplate
+      - patterns:
+          - pattern: (LdapTemplate $LT).search($BASE, $FILTER, ...)
+          - focus-metavariable: $FILTER
+    metadata:
+      cwe: ["CWE-90"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ldap", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → go-ldap search filter sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.ldap.taint.go
+    message: >-
+      Untrusted data flows into an LDAP search filter. Escape special
+      LDAP characters in user input before constructing filter strings.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      # go-ldap — NewSearchRequest: filter is argument index 6
+      - patterns:
+          - pattern: ldap.NewSearchRequest($BASE, $SCOPE, $DEREF, $SIZE, $TIME, $TYPES, $FILTER, $ATTRS, $CTRLS)
+          - focus-metavariable: $FILTER
+    pattern-sanitizers:
+      - pattern: ldap.EscapeFilter(...)
+    metadata:
+      cwe: ["CWE-90"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "ldap", "taint"]

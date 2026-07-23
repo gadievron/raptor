@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Standalone checker synthesis from a confirmed bug.
+
+Synthesise a Semgrep or Coccinelle rule from a seed bug description,
+run it across the target repo, and report variant matches.
+
+Usage:
+  raptor-synthesise-checker --file <path> --function <name> \
+      --lines <start>-<end> --cwe <id> --reasoning <text> \
+      --repo <repo_root> [--out <dir>] [--no-refine] [--json]
+"""
+import os
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def main() -> int:
+    import argparse
+    import json
+    import logging
+
+    parser = argparse.ArgumentParser(
+        description="Synthesise a checker rule from a confirmed bug",
+    )
+    parser.add_argument("--file", required=True,
+                        help="Repo-relative path to the file containing the bug")
+    parser.add_argument("--function", required=True,
+                        help="Name of the vulnerable function")
+    parser.add_argument("--lines", required=True,
+                        help="Line range of the bug (e.g. 42-50)")
+    parser.add_argument("--cwe", default="",
+                        help="CWE identifier (e.g. CWE-78)")
+    parser.add_argument("--reasoning", default="",
+                        help="Why this is a bug (fed to the LLM prompt)")
+    parser.add_argument("--snippet", default="",
+                        help="Source snippet of the vulnerable function")
+    parser.add_argument("--repo", required=True,
+                        help="Root of the target repository")
+    parser.add_argument("--out", default=None,
+                        help="Output directory (default: <repo>/out/checker-synthesis)")
+    parser.add_argument("--no-refine", action="store_true",
+                        help="Single-shot synthesis (skip iterative FP elimination)")
+    parser.add_argument("--max-iterations", type=int, default=5,
+                        help="Max refinement iterations (default: 5)")
+    parser.add_argument("--max-matches", type=int, default=50,
+                        help="Max variant matches to collect (default: 50)")
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Emit result as JSON instead of human-readable")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Enable debug logging")
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    parts = args.lines.split("-")
+    if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        print(f"error: --lines must be <start>-<end>, got '{args.lines}'",
+              file=sys.stderr)
+        return 1
+    line_start, line_end = int(parts[0]), int(parts[1])
+
+    repo_root = Path(args.repo).resolve()
+    if not repo_root.is_dir():
+        print(f"error: repo not found: {repo_root}", file=sys.stderr)
+        return 1
+
+    out_dir = Path(args.out) if args.out else repo_root / "out" / "checker-synthesis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if ".." in args.file.split("/") or os.path.isabs(args.file):
+        print(f"error: --file must be a repo-relative path without '..' "
+              f"segments, got '{args.file}'", file=sys.stderr)
+        return 1
+
+    snippet = args.snippet
+    if not snippet:
+        src_file = repo_root / args.file
+        if src_file.is_file():
+            lines = src_file.read_text().splitlines()
+            snippet = "\n".join(
+                lines[max(0, line_start - 1):line_end]
+            )
+
+    from packages.checker_synthesis import SeedBug
+    seed = SeedBug(
+        file=args.file,
+        function=args.function,
+        line_start=line_start,
+        line_end=line_end,
+        cwe=args.cwe,
+        reasoning=args.reasoning,
+        snippet=snippet,
+    )
+
+    from core.llm.client import LLMClient
+    from core.llm.task_types import TaskType
+    client = LLMClient()
+
+    def llm_callable(prompt, schema, system_prompt):
+        try:
+            data, _full = client.generate_structured(
+                prompt=prompt,
+                schema=schema,
+                system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
+            )
+            return data
+        except Exception as e:
+            logging.getLogger(__name__).debug(
+                "LLM call failed: %s", e,
+            )
+            return None
+
+    print(f"Seed: {seed.file}:{seed.line_start}-{seed.line_end} "
+          f"({seed.function})", file=sys.stderr)
+    print("Engine: auto-detect from file extension", file=sys.stderr)
+    print(f"Mode: {'single-shot' if args.no_refine else f'refinement (up to {args.max_iterations} iterations)'}",
+          file=sys.stderr)
+    print("", file=sys.stderr)
+
+    if args.no_refine:
+        from packages.checker_synthesis import synthesise_and_run
+        result = synthesise_and_run(
+            seed, repo_root, out_dir, llm_callable,
+            max_matches=args.max_matches,
+            triage_each=True,
+            max_triage_calls=args.max_matches,
+        )
+    else:
+        from packages.checker_synthesis import synthesise_with_refinement
+        result = synthesise_with_refinement(
+            seed, repo_root, out_dir, llm_callable,
+            max_iterations=args.max_iterations,
+            max_matches=args.max_matches,
+            max_triage_calls=args.max_matches,
+        )
+
+    if args.json_output:
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0
+
+    if result.rule is None:
+        print("Synthesis failed: no rule passed positive control.")
+        if result.errors:
+            for e in result.errors:
+                print(f"  {e}")
+        return 1
+
+    print(f"Rule: {result.rule.rule_id} ({result.rule.engine})")
+    print(f"Positive control: {'pass' if result.positive_control else 'FAIL'}")
+    if result.rule_path:
+        print(f"Rule file: {result.rule_path}")
+    if result.rule.rationale:
+        print(f"Rationale: {result.rule.rationale}")
+    print()
+
+    if not result.matches:
+        print("No variant matches found.")
+    else:
+        cap = " (capped)" if result.capped else ""
+        print(f"{len(result.matches)} variant match(es){cap}:")
+        for m in result.matches:
+            triage_str = ""
+            if result.triage:
+                for t in result.triage:
+                    if t.match.file == m.file and t.match.line == m.line:
+                        triage_str = f" [{t.status}]"
+                        break
+            print(f"  {m.file}:{m.line}{triage_str}")
+            if m.snippet:
+                for sl in m.snippet.splitlines()[:3]:
+                    print(f"    {sl}")
+
+    if result.errors:
+        print()
+        print("Notes:")
+        for e in result.errors:
+            print(f"  {e}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

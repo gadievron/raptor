@@ -148,8 +148,15 @@ FAST_TIER_IGNORES = {
 
 def is_test_file(path: Path) -> bool:
     """Heuristic: a .py file is a test if its name starts with test_ or
-    ends with _test, or it lives under a tests/ directory."""
+    ends with _test, or it lives under a tests/ directory.
+
+    Files under ``fixtures/`` are excluded — they are test data (e.g.
+    Flask apps) that pytest must not collect as test modules.
+    """
     if not path.name.endswith(".py"):
+        return False
+    parts = path.parts
+    if "fixtures" in parts:
         return False
     name = path.stem
     if name.startswith("test_") or name.endswith("_test"):
@@ -310,11 +317,14 @@ def compute_tier_dispatch(
             result[tier_name] = {"run": triggered, "files": tier_files if triggered else []}
         else:
             affected = [f for f in closure
-                        if file_matches_tier(f, tier_config) and is_test_file(f)]
+                        if file_matches_tier(f, tier_config)
+                        and is_test_file(f)
+                        and (repo / f).is_file()]
             result[tier_name] = {"run": bool(affected), "files": affected}
 
     # Fast tier: tests in core/ and packages/ that aren't carved out.
-    fast_files = [f for f in closure if file_in_fast_tier(f)]
+    fast_files = [f for f in closure
+                  if file_in_fast_tier(f) and (repo / f).is_file()]
     # Also trigger fast tier for non-Python changes that affect the
     # test infrastructure (requirements, pyproject.toml, etc.).
     infra_changed = any(

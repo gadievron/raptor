@@ -396,15 +396,4 @@ def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
         for g in shown:
             lines.append(f"    {g['file']}:{g['function']} @ {g['line']}")
 
-    prov = view.get("provenance") or {}
-    tools = {t: vs for t, vs in (prov.get("tools") or {}).items()}
-    if tools or prov.get("models") or prov.get("newest"):
-        lines.append("  Provenance:")
-        for tool, versions in tools.items():
-            ver = ", ".join(versions) if versions else "(version unrecorded)"
-            lines.append(f"    {tool}: {ver}")
-        if prov.get("models"):
-            lines.append(f"    llm models: {', '.join(prov['models'])}")
-        if prov.get("newest"):
-            lines.append(f"    newest run: {prov['newest']}")
     return "\n".join(lines)

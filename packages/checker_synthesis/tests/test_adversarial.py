@@ -449,3 +449,87 @@ class TestRealSemgrepIntegration:
         # At least one attempt-error logged (semgrep would emit a
         # parse error or simply fail to match).
         assert len(result.errors) >= 1
+
+
+_SPATCH = shutil.which("spatch")
+
+
+@pytest.mark.skipif(_SPATCH is None, reason="spatch not on PATH")
+class TestRealCoccinelleIntegration:
+    """Drive the actual Coccinelle adapter end-to-end. Catches shape
+    drift between our adapter (``_run_coccinelle``) and what
+    ``packages.coccinelle.runner.run_rule`` actually returns."""
+
+    def test_real_coccinelle_finds_planted_match(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "vuln.c").write_text(
+            "#include <stdlib.h>\n"
+            "void leak_a(void) {\n"
+            "    char *p = malloc(64);\n"
+            "    if (!p) return;\n"
+            "}\n"
+            "\n"
+            "void leak_b(void) {\n"
+            "    char *q = malloc(128);\n"
+            "    if (!q) return;\n"
+            "}\n"
+        )
+        seed = SeedBug(
+            file="src/vuln.c", function="leak_a",
+            line_start=2, line_end=5,
+            cwe="CWE-401",
+            reasoning="malloc without free",
+        )
+        cocci_rule = (
+            "@rule@\n"
+            "expression E;\n"
+            "position pos;\n"
+            "@@\n"
+            "* malloc@pos(E)\n"
+        )
+        llm = _stub_llm([
+            {"rule_body": cocci_rule, "rationale": "malloc without free"},
+        ])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm,
+        )
+        assert result.positive_control is True, (
+            f"positive control failed; errors: {result.errors}"
+        )
+        assert len(result.matches) >= 1, (
+            f"expected at least 1 variant match; got {result.matches}"
+        )
+        for m in result.matches:
+            assert "vuln.c" in m.file, f"unexpected file: {m.file}"
+            assert m.line > 0, f"match has no line number: {m}"
+        variant_lines = {m.line for m in result.matches}
+        assert 8 in variant_lines, (
+            f"leak_b (line 8) not found in variant lines: {variant_lines}"
+        )
+        assert result.rule_path.exists()
+
+    def test_real_coccinelle_invalid_rule_records_error(self, tmp_path):
+        """A syntactically-broken cocci rule should fail positive
+        control without exploding."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "f.c").write_text(
+            "void f(int x) { int *p = 0; *p = x; }\n"
+        )
+        seed = SeedBug(
+            file="src/f.c", function="f",
+            line_start=1, line_end=1,
+            cwe="CWE-476", reasoning="null deref",
+        )
+        bad_cocci = "@@ this is not valid cocci @@\n???"
+        llm = _stub_llm([
+            {"rule_body": bad_cocci, "rationale": "broken"},
+            {"rule_body": bad_cocci, "rationale": "still broken"},
+        ])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm,
+        )
+        assert result.rule is None
+        assert result.positive_control is False
+        assert len(result.errors) >= 1

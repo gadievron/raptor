@@ -38,8 +38,8 @@ What this test does NOT cover (each warrants a focused test rather
 than bundling here, and the per-package suites already exercise the
 single-source paths in depth):
 
-  * /agentic's ``emit_finding_annotation`` — exercised by
-    ``packages/llm_analysis/tests/test_annotation_emit.py`` with
+  * /agentic's ``_emit_journal_entry`` — exercised by
+    ``packages/llm_analysis/tests/test_journal_wiring.py`` with
     realistic ``vuln`` objects against the LLM-analysis schema.
   * CLI subprocess paths — per-package ``TestShim`` classes cover
     each ``libexec`` shim end-to-end.

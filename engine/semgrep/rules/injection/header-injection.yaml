@@ -1,0 +1,197 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → HTTP response header value
+  # CWE-113: HTTP Response Splitting via CRLF in header values.
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.header-injection.taint.python
+    message: >-
+      Untrusted data flows into an HTTP response header value. An attacker
+      can inject CRLF sequences to split the response and inject arbitrary
+      headers or body content. Validate and sanitise header values.
+    languages: [python]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      # Focus on $VALUE to prevent FPs when only the header NAME is
+      # tainted — header-name injection is a different attack class
+      - patterns:
+          - pattern-either:
+              # Django HttpResponse header dict-style assignment
+              - pattern: $RESPONSE[$HEADER] = $VALUE
+              # Flask/Werkzeug response headers
+              - pattern: $RESPONSE.headers[$HEADER] = $VALUE
+              - pattern: $RESPONSE.headers.set($HEADER, $VALUE)
+              - pattern: $RESPONSE.headers.add($HEADER, $VALUE)
+              # Django HttpResponse constructor with headers kwarg
+              - pattern: "HttpResponse(..., headers={..., $KEY: $VALUE, ...}, ...)"
+          - focus-metavariable: $VALUE
+    pattern-sanitizers:
+      - pattern: $X.replace("\n", ...)
+      - pattern: $X.replace("\r", ...)
+      - pattern: $X.replace("\r\n", ...)
+    metadata:
+      cwe: ["CWE-113"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "header-injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → response header value
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.header-injection.taint.go
+    message: >-
+      Untrusted data flows into an HTTP response header value. An attacker
+      can inject CRLF sequences to split the response. Validate and
+      sanitise header values before setting them.
+    languages: [go]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      # Focus on $VALUE — the header name is not attacker-controlled in
+      # the typical case and flagging it would create FPs.
+      - patterns:
+          - pattern: $W.Header().Set($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: $W.Header().Add($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+    pattern-sanitizers:
+      - pattern: strings.ReplaceAll($X, "\n", ...)
+      - pattern: strings.ReplaceAll($X, "\r", ...)
+    metadata:
+      cwe: ["CWE-113"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "header-injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → HttpServletResponse header value
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.header-injection.taint.java
+    message: >-
+      Untrusted data flows into an HTTP response header value. An attacker
+      can inject CRLF sequences to split the response. Validate and
+      sanitise header values before setting them.
+    languages: [java]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      # Focus on $VALUE only
+      - patterns:
+          - pattern: (HttpServletResponse $RESP).setHeader($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: (HttpServletResponse $RESP).addHeader($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+    pattern-sanitizers:
+      - pattern: $X.replace("\n", ...)
+      - pattern: $X.replace("\r", ...)
+      - pattern: $X.replaceAll("[\n\r]", ...)
+    metadata:
+      cwe: ["CWE-113"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "header-injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → response header value
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.header-injection.taint.javascript
+    message: >-
+      Untrusted data flows into an HTTP response header value. An attacker
+      can inject CRLF sequences to split the response. Validate and
+      sanitise header values before setting them.
+    languages: [javascript, typescript]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      # Express / Node http — focus on $VALUE
+      - patterns:
+          - pattern: $RES.setHeader($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: $RES.set($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: $RES.header($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: $RES.append($NAME, $VALUE)
+          - focus-metavariable: $VALUE
+    pattern-sanitizers:
+      - pattern: $X.replace(/[\r\n]/g, ...)
+      - pattern: $X.replace(/\n/g, ...)
+      - pattern: $X.replace(/\r/g, ...)
+    metadata:
+      cwe: ["CWE-113"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "header-injection", "taint"]

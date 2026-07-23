@@ -448,7 +448,7 @@ class RaptorConfig:
     #   3. Belt + braces inside get_safe_env() — if the allowlist is ever
     #      widened (e.g., a new `SSH_*` prefix) the overlay still strips
     #      the specific known-bad names.
-    DANGEROUS_ENV_VARS = [
+    DANGEROUS_ENV_VARS = frozenset([
         # Shell/tool-eval vectors
         "TERMINAL",        # Shell-evaluated by command lookup utilities
         "BROWSER",         # Shell-evaluated by open/xdg-open
@@ -634,7 +634,7 @@ class RaptorConfig:
                                # uninitialised-memory disclosure ABI.
         # Note: TERM is NOT stripped — it's read as a string (terminfo lookup),
         # not shell-evaluated. Stripping it breaks colour output in git/grep/etc.
-    ]
+    ])
 
     # Git Configuration
     #

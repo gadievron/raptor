@@ -13,9 +13,8 @@ detection-eligible findings and assert:
   * ``manual_override`` bypasses the pre-flight entirely.
   * Telemetry counts in ``autonomous_analysis_report.json``
     reflect the per-finding outcomes.
-  * Annotations emitted by the pre-flight skip path land with
-    ``status=clean`` (via the existing ``_derive_status`` mapping
-    on ``is_true_positive: false``).
+  * Pre-flight skip path synthesises ``is_true_positive: false``
+    (the harness's deterministic clean verdict).
 
 Cross-pipeline consistency is exercised by reusing the same
 finding shape against /validate's helper prep (separate test
@@ -30,7 +29,6 @@ from unittest.mock import patch
 
 import pytest
 
-from core.annotations import read_annotation
 from packages.llm_analysis.agent import (
     AutonomousSecurityAgentV2,
 )
@@ -123,7 +121,7 @@ class TestPreflightSkipsLLMOnTrueVerdict:
     ):
         """A finding in tests/conftest.py with no production caller —
         pre-flight returns ``true``, agent skips analyze_vulnerability,
-        synthesises a deterministic clean analysis, emits annotation."""
+        synthesises a deterministic clean analysis."""
         finding = _finding("tests/conftest.py", "setup_user", fid="F-FIX")
         # findings.json input
         findings_in = tmp_path / "findings_in.json"
@@ -147,7 +145,7 @@ class TestPreflightSkipsLLMOnTrueVerdict:
                 findings_path=str(findings_in),
                 max_findings=10,
                 checklist=checklist,
-                emit_annotations=True,
+                emit_journal=True,
             )
 
         # Telemetry fields populated.
@@ -155,14 +153,6 @@ class TestPreflightSkipsLLMOnTrueVerdict:
         assert report["fixture_detection_metrics"]["prep_outcomes"][
             "true"
         ] == 1
-        # Annotation written with status=clean (via _derive_status
-        # on synthetic is_true_positive=False).
-        ann_dir = agent.out_dir / "annotations"
-        ann = read_annotation(ann_dir, "tests/conftest.py", "setup_user")
-        assert ann is not None
-        assert ann.metadata.get("status") == "clean"
-        # Body cites the harness reasoning.
-        assert "Test-harness circularity" in ann.body
 
 
 class TestPreflightDoesNotSkipOnFalseVerdict:
@@ -188,7 +178,7 @@ class TestPreflightDoesNotSkipOnFalseVerdict:
                 findings_path=str(findings_in),
                 max_findings=10,
                 checklist=checklist,
-                emit_annotations=False,
+                emit_journal=False,
             )
 
         mock_analyze.assert_called_once()
@@ -224,7 +214,7 @@ class TestPreflightDoesNotSkipOnCandidateVerdict:
                 findings_path=str(findings_in),
                 max_findings=10,
                 checklist=None,
-                emit_annotations=False,
+                emit_journal=False,
             )
 
         # LLM was called (no skip on candidate).
@@ -267,7 +257,7 @@ class TestManualOverrideBypassesPreflight:
                 findings_path=str(findings_in),
                 max_findings=10,
                 checklist=checklist,
-                emit_annotations=False,
+                emit_journal=False,
             )
 
         mock_analyze.assert_called_once()
@@ -305,7 +295,7 @@ class TestMixedBatch:
                 findings_path=str(findings_in),
                 max_findings=10,
                 checklist=checklist,
-                emit_annotations=True,
+                emit_journal=True,
             )
 
         # Two LLM calls (prod + override-bypass).

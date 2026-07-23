@@ -160,6 +160,26 @@ class EventType:
     # class so it's a universal "how often does this model follow the schema"
     # axis, decoupled from any task-specific reliability cell.
     SCHEMA_VALID = "schema_valid"
+    # Cross-run verdict stability: same model, same finding, different
+    # run — did the normalised verdict (positive/negative/inconclusive)
+    # stay the same? ``correct`` = held; ``incorrect`` = flipped.
+    # Producer: :mod:`core.llm.scorecard.stability`.
+    CROSS_RUN_STABILITY = "cross_run_stability"
+    # Cross-family check: a different model family re-analyses a
+    # finding the primary flagged. ``correct`` = checker agreed;
+    # ``incorrect`` = checker disputed (conservative override applied).
+    # Producer: :mod:`core.llm.scorecard.cross_family`.
+    CROSS_FAMILY_CHECK = "cross_family_check"
+    # Self-consistency: Stage F retried a finding (contradictory or
+    # low confidence). ``correct`` = verdict held after retry;
+    # ``incorrect`` = verdict flipped.
+    # Producer: :mod:`core.llm.scorecard.self_consistency`.
+    SELF_CONSISTENCY = "self_consistency"
+    # Dataflow validation: mechanical dataflow analysis (CodeQL/IRIS
+    # or structural tree-sitter) checked the LLM's reachability
+    # claim. ``correct`` = confirmed; ``incorrect`` = refuted.
+    # Producer: :mod:`core.llm.scorecard.dataflow_validation`.
+    DATAFLOW_VALIDATION = "dataflow_validation"
 
 
 ALL_EVENT_TYPES: Tuple[str, ...] = (
@@ -172,6 +192,10 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.EXPLOIT_INTENT_MATCH,
     EventType.EXPLOIT_CHAIN_CLOSURE,
     EventType.SCHEMA_VALID,
+    EventType.CROSS_RUN_STABILITY,
+    EventType.CROSS_FAMILY_CHECK,
+    EventType.SELF_CONSISTENCY,
+    EventType.DATAFLOW_VALIDATION,
 )
 
 

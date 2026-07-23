@@ -630,3 +630,30 @@ class ProjectManager:
             if project.content_id == content_id:
                 return project
         return None
+
+
+def is_project_output_dir(directory: Path) -> bool:
+    """Check whether *directory* is a managed project output directory.
+
+    Returns True when *directory* matches any known project's
+    ``output_dir``, or falls under the default project output base
+    (``out/projects/``). This is used to decide whether sibling
+    directories should share state (strategy weights, project context,
+    learnings). When False, sibling enumeration must validate each
+    sibling's target path to prevent cross-project contamination.
+    """
+    resolved = directory.resolve()
+    default_base = DEFAULT_OUTPUT_BASE.resolve()
+    try:
+        resolved.relative_to(default_base)
+        return True
+    except ValueError:
+        pass
+    try:
+        mgr = ProjectManager()
+        for project in mgr.list_projects():
+            if project.output_path.resolve() == resolved:
+                return True
+    except Exception:
+        pass
+    return False

@@ -4,7 +4,7 @@ rules:
     languages: [java, python, javascript, php]
     severity: HIGH
     pattern-either:
-      - pattern: executeQuery("SELECT " + $X + " FROM " + $Y)
+      - pattern: $OBJ.executeQuery("SELECT " + $X + " FROM " + $Y)
       - pattern: query = "SELECT " + ...
     metadata:
       cwe: ["CWE-89"]

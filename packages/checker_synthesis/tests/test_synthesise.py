@@ -374,6 +374,202 @@ class TestTriage:
 
 
 # ---------------------------------------------------------------------------
+# Dual control
+# ---------------------------------------------------------------------------
+
+
+def _stub_engines_sequence(monkeypatch, sequence):
+    """Patch ``_run_engine`` to return a sequence of (matches, errors)
+    tuples, one per call in order."""
+    calls = {"n": 0}
+
+    def fake_run(rule, rule_path, target):
+        n = calls["n"]
+        calls["n"] += 1
+        if n < len(sequence):
+            matches, errors = sequence[n]
+            return list(matches), list(errors)
+        return [], []
+
+    monkeypatch.setattr(synth_mod, "_run_engine", fake_run)
+    return calls
+
+
+class TestDualControl:
+    def test_dual_control_passes(self, tmp_path, monkeypatch):
+        """Rule matches positive fixture, does not match negative →
+        dual_control=True."""
+        seed = _seed(tmp_path)
+        seed_match = Match(file="src/auth.py", line=3)
+        pos_match = Match(file="test_positive.py", line=2)
+        variant = Match(file="src/admin.py", line=42)
+        _stub_engines_sequence(monkeypatch, [
+            ([seed_match], []),         # positive control
+            ([pos_match], []),          # dual control: positive fixture
+            ([], []),                   # dual control: negative fixture
+            ([seed_match, variant], []),  # codebase scan
+        ])
+        llm = _stub_llm([{
+            "rule_body": "rules:\n  - id: x\n    pattern: ...\n",
+            "rationale": "f-string into execute",
+            "test_positive": "def bad():\n    cursor.execute(f'{x}')\n",
+            "test_negative": "def good():\n    cursor.execute('?', (x,))\n",
+        }])
+        result = synthesise_and_run(seed, tmp_path, tmp_path / "out", llm)
+        assert result.rule is not None
+        assert result.positive_control is True
+        assert result.dual_control is True
+        assert len(result.matches) == 1
+
+    def test_dual_control_positive_miss_retries(self, tmp_path, monkeypatch):
+        """Positive fixture doesn't match → retry with feedback."""
+        seed = _seed(tmp_path)
+        seed_match = Match(file="src/auth.py", line=3)
+        pos_match = Match(file="test_positive.py", line=2)
+        _stub_engines_sequence(monkeypatch, [
+            ([seed_match], []),    # attempt 0: positive control passes
+            ([], []),              # attempt 0: dual control pos fixture MISS
+            # retry
+            ([seed_match], []),    # attempt 1: positive control passes
+            ([pos_match], []),     # attempt 1: dual control pos fixture HIT
+            ([], []),              # attempt 1: dual control neg fixture clean
+            ([seed_match], []),    # codebase scan
+        ])
+        llm = _stub_llm([
+            {
+                "rule_body": "rules:\n  - id: bad",
+                "rationale": "too narrow",
+                "test_positive": "def bad():\n    exec(f'{x}')\n",
+                "test_negative": "def good():\n    exec('?', (x,))\n",
+            },
+            {
+                "rule_body": "rules:\n  - id: good",
+                "rationale": "fixed",
+                "test_positive": "def bad():\n    exec(f'{x}')\n",
+                "test_negative": "def good():\n    exec('?', (x,))\n",
+            },
+        ])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm, max_retries=1,
+        )
+        assert result.dual_control is True
+        assert any("dual control" in e for e in result.errors)
+
+    def test_dual_control_negative_hit_retries(self, tmp_path, monkeypatch):
+        """Negative fixture matches → retry because rule is too broad."""
+        seed = _seed(tmp_path)
+        seed_match = Match(file="src/auth.py", line=3)
+        pos_match = Match(file="test_positive.py", line=2)
+        neg_match = Match(file="test_negative.py", line=2)
+        _stub_engines_sequence(monkeypatch, [
+            ([seed_match], []),    # attempt 0: positive control
+            ([pos_match], []),     # attempt 0: dual pos HIT
+            ([neg_match], []),     # attempt 0: dual neg HIT (bad!)
+            # retry
+            ([seed_match], []),    # attempt 1: positive control
+            ([pos_match], []),     # attempt 1: dual pos HIT
+            ([], []),              # attempt 1: dual neg clean
+            ([seed_match], []),    # codebase scan
+        ])
+        llm = _stub_llm([
+            {
+                "rule_body": "rules:\n  - id: broad",
+                "rationale": "too broad",
+                "test_positive": "def bad():\n    exec(f'{x}')\n",
+                "test_negative": "def good():\n    exec('?', (x,))\n",
+            },
+            {
+                "rule_body": "rules:\n  - id: tight",
+                "rationale": "tightened",
+                "test_positive": "def bad():\n    exec(f'{x}')\n",
+                "test_negative": "def good():\n    exec('?', (x,))\n",
+            },
+        ])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm, max_retries=1,
+        )
+        assert result.dual_control is True
+        assert any("too broad" in e for e in result.errors)
+
+    def test_no_fixtures_skips_dual_control(self, tmp_path, monkeypatch):
+        """When LLM omits test fixtures, dual control is skipped
+        gracefully — synthesis still succeeds on positive control alone."""
+        seed = _seed(tmp_path)
+        seed_match = Match(file="src/auth.py", line=3)
+        variant = Match(file="src/admin.py", line=42)
+        _stub_engines(
+            monkeypatch,
+            seed_matches=[seed_match],
+            repo_matches=[seed_match, variant],
+        )
+        llm = _stub_llm([{
+            "rule_body": "rules:\n  - id: x\n    pattern: ...\n",
+            "rationale": "no fixtures emitted",
+        }])
+        result = synthesise_and_run(seed, tmp_path, tmp_path / "out", llm)
+        assert result.rule is not None
+        assert result.positive_control is True
+        assert result.dual_control is False
+        assert len(result.matches) == 1
+
+    def test_dual_control_exhausts_retries(self, tmp_path, monkeypatch):
+        """If dual control keeps failing and retries run out, no rule
+        is returned."""
+        seed = _seed(tmp_path)
+        seed_match = Match(file="src/auth.py", line=3)
+        _stub_engines_sequence(monkeypatch, [
+            ([seed_match], []),  # attempt 0: pos control
+            ([], []),            # attempt 0: dual pos MISS
+            ([seed_match], []),  # attempt 1: pos control
+            ([], []),            # attempt 1: dual pos MISS
+        ])
+        llm = _stub_llm([
+            {
+                "rule_body": "rules:\n  - id: a",
+                "rationale": "a",
+                "test_positive": "bad()",
+                "test_negative": "good()",
+            },
+            {
+                "rule_body": "rules:\n  - id: b",
+                "rationale": "b",
+                "test_positive": "bad()",
+                "test_negative": "good()",
+            },
+        ])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm, max_retries=1,
+        )
+        assert result.rule is None
+        assert result.dual_control is False
+
+    def test_fixture_ext_python(self):
+        from packages.checker_synthesis.synthesise import _fixture_ext
+        seed = SeedBug(
+            file="src/app.py", function="f",
+            line_start=1, line_end=2, cwe="CWE-1", reasoning="r",
+        )
+        assert _fixture_ext(seed, "semgrep") == ".py"
+
+    def test_fixture_ext_c_coccinelle(self):
+        from packages.checker_synthesis.synthesise import _fixture_ext
+        seed = SeedBug(
+            file="src/drv.c", function="f",
+            line_start=1, line_end=2, cwe="CWE-1", reasoning="r",
+        )
+        assert _fixture_ext(seed, "coccinelle") == ".c"
+        assert _fixture_ext(seed, "semgrep") == ".c"
+
+    def test_fixture_ext_go(self):
+        from packages.checker_synthesis.synthesise import _fixture_ext
+        seed = SeedBug(
+            file="cmd/main.go", function="f",
+            line_start=1, line_end=2, cwe="CWE-1", reasoning="r",
+        )
+        assert _fixture_ext(seed, "semgrep") == ".go"
+
+
+# ---------------------------------------------------------------------------
 # Round-trip
 # ---------------------------------------------------------------------------
 
@@ -398,3 +594,23 @@ class TestSerialisation:
         assert d["rule"]["engine"] == "semgrep"
         assert d["positive_control"] is True
         assert len(d["matches"]) == 1
+
+    def test_to_dict_includes_dual_control(self, tmp_path, monkeypatch):
+        seed = _seed(tmp_path)
+        seed_match = Match(file="src/auth.py", line=3)
+        pos_match = Match(file="test_positive.py", line=2)
+        _stub_engines_sequence(monkeypatch, [
+            ([seed_match], []),
+            ([pos_match], []),
+            ([], []),
+            ([seed_match], []),
+        ])
+        llm = _stub_llm([{
+            "rule_body": "rules:\n  - id: x",
+            "rationale": "x",
+            "test_positive": "bad()",
+            "test_negative": "good()",
+        }])
+        result = synthesise_and_run(seed, tmp_path, tmp_path / "out", llm)
+        d = result.to_dict()
+        assert d["dual_control"] is True

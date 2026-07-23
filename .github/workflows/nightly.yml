@@ -3,7 +3,7 @@ name: Nightly (slow + integration)
 # The `slow` and `integration` markers are deselected by default in
 # pytest.ini (`addopts = -m "not integration and not slow"`), so these
 # tests run NOWHERE in the per-PR / per-push test matrix. This workflow
-# is the only place they execute in CI:
+# is the only place they execute in CI.
 #
 #   * slow        — perf baselines + sandbox-setup-heavy resolver tests
 #                   (deterministic; a failure is a real regression).
@@ -34,12 +34,11 @@ env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
 
 jobs:
   slow-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
@@ -64,18 +63,6 @@ jobs:
           uv pip install -r requirements-dev.txt
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
-        # The binary-oracle precision/edge corpora (core/inventory) are the
-        # only @pytest.mark.slow tests needing system tooling beyond the
-        # gcc/gcov ubuntu-latest already ships:
-        #   * radare2 (r2)        — direct-call-edge extraction
-        #   * LLVM 21 + clang-21  — snappy/leveldb LLVM source-based coverage
-        #                           (snappy's cmake calls plain clang/clang++
-        #                           with a clang-21 diagnostic flag) and the
-        #                           regex-rust llvm-cov/llvm-profdata path.
-        # continue-on-error: an apt / apt.llvm.org hiccup must not red-fail
-        # the nightly — the corpus tests skip themselves when a tool is
-        # absent (skipif guards), so a provisioning miss degrades to
-        # skipped-not-failed and shows up as a SKIP reason in the run log.
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -84,36 +71,27 @@ jobs:
           wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
           chmod +x /tmp/llvm.sh
           sudo /tmp/llvm.sh 21
-          # llvm-21 carries llvm-cov / llvm-profdata; clang-21 is the
-          # compiler. The drivers prefer the -21 suffixed binaries.
           sudo apt-get install -y --no-install-recommends llvm-21 clang-21
-          # snappy's cmake invokes plain ``clang`` / ``clang++``.
           sudo update-alternatives --install /usr/bin/clang clang \
             /usr/bin/clang-21 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ \
             /usr/bin/clang++-21 100
-          # Make the unsuffixed llvm-cov / llvm-profdata resolvable too.
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
-          # Sanity (non-fatal — the tests guard on presence regardless).
           r2 -v || true
           clang --version || true
           /usr/lib/llvm-21/bin/llvm-cov --version || true
           /usr/lib/llvm-21/bin/llvm-profdata --version || true
 
-      - name: Run slow tests (deterministic — failure is a real regression)
+      - name: Run slow tests
+        env:
+          RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           source $VENV_PATH/bin/activate
-          # CLI -m overrides pytest.ini's default deselect.
-          python -m pytest -m slow core packages --durations=25
+          python -m pytest -m slow core packages -q --durations=25
 
-      - name: Run integration tests (live network — retry once on failure)
-        # External-service outages (OSV/NVD/GitHub down or rate-limited)
-        # cause transient failures. Retry once after 60s — a genuine
-        # contract break fails both attempts; a transient outage
-        # recovers on the second. The job red-fails only on persistent
-        # failure, so a red nightly is always worth investigating.
+      - name: Run integration tests (retry once on external outage)
         env:
-          GITHUB_TOKEN: ${{ github.token }}  # higher rate limits for the live GitHub tests
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           source $VENV_PATH/bin/activate
           rc=0
@@ -130,11 +108,11 @@ jobs:
           python -m pytest -m integration core packages --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
 
-      - name: Upload integration test results
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
-          name: integration-test-results
+          name: nightly-slow-integration-results
           path: ${{ runner.temp }}/integration-attempt-*.xml
           retention-days: 14
           if-no-files-found: ignore

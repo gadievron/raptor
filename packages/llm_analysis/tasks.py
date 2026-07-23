@@ -125,9 +125,11 @@ class AnalysisTask(DispatchTask):
         )
         si_blocks = evidence_blocks_for_finding(finding)
         extra = _merge_sage_precall(finding, *si_blocks)
+        budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=extra,
             allow_unreachable=self.allow_unreachable,
+            budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -144,11 +146,23 @@ class AnalysisTask(DispatchTask):
     def get_system_prompt(self):
         return _analysis_system_text(self.profile)
 
+    def budget_tokens_for_model(self, model) -> int:
+        return _budget_for_task(self, model)
+
     def process_result(self, item, result):
         out = super().process_result(item, result)
         from packages.cvss import score_finding
         score_finding(out)
         return out
+
+
+def _budget_for_task(task, model) -> int:
+    from core.llm.prompt_budget import context_budget_for_model
+
+    name = getattr(model, "model_name", None) if model else None
+    sys_text = task.get_system_prompt() or ""
+    sys_tokens = len(sys_text) // 4
+    return context_budget_for_model(name or "fallback", sys_tokens)
 
 
 def _is_sca_finding(f: Dict) -> bool:
@@ -338,8 +352,10 @@ class ExploitTask(DispatchTask):
         )
         si_blocks = evidence_blocks_for_finding(finding)
         sage_blocks = self._sage_exploit_blocks(finding)
+        budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_exploit_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=si_blocks + sage_blocks,
+            budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -395,6 +411,9 @@ class ExploitTask(DispatchTask):
 
     def get_system_prompt(self):
         return _exploit_system_text(self.profile)
+
+    def budget_tokens_for_model(self, model) -> int:
+        return _budget_for_task(self, model)
 
     def get_schema(self, finding):
         return None
@@ -530,8 +549,10 @@ class ConsensusTask(DispatchTask):
         )
         si_blocks = evidence_blocks_for_finding(finding)
         extra = _merge_sage_precall(finding, *si_blocks)
+        budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=extra,
+            budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -547,6 +568,9 @@ class ConsensusTask(DispatchTask):
 
     def get_system_prompt(self):
         return _analysis_system_text(self.profile)
+
+    def budget_tokens_for_model(self, model) -> int:
+        return _budget_for_task(self, model)
 
     def finalize(self, results, prior_results):
         """Apply verdict rules across analysis + consensus results.
@@ -693,10 +717,12 @@ class JudgeTask(DispatchTask):
             ),
         ) + evidence_blocks_for_finding(finding)
 
+        budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
             finding,
             profile=self.profile,
             extra_blocks=_merge_sage_precall(finding, *extra_blocks),
+            budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -712,6 +738,9 @@ class JudgeTask(DispatchTask):
 
     def get_system_prompt(self):
         return _analysis_system_text(self.profile) + self._JUDGE_ADDENDUM
+
+    def budget_tokens_for_model(self, model) -> int:
+        return _budget_for_task(self, model)
 
     def finalize(self, results, prior_results):
         """Apply judge verdicts: preserve primary (single), majority (multi)."""

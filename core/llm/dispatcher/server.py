@@ -78,7 +78,7 @@ _logger = logging.getLogger(__name__)
 #   abstraction layer. The dispatcher's INFO-level audit was a
 #   third copy of the same fact, alongside the provider's own
 #   error log — see the retry-dedupe commit for the full cluster.
-_DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch", "request.error"})
+_DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch"})
 
 
 def _scrub(value: Optional[str]) -> Optional[str]:
@@ -521,13 +521,18 @@ class LLMDispatcher:
         # SOME identifier; the prefix gives correlation without
         # disclosure.
         # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
-        _logger.log(
-            level,
-            "llm-dispatcher %s %s pid=%s uid=%s token=%s label=%s%s",
-            ev.event, ev.status, ev.peer_pid, ev.peer_uid,
-            ev.token_id or "-", safe_worker or "-",
-            f" reason={safe_reason}" if safe_reason else "",
-        )
+        parts = [f"llm-dispatcher {ev.event} {ev.status}"]
+        if ev.peer_pid is not None:
+            parts.append(f"pid={ev.peer_pid}")
+        if ev.peer_uid is not None:
+            parts.append(f"uid={ev.peer_uid}")
+        if ev.token_id:
+            parts.append(f"token={ev.token_id}")
+        if safe_worker:
+            parts.append(f"label={safe_worker}")
+        if safe_reason:
+            parts.append(f"reason={safe_reason}")
+        _logger.log(level, " ".join(parts))
         if self._audit_path is None:
             return
         with self._audit_lock:

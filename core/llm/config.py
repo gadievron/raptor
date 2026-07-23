@@ -249,7 +249,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
             continue
 
     if best_model:
-        logger.info(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
+        logger.debug(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
 
     with _thinking_model_lock:
         _cached_thinking_model = best_model

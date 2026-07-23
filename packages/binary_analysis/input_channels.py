@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 
 # Deliberately broader than core/function_taxonomy: ubiquitous functions
 # like read/fread/open are zero-signal as *sinks* but valid evidence that

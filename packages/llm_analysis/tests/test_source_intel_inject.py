@@ -84,7 +84,7 @@ class TestPrepare:
         result = _result_with_evidence()
         calls = []
 
-        def _spy(target):
+        def _spy(target, **_kw):
             calls.append(target)
             return result
 

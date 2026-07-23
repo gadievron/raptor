@@ -51,7 +51,6 @@ rules:
       - pattern: rand.Intn(...)
       - pattern: rand.Int63n(...)
       - pattern: rand.Float64()
-      - pattern: rand.Read(...)
     metadata:
       cwe: ["CWE-338"]
       asvs: ["V11.5.1"]

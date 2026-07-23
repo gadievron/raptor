@@ -33,7 +33,7 @@ for pure-agentic approaches.
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from packages.codeql.smt_path_validator import (
+from core.smt_solver.path_feasibility import (
     PathCondition,
     PathSMTResult,
     check_path_feasibility,

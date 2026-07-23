@@ -60,8 +60,6 @@ class TestCatalogEntryFromDict:
             },
             "pipeline": {
                 "recommended": ["scan", "agentic"],
-                "estimated_cost_usd": [10, 30],
-                "estimated_time_min": [20, 60],
             },
             "budget_defaults": {
                 "typical_findings_count": 20,
@@ -80,8 +78,6 @@ class TestCatalogEntryFromDict:
         assert e.attack_surface_high == ("src/http",)
         assert e.attack_surface_low == ("tests",)
         assert e.pipeline_recommended == ("scan", "agentic")
-        assert e.estimated_cost_usd == (10.0, 30.0)
-        assert e.estimated_time_min == (20, 60)
         assert e.typical_findings_count == 20
         assert e.typical_cost_per_run_usd == 15.5
         assert e.version == 2

@@ -1,34 +1,16 @@
 """Cost-and-time estimator (QoL #21).
 
-Reads ``pipeline.estimated_cost_usd`` + ``estimated_time_min`` from
-the matched target-type catalog entry and renders an operator-facing
-summary at lifecycle start. Composition layer over the catalog
-substrate — no per-target heuristics live here; the catalog is the
-single source of truth.
+Derives run estimates from the model scorecard — real per-model call
+history: observed cost-per-call and latency-per-call, scaled by finding
+count and divided by ``max_parallel``.  Model- and parallelism-aware.
 
-Consumers:
-  * ``raptor.py:_run_with_lifecycle`` — print at run start.
-  * ``libexec/raptor-run-lifecycle start`` — print on the skills
-    invocation path (parity with raptor.py).
-  * ``--max-cost-usd`` pre-flight gate — hard-fails the run before
-    any LLM spend when the catalog estimate exceeds the operator's
-    declared cap.
-
-Returns ``None`` when:
-  * ``target_path`` is None (no target → no detection possible).
-  * The catalog doesn't match any entry, or the matched entry
-    carries zero-valued estimate pairs (the ``generic`` fallback
-    + entries that haven't filled in cost/time hints).
-  * The catalog loader raises (best-effort; substrate failures
-    must never break the lifecycle).
-
-A ``None`` return is the signal to the renderer to print nothing —
-operators get the estimate when it's available, silence when it
-isn't, never a placeholder.
+Returns ``None`` when the scorecard has insufficient data for the
+requested model (< 5 calls). No estimate is better than a wrong one.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -36,17 +18,11 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class RunEstimate:
-    """Estimated cost + time for a run, sourced from the target-type catalog.
+    """Estimated cost + time for a run.
 
     ``cost_low / cost_high`` in USD; ``time_low / time_high`` in
-    minutes. The pair represents the catalog author's expected
-    range, not a confidence interval — read as "typical runs land
-    here." Wide ranges (``$10 - $50``) signal high variance in the
-    target shape; narrow ranges signal predictable runs.
+    minutes.
 
-    ``target_type`` is the catalog entry name that matched
-    (e.g. ``c.userspace-daemon``); ``generic`` is filtered out at
-    construction time so a None return is the no-useful-data signal.
     """
 
     cost_low: float
@@ -54,36 +30,71 @@ class RunEstimate:
     time_low: int
     time_high: int
     target_type: str
+    source: str = "scorecard"
 
 
-def estimate_run(target_path: Optional[Path]) -> Optional[RunEstimate]:
-    """Best-effort estimate from the target-type catalog. None when
-    no useful data is available (see module docstring for the
-    None-return conditions)."""
-    if target_path is None:
+def estimate_from_scorecard(
+    model: str,
+    n_findings: int,
+    *,
+    max_parallel: int = 3,
+    scorecard_path: Optional[Path] = None,
+) -> Optional[RunEstimate]:
+    """Derive a cost + time estimate from the model's scorecard history.
+
+    Aggregates ``calls``, ``cost_usd``, and ``latency_ms_sum`` across
+    all decision classes for the given model, then scales by
+    ``n_findings`` and ``max_parallel``.
+
+    Returns ``None`` when the scorecard is unavailable, the model has
+    no recorded calls, or latency data is missing.
+    """
+    if n_findings <= 0:
         return None
     try:
-        from core.run.target_types import load
-        entry = load(Path(target_path))
+        from core.llm.scorecard.scorecard import ModelScorecard
+    except ImportError:
+        return None
+    try:
+        sc = ModelScorecard(path=scorecard_path) if scorecard_path else ModelScorecard()
+        stats = sc.get_stats()
     except Exception:  # noqa: BLE001
         return None
-    if entry is None:
+
+    total_calls = 0
+    total_cost = 0.0
+    total_latency_ms = 0
+    for cell in stats:
+        if cell.model != model:
+            continue
+        total_calls += cell.calls
+        total_cost += cell.cost_usd
+        total_latency_ms += cell.latency_ms_sum
+
+    if total_calls < 5:
         return None
-    cost_low, cost_high = entry.estimated_cost_usd
-    time_low, time_high = entry.estimated_time_min
-    # Filter out zero-valued estimates — the ``generic`` fallback
-    # entry and any catalog entry that hasn't filled in cost/time
-    # hints both surface as (0.0, 0.0) / (0, 0). Returning a
-    # ``$0-$0`` estimate would be misleading; None is the
-    # no-useful-data signal.
-    if cost_high <= 0 and time_high <= 0:
-        return None
+
+    avg_cost = total_cost / total_calls
+    avg_latency_s = total_latency_ms / (total_calls * 1000)
+
+    parallel = max(1, max_parallel)
+    wall_time_s = (n_findings * avg_latency_s) / parallel
+    wall_time_min = wall_time_s / 60
+
+    cost_est = n_findings * avg_cost
+    # ±30% range to reflect variance
+    cost_low = cost_est * 0.7
+    cost_high = cost_est * 1.3
+    time_low = max(1, math.floor(wall_time_min * 0.7))
+    time_high = max(1, math.ceil(wall_time_min * 1.3))
+
     return RunEstimate(
-        cost_low=cost_low,
-        cost_high=cost_high,
+        cost_low=round(cost_low, 2),
+        cost_high=round(cost_high, 2),
         time_low=time_low,
         time_high=time_high,
-        target_type=entry.name,
+        target_type=f"{model} (scorecard)",
+        source="scorecard",
     )
 
 
@@ -92,16 +103,12 @@ def format_estimate(est: Optional[RunEstimate]) -> str:
     None — caller can unconditionally append to output, no None
     check needed at the print site.
 
-    Format::
+    ::
 
-        Expected: $25-$50, 40-75 min (target type: c.userspace-daemon)
+        Expected: $25-$50, 40-75 min (claude-opus-4-7, from scorecard)
 
-    Ranges with low == high collapse to a single value::
-
-        Expected: $30, 60 min (target type: c.userspace-daemon)
-
-    Cost or time only (the other side is zero-valued in the
-    catalog) renders just the populated half.
+    Ranges with low == high collapse to a single value.
+    Cost or time only renders just the populated half.
     """
     if est is None:
         return ""
@@ -125,7 +132,5 @@ def format_estimate(est: Optional[RunEstimate]) -> str:
     parts = [p for p in (money, mins) if p]
     if not parts:
         return ""
-    return (
-        f"Expected: {', '.join(parts)} "
-        f"(target type: {est.target_type})"
-    )
+    label = f"{est.target_type.split(' (scorecard)')[0]}, from scorecard"
+    return f"Expected: {', '.join(parts)} ({label})"

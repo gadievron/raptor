@@ -22,7 +22,7 @@ from core.hash import sha256_file
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
 from .diff import diff_manifests
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 from .fuzz_evidence import CrashEvidence, FuzzEvidenceBundle, load_fuzz_evidence
 from .fuzz_suitability import assess_fuzz_suitability
 from .graph_store import BinaryGraphStore, graph_path_for_run, graph_summary, stable_node_id

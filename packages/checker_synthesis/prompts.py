@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable
 
+from .grammars import COCCINELLE_GRAMMAR, SEMGREP_GRAMMAR
 from .models import SeedBug, SynthesisedRule, Match
 
 
@@ -43,7 +44,7 @@ def _truncate_snippet(snippet: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-SYNTHESIS_SYSTEM = (
+_SYNTHESIS_SYSTEM_BASE = (
     "You are a security analyst translating a confirmed code-level bug "
     "into a static analysis rule. The rule must:\n"
     "  1. Match the original bug's pattern (positive control).\n"
@@ -51,17 +52,34 @@ SYNTHESIS_SYSTEM = (
     "VARIANTS of the same bug class — not every superficially similar "
     "construct.\n"
     "  3. Be syntactically valid for the chosen engine (Semgrep YAML "
-    "or Coccinelle .cocci).\n\n"
+    "or Coccinelle .cocci).\n"
+    "  4. Come with test fixtures — a minimal vulnerable snippet that "
+    "MUST match (test_positive) and a minimal safe snippet that must "
+    "NOT match (test_negative) — proving the rule distinguishes buggy "
+    "from correct code.\n\n"
     "Avoid rules that match every call to a common API (e.g. every "
     "``subprocess.run``). Match the structural shape that makes the "
     "ORIGINAL bug unsafe — typically the absence of a check, the use "
     "of a tainted value at a sink, or a missing cleanup."
 )
 
+_ENGINE_GRAMMARS = {
+    "coccinelle": COCCINELLE_GRAMMAR,
+    "semgrep": SEMGREP_GRAMMAR,
+}
+
+
+def synthesis_system_for_engine(engine: str) -> str:
+    """Return the system prompt with engine-specific grammar grounding."""
+    grammar = _ENGINE_GRAMMARS.get(engine)
+    if grammar:
+        return _SYNTHESIS_SYSTEM_BASE + "\n\n" + grammar
+    return _SYNTHESIS_SYSTEM_BASE
+
 
 SYNTHESIS_SCHEMA: Dict[str, Any] = {
     "type": "object",
-    "required": ["rule_body", "rationale"],
+    "required": ["rule_body", "rationale", "test_positive", "test_negative"],
     "properties": {
         "rule_body": {
             "type": "string",
@@ -77,6 +95,29 @@ SYNTHESIS_SCHEMA: Dict[str, Any] = {
                 "One paragraph explaining what structural pattern this "
                 "rule captures and why a variant matching this rule is "
                 "likely to be the same bug class."
+            ),
+        },
+        "test_positive": {
+            "type": "string",
+            "description": (
+                "A minimal standalone code snippet (5-20 lines) that "
+                "contains the vulnerable pattern. The rule MUST match "
+                "this snippet. This is the 'known bad' — a synthetic "
+                "example of the bug class, simpler than the original "
+                "seed. Must be complete enough to parse (imports, "
+                "function definition, etc.)."
+            ),
+        },
+        "test_negative": {
+            "type": "string",
+            "description": (
+                "A minimal standalone code snippet (5-20 lines) of "
+                "structurally similar but SAFE code that the rule must "
+                "NOT match. This is the 'known good' — same shape as "
+                "the positive fixture but with the vulnerability fixed "
+                "(e.g. parameterised query instead of string concat, "
+                "bounds check added, resource freed). Must be complete "
+                "enough to parse."
             ),
         },
     },
@@ -132,7 +173,16 @@ def build_synthesis_prompt(
         "first instinct is a single ``pattern: foo(...)`` that would "
         "match every call to ``foo``, refine it.",
         "",
-        "Respond with JSON: {\"rule_body\": \"...\", \"rationale\": \"...\"}.",
+        "Additionally, provide two test fixtures (each 5-20 lines of "
+        "complete, parseable code):",
+        "  4. test_positive: a minimal standalone snippet containing the "
+        "vulnerable pattern — the rule MUST match this.",
+        "  5. test_negative: a minimal standalone snippet that is "
+        "structurally similar but SAFE (the fix applied) — the rule "
+        "must NOT match this.",
+        "",
+        "Respond with JSON: {\"rule_body\": \"...\", \"rationale\": \"...\", "
+        "\"test_positive\": \"...\", \"test_negative\": \"...\"}.",
     ]
     if retry_feedback:
         parts += [

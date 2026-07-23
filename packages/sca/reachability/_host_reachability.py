@@ -66,7 +66,7 @@ should set ``confidence="medium"`` to reflect this, not
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from core.analysis.reachability import (
     InternalFunction,
@@ -139,7 +139,7 @@ def _looks_internal(name: str) -> bool:
 
 
 def is_host_dead(
-    inventory: Dict[str, Any],
+    inventory: dict[str, Any],
     host: InternalFunction,
     *,
     exclude_test_files: bool = True,
@@ -189,8 +189,8 @@ def is_host_dead(
 
 
 def all_call_sites_in_dead_code(
-    inventory: Dict[str, Any],
-    evidence: List[str],
+    inventory: dict[str, Any],
+    evidence: list[str],
     *,
     exclude_test_files: bool = True,
 ) -> bool:
@@ -233,8 +233,8 @@ def all_call_sites_in_dead_code(
 
 
 def classify_called_or_dead(
-    inventory: Dict[str, Any],
-    evidence_lines: List[str],
+    inventory: dict[str, Any],
+    evidence_lines: list[str],
     *,
     likely_called_reason: str,
     affected_summary: str,

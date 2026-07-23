@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packages.codeql.build_detector import BuildDetector
+from core.build.build_detector import BuildDetector
 
 
 class TestJavaSynthesisedClasspath(unittest.TestCase):

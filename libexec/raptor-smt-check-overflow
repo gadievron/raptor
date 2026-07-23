@@ -38,11 +38,18 @@ parser involved for the verb's own predicate), so the verb cannot fail
 at parse time on its own predicate — only on caller-supplied guards.
 """
 import argparse
+import faulthandler
 import json
+import signal
 import sys
 from pathlib import Path
 
 # libexec/<this> -> repo root
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
 # ─── trust-marker check (do not import; inline by design) ───
 import os
 if not (os.environ.get("CLAUDECODE")

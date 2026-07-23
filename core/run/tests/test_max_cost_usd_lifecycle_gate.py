@@ -3,20 +3,12 @@
 Covers:
   1. ``raptor._extract_and_strip_max_cost_usd`` — argument-level
      parsing + scrubbing of the lifecycle-only flag.
-  2. ``libexec/raptor-run-lifecycle start --max-cost-usd <cap>``
-     end-to-end: estimate prints, exit code 0 when estimate within
-     cap, exit code 1 + clear stderr message when estimate exceeds
-     cap.
-
-Both raptor.py and libexec/raptor-run-lifecycle apply the gate;
-both surfaces are exercised so a regression in one path doesn't
-slip past tests covering only the other.
+  2. ``raptor._preflight_cost_gate`` — scorecard-derived estimate
+     compared against the operator's declared budget.
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -25,18 +17,16 @@ import pytest
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
-# ---------------------------------------------------------------------------
-# Helper-level: _extract_and_strip_max_cost_usd
-# ---------------------------------------------------------------------------
-
-
 def _import_raptor():
-    """Import the dispatcher module. Cached after first call so
-    repeat tests in the same process don't re-exec the import."""
     if "raptor" not in sys.modules:
         sys.path.insert(0, str(_RAPTOR_ROOT))
     import raptor  # noqa: PLC0415
     return raptor
+
+
+# ---------------------------------------------------------------------------
+# Helper-level: _extract_and_strip_max_cost_usd
+# ---------------------------------------------------------------------------
 
 
 class TestExtractAndStrip:
@@ -67,9 +57,6 @@ class TestExtractAndStrip:
         assert out == ["--repo", "/x"]
 
     def test_fractional_dollar_amount_preserved(self):
-        # Sub-penny precision the scorecard uses (``$0.0042``) is
-        # representable; gate should accept floats with arbitrary
-        # decimals.
         raptor = _import_raptor()
         cap, _ = raptor._extract_and_strip_max_cost_usd(
             ["--max-cost-usd", "0.0042"],
@@ -105,111 +92,60 @@ class TestExtractAndStrip:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: libexec/raptor-run-lifecycle start --max-cost-usd <cap>
+# Pre-flight gate: _preflight_cost_gate
 # ---------------------------------------------------------------------------
 
 
-def _build_c_daemon_target(tmp_path: Path) -> Path:
-    """Synthesise a tree that the catalog detects as
-    c.userspace-daemon (estimated cost $25-$50)."""
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "configure.ac").write_text("")
-    (tmp_path / "Makefile.am").write_text("")
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "main.c").write_text("")
-    return tmp_path
+class TestPreflightCostGate:
+    def test_no_target_does_not_fire(self, tmp_path):
+        raptor = _import_raptor()
+        assert raptor._preflight_cost_gate(None, 10.0, tmp_path) is False
 
-
-def _run_lifecycle_start(
-    target: Path, out_dir: Path, *, max_cost_usd: str | None = None,
-) -> subprocess.CompletedProcess:
-    """Invoke libexec/raptor-run-lifecycle start; returns the
-    completed process for assertion."""
-    cmd = [
-        sys.executable,
-        str(_RAPTOR_ROOT / "libexec" / "raptor-run-lifecycle"),
-        "start", "scan",
-        "--target", str(target),
-        "--out", str(out_dir),
-    ]
-    if max_cost_usd is not None:
-        cmd += ["--max-cost-usd", max_cost_usd]
-    env = os.environ.copy()
-    env["CLAUDECODE"] = "1"  # bypass trust-marker gate
-    # The .active project symlink in a developer worktree would
-    # interfere with --out resolution; force the explicit out path
-    # by setting a non-existent active dir.
-    env.pop("RAPTOR_PROJECT", None)
-    return subprocess.run(
-        cmd, env=env, capture_output=True, text=True, timeout=30,
-    )
-
-
-class TestLibexecPreflightGate:
-    """The skills-path lifecycle (libexec/raptor-run-lifecycle)
-    applies the same pre-flight gate as the dispatcher path so
-    /understand, /codeql, /validate etc. all benefit."""
-
-    def test_no_cap_proceeds_with_estimate_printed(self, tmp_path):
-        target = _build_c_daemon_target(tmp_path / "target")
-        out_dir = tmp_path / "out"
-        result = _run_lifecycle_start(target, out_dir)
-        assert result.returncode == 0
-        # Estimate line lands on stderr (per design — stdout
-        # reserved for the OUTPUT_DIR= sentinel).
-        assert "Expected: $25-$50" in result.stderr
-        assert "c.userspace-daemon" in result.stderr
-        # Sentinel still on stdout intact.
-        assert f"OUTPUT_DIR={out_dir}" in result.stdout
-
-    def test_cap_above_estimate_proceeds(self, tmp_path):
-        # Cap of $100 > estimate upper bound $50 → proceed.
-        target = _build_c_daemon_target(tmp_path / "target")
-        out_dir = tmp_path / "out"
-        result = _run_lifecycle_start(
-            target, out_dir, max_cost_usd="100",
+    def test_no_scorecard_does_not_fire(self, tmp_path, monkeypatch):
+        raptor = _import_raptor()
+        monkeypatch.setattr(
+            "core.run.estimator.estimate_from_scorecard",
+            lambda *a, **kw: None,
         )
-        assert result.returncode == 0
-        assert f"OUTPUT_DIR={out_dir}" in result.stdout
-        assert "Pre-flight cost gate" not in result.stderr
-
-    def test_cap_below_estimate_hard_fails(self, tmp_path):
-        # Cap of $20 < estimate upper bound $50 → refuse.
-        target = _build_c_daemon_target(tmp_path / "target")
-        out_dir = tmp_path / "out"
-        result = _run_lifecycle_start(
-            target, out_dir, max_cost_usd="20",
-        )
-        assert result.returncode == 1
-        assert "Pre-flight cost gate" in result.stderr
-        assert "$50.00" in result.stderr  # estimate upper bound
-        assert "$20.00" in result.stderr  # cap
-        # Operator-actionable guidance present.
-        assert "Raise the cap" in result.stderr
-
-    def test_cap_equal_to_estimate_proceeds(self, tmp_path):
-        # Boundary: cap == estimate.cost_high → proceed (gate is
-        # strict `>`, not `>=`, so the operator who set the cap
-        # at the catalog's documented upper bound isn't refused
-        # for matching exactly).
-        target = _build_c_daemon_target(tmp_path / "target")
-        out_dir = tmp_path / "out"
-        result = _run_lifecycle_start(
-            target, out_dir, max_cost_usd="50",
-        )
-        assert result.returncode == 0
-        assert "Pre-flight cost gate" not in result.stderr
-
-    def test_cap_with_no_catalog_match_proceeds_quietly(self, tmp_path):
-        # Empty target → catalog falls back to ``generic`` (cost
-        # $10-$30). Cap of $5 < $30 → refuse. (Verifies the gate
-        # also bites on the generic fallback path.)
-        target = tmp_path / "empty"
+        target = tmp_path / "t"
         target.mkdir()
-        out_dir = tmp_path / "out"
-        result = _run_lifecycle_start(
-            target, out_dir, max_cost_usd="5",
+        (target / "configure.ac").write_text("")
+        (target / "Makefile.am").write_text("")
+        src = target / "src"
+        src.mkdir()
+        (src / "main.c").write_text("")
+        assert raptor._preflight_cost_gate(str(target), 10.0, tmp_path) is False
+
+    def test_estimate_within_cap_does_not_fire(self, tmp_path, monkeypatch):
+        raptor = _import_raptor()
+        from core.run.estimator import RunEstimate
+        est = RunEstimate(
+            cost_low=5, cost_high=8, time_low=10, time_high=15,
+            target_type="test (scorecard)",
         )
-        assert result.returncode == 1
-        assert "Pre-flight cost gate" in result.stderr
+        monkeypatch.setattr(
+            "core.run.estimator.estimate_from_scorecard",
+            lambda *a, **kw: est,
+        )
+        target = tmp_path / "t"
+        target.mkdir()
+        assert raptor._preflight_cost_gate(str(target), 10.0, tmp_path) is False
+
+    def test_estimate_exceeds_cap_fires(self, tmp_path, monkeypatch, capsys):
+        raptor = _import_raptor()
+        from core.run.estimator import RunEstimate
+        est = RunEstimate(
+            cost_low=15, cost_high=25, time_low=10, time_high=15,
+            target_type="test (scorecard)",
+        )
+        monkeypatch.setattr(
+            "core.run.estimator.estimate_from_scorecard",
+            lambda *a, **kw: est,
+        )
+        target = tmp_path / "t"
+        target.mkdir()
+        assert raptor._preflight_cost_gate(str(target), 10.0, tmp_path) is True
+        captured = capsys.readouterr()
+        assert "Pre-flight cost gate" in captured.err
+        assert "$25.00" in captured.err
+        assert "$10.00" in captured.err

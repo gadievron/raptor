@@ -6,27 +6,39 @@ Analyses crashes from fuzzing to extract exploitability information.
 This is so much of a WIP, it's not even funny. However, you can see what we are trying to do and how it could be useful. 
 """
 
+import platform
 import re
 import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from core.config import RaptorConfig
+from core.hash import sha256_string
+from core.logging import get_logger
+from core.sage.hooks import store_crash_analysis_pattern
 from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 # _run_trusted: read-only tools (file, readelf, nm, strings, etc.) — no namespace overhead.
 # Crash-analysis work runs a debugger or ASAN-instrumented binary:
 # - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
 # Each call site specifies target+output for Landlock engagement.
-import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
-import platform
-
-from core.config import RaptorConfig
-from core.hash import sha256_string
-from core.logging import get_logger
-from core.sage.hooks import store_crash_analysis_pattern
 from packages.binary_analysis._validators import is_valid_hex_address
 
 logger = get_logger()
+
+_SIGSEGV_SIGNALS = frozenset({"11", "sigsegv", "segmentation fault"})
+_SIGABRT_SIGNALS = frozenset({"6", "06", "sigabrt", "abort"})
+_SIGFPE_SIGNALS = frozenset({"8", "08", "sigfpe", "floating point exception"})
+_SIGILL_SIGNALS = frozenset({"4", "04", "sigill", "illegal instruction"})
+_SIGPIPE_SIGNALS = frozenset({"13", "sigpipe", "broken pipe"})
+_SIGBUS_SIGNALS = frozenset({"7", "07", "sigbus", "bus error"})
+_STACK_OVERFLOW_FUNCS = frozenset({"strcpy", "strcat", "gets", "sprintf"})
+_HEAP_ALLOC_FUNCS = frozenset({"malloc", "realloc", "calloc"})
+_BUFFER_COPY_FUNCS = frozenset({"strcpy", "strcat", "strncpy", "memcpy", "memmove"})
+_ASM_INSTRUCTIONS = frozenset({"mov", "call", "jmp", "ret", "push", "pop", "add", "sub", "cmp"})
+_DISASM_MARKERS = frozenset({"<", ">", "mov", "call", "jmp", "ret", "push", "pop"})
 
 
 @dataclass
@@ -480,20 +492,20 @@ class CrashAnalyser:
         """
         # Signal-based classification
         signal = context.signal.lower()
-        if signal in ["11", "sigsegv", "segmentation fault"]:
+        if signal in _SIGSEGV_SIGNALS:
             # Segmentation fault - analyze further
             memory_region = context.binary_info.get("memory_region", "").lower()
             
             if "heap" in memory_region or "malloc" in context.function_name.lower():
                 return "heap_overflow"
-            elif "stack" in memory_region or any(word in context.function_name.lower() for word in ["strcpy", "strcat", "gets", "sprintf"]):
+            elif "stack" in memory_region or any(word in context.function_name.lower() for word in _STACK_OVERFLOW_FUNCS):
                 return "stack_overflow"
             elif "null" in memory_region or context.crash_address in ["0x0", "0x00000000"]:
                 return "null_deref"
             else:
                 return "memory_access_violation"
                 
-        elif signal in ["6", "06", "sigabrt", "abort"]:
+        elif signal in _SIGABRT_SIGNALS:
             # Abort signal - could be ASan, assert, or double-free
             if context.binary_info.get("asan_enabled") == "true":
                 return "asan_detected_bug"
@@ -502,24 +514,24 @@ class CrashAnalyser:
             else:
                 return "abort_signal"
 
-        elif signal in ["8", "08", "sigfpe", "floating point exception"]:
+        elif signal in _SIGFPE_SIGNALS:
             return "arithmetic_error"
 
-        elif signal in ["4", "04", "sigill", "illegal instruction"]:
+        elif signal in _SIGILL_SIGNALS:
             return "illegal_instruction"
 
-        elif signal in ["13", "sigpipe", "broken pipe"]:
+        elif signal in _SIGPIPE_SIGNALS:
             return "broken_pipe"
 
-        elif signal in ["7", "07", "sigbus", "bus error"]:
+        elif signal in _SIGBUS_SIGNALS:
             return "bus_error"
             
         # Function name based classification
         func_name = context.function_name.lower()
         func_words = func_name.split("_")
-        if "free" in func_words or any(w in func_name for w in ["malloc", "realloc", "calloc"]):
+        if "free" in func_words or any(w in func_name for w in _HEAP_ALLOC_FUNCS):
             return "heap_corruption"
-        elif any(word in func_name for word in ["strcpy", "strcat", "strncpy", "memcpy", "memmove"]):
+        elif any(word in func_name for word in _BUFFER_COPY_FUNCS):
             return "buffer_overflow"
         elif "printf" in func_name:
             return "format_string_vulnerability"
@@ -1066,7 +1078,7 @@ class CrashAnalyser:
         # If no crash instruction found with =>, try to find it from disassembly
         if not crash_instruction_found:
             for line in lines:
-                if "0x" in line and any(instr in line.lower() for instr in ["mov", "call", "jmp", "ret", "push", "pop", "add", "sub", "cmp"]):
+                if "0x" in line and any(instr in line.lower() for instr in _ASM_INSTRUCTIONS):
                     # Look for lines that look like disassembly
                     if ":" in line and not line.startswith("(gdb)"):
                         context.crash_instruction = line.strip()
@@ -1170,7 +1182,7 @@ class CrashAnalyser:
                 if "<" in line and ">" in line:  # Function start marker
                     in_disassembly = True
                     continue
-                elif in_disassembly and ":" in line and any(c in line for c in ["<", ">", "mov", "call", "jmp", "ret", "push", "pop"]):
+                elif in_disassembly and ":" in line and any(c in line for c in _DISASM_MARKERS):
                     disasm_lines.append(line.strip())
                     if len(disasm_lines) >= num_instructions:
                         break

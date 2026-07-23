@@ -228,8 +228,8 @@ class TestDiscoverSinks:
         assert "dangerous_target_usage" in d
         assert d["direct_sinks"][0]["target"] == "os.execute"
 
-    def test_cross_file_no_edge(self):
-        """Call graph edges are file-local; cross-file calls aren't linked."""
+    def test_cross_file_edge_resolved(self):
+        """Cross-file calls are linked via function name index."""
         graphs = {
             "a.lua": _make_graph([
                 ("caller_a", ["remote_fn"], 1),
@@ -239,11 +239,9 @@ class TestDiscoverSinks:
             ]),
         }
         result = discover_sinks(graphs)
-        # remote_fn in b.lua is a direct sink
         assert len(result.direct_sinks) == 1
-        # caller_a in a.lua does NOT have transitive reach because
-        # cross-file edges aren't linked (same-file only)
-        assert len(result.transitive_reach) == 0
+        assert len(result.transitive_reach) == 1
+        assert result.transitive_reach[0].function == "caller_a"
 
 
     def test_diamond_graph_merges_sinks(self):
@@ -320,3 +318,72 @@ class TestDiscoverSinksForTarget:
         assert len(result.direct_sinks) > 0
         targets = {s.target for s in result.direct_sinks}
         assert targets & {"os.execute", "io.popen", "loadstring", "loadfile"}
+
+
+class TestChainReconstruction:
+    def test_linear_chain(self):
+        """main → run_task → exec_cmd → os.execute produces a 2-hop chain."""
+        graphs = {
+            "util.lua": _make_graph([
+                ("exec_cmd", ["os", "execute"], 10),
+                ("run_task", ["exec_cmd"], 20),
+                ("main", ["run_task"], 30),
+            ]),
+        }
+        result = discover_sinks(graphs)
+        by_func = {t.function: t for t in result.transitive_reach}
+
+        main_chain = by_func["main"].chain
+        assert main_chain is not None
+        assert len(main_chain) == 2
+        assert main_chain[0].function == "run_task"
+        assert main_chain[1].function == "exec_cmd"
+
+        run_chain = by_func["run_task"].chain
+        assert run_chain is not None
+        assert len(run_chain) == 1
+        assert run_chain[0].function == "exec_cmd"
+
+    def test_chain_serialization(self):
+        """Chains appear in as_dict() output."""
+        graphs = {
+            "a.lua": _make_graph([
+                ("sink_fn", ["os", "execute"], 1),
+                ("caller", ["sink_fn"], 2),
+            ]),
+        }
+        result = discover_sinks(graphs)
+        d = result.as_dict()
+        tr = d["transitive_reach"]
+        assert len(tr) == 1
+        assert "chain" in tr[0]
+        assert tr[0]["chain"][0]["function"] == "sink_fn"
+
+    def test_cross_file_chain(self):
+        """Chain works across files."""
+        graphs = {
+            "a.lua": _make_graph([
+                ("caller_a", ["remote_fn"], 1),
+            ]),
+            "b.lua": _make_graph([
+                ("remote_fn", ["os", "execute"], 10),
+            ]),
+        }
+        result = discover_sinks(graphs)
+        assert len(result.transitive_reach) == 1
+        chain = result.transitive_reach[0].chain
+        assert chain is not None
+        assert len(chain) == 1
+        assert chain[0].function == "remote_fn"
+        assert chain[0].file == "b.lua"
+
+    def test_no_chain_for_direct_sinks(self):
+        """Direct sink callers don't appear in transitive_reach."""
+        graphs = {
+            "a.lua": _make_graph([
+                ("handler", ["os", "execute"], 10),
+            ]),
+        }
+        result = discover_sinks(graphs)
+        assert len(result.transitive_reach) == 0
+        assert len(result.direct_sinks) == 1

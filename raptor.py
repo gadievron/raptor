@@ -97,23 +97,14 @@ def _extract_target(args: list) -> str | None:
     return None
 
 
+
 def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
     """Extract ``--max-cost-usd <USD>`` (or ``--max-cost-usd=<USD>``)
     from ``args``. Returns ``(cap_usd, args_without_flag)``.
 
-    Lives at the lifecycle level so the operator can declare a
-    per-run budget once at the entry point and the estimator gate
-    + downstream loop both see the same cap. Stripped before
-    forwarding so downstream scripts (scanner, agentic, codeql)
-    don't have to recognise the flag.
-
-    Invalid values (non-numeric, zero, negative) print a stderr
-    warning and return ``(None, args)`` unchanged — operator's
-    typo doesn't silently uncap the run, but the run also doesn't
-    refuse to start over a bad cap value. (A hard error here
-    would force every operator typo through a full lifecycle
-    failure, which is more brittle than this warn-and-skip
-    fallback.)
+    Stripped so the dispatcher can use the value for the pre-flight
+    gate, then re-injected into downstream args for runtime
+    enforcement via ``LLMConfig.max_cost_per_scan``.
     """
     flag = "--max-cost-usd"
     prefix = f"{flag}="
@@ -151,6 +142,57 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
         )
         return (None, out)
     return (cap, out)
+
+
+def _preflight_cost_gate(
+    target: str | None,
+    max_cost_usd: float,
+    out_dir: Path,
+) -> bool:
+    """Pre-flight cost gate: refuse to start when the scorecard-
+    derived estimate exceeds the operator's declared budget.
+
+    Uses ``typical_findings_count`` from the catalog + per-model
+    cost data from the scorecard. Returns True if the gate fires
+    (run should be aborted), False otherwise.
+
+    When no scorecard data is available the gate does not fire —
+    the runtime cap still enforces during execution.
+    """
+    try:
+        from core.run.target_types import load
+        from core.run.estimator import estimate_from_scorecard, format_estimate
+        from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+    except ImportError:
+        return False
+    try:
+        entry = load(Path(target)) if target else None
+    except Exception:  # noqa: BLE001
+        return False
+    n_findings = entry.typical_findings_count if entry else 0
+    if n_findings <= 0:
+        return False
+    model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+    est = estimate_from_scorecard(model, n_findings)
+    if est is None:
+        return False
+    est_line = format_estimate(est)
+    if est_line:
+        print(est_line, flush=True)
+    if est.cost_high > max_cost_usd:
+        print(
+            f"✗ Pre-flight cost gate: scorecard estimate "
+            f"upper bound (${est.cost_high:.2f}) exceeds "
+            f"--max-cost-usd cap (${max_cost_usd:.2f}). "
+            f"Raise the cap or re-run without --max-cost-usd.",
+            file=sys.stderr, flush=True,
+        )
+        try:
+            fail_run(out_dir, "pre-flight cost gate exceeded")
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    return False
 
 
 def _extract_agentic_log_level(args: list) -> str | None:
@@ -304,10 +346,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
 
     target = _extract_target(args)
 
-    # Operator-declared per-run budget cap (QoL #21). Stripped from
-    # ``args`` before forwarding so downstream scripts don't have
-    # to recognise the flag. Pre-flight gate fires below, after
-    # the catalog estimate is computed.
+    # Operator-declared per-run budget cap (QoL #21). Stripped
+    # from args before forwarding — propagated via env var so
+    # downstream commands can pick it up for runtime enforcement.
     max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
 
     # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
@@ -396,60 +437,26 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             print(f"  (license-detect skipped: {e})",
                   file=sys.stderr, flush=True)
 
-    # Cost-and-time estimate from the target-type catalog (QoL #21).
-    # Operator sees the expected ballpark before any LLM cost
-    # incurs; Ctrl-C is the cancel path. When ``--max-cost-usd``
-    # is set, the upper bound of the catalog estimate is gated
-    # against the cap pre-flight — runs that would obviously
-    # blow the budget refuse to start rather than spending the
-    # cap to discover the cap was insufficient.
+    # Target shape summary — operator sees what RAPTOR detected
+    # before any LLM cost incurs.
     if target:
         try:
-            from core.run.estimator import estimate_run, format_estimate
-            _est = estimate_run(Path(target))
-            # Richer start line: primary language + LOC + build
-            # system + target type + cost estimate, all in one
-            # line. Falls back to the bare estimate if /describe
-            # substrate is unavailable so the budget gate still
-            # surfaces.
-            try:
-                from packages.describe.start_line import format_start_line
-                _start_line = format_start_line(Path(target))
-            except Exception:  # noqa: BLE001
-                _start_line = None
+            from packages.describe.start_line import format_start_line
+            _start_line = format_start_line(Path(target))
             if _start_line:
                 print(_start_line, flush=True)
-            else:
-                _est_line = format_estimate(_est)
-                if _est_line:
-                    print(_est_line, flush=True)
-            if (
-                max_cost_usd is not None
-                and _est is not None
-                and _est.cost_high > max_cost_usd
-            ):
-                print(
-                    f"✗ Pre-flight cost gate: catalog estimate "
-                    f"upper bound (${_est.cost_high:.2f}) exceeds "
-                    f"--max-cost-usd cap (${max_cost_usd:.2f}). "
-                    f"Raise the cap or accept the risk and re-run "
-                    f"without --max-cost-usd.",
-                    file=sys.stderr, flush=True,
-                )
-                # Mark the run failed so the lifecycle metadata
-                # reflects WHY this output dir didn't progress —
-                # operator inspecting the dir later sees the
-                # pre-flight refusal, not a phantom ``running``
-                # state.
-                try:
-                    fail_run(out_dir, "pre-flight cost gate exceeded")
-                except Exception:  # noqa: BLE001
-                    pass
-                return 1
-        except Exception as e:
-            # Estimator is best-effort; never break the lifecycle.
-            print(f"  (estimate skipped: {e})",
-                  file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Pre-flight cost gate (scorecard-derived). When the operator
+    # declared --max-cost-usd, compare the scorecard estimate
+    # (using typical_findings_count from the catalog) against the
+    # cap. Refuses to start when the estimate clearly exceeds the
+    # budget. When no scorecard data exists the gate does not fire
+    # — the runtime cap still enforces during execution.
+    if max_cost_usd is not None:
+        if _preflight_cost_gate(target, max_cost_usd, out_dir):
+            return 1
 
     # SAGE: Pre-scan recall
     try:
@@ -479,6 +486,13 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             pass
     except Exception:
         pass
+
+    # Re-inject --max-cost-usd for downstream runtime enforcement.
+    # The pre-flight gate consumed the value above; downstream
+    # scripts (raptor_agentic.py) read it into LLMConfig.max_cost_per_scan
+    # so CostTracker enforces the cap during LLM calls.
+    if max_cost_usd is not None:
+        args = args + ["--max-cost-usd", str(max_cost_usd)]
 
     # Inject --out so the downstream script uses the lifecycle directory
     if not any(a == "--out" or a.startswith("--out=") for a in args):

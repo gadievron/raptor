@@ -33,10 +33,19 @@ _VALID_KEYS = frozenset({
     "codeql_max_disk_cache_mb",
     "max_semgrep_workers",
     "max_codeql_workers",
-    "max_agentic_parallel",
     "max_fuzz_parallel",
     "max_inventory_workers",
+    "max_llm_workers",
     "max_json_memo_mb",
+    "throttle_cooldown_s",
+})
+
+# Keys that are valid in tuning.json but consumed directly by their
+# own modules (core/llm/concurrency.py) rather than through the
+# resolved Tuning dataclass. Excluded from _resolve() / Tuning.
+_PASSTHROUGH_KEYS = frozenset({
+    "max_llm_workers",
+    "throttle_cooldown_s",
 })
 
 _BOOLEAN_KEYS = frozenset({"codeql_enabled"})
@@ -51,7 +60,6 @@ _DEFAULTS = {
     "codeql_max_disk_cache_mb": 0,
     "max_semgrep_workers": 4,
     "max_codeql_workers": 2,
-    "max_agentic_parallel": 3,
     "max_fuzz_parallel": 4,
     "max_inventory_workers": "auto",
     "max_json_memo_mb": 128,
@@ -190,7 +198,9 @@ _AUTO_RESOLVERS = {
 # Keys where 0 is a valid explicit value:
 #   - codeql_threads: 0 = all CPUs
 #   - codeql_max_disk_cache_mb: 0 = use codeql's unbounded default
-_ZERO_ALLOWED = frozenset({"codeql_threads", "codeql_max_disk_cache_mb"})
+_ZERO_ALLOWED = frozenset({
+    "codeql_threads", "codeql_max_disk_cache_mb",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +212,6 @@ class Tuning:
     codeql_max_disk_cache_mb: int
     max_semgrep_workers: int
     max_codeql_workers: int
-    max_agentic_parallel: int
     max_fuzz_parallel: int
     max_inventory_workers: int
     max_json_memo_mb: int
@@ -256,7 +265,7 @@ def _resolve(raw_config: Dict[str, Any]) -> Tuning:
             logger.warning('tuning.json: unknown key "%s" (ignored)', key)
 
     resolved = {}
-    for key in _VALID_KEYS:
+    for key in _VALID_KEYS - _PASSTHROUGH_KEYS:
         raw = raw_config.get(key, _DEFAULTS[key])
         value = _validate_value(key, raw)
         if value is None:
@@ -310,7 +319,6 @@ def _create_default_file(path: Path) -> None:
             "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
             "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
             "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
-            "max_agentic_parallel": "parallel Claude Code agents for analysis",
             "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
             "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
             "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",

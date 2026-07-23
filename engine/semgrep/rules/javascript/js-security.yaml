@@ -1,0 +1,87 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # JavaScript/TypeScript — pattern: Express cookie with security flags disabled
+  # ---------------------------------------------------------------------------
+  - id: raptor.js.insecure-cookie-secure-false
+    message: >-
+      Express cookie Secure flag explicitly set to false — the cookie will
+      be sent over unencrypted HTTP, exposing it to network sniffing. Set
+      secure: true.
+    languages: [javascript, typescript]
+    severity: HIGH
+    pattern: |
+      $RES.cookie($NAME, $VALUE, {..., secure: false, ...})
+    metadata:
+      cwe: ["CWE-614"]
+      tags: ["security", "javascript", "cookie"]
+
+  - id: raptor.js.insecure-cookie-httponly-false
+    message: >-
+      Express cookie httpOnly flag explicitly set to false — the cookie is
+      accessible to client-side JavaScript, enabling session theft via XSS.
+      Set httpOnly: true.
+    languages: [javascript, typescript]
+    severity: HIGH
+    pattern: |
+      $RES.cookie($NAME, $VALUE, {..., httpOnly: false, ...})
+    metadata:
+      cwe: ["CWE-1004"]
+      tags: ["security", "javascript", "cookie"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript/TypeScript — taint: web sources -> filesystem path sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.js.path-traversal
+    message: >-
+      Untrusted data flows into a filesystem path operation, enabling
+      directory traversal. path.join does NOT prevent "../" traversal above
+      the base directory. Validate and sanitise the path component.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: path.join($BASE, $PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: fs.readFile($PATH, ...)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: fs.readFileSync($PATH, ...)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: fs.writeFile($PATH, ...)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: fs.writeFileSync($PATH, ...)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: fs.createReadStream($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: fs.createWriteStream($PATH)
+          - focus-metavariable: $PATH
+    metadata:
+      cwe: ["CWE-22"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "javascript", "path-traversal", "taint"]

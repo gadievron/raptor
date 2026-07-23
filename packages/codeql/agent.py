@@ -28,7 +28,7 @@ from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.run.output import unique_run_suffix as _unique_run_suffix
 from packages.codeql.language_detector import LanguageDetector, LanguageInfo
-from packages.codeql.build_detector import BuildDetector, BuildSystem
+from core.build.build_detector import BuildDetector, BuildSystem
 from packages.codeql.database_manager import DatabaseManager, DatabaseResult
 from packages.codeql.query_runner import QueryRunner, QueryResult
 

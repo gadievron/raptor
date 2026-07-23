@@ -163,8 +163,8 @@ def build_enriched_sarif(
     """
     if tool_version is None:
         try:
-            from core.version import effective_version
-            tool_version = effective_version()
+            from core.config import RaptorConfig
+            tool_version = RaptorConfig.effective_version()
         except Exception:
             tool_version = "unknown"
 

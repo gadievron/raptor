@@ -275,7 +275,7 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 
 **Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
 
-**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
 
 **Source attribution:** Every annotation carries `metadata.source=human` or `metadata.source=llm`. LLM-driven writes pass `overwrite=respect-manual` so a manual operator note is never silently clobbered. Operators using `/annotate add` set `source=human` by default.
 

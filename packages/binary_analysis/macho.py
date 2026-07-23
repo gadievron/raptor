@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from core.sandbox import run_trusted
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
 
 _FAT_MAGICS = {
     b"\xca\xfe\xba\xbe": (">", False),

@@ -165,26 +165,8 @@ def _format_project_tuning(entry) -> list:
     /agentic, /codeql defaults on this project. Returns a list of
     lines (caller decides where they land — stdout / file / etc.).
     """
-    from core.run.estimator import RunEstimate, format_estimate
     lines: list = []
     lines.append(f"  Target type: {entry.name}")
-    # Cost/time — synthesise a RunEstimate from the catalog so we
-    # share the format_estimate renderer (single source of truth
-    # for the operator-facing string).
-    cost_low, cost_high = entry.estimated_cost_usd
-    time_low, time_high = entry.estimated_time_min
-    if cost_high > 0 or time_high > 0:
-        _est = RunEstimate(
-            cost_low=cost_low, cost_high=cost_high,
-            time_low=time_low, time_high=time_high,
-            target_type=entry.name,
-        )
-        _est_line = format_estimate(_est)
-        if _est_line:
-            # Strip the ``(target type: X)`` suffix — already
-            # printed above in the tuning block.
-            _est_line = _est_line.split(" (target type:", 1)[0]
-            lines.append(f"  {_est_line}")
     if entry.semgrep_packs_default:
         lines.append(
             f"  /scan baseline packs: "

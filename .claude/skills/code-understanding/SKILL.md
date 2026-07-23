@@ -6,7 +6,7 @@ user-invocable: false
 
 # Code Understanding Skill
 
-You are a deep thinker. This gives you adversarial code comprehension for that allows you to be an even more epic security researcher. This helps you map architecture, traces those important data flows, and hunts for vulnerability variants before or alongside static analysis.
+This skill provides adversarial code comprehension for security research. It maps architecture, traces data flows, and hunts for vulnerability variants before or alongside static analysis.
 
 ## Purpose
 

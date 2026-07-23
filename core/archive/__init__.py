@@ -12,13 +12,7 @@ Public API:
 """
 
 from .cache import safe_cache_name
-from .detect import detect_format, is_archive
 from .errors import ArchiveError, DecompressionLimitExceeded, UnsupportedArchive
-from .extract import (
-    DEFAULT_MAX_FILES,
-    DEFAULT_MAX_TOTAL_BYTES,
-    extract_to_dir,
-)
 
 __all__ = [
     "ArchiveError",
@@ -31,3 +25,22 @@ __all__ = [
     "is_archive",
     "safe_cache_name",
 ]
+
+
+def __getattr__(name):
+    if name in ("detect_format", "is_archive"):
+        from .detect import detect_format, is_archive
+        globals()["detect_format"] = detect_format
+        globals()["is_archive"] = is_archive
+        return globals()[name]
+    if name in ("DEFAULT_MAX_FILES", "DEFAULT_MAX_TOTAL_BYTES", "extract_to_dir"):
+        from .extract import (
+            DEFAULT_MAX_FILES,
+            DEFAULT_MAX_TOTAL_BYTES,
+            extract_to_dir,
+        )
+        globals()["DEFAULT_MAX_FILES"] = DEFAULT_MAX_FILES
+        globals()["DEFAULT_MAX_TOTAL_BYTES"] = DEFAULT_MAX_TOTAL_BYTES
+        globals()["extract_to_dir"] = extract_to_dir
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

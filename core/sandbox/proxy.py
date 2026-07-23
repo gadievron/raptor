@@ -1094,7 +1094,7 @@ class EgressProxy:
                     f"proxy bound to non-loopback {bound_host!r} — refusing to serve"
                 )
             self.port = bound_port
-            logger.info(
+            logger.debug(
                 f"egress proxy listening on 127.0.0.1:{self.port} "
                 f"(allowlist: {sorted(self._allowed_hosts)})"
             )

@@ -533,8 +533,14 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           set -f  # word-split $SCA_FILES without glob expansion
+          rc=0
           python -m pytest -n auto --splits 4 --group ${{ matrix.group }} \
-            --durations-path packages/sca/test-durations.json $SCA_FILES
+            --durations-path packages/sca/test-durations.json $SCA_FILES \
+            || rc=$?
+          # Exit 5 = "no tests collected" — legitimate when path filtering
+          # narrows SCA_FILES to fewer files than split groups.
+          if [ "$rc" -eq 5 ]; then exit 0; fi
+          exit "$rc"
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.

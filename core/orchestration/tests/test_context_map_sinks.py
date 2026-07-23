@@ -10,6 +10,7 @@ from core.orchestration.context_map_sinks import (
     _merge_discovered_sinks,
     _merge_framework_apis,
     _next_sink_id,
+    _populate_sinks_array,
     enrich_with_sink_discovery,
 )
 from core.inventory.sink_discovery import (
@@ -380,3 +381,41 @@ class TestE2ELibexecShim:
             if s.get("source") == "mechanical"
         ]
         assert len(mech_sinks2) == len(mech_sinks)
+
+
+# ---------------------------------------------------------------------------
+# _populate_sinks_array
+# ---------------------------------------------------------------------------
+
+
+class TestPopulateSinksArray:
+    """Tests for the simple ``sinks`` array populated from discovery results."""
+
+    def test_adds_caller_and_callee(self):
+        """Both the caller function and the dangerous target appear in sinks."""
+        cmap: dict = {}
+        result = _sample_result()
+        _populate_sinks_array(cmap, result)
+        sinks = cmap["sinks"]
+        callers = [s for s in sinks if s["file"] != ""]
+        callees = [s for s in sinks if s["file"] == ""]
+        assert len(callers) == 2
+        assert len(callees) == 2
+        callee_fns = {s["function"] for s in callees}
+        assert "os.execute" in callee_fns
+        assert "io.popen" in callee_fns
+
+    def test_deduplicates(self):
+        """Running twice doesn't duplicate entries."""
+        cmap: dict = {}
+        result = _sample_result()
+        _populate_sinks_array(cmap, result)
+        _populate_sinks_array(cmap, result)
+        assert len(cmap["sinks"]) == 4  # 2 callers + 2 callees
+
+    def test_merges_with_existing(self):
+        """Pre-existing sinks entries are preserved."""
+        cmap = {"sinks": [{"file": "x.c", "function": "foo", "target": "bar", "direct": True}]}
+        result = _sample_result()
+        _populate_sinks_array(cmap, result)
+        assert len(cmap["sinks"]) == 5  # 1 existing + 2 callers + 2 callees

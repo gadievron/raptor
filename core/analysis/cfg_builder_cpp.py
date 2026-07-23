@@ -6,9 +6,7 @@ public shape so :func:`core.dataflow.sanitizer_catalog.match_sanitizers_in_cfg`,
 Phase 11) :func:`core.analysis.sanitizer_cut.evaluate_finding` can
 consume the C/C++ CFG with the same interface as the Python one.
 
-Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`). The
-Phase 8 decision doc at ``docs/phase-8-substrate-spike/DECISION.md``
-explains why.
+Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`).
 
 Scope — control-flow constructs handled:
 

@@ -33,8 +33,6 @@ Each ``<name>.yml`` carries::
 
   pipeline:
     recommended: [understand-map, scan-with-codeql, agentic-with-validate]
-    estimated_cost_usd:  [25, 50]
-    estimated_time_min:  [40, 75]
 
   budget_defaults:
     typical_findings_count:  25
@@ -117,9 +115,6 @@ class CatalogEntry:
     attack_surface_low: Tuple[str, ...] = field(default_factory=tuple)
     pipeline_recommended: Tuple[str, ...] = field(default_factory=tuple)
 
-    # Cost / time hints — pairs (low, high) USD / minutes
-    estimated_cost_usd: Tuple[float, float] = (0.0, 0.0)
-    estimated_time_min: Tuple[int, int] = (0, 0)
     typical_findings_count: int = 0
     typical_cost_per_run_usd: float = 0.0
 
@@ -145,9 +140,6 @@ class CatalogEntry:
         def _t(seq):
             return tuple(seq) if seq else tuple()
 
-        cost_pair = pipeline.get("estimated_cost_usd") or [0.0, 0.0]
-        time_pair = pipeline.get("estimated_time_min") or [0, 0]
-
         return cls(
             name=data["name"],
             description=data.get("description", "").strip(),
@@ -160,8 +152,6 @@ class CatalogEntry:
             attack_surface_high=_t(surface.get("high_priority_dirs")),
             attack_surface_low=_t(surface.get("low_priority_dirs")),
             pipeline_recommended=_t(pipeline.get("recommended")),
-            estimated_cost_usd=(float(cost_pair[0]), float(cost_pair[1])),
-            estimated_time_min=(int(time_pair[0]), int(time_pair[1])),
             typical_findings_count=int(budget.get("typical_findings_count") or 0),
             typical_cost_per_run_usd=float(
                 budget.get("typical_cost_per_run_usd") or 0),

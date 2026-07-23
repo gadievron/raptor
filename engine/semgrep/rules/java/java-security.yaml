@@ -1,0 +1,124 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Java — pattern: insecure pseudo-random number generator
+  # ---------------------------------------------------------------------------
+  - id: raptor.java.insecure-random
+    message: >-
+      java.util.Random is a predictable PRNG unsuitable for
+      security-sensitive operations (tokens, keys, nonces). Use
+      java.security.SecureRandom instead.
+    languages: [java]
+    severity: HIGH
+    pattern-either:
+      - pattern: new Random(...)
+      - pattern: new java.util.Random(...)
+      - pattern: Math.random()
+    metadata:
+      cwe: ["CWE-330"]
+      owasp_top_10: ["A2:2021-Cryptographic Failures"]
+      tags: ["security", "java", "random"]
+
+  # ---------------------------------------------------------------------------
+  # Java — pattern: cookie security flags explicitly disabled
+  # ---------------------------------------------------------------------------
+  - id: raptor.java.insecure-cookie-secure-false
+    message: >-
+      Cookie Secure flag explicitly set to false — the cookie will be sent
+      over unencrypted HTTP, exposing it to network sniffing. Call
+      setSecure(true).
+    languages: [java]
+    severity: HIGH
+    pattern: $COOKIE.setSecure(false)
+    metadata:
+      cwe: ["CWE-614"]
+      tags: ["security", "java", "cookie"]
+
+  - id: raptor.java.insecure-cookie-httponly-false
+    message: >-
+      Cookie HttpOnly flag explicitly set to false — the cookie is
+      accessible to client-side JavaScript, enabling session theft via XSS.
+      Call setHttpOnly(true).
+    languages: [java]
+    severity: HIGH
+    pattern: $COOKIE.setHttpOnly(false)
+    metadata:
+      cwe: ["CWE-1004"]
+      tags: ["security", "java", "cookie"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: Spring MVC redirect open redirect
+  # ---------------------------------------------------------------------------
+  - id: raptor.java.spring-redirect
+    message: >-
+      Untrusted data flows into a Spring MVC "redirect:" view name,
+      enabling open redirect attacks. Validate the redirect target against
+      an allowlist of trusted URLs.
+    languages: [java]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      - patterns:
+          - pattern: |
+              "redirect:" + $URL
+          - focus-metavariable: $URL
+    metadata:
+      cwe: ["CWE-601"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "java", "open-redirect", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params -> filesystem path sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.java.path-traversal
+    message: >-
+      Untrusted data flows into a filesystem path operation, enabling
+      directory traversal. Validate and canonicalise the path, then verify
+      it stays within the intended base directory.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      - patterns:
+          - pattern: new File($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: new FileInputStream($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: new FileOutputStream($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: new FileReader($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: Paths.get($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: Paths.get($PATH, ...)
+          - focus-metavariable: $PATH
+    metadata:
+      cwe: ["CWE-22"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "java", "path-traversal", "taint"]

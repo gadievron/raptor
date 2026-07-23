@@ -247,7 +247,7 @@ def probe_envelope_compatibility(
     probe_result = evaluate_probe_response(raw, nonce)
 
     if probe_result.compatible:
-        logger.info(
+        logger.debug(
             "Envelope probe passed for %s (profile: %s)",
             model_name, profile.name,
         )

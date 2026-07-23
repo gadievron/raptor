@@ -2312,15 +2312,11 @@ def module_aborts_on_load(
     if not file_path:
         return None
     normalised = file_path.replace("\\", "/")
-    for file_record in inventory.get("files", []):
-        if not isinstance(file_record, dict):
-            continue
-        rec_path = file_record.get("path")
-        if not isinstance(rec_path, str):
-            continue
-        if rec_path.replace("\\", "/") == normalised:
-            abort = file_record.get("module_aborts_on_load")
-            return abort if isinstance(abort, dict) else None
+    index = _files_by_path(inventory)
+    file_record = index.get(normalised)
+    if file_record is not None:
+        abort = file_record.get("module_aborts_on_load")
+        return abort if isinstance(abort, dict) else None
     return None
 
 
@@ -2342,21 +2338,17 @@ def build_excluded(
     hard-suppress.
 
     The returned dict carries ``line`` (constraint location, display-only)
-    and ``summary`` (e.g. ``"//go:build ignore"``). Path-keyed lookup, no
-    index build — mirrors :func:`module_aborts_on_load`.
+    and ``summary`` (e.g. ``"//go:build ignore"``). Path-keyed lookup via
+    :func:`_files_by_path` — O(1) instead of O(files) per call.
     """
     if not file_path:
         return None
     normalised = file_path.replace("\\", "/")
-    for file_record in inventory.get("files", []):
-        if not isinstance(file_record, dict):
-            continue
-        rec_path = file_record.get("path")
-        if not isinstance(rec_path, str):
-            continue
-        if rec_path.replace("\\", "/") == normalised:
-            rec = file_record.get("build_excluded")
-            return rec if isinstance(rec, dict) else None
+    index = _files_by_path(inventory)
+    file_record = index.get(normalised)
+    if file_record is not None:
+        rec = file_record.get("build_excluded")
+        return rec if isinstance(rec, dict) else None
     return None
 
 
@@ -3099,7 +3091,8 @@ def _nested_function_keys(items: List[Dict[str, Any]]) -> "frozenset":
 
 def _item_is_entry(item: Dict[str, Any], language: str,
                    library_mode: bool = False,
-                   nested_keys: "frozenset" = frozenset()) -> bool:
+                   nested_keys: "frozenset" = frozenset(),
+                   header_api: "frozenset | None" = None) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
     separately off the adjacency index.)
@@ -3112,6 +3105,10 @@ def _item_is_entry(item: Dict[str, Any], language: str,
     one; those functions fall through to UNCERTAIN and the caller's
     existing 1-hop NOT_CALLED logic, leaving their behavior unchanged.
     ``main`` and framework dispatch are entries in every language.
+
+    When ``header_api`` is provided (a frozenset of function names declared
+    in public C/C++ headers), it replaces the non-static heuristic: only
+    functions declared in a public header are treated as entry points.
     """
     name = item.get("name") or ""
     if name == "main":
@@ -3162,12 +3159,8 @@ def _item_is_entry(item: Dict[str, Any], language: str,
         return False
     vis = (item.get("metadata") or {}).get("visibility")
     if p.visibility_entry == "non_static":
-        # External linkage = potential entry from another TU. NOTE: a
-        # ``static`` function whose ADDRESS is stored in a non-static /
-        # exported object (an ops/vtable dispatch table) is externally
-        # reachable too, but the call graph doesn't track address-taking —
-        # such functions can read NO_PATH_FROM_ENTRY. Surface-only keeps this
-        # from silencing them; tracking address-of is a substrate follow-up.
+        if header_api is not None:
+            return (item.get("name") or "") in header_api
         return vis != "static"
     if p.visibility_entry == "go_exported":
         return vis == "exported" or name[:1].isupper()
@@ -3209,11 +3202,13 @@ def _files_by_path(inventory: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Path-keyed view of ``inventory["files"]`` — O(1) lookup per file.
 
     Cached per-inventory by ``id``; identity-checked on read so a fresh
-    inventory at the same address rebuilds the index. Used by the
-    file-scoped helpers (``_file_language``, ``_file_python_exports``,
-    ``_file_masks_target``, ``_is_nested_function``) which were each
-    doing an O(files) linear scan per call — the entry-reachability
-    path walks the reverse closure and pays this cost per node.
+    inventory at the same address rebuilds the index. Thread-safe via
+    ``_FILES_BY_PATH_CACHE_LOCK`` (same pattern as ``_INDEX_CACHE_LOCK``).
+    Used by the file-scoped helpers (``_file_language``,
+    ``_file_python_exports``, ``_file_masks_target``,
+    ``_is_nested_function``) which were each doing an O(files) linear
+    scan per call — the entry-reachability path walks the reverse
+    closure and pays this cost per node.
     """
     inv_id = id(inventory)
     with _FILES_BY_PATH_CACHE_LOCK:
@@ -3227,6 +3222,9 @@ def _files_by_path(inventory: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         path = (fr.get("path") or "").replace("\\", "/")
         if path:
             index[path] = fr
+    # FIFO eviction (matches the sibling ``_ENTRY_SET_CACHE`` pattern):
+    # drop the oldest entry when full, instead of wiping every entry —
+    # keeps the cache useful under multi-inventory pipelines.
     with _FILES_BY_PATH_CACHE_LOCK:
         if len(_FILES_BY_PATH_CACHE) >= _FILES_BY_PATH_CACHE_MAX:
             _FILES_BY_PATH_CACHE.pop(next(iter(_FILES_BY_PATH_CACHE)))
@@ -3243,6 +3241,8 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
         if cached is not None and cached[0] is inventory:
             return cached[1]
     library_mode = bool(inventory.get("treat_exports_as_entries"))
+    header_api_raw = inventory.get("header_api")
+    header_api = frozenset(header_api_raw) if header_api_raw else None
     entries: Set[InternalFunction] = set()
     for fr in inventory.get("files", []):
         if not isinstance(fr, dict):
@@ -3257,7 +3257,8 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
             if item.get("kind", "function") != "function":
                 continue
             if _item_is_entry(item, lang, library_mode=library_mode,
-                              nested_keys=nested_keys):
+                              nested_keys=nested_keys,
+                              header_api=header_api):
                 entries.add(InternalFunction(
                     file_path=path, name=item.get("name") or "",
                     line=int(item.get("line_start") or 0),

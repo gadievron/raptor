@@ -4,7 +4,7 @@ Extracts functions, globals, macros, and classes from source files.
 AST-based for Python, tree-sitter when available, regex fallback.
 
 Security metadata (decorators, annotations, visibility, types) is captured
-in FunctionMetadata. See docs/design-inventory-metadata.md for design rationale.
+in FunctionMetadata.
 """
 
 import ast
@@ -72,7 +72,6 @@ class FunctionMetadata:
     """Security-relevant metadata extracted from function definitions.
 
     Language-agnostic — same fields for all languages, language-specific values.
-    See docs/design-inventory-metadata.md for field semantics.
     """
     class_name: Optional[str] = None
     visibility: Optional[str] = None      # public/private/protected/static/exported/extern
@@ -1308,6 +1307,7 @@ class TreeSitterExtractor:
             except Exception as e:
                 logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
                 return []  # Caller will fall back to regex extractor
+        self._source_lines = content.splitlines(True)
         functions = []
         self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
         return functions
@@ -1600,6 +1600,11 @@ class TreeSitterExtractor:
         sibling of the translation_unit root, not inside a
         function_definition. Find the name and estimate the end line by
         scanning forward for the matching compound_statement.
+
+        K&R style with macros (``int ZEXPORT inflate(strm, flush)``)
+        additionally fragments the body: the opening ``{`` becomes a
+        bare token instead of a compound_statement. In that case, fall
+        back to brace-depth counting via CExtractor._find_end_brace.
         """
         seen_names = {f.name for f in functions}
         name = None
@@ -1609,13 +1614,19 @@ class TreeSitterExtractor:
                 break
         if not name or name in seen_names or name in CExtractor.KEYWORDS:
             return
-        # Estimate end: scan siblings for the next compound_statement
-        # (the function body `{ ... }`).
         end_line = decl_node.start_point[0] + 1
         sib = decl_node.next_sibling
         while sib is not None:
             if sib.type == "compound_statement":
                 end_line = sib.end_point[0] + 1
+                break
+            if sib.type == "{":
+                brace_line = sib.start_point[0]
+                found = CExtractor._find_end_brace(
+                    self._source_lines, brace_line,
+                )
+                if found:
+                    end_line = found
                 break
             if sib.type in ("function_definition", "function_declarator",
                             "preproc_include", "preproc_define"):
@@ -2275,6 +2286,37 @@ def extract_items(filepath: str, language: str, content: str,
             items = [i for i in items if i.kind != KIND_FUNCTION]
             extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
             items.extend(extractor.extract(filepath, content))
+
+    # C/C++ repair pass: tree-sitter fragmentation from unknown macros
+    # (ZEXPORT, ZLIB_INTERNAL, etc.) can leave functions with broken
+    # line_end (== line_start) or miss functions entirely (swallowed by
+    # cascading parse errors). Use the regex extractor to fill gaps.
+    if ts_parsed and language in ("c", "cpp"):
+        ts_funcs = {i.name for i in items if i.kind == KIND_FUNCTION}
+        broken = {
+            i.name for i in items
+            if i.kind == KIND_FUNCTION
+            and i.line_end is not None
+            and i.line_end <= i.line_start
+        }
+        if broken or True:
+            regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+            regex_funcs = regex_ext.extract(filepath, content)
+            regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
+            for i, item in enumerate(items):
+                if item.kind == KIND_FUNCTION and item.name in broken:
+                    repair = regex_by_name.get(item.name)
+                    if repair and repair.line_end and repair.line_end > repair.line_start:
+                        items[i] = FunctionInfo(
+                            name=item.name,
+                            line_start=item.line_start,
+                            line_end=repair.line_end,
+                            signature=item.signature or repair.signature,
+                            metadata=item.metadata or repair.metadata,
+                        )
+            for name, rfn in regex_by_name.items():
+                if name not in ts_funcs:
+                    items.append(rfn)
 
     # C/C++ macro extraction (regex — tree-sitter doesn't parse preprocessor)
     if language in ("c", "cpp"):

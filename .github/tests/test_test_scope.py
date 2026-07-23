@@ -39,6 +39,12 @@ class TestIsTestFile:
     def test_not_python(self):
         assert not is_test_file(Path("core/llm/tests/data.json"))
 
+    def test_fixtures_excluded(self):
+        assert not is_test_file(Path("packages/llm_analysis/tests/fixtures/iris_e2e/src/app.py"))
+
+    def test_fixtures_deep_excluded(self):
+        assert not is_test_file(Path("core/dataflow/tests/fixtures/cvefix_cmdi_py/after/app.py"))
+
 
 class TestFileInDir:
     def test_direct_child(self):

@@ -344,15 +344,17 @@ def _extract_proposal(
                 other_diffs = _git_diff_other_files(
                     repo_root, pair.parent_hash, pair.fix_hash, raw_uri)
                 path = _format_path(res)
-                context = body
+                context_parts = [body]
                 if diff:
-                    context += "\n\n# fix diff (the change that added the sanitizer):\n" + diff
+                    context_parts.append("\n\n# fix diff (the change that added the sanitizer):\n" + diff)
                 if other_diffs:
-                    context += ("\n\n# other fix-touched files (the validator "
-                                "may live in a helper or middleware):\n"
-                                + other_diffs)
+                    context_parts.append(
+                        "\n\n# other fix-touched files (the validator "
+                        "may live in a helper or middleware):\n"
+                        + other_diffs)
                 if path:
-                    context += "\n\n" + path
+                    context_parts.append("\n\n" + path)
+                context = "".join(context_parts)
                 proposal = BarrierProposal(
                     sink_class=sink_class,
                     finding_id=f"{pair.cve_id}:{pair.cwe}:{Path(raw_uri).name}:{line}",

@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.orchestration.context_map_callgraph import (
+    enrich_with_call_edges,
     enrich_with_forward_reachable,
 )
 
@@ -216,3 +217,69 @@ def test_enrich_handles_non_dict_entries(tmp_path):
     enrich_with_forward_reachable(cmap, target)
     # The valid entry should be processed (even if no enrichment lands).
     assert isinstance(cmap["entry_points"][3], dict)
+
+
+# ---------------------------------------------------------------------------
+# enrich_with_call_edges
+# ---------------------------------------------------------------------------
+
+
+def test_call_edges_from_checklist():
+    """call_edges populated from checklist call_graph data."""
+    checklist = {
+        "files": [
+            {
+                "path": "src/main.c",
+                "items": [
+                    {"name": "main"},
+                    {"name": "parse_input"},
+                ],
+                "call_graph": {
+                    "calls": [
+                        {"caller": "main", "chain": ["parse_input", "validate"]},
+                        {"caller": "parse_input", "chain": ["strcpy"]},
+                    ],
+                },
+            },
+        ],
+    }
+    cmap: dict = {}
+    n = enrich_with_call_edges(cmap, checklist=checklist)
+    assert n == 3
+    edges = cmap["call_edges"]
+    assert edges[0]["caller_file"] == "src/main.c"
+    assert edges[0]["caller"] == "main"
+    assert edges[0]["callee"] == "parse_input"
+    assert edges[0]["callee_file"] == "src/main.c"
+    assert edges[2]["callee"] == "strcpy"
+    assert edges[2]["callee_file"] == ""  # not in items → unknown
+
+
+def test_call_edges_empty_checklist():
+    """No call_graph → zero edges, no crash."""
+    cmap: dict = {}
+    n = enrich_with_call_edges(cmap, checklist={"files": []})
+    assert n == 0
+    assert cmap["call_edges"] == []
+
+
+def test_call_edges_idempotent():
+    """Running twice overwrites prior edges."""
+    checklist = {
+        "files": [{
+            "path": "a.c",
+            "call_graph": {"calls": [{"caller": "f", "chain": ["g"]}]},
+        }],
+    }
+    cmap: dict = {}
+    enrich_with_call_edges(cmap, checklist=checklist)
+    enrich_with_call_edges(cmap, checklist=checklist)
+    assert len(cmap["call_edges"]) == 1
+
+
+def test_call_edges_no_checklist():
+    """None checklist path and no dict → zero edges."""
+    cmap: dict = {}
+    n = enrich_with_call_edges(cmap)
+    assert n == 0
+    assert "call_edges" not in cmap

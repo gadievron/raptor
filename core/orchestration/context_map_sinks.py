@@ -70,7 +70,11 @@ def enrich_with_sink_discovery(
     # 3. Add framework APIs to meta
     modified += _merge_framework_apis(context_map, result)
 
-    # 4. Add the summary to context_map root (always counts as modified
+    # 4. Populate the simple `sinks` array for consumers that don't
+    # read `sink_details` (e.g. audit orchestrator's sink-reachability gate)
+    modified += _populate_sinks_array(context_map, result)
+
+    # 5. Add the summary to context_map root (always counts as modified
     # so the caller persists the result even if only framework APIs
     # or the summary changed)
     context_map["sink_discovery"] = result.as_dict()
@@ -213,6 +217,59 @@ def _merge_framework_apis(
             "sink enrichment: added %d discovered framework APIs to meta",
             added,
         )
+    return added
+
+
+def _populate_sinks_array(
+    context_map: Dict[str, Any],
+    result: SinkDiscoveryResult,
+) -> int:
+    """Populate the simple ``sinks`` array from discovery results.
+
+    The ``sinks`` array uses a flat format (file, function, target, direct)
+    that consumers like the audit orchestrator's sink-reachability gate
+    read directly.  Includes BOTH the caller function (which calls the
+    dangerous target) AND the dangerous target itself — so any function
+    that calls e.g. ``strcpy`` is transitively reachable to a sink.
+
+    Merges with any existing ``sinks`` entries (e.g. from LLM MAP-3).
+    Deduplicates by (file, function, target).
+    """
+    sinks = context_map.get("sinks")
+    if sinks is None:
+        sinks = []
+        context_map["sinks"] = sinks
+
+    existing: Set[tuple] = set()
+    for s in sinks:
+        existing.add((s.get("file", ""), s.get("function", ""), s.get("target", "")))
+
+    added = 0
+    for sink in result.direct_sinks:
+        key = (sink.file, sink.function, sink.target)
+        if key not in existing:
+            existing.add(key)
+            sinks.append({
+                "file": sink.file,
+                "function": sink.function,
+                "target": sink.target,
+                "direct": sink.direct,
+            })
+            added += 1
+
+        target_key = ("", sink.target, sink.target)
+        if target_key not in existing:
+            existing.add(target_key)
+            sinks.append({
+                "file": "",
+                "function": sink.target,
+                "target": sink.target,
+                "direct": True,
+            })
+            added += 1
+
+    if added:
+        logger.info("sink enrichment: added %d entries to sinks array", added)
     return added
 
 

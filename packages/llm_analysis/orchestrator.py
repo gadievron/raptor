@@ -423,7 +423,7 @@ def _attach_calibrated_aggregation(
     """Run Dawid–Skene calibrated aggregation over the multi-model panel
     and attach the additive ``calibrated_aggregation`` field to each
     finding in ``results_by_id`` (Phase 3 of the calibrated-aggregation
-    arc; see docs/design-aggregation-dominators-wp.md).
+    arc).
 
     Returns the run summary dict surfaced in
     ``orchestrated_report.json`` under
@@ -482,7 +482,7 @@ def _attach_calibrated_aggregation(
             "fallback_by_reason": dict(fallback_by_reason),
             "total": len(verdicts),
         })
-        logger.info(
+        logger.debug(
             "Calibrated aggregation: %d D–S, %d vote-fallback "
             "[%s] (%d total)",
             n_ds, n_vote, breakdown, len(verdicts),
@@ -507,7 +507,7 @@ def orchestrate(
     prep_report_path: Path,
     repo_path: Path,
     out_dir: Path,
-    max_parallel: int = 3,
+    max_parallel: int = 0,
     max_findings: int = 0,
     no_exploits: bool = False,
     no_patches: bool = False,
@@ -519,6 +519,7 @@ def orchestrate(
     deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
     allow_unreachable: bool = False,
+    checklist: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -537,7 +538,7 @@ def orchestrate(
         prep_report_path: Path to autonomous_analysis_report.json from Phase 3.
         repo_path: Target repository path.
         out_dir: Output directory for orchestration results.
-        max_parallel: Maximum concurrent agents.
+        max_parallel: Maximum concurrent agents (0 = auto from model RPM).
         no_exploits: Skip exploit generation.
         no_patches: Skip patch generation.
         llm_config: LLMConfig for external LLM dispatch (None = CC only).
@@ -598,7 +599,7 @@ def orchestrate(
         from packages.llm_analysis.source_intel_inject import (
             prepare_source_intel,
         )
-        prepare_source_intel(repo_path)
+        prepare_source_intel(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
 
@@ -642,6 +643,14 @@ def orchestrate(
     analysis_model = role_resolution.get("analysis_model")
     analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
+
+    if max_parallel <= 0:
+        from core.llm.concurrency import derive_max_workers
+        max_parallel = derive_max_workers(analysis_model_name) if analysis_model_name else 3
+        logger.info(
+            "auto workers: model=%s → max_parallel=%d",
+            analysis_model_name or "(cc)", max_parallel,
+        )
     analysis_models_all = role_resolution.get("analysis_models", [])
     n_analysis = len(analysis_models_all)
     if n_analysis > 1:
@@ -660,6 +669,17 @@ def orchestrate(
         extras.append(f"{n_aggregate} aggregate")
     extra_str = f" ({', '.join(extras)})" if extras else ""
     print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
+
+    try:
+        from core.run.estimator import estimate_from_scorecard, format_estimate
+        _sc_est = estimate_from_scorecard(
+            analysis_model_name or "", n, max_parallel=max_parallel,
+        )
+        _sc_line = format_estimate(_sc_est)
+        if _sc_line:
+            print(f"  {_sc_line}")
+    except Exception:  # noqa: BLE001
+        pass
 
     # --- Build dispatch callable ---
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
@@ -1091,6 +1111,13 @@ def orchestrate(
                 results_by_id, cost_tracker, max_parallel,
             )
 
+    # Snapshot verdicts before Stage F so the self-consistency
+    # producer can detect flips (RetryTask overwrites in place).
+    verdicts_pre_retry: Dict[str, bool] = {}
+    for fid, r in results_by_id.items():
+        if isinstance(r, dict) and "error" not in r:
+            verdicts_pre_retry[fid] = bool(r.get("is_exploitable", False))
+
     # Stage F: self-consistency check + retry contradictions and low confidence
     dispatch_task(
         RetryTask(results_by_id=results_by_id, profile=profile), findings,
@@ -1111,6 +1138,7 @@ def orchestrate(
     # judge — capturing the post-consensus value, which defeated
     # the snapshot's purpose. Take it here, before BOTH stages,
     # so judge can compare against the actual primary verdict.
+    sc = getattr(client, "scorecard", None) if client is not None else None
     primary_verdicts_pre_consensus: Dict[str, bool] = {}
     for fid, r in results_by_id.items():
         if isinstance(r, dict) and "error" not in r:
@@ -1194,21 +1222,19 @@ def orchestrate(
         # keeps primary's verdict in that mode — no panel-majority
         # signal to attribute). Agreed findings skipped (no useful
         # per-model signal).
-        if client is not None:
-            sc = getattr(client, "scorecard", None)
-            if sc is not None:
-                from core.llm.scorecard.judge import record_judge_outcomes
-                try:
-                    record_judge_outcomes(
-                        sc,
-                        results_by_id=results_by_id,
-                        primary_verdicts_before_judge=primary_verdicts_before_judge,
-                    )
-                except Exception as e:                  # noqa: BLE001
-                    # WARNING (not DEBUG): family-wide convention.
-                    # See core/llm/scorecard/consensus.py for the
-                    # rationale on operator-visible producer failures.
-                    logger.warning("judge producer failed: %s", e)
+        if sc is not None:
+            from core.llm.scorecard.judge import record_judge_outcomes
+            try:
+                record_judge_outcomes(
+                    sc,
+                    results_by_id=results_by_id,
+                    primary_verdicts_before_judge=primary_verdicts_before_judge,
+                )
+            except Exception as e:                  # noqa: BLE001
+                # WARNING (not DEBUG): family-wide convention.
+                # See core/llm/scorecard/consensus.py for the
+                # rationale on operator-visible producer failures.
+                logger.warning("judge producer failed: %s", e)
 
     # Multi-model correlation (pure Python, no LLM)
     correlation = None
@@ -1246,50 +1272,110 @@ def orchestrate(
         # Per-cell auto-policy unaffected — this populates its own
         # event slot, distinct from the cheap-tier prefilter
         # counters that drive the gate.
-        if client is not None:
-            sc = getattr(client, "scorecard", None)
-            if sc is not None:
-                # Pass ``_multi_results`` directly so the producer can
-                # attribute each minority model's reasoning to the
-                # right model. Decoupled from results_by_id to avoid
-                # mutating records that get serialised into
-                # orchestrated_report.json.
-                from core.llm.scorecard.consensus import (
-                    record_consensus_outcomes,
+        if sc is not None:
+            # Pass ``_multi_results`` directly so the producer can
+            # attribute each minority model's reasoning to the
+            # right model. Decoupled from results_by_id to avoid
+            # mutating records that get serialised into
+            # orchestrated_report.json.
+            from core.llm.scorecard.consensus import (
+                record_consensus_outcomes,
+            )
+            try:
+                record_consensus_outcomes(
+                    sc,
+                    correlation=correlation,
+                    results_by_id=results_by_id,
+                    per_finding_results=_multi_results,
                 )
-                try:
-                    record_consensus_outcomes(
-                        sc,
-                        correlation=correlation,
-                        results_by_id=results_by_id,
-                        per_finding_results=_multi_results,
-                    )
-                except Exception as e:                  # noqa: BLE001
-                    # Never let scorecard wiring abort orchestration —
-                    # but log at WARNING so operators see regressions
-                    # without needing DEBUG enabled.
-                    logger.warning(
-                        "consensus producer failed: %s", e,
-                    )
-                # Sister producer covering the agreed-verdict case
-                # the consensus producer skips: panel agreed on
-                # is_exploitable but reasoning text diverged. See
-                # core.llm.scorecard.reasoning_divergence.
-                from core.llm.scorecard.reasoning_divergence import (
-                    record_reasoning_divergence,
+            except Exception as e:                  # noqa: BLE001
+                # Never let scorecard wiring abort orchestration —
+                # but log at WARNING so operators see regressions
+                # without needing DEBUG enabled.
+                logger.warning(
+                    "consensus producer failed: %s", e,
                 )
-                try:
-                    record_reasoning_divergence(
-                        sc,
-                        correlation=correlation,
-                        results_by_id=results_by_id,
-                        per_finding_results=_multi_results,
-                    )
-                except Exception as e:                  # noqa: BLE001
-                    # WARNING (not DEBUG): see consensus producer above.
-                    logger.warning(
-                        "reasoning_divergence producer failed: %s", e,
-                    )
+            # Sister producer covering the agreed-verdict case
+            # the consensus producer skips: panel agreed on
+            # is_exploitable but reasoning text diverged. See
+            # core.llm.scorecard.reasoning_divergence.
+            from core.llm.scorecard.reasoning_divergence import (
+                record_reasoning_divergence,
+            )
+            try:
+                record_reasoning_divergence(
+                    sc,
+                    correlation=correlation,
+                    results_by_id=results_by_id,
+                    per_finding_results=_multi_results,
+                )
+            except Exception as e:                  # noqa: BLE001
+                # WARNING (not DEBUG): see consensus producer above.
+                logger.warning(
+                    "reasoning_divergence producer failed: %s", e,
+                )
+
+    # Cross-run stability: compare this run's verdicts against the most
+    # recent prior agentic run on the same target.
+    n_stability = 0
+    if sc is not None and out_dir is not None:
+        try:
+            from core.llm.scorecard.stability import (
+                record_cross_run_stability,
+            )
+            n_stability = record_cross_run_stability(
+                sc, out_dir=out_dir, results_by_id=results_by_id,
+            )
+            if n_stability:
+                logger.info(
+                    "cross-run stability: %d events recorded", n_stability,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("cross-run stability producer failed: %s", e)
+
+    # Cross-family check outcomes.
+    if sc is not None:
+        try:
+            from core.llm.scorecard.cross_family import (
+                record_cross_family_outcomes,
+            )
+            n_cf = record_cross_family_outcomes(
+                sc, results_by_id=results_by_id,
+            )
+            if n_cf:
+                logger.info("cross-family scorecard: %d events", n_cf)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("cross-family producer failed: %s", e)
+
+    # Self-consistency outcomes (Stage F retries).
+    if sc is not None:
+        try:
+            from core.llm.scorecard.self_consistency import (
+                record_self_consistency_outcomes,
+            )
+            n_sc = record_self_consistency_outcomes(
+                sc,
+                results_by_id=results_by_id,
+                verdicts_pre_retry=verdicts_pre_retry,
+            )
+            if n_sc:
+                logger.info("self-consistency scorecard: %d events", n_sc)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("self-consistency producer failed: %s", e)
+
+    # Dataflow validation outcomes.
+    if sc is not None:
+        try:
+            from core.llm.scorecard.dataflow_validation import (
+                record_dataflow_validation_outcomes,
+            )
+            n_dv = record_dataflow_validation_outcomes(
+                sc, results_by_id=results_by_id,
+            )
+            if n_dv:
+                logger.info("dataflow-validation scorecard: %d events", n_dv)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("dataflow-validation producer failed: %s", e)
 
     # Final LLM aggregation over independent analysis outputs. This is distinct
     # from consensus/judge: it produces a downstream artifact instead of
@@ -1469,6 +1555,7 @@ def orchestrate(
         "fired_models": (
             client.get_fired_models() if client is not None else []
         ),
+        "stability_events": n_stability,
     }
 
     if defense_telemetry.has_warnings:
@@ -1542,6 +1629,26 @@ def orchestrate(
         print(f"  {', '.join(cf_parts)}")
     if groups:
         print(f"  Cross-finding groups: {len(groups)}")
+    if n_stability:
+        try:
+            from core.llm.scorecard.scorecard import EventType
+            _stats = sc.get_stats() if sc else []
+            _s_correct = sum(
+                s.events[EventType.CROSS_RUN_STABILITY].correct
+                for s in _stats
+                if EventType.CROSS_RUN_STABILITY in s.events
+            )
+            _s_incorrect = sum(
+                s.events[EventType.CROSS_RUN_STABILITY].incorrect
+                for s in _stats
+                if EventType.CROSS_RUN_STABILITY in s.events
+            )
+            st_parts = [f"{_s_correct} consistent"]
+            if _s_incorrect:
+                st_parts.append(f"{_s_incorrect} flipped")
+            print(f"  Stability: {', '.join(st_parts)} vs prior run")
+        except Exception:  # noqa: BLE001
+            pass
     print(f"  Report: {out_path}")
 
     return merged
@@ -1668,7 +1775,7 @@ def _resolve_cross_family_checker(
     )
     for m in candidates:
         if not same_family(primary_name, m.model_name):
-            logger.info("Cross-family checker: %s (from resolved roles)", m.model_name)
+            logger.debug("Cross-family checker: %s (from resolved roles)", m.model_name)
             return m
 
     return _auto_detect_cross_family_checker(primary_family)
@@ -1912,8 +2019,17 @@ def _merge_results(
             if k not in finding:
                 finding[k] = v
 
-        # Ensure standard fields are set
-        finding["exploitable"] = cc.get("is_exploitable", False)
+        # Ensure standard fields are set.
+        # Invariant: a finding that isn't a true positive cannot be
+        # exploitable. The LLM sometimes contradicts itself (e.g.
+        # is_true_positive=False but is_exploitable=True); enforce
+        # the logical floor here so downstream consumers never see
+        # an impossible verdict combination.
+        _is_tp = cc.get("is_true_positive", True)
+        _is_exp = cc.get("is_exploitable", False)
+        if not _is_tp and _is_exp:
+            _is_exp = False
+        finding["exploitable"] = _is_exp
         finding["exploitability_score"] = cc.get("exploitability_score", 0)
 
         if finding["exploitable"]:

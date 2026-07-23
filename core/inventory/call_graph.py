@@ -111,7 +111,7 @@ INDIRECTION_BRACKET_DISPATCH = "bracket_dispatch"  # JS obj[<var>](...) / Py HAN
 INDIRECTION_EVAL = "eval"                        # JS eval / new Function
 
 
-@dataclass
+@dataclass(slots=True)
 class CallSite:
     """One call expression in a file.
 
@@ -169,7 +169,7 @@ class CallSite:
     receiver_type: Optional[str] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class DecoratedFunction:
     """One ``def`` (sync or async) that carries one or more
     decorators. Methods of classes are tracked the same way —
@@ -190,7 +190,7 @@ class DecoratedFunction:
     decorators: List[List[str]] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class ClassDef:
     """One ``class`` definition in a file.
 
@@ -4252,10 +4252,57 @@ class _CCallGraph:
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
-        # Stack of lexically-enclosing function names. ``None`` is
-        # never pushed — file-scope ``CallSite``s (initialisers) emit
-        # with ``caller=None``.
         self._enclosing: List[str] = []
+        self._fn_ptr_vars: Set[str] = set()
+
+    # ------------------------------------------------------------------
+    # Pre-pass: collect function-pointer variable declarations
+    # ------------------------------------------------------------------
+
+    def _collect_fn_ptr_declarations(self, node) -> None:
+        """Walk all declaration nodes to find function-pointer variables.
+
+        Matches patterns like ``void (*handler)(int)`` where a
+        pointer_declarator wraps a function_declarator.
+        """
+        if node.type == "declaration":
+            self._check_fn_ptr_decl(node)
+        for child in node.children:
+            self._collect_fn_ptr_declarations(child)
+
+    def _check_fn_ptr_decl(self, decl_node) -> None:
+        """Check if a declaration contains a function-pointer declarator."""
+        for child in decl_node.children:
+            name = self._extract_fn_ptr_name(child)
+            if name:
+                self._fn_ptr_vars.add(name)
+
+    def _extract_fn_ptr_name(self, node) -> Optional[str]:
+        """Recursively search for identifier inside pointer_declarator
+        that wraps a function_declarator."""
+        if node.type == self._POINTER_DECLARATOR:
+            has_func_decl = any(
+                c.type == self._FUNCTION_DECLARATOR for c in node.children
+            )
+            if has_func_decl:
+                for c in node.children:
+                    if c.type == self._PARENTHESIZED_DECLARATOR:
+                        return self._extract_fn_ptr_name(c)
+                    if c.type == self._POINTER_DECLARATOR:
+                        return self._extract_fn_ptr_name(c)
+                    if c.type == self._IDENTIFIER:
+                        return c.text.decode("utf-8", errors="replace")
+        if node.type == self._PARENTHESIZED_DECLARATOR:
+            for c in node.children:
+                name = self._extract_fn_ptr_name(c)
+                if name:
+                    return name
+        if node.type == "init_declarator":
+            for c in node.children:
+                name = self._extract_fn_ptr_name(c)
+                if name:
+                    return name
+        return None
 
     # ------------------------------------------------------------------
     # Walk dispatch
@@ -4264,6 +4311,7 @@ class _CCallGraph:
     def walk(self, node) -> None:
         """Pre-order traversal. Function definitions push their name
         before children are visited; pop on the way back up."""
+        self._collect_fn_ptr_declarations(node)
         t = node.type
         if t == self._PREPROC_INCLUDE:
             self._visit_include(node)
@@ -4337,6 +4385,8 @@ class _CCallGraph:
             return
 
         if is_fn_pointer:
+            self.graph.indirection.add(INDIRECTION_FN_POINTER)
+        elif len(chain) == 1 and chain[0] in self._fn_ptr_vars:
             self.graph.indirection.add(INDIRECTION_FN_POINTER)
 
         caller = self._enclosing[-1] if self._enclosing else None

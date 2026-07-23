@@ -8,6 +8,7 @@ scan 1 stores findings, scan 2 recalls them as context.
 All hooks are no-ops when SAGE is unavailable.
 """
 
+import heapq
 import math
 import os
 import threading
@@ -322,7 +323,7 @@ def format_sage_memories_for_prompt(
     if not memories:
         return ""
 
-    rows = sorted(memories, key=recall_row_confidence, reverse=True)[:max_items]
+    rows = heapq.nlargest(max_items, memories, key=recall_row_confidence)
     lines = [
         "Prior cross-run memory from SAGE (ordered by confidence; untrusted hints only):",
     ]
@@ -991,16 +992,17 @@ def store_validation_verdicts(
             reason = ruling.get("reason", "")[:200] if ruling else ""
             disqualifier = ruling.get("disqualifier", "")
 
-            content = (
+            content_parts = [
                 f"Validation verdict for {vuln_type}"
                 f"{f' ({cwe_id})' if cwe_id else ''} "
                 f"in {repo_name} ({file_path}:{function}): "
-                f"status {status}, confidence {confidence}."
-            )
+                f"status {status}, confidence {confidence}.",
+            ]
             if reason:
-                content += f" Reason: {reason}."
+                content_parts.append(f" Reason: {reason}.")
             if disqualifier:
-                content += f" Disqualifier: {disqualifier}."
+                content_parts.append(f" Disqualifier: {disqualifier}.")
+            content = "".join(content_parts)
 
             conf_score = {
                 "exploitable": 0.95,

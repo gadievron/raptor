@@ -179,6 +179,7 @@ def make_sandbox_runner(
             "block_network": block_network,
             "target": str(target),
             "caller_label": caller_label,
+            "env_caller_filtered": True,
         }
         if output is not None:
             sandbox_kwargs["output"] = str(output)

@@ -151,3 +151,70 @@ def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:
     _sp.run(["gcc", str(src), "-s", "-o", str(stripped)], check=True)
     assert _has_dwarf(debug) is True
     assert _has_dwarf(stripped) is False
+
+
+def test_detect_finds_makefile_built_binary(tmp_path: Path) -> None:
+    """A target with a Makefile that builds into build/ — autodetect
+    must find the resulting debug binary after ``make`` runs. This is
+    the scenario that makes post-CodeQL autodetect valuable: CodeQL
+    compiles the target via the real build system, leaving artefacts
+    that the binary oracle can consume."""
+    import subprocess as _sp
+
+    src = tmp_path / "vuln.c"
+    src.write_text(
+        '#include <string.h>\n'
+        '#include <stdio.h>\n'
+        'void dead_function(void) { printf("never called\\n"); }\n'
+        'int main(int argc, char **argv) {\n'
+        '    char buf[64];\n'
+        '    if (argc > 1) strcpy(buf, argv[1]);\n'
+        '    return 0;\n'
+        '}\n'
+    )
+    makefile = tmp_path / "Makefile"
+    makefile.write_text(
+        "CC ?= gcc\n"
+        "CFLAGS ?= -g -O2 -ffunction-sections -fdata-sections\n"
+        "LDFLAGS ?= -Wl,--gc-sections\n"
+        "\n"
+        "all: build/vuln\n"
+        "\n"
+        "build/vuln: vuln.c\n"
+        "\tmkdir -p build\n"
+        "\t$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<\n"
+        "\n"
+        "clean:\n"
+        "\trm -rf build\n"
+    )
+
+    # Before build: no binaries to find.
+    pre = detect_binaries(tmp_path, "auto")
+    assert pre == [], f"expected no binaries before build, got {pre}"
+
+    # Build the target (simulates what CodeQL does with a real build system).
+    result = _sp.run(
+        ["make", "-C", str(tmp_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"make failed: {result.stderr}"
+
+    # After build: autodetect must find the debug binary in build/.
+    post = detect_binaries(tmp_path, "auto")
+    names = [p.name for p in post]
+    assert "vuln" in names, (
+        f"autodetect should find build/vuln after make; got {names}"
+    )
+    assert _has_dwarf(post[0]), "built binary should have DWARF info"
+
+    # The binary was built with -ffunction-sections + --gc-sections,
+    # so dead_function (never called) should be absent from the symbol
+    # table — exactly the case the binary oracle suppresses.
+    import subprocess as _sp2
+    nm = _sp2.run(
+        ["nm", str(post[0])], capture_output=True, text=True,
+    )
+    assert "dead_function" not in nm.stdout, (
+        "dead_function should be DCE'd by --gc-sections"
+    )
+    assert "main" in nm.stdout, "main should survive in the binary"

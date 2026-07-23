@@ -42,7 +42,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from core.json import load_json, save_json
 from core.sandbox import run_untrusted_networked
@@ -980,6 +980,7 @@ def run_reachability_prepass(
     agentic_out_dir: Path,
     *,
     allow_unreachable: bool = False,
+    inventory: Optional[Dict[str, Any]] = None,
 ) -> "ReachabilityPrepassResult":
     """Always-on companion to ``run_understand_prepass``.
 
@@ -1014,22 +1015,21 @@ def run_reachability_prepass(
             duration_s=time.time() - t0,
         )
 
-    # Build the inventory once. Cached on the result so the
-    # agentic launcher can hand it to /validate + codeql.
-    try:
-        from core.inventory.builder import build_inventory
-        import tempfile
-        with tempfile.TemporaryDirectory() as td:
-            inventory = build_inventory(str(target), td)
-    except Exception as e:                          # noqa: BLE001
-        logger.debug(
-            "reachability prepass: inventory build failed (%s)", e,
-        )
-        return ReachabilityPrepassResult(
-            ran=False,
-            skipped_reason="inventory build failed",
-            duration_s=time.time() - t0,
-        )
+    if inventory is None:
+        try:
+            from core.inventory.builder import build_inventory
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(str(target), td)
+        except Exception as e:                      # noqa: BLE001
+            logger.debug(
+                "reachability prepass: inventory build failed (%s)", e,
+            )
+            return ReachabilityPrepassResult(
+                ran=False,
+                skipped_reason="inventory build failed",
+                duration_s=time.time() - t0,
+            )
 
     try:
         from core.orchestration.reachability_enrichment import (

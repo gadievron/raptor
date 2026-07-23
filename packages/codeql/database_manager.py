@@ -36,7 +36,7 @@ from core.logging import get_logger
 from core.git.clone import safe_git_command
 from core.git import get_safe_git_env
 from core.sandbox import SandboxSetupError
-from packages.codeql.build_detector import BuildSystem
+from core.build.build_detector import BuildSystem
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
@@ -810,6 +810,7 @@ class DatabaseManager:
                 block_network=True,
                 cwd=working_dir,
                 env=env,
+                env_caller_filtered=True,
                 tool_paths=self._sandbox_tool_paths(),
                 # Audit JSONL home (only used when --audit is engaged).
                 # Decoupled from output= because the build subprocess
@@ -1295,7 +1296,7 @@ def main():
     # Create build system object if command provided
     build_system = None
     if args.build_command:
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         build_system = BuildSystem(
             type="custom",
             command=args.build_command,
