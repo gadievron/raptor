@@ -151,7 +151,9 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
 | `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
-| `/project` | Named workspaces to organise runs and track findings over time (includes `threat-model` subcommand) | Stable |
+| `/project` | Named workspaces to organise runs and track findings over time | Stable |
+| `/threat-model` | Create, inspect, and maintain per-project threat models | Stable |
+| `/frida` | Dynamic instrumentation via Frida | Alpha |
 | `/web` | Web application scanning | Alpha/stub |
 
 ---

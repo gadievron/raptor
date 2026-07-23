@@ -342,7 +342,7 @@ Two places Z3 is used — both degrade gracefully when absent:
    whether a one-gadget's register/memory constraints are satisfiable given a crash
    state. Result in `exploitation_paths[vuln].one_gadget_info.smt_feasibility`.
 
-2. **CodeQL dataflow** (`packages/codeql/smt_path_validator.py`): checks whether the
+2. **CodeQL dataflow** (`core/smt_solver/path_feasibility.py`): checks whether the
    branch conditions along a dataflow path are jointly satisfiable. `unsat` → false
    positive, skip LLM. `sat` → concrete input values fed into the LLM prompt and
    `DataflowValidation.prerequisites`. Best coverage: CWE-190, CWE-120/122,
