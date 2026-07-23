@@ -145,31 +145,35 @@ and deduplicated by resolved absolute path.
 
 ### Rule Inventory
 
-39 semantic patch files under `engine/coccinelle/rules/`, covering
+54 semantic patch files under `engine/coccinelle/rules/`, covering
 C/C++ structural patterns that require control-flow sensitivity:
 
 **Memory safety:**
 `use_after_free`, `double_free`, `realloc_losing_ptr`,
-`free_nonbase_ptr`, `stack_addr_escape`, `missing_null_check`
+`free_nonbase_ptr`, `stack_addr_escape`, `missing_null_check`,
+`free_stack_array`, `mmap_free`, `use_after_close`,
+`use_after_fclose`
 
 **Uninitialised data:**
 `copy_to_user_uninit`, `uninitialized_return`
 
 **Resource leaks:**
-`resource_leak_err`, `mmap_leak_err`, `double_close`
+`resource_leak_err`, `mmap_leak_err`, `double_close`,
+`popen_fclose`, `fdopendir_double_close`
 
 **Integer issues:**
 `integer_overflow_alloc`, `shift_overflow`, `sign_extension_widen`,
 `division_by_zero`, `uid_truncation`, `double_sizeof`
 
-**Concurrency:**
-`lock_imbalance`, `sleep_under_spinlock`,
-`gfp_kernel_under_spinlock`, `rcu_no_lock`, `use_after_unlock`
-
 **Buffer handling:**
 `missing_bounds_check`, `strncpy_no_nul`, `snprintf_advance`,
 `copy_user_size_mismatch`, `sizeof_array_param`,
-`sizeof_container_of`
+`sizeof_container_of`, `malloc_strlen_strcpy`
+
+**Concurrency:**
+`lock_imbalance`, `sleep_under_spinlock`,
+`gfp_kernel_under_spinlock`, `rcu_no_lock`, `use_after_unlock`,
+`signal_handler_unsafe`
 
 **TOCTOU and race conditions:**
 `toctou_stat_open`, `double_fetch`
@@ -182,6 +186,17 @@ C/C++ structural patterns that require control-flow sensitivity:
 
 **Format strings:**
 `format_string`
+
+**API misuse:**
+`signal_sigkill_sigstop`, `fcntl_flag_domain`,
+`double_byteswap`, `inet_ntoa_double_call`,
+`open_creat_no_mode`
+
+**Compiler optimisation hazards:**
+`dead_memset_free`
+
+**Kernel-specific:**
+`is_err_not_ptr_err`
 
 **Miscellaneous:**
 `va_arg_mismatch`, `init_after_register`, `unsafe_list_del`,
