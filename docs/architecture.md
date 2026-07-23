@@ -409,7 +409,7 @@ python3 packages/llm_analysis/agent.py \
 - `exploits/` - Generated exploit code (if requested)
 - `patches/` - Proposed secure fixes (if requested)
 
-**Calibrated Aggregation Output** (Phase 3 of the calibrated-aggregation arc -- see `docs/design-aggregation-dominators-wp.md`):
+**Calibrated Aggregation Output** (Phase 3 of the calibrated-aggregation arc -- see `core/llm/scorecard/calibrated_aggregation.py`):
 
 Each finding in `orchestrated_report.json` gains an additive `calibrated_aggregation` field carrying a Dawid--Skene calibrated posterior over the panel verdict. Shape:
 
@@ -437,7 +437,7 @@ The existing `is_exploitable`, `multi_model_analyses`, and `ruling` fields are u
 
 The step is unconditional: it is purely additive (only ever adds the `calibrated_aggregation` field), so there is no opt-out to maintain. The block at `orchestrator.py:~830` is wrapped in a `try / except` -- if D--S fails for any reason, the field is dropped, a `WARNING` is logged, and the failure is recorded under `orchestration.calibrated_aggregation.failed` in `orchestrated_report.json`.
 
-**Phase 4 (deferred, follow-up PR)**: the posterior-weighted scorecard update is *not* in this PR. `core/llm/scorecard/consensus.py` still grades dissenters against the majority vote via `record_event` on the single `multi_model_consensus` slot. The follow-up -- gated on replay-harness validation because the Phase-1a audit returned no-data -- will collapse to one consensus mode that always records *soft* credits (the legacy discrete update being the `correct=1.0, incorrect=0.0` special case), grade against the Dawid--Skene posterior (`correct_credit = p if verdict else (1-p)`), and draw its priors from `/validate` ground truth rather than the scorecard. See `docs/design-aggregation-dominators-wp.md` Phase 4.
+**Phase 4 (deferred, follow-up PR)**: the posterior-weighted scorecard update is *not* in this PR. `core/llm/scorecard/consensus.py` still grades dissenters against the majority vote via `record_event` on the single `multi_model_consensus` slot. The follow-up -- gated on replay-harness validation because the Phase-1a audit returned no-data -- will collapse to one consensus mode that always records *soft* credits (the legacy discrete update being the `correct=1.0, incorrect=0.0` special case), grade against the Dawid--Skene posterior (`correct_credit = p if verdict else (1-p)`), and draw its priors from `/validate` ground truth rather than the scorecard. See `core/llm/scorecard/calibrated_aggregation.py` Phase 4.
 
 **LLM Abstraction**:
 ```

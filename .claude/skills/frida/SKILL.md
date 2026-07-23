@@ -21,7 +21,7 @@ pipx install frida-tools                       # host CLI + python bindings
 raptor doctor                                  # confirms frida is detected
 ```
 
-For remote / mobile targets, install the matching `frida-server` on the target side. See `docs/frida/SETUP_MACOS.md`, `SETUP_LINUX.md`. Note: most `frida-server` binaries bind to `127.0.0.1` by default - start with `-l 0.0.0.0:27042` or SSH-forward port 27042.
+For remote / mobile targets, install the matching `frida-server` on the target side. See `docs/frida.md`. Note: most `frida-server` binaries bind to `127.0.0.1` by default - start with `-l 0.0.0.0:27042` or SSH-forward port 27042.
 
 ## Invocation
 

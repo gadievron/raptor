@@ -120,7 +120,7 @@ patches.
 | `--check-mitigations` | Run binary mitigation checks |
 | `--skip-mitigation-checks` | Skip binary mitigation checks |
 
-**Sanitiser cut** (see [sanitiser cut design](design-sanitizer-cut-value-binding.md))
+**Sanitiser cut**
 
 | Flag | Description |
 |------|-------------|

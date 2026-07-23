@@ -51,6 +51,8 @@ overview:
 
 | Guide | Covers |
 |-------|--------|
+| [Core Concepts](concepts.md) | Two-layer model, finding lifecycle, choosing a command |
+| [Autonomous Workflow](agentic.md) | `/agentic` pipeline, enrichment flags, multi-model analysis |
 | [Architecture](architecture.md) | Codebase structure, directory tree |
 | [Static Analysis](static-analysis.md) | Semgrep and Coccinelle rules |
 | [CodeQL](codeql.md) | CodeQL integration and autonomous analysis |
