@@ -8,12 +8,12 @@ RAPTOR uses a **hybrid integration** approach:
 
 1. **SDK Layer** (Python runtime): `core/sage/` module wraps the `sage-agent-sdk` to provide persistent memory for Python packages (fuzzing memory, exploit feasibility, analysis pipeline)
 
-2. **MCP Layer** (Claude Code agents): All 16 Claude Code agents connect to SAGE via MCP for persistent memory across sessions
+2. **MCP Layer** (Claude Code agents): All 16 Claude Code agents connect to SAGE via MCP (stdio transport) for persistent memory across sessions
 
 ```
 RAPTOR
 ├── Claude Code Agents (16)
-│   └── SAGE MCP ──────────────────┐
+│   └── SAGE MCP (stdio) ─────────┐
 ├── Python Packages                │
 │   ├── Fuzzing Memory (SDK) ──────┤
 │   ├── Exploit Feasibility ───────┤
@@ -50,19 +50,20 @@ libexec/raptor-sage-setup
 
 One command does everything; re-runs are safe (see *Reinstall / re-seed* below):
 
-- Verifies `sage-agent-sdk` is importable by `python3`.
-- Merges the SAGE entry from `core/sage/mcp-entry.json` into `./.mcp.json`
-  (creates the file if absent, deep-merges if you already have other MCP
-  servers registered).
-- Sets `SAGE_ENABLED=true` in `.claude/settings.local.json` so Claude Code
-  propagates the flag into RAPTOR subprocesses (Python-pipeline opt-in —
-  the MCP side is `.mcp.json`).
+- Verifies prerequisites (`sage-agent-sdk`, jq, docker, curl, the stdio wrapper).
+- Migrates the SAGE_HOME volume mount if upgrading from the old `.sage-gui` layout
+  (automatic, non-destructive — see *Volume migration* below).
 - `docker compose -f core/sage/docker-compose.yml up -d` — starts SAGE (port
   8090) and Ollama (port 11435, model `nomic-embed-text`).
 - Waits for SAGE health.
 - Seeds institutional knowledge (30+ primitives, 25+ mitigations, system
   prompts, 10 expert personas, methodology, exploitability heuristics).
 - Registers all 16 RAPTOR agents on the SAGE network.
+- Generates the stdio MCP entry in `./.mcp.json` (replaces any stale SSE
+  config; preserves other MCP servers you've registered).
+- Sets `SAGE_ENABLED=true` in `.claude/settings.local.json` so Claude Code
+  propagates the flag into RAPTOR subprocesses (Python-pipeline opt-in).
+- Runs a smoke test against the MCP wrapper (non-fatal if it fails).
 
 ### 3. Restart Claude Code
 
@@ -134,22 +135,46 @@ core/sage/docker-compose.yml down -v` to wipe them.
 ### MCP Configuration
 
 `.mcp.json` is `.gitignore`d and managed by `libexec/raptor-sage-setup`.
-The template fragment lives at `core/sage/mcp-entry.json`:
+The setup script generates the entry inline using stdio transport via the
+`libexec/raptor-sage-mcp` wrapper:
 
 ```json
 {
   "mcpServers": {
     "sage": {
-      "type": "sse",
-      "url": "http://localhost:8090/mcp/sse"
+      "command": "/path/to/raptor/libexec/raptor-sage-mcp",
+      "args": [],
+      "env": {
+        "SAGE_PROVIDER": "claude-code",
+        "SAGE_PROJECT": "raptor",
+        "SAGE_IDENTITY_PATH": "/root/.sage/agents/raptor-claude-code/agent.key"
+      }
     }
   }
 }
 ```
 
-The setup script deep-merges this fragment into `./.mcp.json`, preserving
-any other MCP servers you've registered. Uninstall removes only the SAGE
-entry and leaves everything else in place.
+The wrapper `exec`s into `docker compose exec -T sage /usr/local/bin/sage-gui mcp`,
+wiring Claude Code's stdin/stdout directly to the SAGE MCP process inside the
+container. No SSE, no HTTP, no OAuth.
+
+The setup script replaces `.mcpServers.sage` entirely on each run (stale
+`type`/`url` fields from an old SSE config are removed). Other MCP servers
+are preserved. Uninstall removes only the SAGE entry.
+
+### Volume Migration
+
+The docker-compose volume mount changed from `/root/.sage-gui` (SAGE <= 6.6.5)
+to `/root/.sage` (SAGE 11.x). When `libexec/raptor-sage-setup` detects an
+existing container with the old mount, it automatically migrates the data:
+
+1. Stops the sage service (retains the container).
+2. Copies SAGE_HOME data from the writable layer to a host-side backup.
+3. Populates the named volume via a disposable container.
+4. Writes a `.migration-complete` marker.
+
+The migration is non-destructive — it skips if the destination volume already
+has data, and never overwrites divergent content.
 
 ## How It Works
 

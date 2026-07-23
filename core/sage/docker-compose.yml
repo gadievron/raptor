@@ -40,15 +40,16 @@ services:
       - OLLAMA_HOST=http://ollama:11434
 
   sage:
-    image: ghcr.io/l33tdawg/sage:11.10.0
+    image: ghcr.io/l33tdawg/sage:11.11.6
     ports:
       - "8090:8080"
     volumes:
-      - sage_data:/root/.sage-gui
+      - sage_data:/root/.sage
     depends_on:
       ollama:
         condition: service_healthy
     environment:
+      - SAGE_HOME=/root/.sage
       - OLLAMA_URL=http://ollama:11434
       - REST_ADDR=0.0.0.0:8080
     healthcheck:

@@ -3,13 +3,15 @@
 # raptor-sage-setup — install or uninstall the SAGE persistent-memory sidecar.
 #
 # Install (default):
-#   1. Merge core/sage/mcp-entry.json into ./.mcp.json (create or deep-merge).
-#   2. Merge SAGE_ENABLED=true into .claude/settings.local.json so Claude Code
-#      propagates it to RAPTOR subprocesses (Python pipeline opt-in).
+#   1. Verify prerequisites (jq, docker, python3, curl, sage-agent-sdk, wrapper).
+#   2. Migrate SAGE_HOME volume mount if upgrading from the old .sage-gui layout.
 #   3. docker compose -f core/sage/docker-compose.yml up -d.
 #   4. Wait for SAGE health.
 #   5. Seed institutional knowledge (core/sage/scripts/seed_sage_knowledge.py).
 #   6. Register RAPTOR agents (core/sage/scripts/register_agents.py).
+#   7. Generate stdio MCP entry in ./.mcp.json (replaces old SSE template).
+#   8. Merge SAGE_ENABLED=true into .claude/settings.local.json.
+#   9. Smoke-test the MCP wrapper.
 #
 # Uninstall (--uninstall):
 #   1. docker compose down (data volumes preserved).
@@ -47,7 +49,12 @@ declare -a _RAPTOR_TMP_FILES=()
 _raptor_cleanup_tmps() {
     local f
     for f in "${_RAPTOR_TMP_FILES[@]:-}"; do
-        [ -n "$f" ] && rm -f "$f"
+        [ -n "$f" ] || continue
+        if [ -d "$f" ]; then
+            rm -rf "$f"
+        else
+            rm -f "$f"
+        fi
     done
 }
 trap _raptor_cleanup_tmps EXIT
@@ -141,7 +148,7 @@ unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 COMPOSE_FILE="$RAPTOR_DIR/core/sage/docker-compose.yml"
-TEMPLATE="$RAPTOR_DIR/core/sage/mcp-entry.json"
+MCP_WRAPPER="$RAPTOR_DIR/libexec/raptor-sage-mcp"
 MCP="$RAPTOR_DIR/.mcp.json"
 SETTINGS_LOCAL="$RAPTOR_DIR/.claude/settings.local.json"
 SAGE_URL="http://localhost:8090"
@@ -161,38 +168,141 @@ check_sdk() {
     }
 }
 
-merge_mcp_entry() {
-    if [ ! -f "$MCP" ]; then
-        cp "$TEMPLATE" "$MCP"
-        echo "Created $MCP."
-        return
+check_wrapper() {
+    if [ ! -f "$MCP_WRAPPER" ]; then
+        echo "raptor-sage-setup: stdio wrapper not found: $MCP_WRAPPER" >&2
+        echo "  Expected at libexec/raptor-sage-mcp — was it deleted?" >&2
+        exit 3
     fi
-    # `mktemp -p` under the target directory so the subsequent
-    # `mv` is on the same filesystem (atomic rename). Pre-fix
-    # `mktemp` defaulted to `/tmp` (or whatever `$TMPDIR` resolved
-    # to), then `mv tmp $MCP` was a CROSS-FILESYSTEM move on
-    # systems where the target ($RAPTOR_DIR) and /tmp are on
-    # different mount points (common on container layouts where
-    # /tmp is tmpfs and $RAPTOR_DIR is a bind-mounted host dir;
-    # also common on dev hosts with a separate /tmp partition).
-    # Cross-fs `mv` is implemented as copy+unlink — NOT atomic;
-    # a Ctrl-C / OOM kill / power loss between the copy and the
-    # unlink leaves the source file in /tmp and the target
-    # half-written, so concurrent readers of $MCP see a partial
-    # file. Same-fs mktemp ensures the rename is atomic at the
-    # filesystem-metadata level.
+    if [ ! -x "$MCP_WRAPPER" ]; then
+        echo "raptor-sage-setup: stdio wrapper not executable: $MCP_WRAPPER" >&2
+        echo "  Fix: chmod +x $MCP_WRAPPER" >&2
+        exit 3
+    fi
+}
+
+migrate_sage_home_if_needed() {
+    # SAGE <= 6.6.5 used /root/.sage-gui as the volume mount. SAGE 11.x
+    # expects /root/.sage. If an existing container still has the old mount
+    # we migrate the data into the volume before docker compose recreates
+    # the container with the new mount point.
+    local cid
+    cid=$(docker compose -f "$COMPOSE_FILE" ps -aq sage 2>/dev/null || true)
+    [ -z "$cid" ] && return 0
+
+    # Check whether the container's mounts include the old path.
+    local has_old_mount
+    has_old_mount=$(docker inspect "$cid" \
+        --format '{{range .Mounts}}{{if eq .Destination "/root/.sage-gui"}}old{{end}}{{end}}' \
+        2>/dev/null || true)
+    [ "$has_old_mount" != "old" ] && return 0
+
+    echo "Detected old volume mount (/root/.sage-gui). Migrating data to /root/.sage..."
+
+    docker compose -f "$COMPOSE_FILE" stop sage
+
+    local backup
+    backup=$(mktemp -d "$RAPTOR_DIR/.sage-migration.XXXXXX")
+    _RAPTOR_TMP_FILES+=("$backup")
+
+    # The volume was mounted at /root/.sage-gui, but SAGE_HOME defaults to
+    # /root/.sage — so state may be in either location. Copy both: the volume
+    # contents (ledger, old data) and the writable-layer SAGE_HOME (agent keys,
+    # ledger written to the default path).
+    docker cp "$cid:/root/.sage-gui/." "$backup/" 2>/dev/null || true
+    docker cp "$cid:/root/.sage/." "$backup/" 2>/dev/null || true
+
+    local volume_name
+    volume_name=$(docker inspect "$cid" \
+        --format '{{range .Mounts}}{{if eq .Destination "/root/.sage-gui"}}{{.Name}}{{end}}{{end}}' \
+        2>/dev/null || true)
+    if [ -z "$volume_name" ]; then
+        echo "raptor-sage-setup: could not resolve volume name for /root/.sage-gui mount." >&2
+        echo "  Skipping migration — the container will start fresh." >&2
+        return 0
+    fi
+
+    # Resolve the SAGE image from the compose file so we don't hardcode a version.
+    local sage_image
+    sage_image=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null \
+        | grep -m1 'sage' || true)
+    [ -z "$sage_image" ] && sage_image="ghcr.io/l33tdawg/sage:11.11.6"
+
+    # Only populate destination if the backup has content and the destination
+    # volume is empty (avoid overwriting divergent data).
+    if [ -d "$backup" ] && [ "$(ls -A "$backup" 2>/dev/null)" ]; then
+        local dest_marker
+        dest_marker=$(docker run --rm \
+            -v "$volume_name:/dest:ro" \
+            --entrypoint /bin/sh \
+            "$sage_image" \
+            -c 'ls -A /dest 2>/dev/null | head -1' 2>/dev/null || true)
+        if [ -z "$dest_marker" ]; then
+            docker run --rm \
+                -v "$backup:/src:ro" \
+                -v "$volume_name:/dest" \
+                --entrypoint /bin/sh \
+                "$sage_image" \
+                -c 'cp -a /src/. /dest/'
+            docker run --rm \
+                -v "$volume_name:/dest" \
+                --entrypoint /bin/sh \
+                "$sage_image" \
+                -c 'date -u > /dest/.migration-complete'
+            echo "Volume migration complete."
+        else
+            echo "Destination volume already has data — skipping copy to avoid overwrite."
+        fi
+    fi
+
+    rm -rf "$backup"
+}
+
+generate_mcp_entry() {
+    # Generate the stdio MCP entry inline. Replaces .mcpServers.sage entirely
+    # so stale type/url fields from an old SSE config do not survive.
     local tmp
     tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
-    jq -s '.[0] * .[1]' "$MCP" "$TEMPLATE" > "$tmp"
+
+    (if [ -f "$MCP" ]; then cat "$MCP"; else echo '{}'; fi) \
+    | jq --arg cmd "$MCP_WRAPPER" --arg project "$(basename "$RAPTOR_DIR")" '
+      if type != "object" then error(".mcp.json root must be an object") else . end
+      | if .mcpServers == null then .mcpServers = {} elif (.mcpServers | type) != "object" then error(".mcpServers must be an object") else . end
+      | .mcpServers.sage = {
+          "command": $cmd,
+          "args": [],
+          "env": {
+            "SAGE_PROVIDER": "claude-code",
+            "SAGE_PROJECT": $project,
+            "SAGE_IDENTITY_PATH": "/root/.sage/agents/raptor-claude-code/agent.key"
+          }
+        }
+    ' > "$tmp"
     mv "$tmp" "$MCP"
     trap - RETURN
-    echo "Merged SAGE entry into $MCP."
+    echo "Generated stdio MCP entry in $MCP."
+}
+
+smoke_test_mcp() {
+    # Send an MCP initialize request to the wrapper and check for a valid response.
+    # Non-fatal — warn and continue if it fails (container may need more startup time).
+    # The wrapper requires CLAUDECODE or _RAPTOR_TRUSTED to pass its trust-marker
+    # check — export CLAUDECODE for the duration of this test.
+    local response
+    response=$(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-smoke-test","version":"1.0.0"}}}' \
+        | CLAUDECODE=1 timeout 10 "$MCP_WRAPPER" 2>/dev/null || true)
+    if printf '%s' "$response" | grep -q '"result"'; then
+        echo "MCP smoke test passed."
+    else
+        echo "Warning: MCP smoke test did not get a valid response." >&2
+        echo "  SAGE may still be starting up. Claude Code will retry on first use." >&2
+    fi
 }
 
 remove_mcp_entry() {
     [ -f "$MCP" ] || return 0
-    # Same same-fs mktemp pattern as merge_mcp_entry above.
+    # Same same-fs mktemp pattern as generate_mcp_entry.
     local tmp
     tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
@@ -370,8 +480,8 @@ install_sage() {
     need python3
     need curl
     check_sdk
-    merge_mcp_entry
-    enable_sage_env
+    check_wrapper
+    migrate_sage_home_if_needed
     # `--remove-orphans` so containers from a PREVIOUS
     # compose config (e.g. the operator updated
     # core/sage/docker-compose.yml between runs and the old config's
@@ -384,6 +494,9 @@ install_sage() {
     wait_health
     python3 "$RAPTOR_DIR/core/sage/scripts/seed_sage_knowledge.py" --sage-url "$SAGE_URL"
     python3 "$RAPTOR_DIR/core/sage/scripts/register_agents.py" --sage-url "$SAGE_URL"
+    generate_mcp_entry
+    enable_sage_env
+    smoke_test_mcp
     echo
     echo "SAGE is up. Restart Claude Code so it picks up the MCP registration."
 }
