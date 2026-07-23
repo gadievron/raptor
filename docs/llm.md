@@ -195,7 +195,11 @@ Controlled by `LLMConfig.scorecard_enabled` (default `True`).
 
 `LLMConfig.max_cost_per_scan` sets a USD budget cap (default $10.00). Enforced via
 atomic pre-debit reservation before each provider call. Concurrent dispatchers cannot
-race past the cap.
+race past the cap. Override with `--max-cost-usd` on the CLI.
+
+**Note:** there is no `RAPTOR_MAX_COST` environment variable — no code reads it.
+The budget cap is set exclusively via `--max-cost-usd` (CLI) or `max_cost_per_scan`
+(config).
 
 ### Token Pricing
 

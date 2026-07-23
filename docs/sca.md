@@ -34,10 +34,6 @@ python3 raptor.py sca --repo /path/to/project
 
 `bin/raptor-sca` strips dangerous environment variables (`LD_PRELOAD`,
 `PYTHON*`, etc.) before dispatching to the Python implementation.
-The internal dispatch script (`libexec/raptor-sca-run`) refuses to run
-unless invoked via `bin/raptor-sca`, the RAPTOR launcher, or Claude Code.
-If you need to call it directly (e.g., custom CI), set `_RAPTOR_TRUSTED=1`
-in the environment.
 
 ---
 

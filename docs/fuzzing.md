@@ -302,8 +302,8 @@ applies:
 - **Network deny** -- fuzzing processes cannot make network connections.
 - **Resource limits** -- CPU and memory caps prevent runaway processes.
 
-PoC compilation and execution use `libexec/raptor-run-sandboxed`, which
-combines namespace isolation with the Landlock policy.  When `--execute-exploits`
+PoC compilation and execution run inside the sandbox, which combines
+namespace isolation with the Landlock policy.  When `--execute-exploits`
 is enabled, generated exploits run under the same sandbox with an additional
 seccomp filter.
 

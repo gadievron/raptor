@@ -102,7 +102,10 @@ runs before pack resolution. If the registry is unreachable, all
 uncached `p/` packs are dropped silently and the scan proceeds with
 local rules only. Previously fetched packs cached under
 `engine/semgrep/rules/registry-cache/` are used regardless of
-connectivity.
+connectivity. The directory ships empty; use
+`engine/semgrep/tools/cache-packs.py` to pre-populate it for
+airgapped deployments (supports `list`, `update`, `fetch`, and
+`import` subcommands).
 
 ### Policy Groups
 

@@ -126,6 +126,22 @@ export RAPTOR_CALLER_DIR="/original/cwd"
 ```
 
 
+
+## Exit Codes
+
+Exit code **0** means the pipeline completed successfully — it does **not**
+mean no findings were produced. Exit code **1** indicates an error (missing
+tools, invalid arguments, subprocess failure). Exit code **130** signals
+SIGINT (Ctrl-C).
+
+To gate CI on finding severity, use SCA's threshold flags:
+
+```bash
+python3 raptor.py sca --repo . --fail-on-severity high --fail-on-kev
+```
+
+For other modes, parse the output files (`findings.json`, SARIF) rather than
+relying on the exit code.
 ## Output
 
 All results are written to `out/` (or the active project directory). The

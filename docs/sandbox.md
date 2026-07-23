@@ -1071,7 +1071,7 @@ them. In practice, the pid-ns hierarchy ensures cleanup within seconds.
 - **ABI v4 (kernel 6.7+)** required for `allowed_tcp_ports` (TCP
   connect allowlist). Earlier kernels emit a WARNING and the parameter
   is silently ignored -- use the [egress proxy](#egress-proxy) instead.
-- **ABI v3 (kernel 5.19+)** required for `TRUNCATE` support. Without
+- **ABI v3 (kernel 6.2+)** required for `TRUNCATE` support. Without
   it, writes to `/dev/null` via truncation may hit EACCES.
 
 ### Audit coverage gaps
@@ -1146,7 +1146,7 @@ hit the Landlock read-restriction even under `fake_home=True`. Either:
 
 `/dev/null` writes are permitted by a narrow Landlock rule. If you see
 EACCES on `/dev/null`, you are likely running on a kernel without
-Landlock ABI v3 (TRUNCATE). Upgrade to 5.19+.
+Landlock ABI v3 (TRUNCATE). Upgrade to 6.2+.
 
 ### Rust `cargo build` fails at the linker stage
 

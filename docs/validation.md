@@ -28,8 +28,7 @@ assessment work.
 | `--out <dir>` | Write output to a specific directory instead of the default |
 
 The canonical entry point is `python3 raptor.py validate` or the `/validate`
-slash command.  The pipeline uses `libexec/raptor-validation-helper 0` to
-bootstrap the run lifecycle -- it does not call `raptor-run-lifecycle` directly.
+slash command.
 
 ### Typical workflows
 
@@ -104,7 +103,7 @@ The LLM then:
    flows, then internal computed values.
 2. For each promising candidate, attempts a harmless proof-of-concept.  PoCs
    are compiled and executed inside the [sandbox](sandbox.md)
-   (`libexec/raptor-run-sandboxed`).
+
 3. Classifies each finding as `poc_success`, `not_disproven`, or `disproven`.
    Disproved findings require a structured `disproved_because` record
    explaining what was investigated, why it is definitively not exploitable,
@@ -326,8 +325,7 @@ The terminal stage.  It:
 1. Merges `stage-f.json` into `findings.json`.
 2. Recomputes CVSS scores from the final vectors (after any Stage F
    corrections) using `packages.cvss.compute_base_score`.
-3. Validates all output against JSON schemas
-   (`libexec/raptor-validate-schema`).
+3. Validates all output against JSON schemas.
 4. Generates `validation-report.md` (human-readable summary).
 5. Generates `diagrams.md` (Mermaid visual maps -- see
    [commands](commands.md#diagram)).
@@ -479,3 +477,4 @@ uses ALL_CAPS.
 | `confirmed_unverified` | Analysis incomplete (no binary, error, unknown) |
 | `confirmed` | Non-memory-corruption finding (Stage E not applicable) |
 | `ruled_out` | Failed sanity, ruling, or disqualifier checks |
+| `disproven` | Pre-ruled by Stage B evidence (e.g. SMT refutation, dead code) |
