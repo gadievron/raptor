@@ -14,6 +14,13 @@ urllib3==2.7.0
 pydantic==2.13.4
 typer==0.25.1
 
+# packages/cve_env drives the Claude Code agent SDK (session auth; no
+# ANTHROPIC_API_KEY required) for its in-process MCP tool-use loop. Exact
+# pin = the version cve-env was resolved/tested against (uv.lock @ ba9f91c,
+# within the upstream >=0.1.66,<0.2 range). Pulls anyio/mcp/sniffio
+# transitively; none clash with raptor's existing pins.
+claude-agent-sdk==0.1.71
+
 # Structured output (works with both OpenAI and Anthropic SDKs).
 # 1.15.1+ moves ``diskcache`` from an unconditional runtime dep
 # to the ``[diskcache]`` extra — this bump drops diskcache from
