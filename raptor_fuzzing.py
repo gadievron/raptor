@@ -140,6 +140,16 @@ Examples:
     ap.add_argument("--plan-only", action="store_true",
                     help="With --orchestrator, print the plan and exit without running")
     ap.add_argument(
+        "--path-homology",
+        action="store_true",
+        help="With --orchestrator, compute the per-function path-homology "
+             "structural signal during binary analysis (Betti numbers, "
+             "cyclomatic complexity, and a decompiler_low_confidence tag "
+             "for functions with irreducible control flow). Reported in "
+             "binary-context-map.json; adds a per-function r2 call. "
+             "Off by default.",
+    )
+    ap.add_argument(
         "--no-verify-exploits",
         action="store_true",
         help="Skip the compile-verify step on LLM-emitted exploits "
@@ -358,6 +368,7 @@ Examples:
                 duration_seconds=args.duration,
                 corpus_dir=corpus_dir,
                 dict_path=Path(args.dict) if args.dict else None,
+                path_homology=args.path_homology,
                 source_context_dir=binary_path.parent,
                 seed_profile=args.seed_profile,
             )
