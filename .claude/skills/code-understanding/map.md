@@ -77,6 +77,9 @@ Find all dangerous operations:
 - Network requests with user-controlled URLs (SSRF candidates)
 - Template rendering with user data
 - Cryptographic operations (especially key material handling)
+- LDAP injection (`DirContext.search`, `LdapContext` with string-concatenated filters)
+- JNDI lookup (`InitialContext.lookup`, `Context.lookup` with user-controlled names)
+- XXE (`DocumentBuilderFactory`, `SAXParserFactory`, `XMLInputFactory` without disabling external entities)
 
 For each: record file path, line number, and what data reaches it.
 

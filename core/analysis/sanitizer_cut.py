@@ -354,8 +354,18 @@ def _propagate_taint(
                     taint[(n, p)] = True
 
     # Iterate to fixed point. Monotone: taint only grows.
+    MAX_TAINT_ITERATIONS = 100
     changed = True
+    taint_iter = 0
     while changed:
+        taint_iter += 1
+        if taint_iter > MAX_TAINT_ITERATIONS:
+            logger.warning(
+                "_propagate_taint hit iteration cap (%d); "
+                "stopping fixed-point loop",
+                MAX_TAINT_ITERATIONS,
+            )
+            break
         changed = False
         for n in graph.nodes():
             tainted_in: Set[str] = set()

@@ -234,10 +234,13 @@ def _collect_functions(tree: ast.AST) -> List[_FunctionRecord]:
                 # Methods: class_name is set when this def is at the
                 # immediate body of a class. Nested functions inside
                 # methods inherit class_name=None — they're not
-                # bound to the receiver.
+                # bound to the receiver. For inner classes, prefix
+                # is "Outer.Inner" while class_name is "Inner", so
+                # check the last component.
                 is_method = (
                     class_name is not None
-                    and prefix == class_name
+                    and (prefix == class_name
+                         or prefix.endswith("." + class_name))
                 )
                 out.append(_FunctionRecord(
                     qualified_name=qualified,
@@ -329,7 +332,7 @@ def _enclosing_function_chain(
 def _resolve_callee(
     chain: List[str],
     caller: Optional[_FunctionRecord],
-    function_records_by_name: Dict[str, _FunctionRecord],
+    function_records_by_name: Dict[str, List[_FunctionRecord]],
     class_methods: Dict[str, Set[str]],
 ) -> Optional[str]:
     """Resolve a call's attribute chain to a callee's qualified
@@ -464,9 +467,9 @@ def build_python_module_callgraph(
         return None
 
     fn_records = _collect_functions(tree)
-    by_name: Dict[str, _FunctionRecord] = {
-        fr.qualified_name: fr for fr in fn_records
-    }
+    by_name: Dict[str, List[_FunctionRecord]] = {}
+    for fr in fn_records:
+        by_name.setdefault(fr.qualified_name, []).append(fr)
     class_methods: Dict[str, Set[str]] = {}
     for fr in fn_records:
         if fr.is_method and fr.class_name is not None:
