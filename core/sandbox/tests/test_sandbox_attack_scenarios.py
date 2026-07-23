@@ -426,9 +426,8 @@ class TestProxyHostnameMatchRigor(unittest.TestCase):
 
     def _proxy(self, allowed):
         from core.sandbox.proxy import EgressProxy
-        p = EgressProxy(allowed_hosts=allowed)
-        self.addCleanup(lambda: (p.stop(), p._thread.join(timeout=5)))
-        return p
+        # Direct instantiation avoids the singleton-sharing of get_proxy().
+        return EgressProxy(allowed_hosts=allowed)
 
     def test_exact_match_case_insensitive(self):
         p = self._proxy(["example.com"])

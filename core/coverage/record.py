@@ -435,6 +435,60 @@ def build_from_annotations(
     }
 
 
+def build_from_journal(run_dir: Path,
+                       tool_name: str = "journal") -> Optional[Dict[str, Any]]:
+    """Build a coverage record from review-journal.jsonl.
+
+    Replaces ``build_from_annotations`` for runs that emit journal
+    entries instead of annotation .md files (post-migration /agentic).
+
+    Args:
+        run_dir: Run output directory containing review-journal.jsonl.
+        tool_name: ``tool`` field for the resulting record.
+
+    Returns:
+        Coverage record dict, or None if no journal entries exist.
+    """
+    from core.coverage.journal import load_entries
+
+    entries = load_entries(run_dir)
+    if not entries:
+        return None
+
+    files = set()
+    functions: List[Dict[str, str]] = []
+    seen = set()
+    statuses: Dict[str, int] = {}
+
+    for entry in entries:
+        if entry.file:
+            files.add(entry.file)
+        key = (entry.file, entry.function)
+        if key in seen:
+            continue
+        seen.add(key)
+        func_entry: Dict[str, str] = {
+            "file": entry.file,
+            "function": entry.function,
+        }
+        if entry.verdict:
+            func_entry["status"] = entry.verdict
+            statuses[entry.verdict] = statuses.get(entry.verdict, 0) + 1
+        if entry.source_hash:
+            func_entry["hash"] = entry.source_hash
+        functions.append(func_entry)
+
+    if not files and not functions:
+        return None
+    return {
+        "tool": tool_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "files_examined": sorted(files),
+        "functions_analysed": functions,
+        "journal_statuses": statuses,
+    }
+
+
 def write_record(run_dir: Path, record: Dict[str, Any],
                  tool_name: str = None) -> Path:
     """Write a coverage record to the run directory.

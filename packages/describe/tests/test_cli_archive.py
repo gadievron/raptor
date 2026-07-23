@@ -137,20 +137,17 @@ class TestArchiveHandling:
         doc = json.loads(out_buf.getvalue())
         assert doc["archive_label"] is None
 
-    def test_temp_dir_cleaned_up_after_archive_describe(
-        self, tmp_path, monkeypatch,
-    ):
-        # Isolate from parallel xdist workers whose raptor-describe-*
-        # dirs in shared /tmp would appear as false-positive leaks.
+    def test_temp_dir_cleaned_up_after_archive_describe(self, tmp_path):
+        # After a successful archive-describe, no raptor-describe-*
+        # temp dirs should remain under the system tmp.
         import tempfile as _tmp
-        private_tmp = tmp_path / "systmp"
-        private_tmp.mkdir()
-        monkeypatch.setattr(_tmp, "tempdir", str(private_tmp))
-
         src = tmp_path / "proj"
         _make_c_daemon_source(src)
         archive = tmp_path / "proj.tar.gz"
         _make_tarball(src, archive)
+
+        sys_tmp = Path(_tmp.gettempdir())
+        before = set(sys_tmp.glob("raptor-describe-*"))
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -160,7 +157,8 @@ class TestArchiveHandling:
         )
         assert rc == 0, err_buf.getvalue()
 
-        leaked = set(private_tmp.glob("raptor-describe-*"))
+        after = set(sys_tmp.glob("raptor-describe-*"))
+        leaked = after - before
         assert not leaked, (
             f"temp extract dirs leaked: {leaked}"
         )
@@ -189,18 +187,6 @@ class TestArchiveCacheHit:
     /describe MUST use that path — not re-extract.
     """
 
-    @staticmethod
-    def _find_cache_dir(archive_path, safe_cache_name_fn, project_out):
-        from core.run.provenance import archive_snapshot
-        snap = archive_snapshot(archive_path)
-        if snap is None:
-            return None
-        cache_name = safe_cache_name_fn(
-            snap["archive_name"], snap["archive_sha256"],
-        )
-        candidate = project_out / "_sources" / cache_name
-        return candidate if candidate.is_dir() else None
-
     def _set_active_project(
         self, monkeypatch, home: Path, project_out: Path,
     ) -> None:
@@ -225,12 +211,6 @@ class TestArchiveCacheHit:
         monkeypatch.setattr(
             "core.run.output._resolve_active_project",
             lambda: (str(project_out), "_t", "/tmp"),
-        )
-        monkeypatch.setattr(
-            "packages.describe.cli._find_cached_extraction",
-            lambda archive_path, safe_cache_name_fn: (
-                self._find_cache_dir(archive_path, safe_cache_name_fn, project_out)
-            ),
         )
 
     def test_cache_hit_skips_extraction(
@@ -270,13 +250,12 @@ class TestArchiveCacheHit:
             monkeypatch, tmp_path / "fakehome", project_out,
         )
 
-        # 4. Isolate from parallel xdist workers: redirect tempdir
-        #    so any fallback extraction lands in a private dir and
-        #    the leak check is immune to other workers' dirs.
+        # 4. Run describe. Expect cache hit → no tmp extract dir
+        #    created (verify with /tmp tally) + content reflects
+        #    the cached tree.
         import tempfile as _tmp
-        private_tmp = tmp_path / "systmp"
-        private_tmp.mkdir()
-        monkeypatch.setattr(_tmp, "tempdir", str(private_tmp))
+        sys_tmp = Path(_tmp.gettempdir())
+        before = set(sys_tmp.glob("raptor-describe-*"))
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -286,7 +265,8 @@ class TestArchiveCacheHit:
         )
         assert rc == 0, err_buf.getvalue()
 
-        leaked = set(private_tmp.glob("raptor-describe-*"))
+        after = set(sys_tmp.glob("raptor-describe-*"))
+        leaked = after - before
         assert not leaked, (
             "cache hit must NOT create a tmp extract dir; "
             f"new tmp dirs: {leaked}"

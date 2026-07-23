@@ -554,13 +554,16 @@ def _render_one_vuln(
     # Dep name comes from the operator's manifest — sanitise defensively
     # against ANSI / BIDI / control-character smuggling in package names.
     heading = "#" * max(3, heading_level)
-    head = f"{heading} {label} — {escape_nonprintable(dep.name)} " \
-           f"{escape_nonprintable(dep.version or '*')}"
+    head_parts = [
+        f"{heading} {label} — {escape_nonprintable(dep.name)} "
+        f"{escape_nonprintable(dep.version or '*')}",
+    ]
     if f.fixed_version:
-        head += f" → fix: {escape_nonprintable(f.fixed_version)}"
+        head_parts.append(f" → fix: {escape_nonprintable(f.fixed_version)}")
     if f.suppressed:
         reason = escape_nonprintable(f.suppression_reason or 'no reason')
-        head += f" _(suppressed: {reason})_"
+        head_parts.append(f" _(suppressed: {reason})_")
+    head = "".join(head_parts)
 
     bullets: List[str] = []
     if primary is not None:

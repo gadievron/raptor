@@ -274,7 +274,7 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 
 **Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
 
-**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
 
 **Source attribution:** Every annotation carries `metadata.source=human` or `metadata.source=llm`. LLM-driven writes pass `overwrite=respect-manual` so a manual operator note is never silently clobbered. Operators using `/annotate add` set `source=human` by default.
 
@@ -300,12 +300,12 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 
 ## PROGRESSIVE LOADING
 
-**When scan completes:** Load `tiers/analysis-guidance.md` (exploit feasibility triage)
+**When scan completes:** Load `tiers/analysis-guidance.md` (adversarial thinking)
 **When validating exploitability:** Load `.claude/skills/exploitability-validation/SKILL.md` (gates, methodology)
 **When validation errors occur:** Load `tiers/validation-recovery.md` (stage-specific recovery)
 **When developing exploits:** Load `tiers/exploit-guidance.md` (constraints, techniques)
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
-**When requested:** Load `tiers/personas/[name].md` (expert personas: security_researcher, exploit_developer, crash_analyst, binary_exploitation_specialist, patch_engineer, penetration_tester, fuzzing_strategist)
+**When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, or `teach.md`
 
 ---
@@ -342,7 +342,7 @@ Two places Z3 is used — both degrade gracefully when absent:
    whether a one-gadget's register/memory constraints are satisfiable given a crash
    state. Result in `exploitation_paths[vuln].one_gadget_info.smt_feasibility`.
 
-2. **CodeQL dataflow** (`core/smt_solver/path_feasibility.py`): checks whether the
+2. **CodeQL dataflow** (`packages/codeql/smt_path_validator.py`): checks whether the
    branch conditions along a dataflow path are jointly satisfiable. `unsat` → false
    positive, skip LLM. `sat` → concrete input values fed into the LLM prompt and
    `DataflowValidation.prerequisites`. Best coverage: CWE-190, CWE-120/122,

@@ -1105,16 +1105,8 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            stale = [t for t in self._client_tasks if not t.done()]
-            for t in stale:
-                t.cancel()
-            if stale and self._loop is not None:
-                try:
-                    self._loop.run_until_complete(
-                        asyncio.gather(*stale, return_exceptions=True)
-                    )
-                except Exception:
-                    pass
+            for task in list(self._client_tasks):
+                task.cancel()
             self._client_tasks.clear()
             if self._server is not None and self._loop is not None:
                 self._server.close()
@@ -1123,12 +1115,6 @@ class EgressProxy:
                 except Exception:
                     pass
             if self._loop is not None:
-                try:
-                    self._loop.run_until_complete(
-                        self._loop.shutdown_asyncgens()
-                    )
-                except Exception:
-                    pass
                 self._loop.close()
 
     # ----- async CONNECT handler -----
@@ -1757,5 +1743,4 @@ def _reset_for_tests() -> None:
     with _lock:
         if _instance is not None:
             _instance.stop()
-            _instance._thread.join(timeout=5.0)
             _instance = None
