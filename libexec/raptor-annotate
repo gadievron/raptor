@@ -45,15 +45,21 @@ operator notes.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
 import os
 import shlex
+import signal
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE")

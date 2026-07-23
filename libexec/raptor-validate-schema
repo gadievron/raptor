@@ -17,9 +17,15 @@ Exit code 0 on success, 1 on validation errors, 2 on missing file.
 On success, records file hash in <dir>/.validated so the prep script
 can skip re-validation if the file hasn't changed.
 """
+import faulthandler
 import hashlib
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os

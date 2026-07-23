@@ -6,8 +6,14 @@ Usage: raptor-run-feasibility <binary_path> <findings.json> <output_dir> [--vuln
 Runs analyze_binary once, saves exploit context, then maps constraints
 to all findings that reference this binary. Updates findings.json in place.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os

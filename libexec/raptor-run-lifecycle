@@ -15,8 +15,14 @@ cancel: updates status=cancelled
 This script only writes metadata. Coverage, cleanup, and reporting
 are handled by their respective tools.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
@@ -35,6 +41,34 @@ import core.startup.process_init  # noqa: E402,F401
 
 from core.run.output import get_output_dir, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
+
+
+def _merge_journal_index(out_dir: Path) -> None:
+    """Merge per-run review journal into project-level index.
+
+    No-op when the run produced no journal or when no active project
+    context exists.
+    """
+    journal_path = out_dir / "review-journal.jsonl"
+    if not journal_path.is_file():
+        return
+    active = Path(".active")
+    if not active.is_symlink() and not active.exists():
+        return
+    try:
+        project_dir = active.resolve()
+    except OSError:
+        return
+    if not project_dir.is_dir():
+        return
+    try:
+        from core.audit.journal import merge_into_index
+        merged = merge_into_index(project_dir, out_dir)
+        if merged:
+            print(f"  journal: {merged} entries merged into project index",
+                  file=sys.stderr)
+    except Exception as exc:
+        print(f"  journal merge skipped: {exc}", file=sys.stderr)
 
 
 def main():
@@ -77,15 +111,11 @@ def main():
                             help="Target path (preferred form)")
         parser.add_argument("--out", dest="explicit_out", default=None,
                             help="Explicit output directory override")
-        # Per-run operator-declared budget cap (QoL #21). When the
-        # target-type catalog's estimated upper bound exceeds the
-        # cap, the lifecycle hard-fails pre-flight before any
-        # downstream tool runs.
         parser.add_argument(
             "--max-cost-usd", dest="max_cost_usd", default=None,
             type=float,
             help="Per-run USD budget cap; pre-flight gate refuses "
-                 "to start when catalog estimate exceeds the cap",
+                 "to start when scorecard estimate exceeds the cap",
         )
         # `sys.argv[2:]` so the `start` subcommand isn't re-parsed.
         try:
@@ -110,42 +140,42 @@ def main():
         start_run(out_dir, args.command, target=target_path)
         print(f"OUTPUT_DIR={out_dir}")
 
-        # Cost-and-time estimate from target-type catalog (QoL #21).
-        # Mirrors raptor.py:_run_with_lifecycle — skills-path runs
-        # (CLAUDE.md ``raptor-run-lifecycle start`` invocation) get
-        # the same operator visibility AND the same --max-cost-usd
-        # pre-flight gate as the dispatcher path. Goes to stderr
-        # so stdout stays single-line OUTPUT_DIR= for callers
-        # that parse it.
-        if target_path:
+        # Pre-flight cost gate (scorecard-derived). When
+        # --max-cost-usd is set, compare against the scorecard
+        # estimate. Goes to stderr so stdout stays single-line
+        # OUTPUT_DIR= for callers that parse it.
+        if args.max_cost_usd is not None and target_path:
             try:
-                from core.run.estimator import estimate_run, format_estimate
-                _est = estimate_run(Path(target_path))
-                _est_line = format_estimate(_est)
-                if _est_line:
-                    sys.stderr.write(_est_line + "\n")
-                if (
-                    args.max_cost_usd is not None
-                    and _est is not None
-                    and _est.cost_high > args.max_cost_usd
-                ):
-                    sys.stderr.write(
-                        f"✗ Pre-flight cost gate: catalog estimate "
-                        f"upper bound (${_est.cost_high:.2f}) exceeds "
-                        f"--max-cost-usd cap (${args.max_cost_usd:.2f}). "
-                        f"Raise the cap or accept the risk and "
-                        f"re-run without --max-cost-usd.\n"
-                    )
-                    # Same metadata-clean-up rationale as the
-                    # dispatcher path — mark the run failed so
-                    # the on-disk metadata explains why the
-                    # OUTPUT_DIR exists without progress.
-                    try:
-                        fail_run(out_dir,
-                                 "pre-flight cost gate exceeded")
-                    except Exception:  # noqa: BLE001
-                        pass
-                    sys.exit(1)
+                from core.run.target_types import load as _load_catalog
+                from core.run.estimator import (
+                    estimate_from_scorecard, format_estimate,
+                )
+                from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+                _entry = _load_catalog(Path(target_path))
+                _n = _entry.typical_findings_count if _entry else 0
+                if _n > 0:
+                    _model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+                    _est = estimate_from_scorecard(_model, _n)
+                    if _est is not None:
+                        _line = format_estimate(_est)
+                        if _line:
+                            sys.stderr.write(_line + "\n")
+                        if _est.cost_high > args.max_cost_usd:
+                            sys.stderr.write(
+                                f"✗ Pre-flight cost gate: scorecard "
+                                f"estimate upper bound "
+                                f"(${_est.cost_high:.2f}) exceeds "
+                                f"--max-cost-usd cap "
+                                f"(${args.max_cost_usd:.2f}). "
+                                f"Raise the cap or re-run without "
+                                f"--max-cost-usd.\n"
+                            )
+                            try:
+                                fail_run(out_dir,
+                                         "pre-flight cost gate exceeded")
+                            except Exception:  # noqa: BLE001
+                                pass
+                            sys.exit(1)
             except SystemExit:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -170,6 +200,9 @@ def main():
                 if entry:
                     manifest = {"models": [entry]}
             complete_run(Path(sys.argv[2]), manifest=manifest)
+            # Merge review journal into project-level index (no-op when
+            # no journal exists or no active project).
+            _merge_journal_index(Path(sys.argv[2]))
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)

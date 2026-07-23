@@ -9,8 +9,14 @@ a summary grouped by oracle x status. Command-agnostic: surfaces
 confirmations from /fuzz, /agentic, /crash-analysis, /validate in one place,
 rather than leaving verified status scattered across per-producer fields.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os

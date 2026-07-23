@@ -75,9 +75,9 @@ That path is from an earlier RAPTOR layout that
 predates Claude Code's skills mechanism — files there
 aren't auto-loaded by Claude Code today, so saving
 new skills there would have made them invisible to
-the LLM. Existing files under `tiers/personas/` are
-still loaded via explicit prompts and via the Python
-methodology loader, but new skills should go under
+the LLM. Existing files under `tiers/personas/` and
+`tiers/specialists/` are still loaded VIA EXPLICIT
+prompts, but new skills should go under
 `.claude/skills/` for auto-load.)
 
 **Skill structure:**

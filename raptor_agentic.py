@@ -38,11 +38,6 @@ from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 logger = get_logger()
 
 
-def _tuning_default(key: str) -> int:
-    from core.tuning import get_tuning
-    return getattr(get_tuning(), key)
-
-
 def _materialise_threat_model_phase(
     *,
     target: Path,
@@ -1150,6 +1145,11 @@ Examples:
         action="store_true",
         help="Skip per-finding annotation emission (default: emit)",
     )
+    parser.add_argument(
+        "--max-cost-usd", dest="max_cost_usd", type=float, default=None,
+        help="Per-run USD budget cap; overrides LLMConfig.max_cost_per_scan "
+             "so CostTracker enforces the cap during LLM calls",
+    )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
@@ -1257,7 +1257,7 @@ Examples:
 
     # Orchestration options
     parser.add_argument("--max-parallel", type=int, default=None,
-                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: from tuning.json)")
+                       help="Maximum parallel dispatch threads (0 = auto from model RPM)")
     parser.add_argument("--understand", action="store_true",
                         help="Run /understand --map before scanning for architectural context")
     parser.add_argument(
@@ -2641,9 +2641,6 @@ Examples:
             analysis_cmd.append("--no-exploits")
         if args.no_patches:
             analysis_cmd.append("--no-patches")
-        precall_path = out_dir / "sage_precall_scan.json"
-        if precall_path.exists():
-            analysis_cmd.extend(["--sage-precall", str(precall_path)])
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
@@ -2742,6 +2739,8 @@ Examples:
                 aggregate=getattr(args, "aggregate", None),
                 auto_detect=llm_env.external_llm,
             )
+            if llm_config and getattr(args, "max_cost_usd", None) is not None:
+                llm_config.max_cost_per_scan = args.max_cost_usd
             # Dataflow validation is on by default when CodeQL ran;
             # `--no-validate-dataflow` opts out entirely. `--deep-validate`
             # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.
@@ -2749,7 +2748,7 @@ Examples:
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
                 out_dir=out_dir,
-                max_parallel=args.max_parallel if args.max_parallel is not None else _tuning_default("max_agentic_parallel"),
+                max_parallel=args.max_parallel or 0,
                 max_findings=args.max_findings,
                 no_exploits=args.no_exploits,
                 no_patches=args.no_patches,

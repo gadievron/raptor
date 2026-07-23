@@ -4,10 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):

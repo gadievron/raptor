@@ -14,8 +14,14 @@ store:  reads context-map.json, flow-trace-*.json, variants.json from
 Both are best-effort: SAGE unavailable → exit 0 silently.
 """
 
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os

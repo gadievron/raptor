@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Run all context-map enrichers in sequence, loading shared data once.
+
+Usage: raptor-enrich-context-map <understand_dir>
+
+Replaces the pattern of calling each enricher script separately, which
+rebuilds the checklist/inventory 3-4 times. This loads checklist and
+context-map once, runs each enricher function in sequence, and saves
+the result once at the end.
+
+Individual enricher scripts remain for standalone use.
+"""
+import argparse
+import faulthandler
+import logging
+import signal
+import sys
+import tempfile
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+from core.json import load_json, save_json
+
+logger = logging.getLogger(__name__)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-enrich-context-map",
+        description="Run all context-map enrichers (callgraph, ast-view, "
+                    "sites, sinks) in one pass, sharing loaded data.",
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    args = parser.parse_args()
+
+    understand_dir = Path(args.understand_dir).resolve()
+    if not understand_dir.is_dir():
+        print(f"raptor-enrich-context-map: {understand_dir} is not a "
+              "directory", file=sys.stderr)
+        return 1
+
+    context_map_path = understand_dir / "context-map.json"
+    if not context_map_path.exists():
+        print(f"raptor-enrich-context-map: {context_map_path} not found",
+              file=sys.stderr)
+        return 1
+
+    context_map = load_json(context_map_path)
+    if not isinstance(context_map, dict):
+        print(f"raptor-enrich-context-map: {context_map_path} is not a "
+              "JSON object", file=sys.stderr)
+        return 1
+
+    checklist = load_json(understand_dir / "checklist.json") or {}
+    target_path = (
+        checklist.get("target_path") if isinstance(checklist, dict) else None
+    )
+    checklist_path = understand_dir / "checklist.json"
+
+    changed = False
+    summary: list[str] = []
+
+    if not target_path:
+        print("raptor-enrich-context-map: checklist missing target_path; "
+              "only callgraph enrichment available", file=sys.stderr)
+
+    # 1. Call-graph edges (uses checklist only)
+    try:
+        from core.orchestration.context_map_callgraph import (
+            enrich_with_call_edges,
+        )
+        n_edges = enrich_with_call_edges(
+            context_map, checklist_path, checklist=checklist,
+        )
+        if n_edges:
+            changed = True
+            summary.append(f"callgraph: {n_edges} edges")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("callgraph enrichment failed: %s", e, exc_info=True)
+
+    # 2. Build inventory once (shared by ast-view and forward-reachable)
+    inventory = None
+    if target_path:
+        try:
+            from core.inventory.builder import build_inventory
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(str(target_path), td)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("inventory build failed: %s", e, exc_info=True)
+
+    # 3. Forward reachability (needs target_path + inventory)
+    if target_path:
+        try:
+            from core.orchestration.context_map_callgraph import (
+                enrich_with_forward_reachable,
+            )
+            n_ep = enrich_with_forward_reachable(
+                context_map, Path(target_path), inventory=inventory,
+            )
+            if n_ep:
+                changed = True
+                summary.append(f"forward-reachable: {n_ep} entry points")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("forward-reachable enrichment failed: %s", e,
+                         exc_info=True)
+
+    # 4. AST views (needs target_path + inventory)
+    if inventory and target_path:
+        try:
+            from core.orchestration.context_map_ast_view import (
+                enrich_with_ast_view,
+            )
+            n_ast = enrich_with_ast_view(
+                context_map, Path(target_path), inventory=inventory,
+            )
+            if n_ast:
+                changed = True
+                summary.append(f"ast-view: {n_ast} entries")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ast-view enrichment failed: %s", e, exc_info=True)
+
+    # 5. Sites (source_intel — spatch, needs target_path)
+    if target_path:
+        try:
+            from packages.code_understanding.context_map_sites import (
+                enrich_context_map_with_sites,
+            )
+            from packages.source_intel import analyze
+            si = analyze(Path(target_path))
+            counts = enrich_context_map_with_sites(
+                context_map, si, repo_root=target_path,
+            )
+            total = counts["ownership_model"] + counts["privilege_model"]
+            if total:
+                changed = True
+                summary.append(
+                    f"sites: {counts['ownership_model']} ownership + "
+                    f"{counts['privilege_model']} privilege"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("sites enrichment failed: %s", e, exc_info=True)
+
+    # 6. Sink discovery (needs target_path)
+    if target_path:
+        try:
+            from core.orchestration.context_map_sinks import (
+                enrich_with_sink_discovery,
+            )
+            extra_sinks = None
+            try:
+                from core.iris.api import get_project_sinks
+                iris_sinks = get_project_sinks(out_dir=understand_dir)
+                if iris_sinks:
+                    extra_sinks = iris_sinks
+            except Exception:
+                pass
+            n_sinks = enrich_with_sink_discovery(
+                context_map, Path(target_path), extra_sinks=extra_sinks,
+            )
+            if n_sinks:
+                changed = True
+                summary.append(f"sinks: {n_sinks} entries")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("sink enrichment failed: %s", e, exc_info=True)
+
+    if changed:
+        save_json(context_map_path, context_map)
+
+    if summary:
+        print(f"raptor-enrich-context-map: {', '.join(summary)} "
+              f"in {context_map_path}")
+    else:
+        print("raptor-enrich-context-map: no enrichments applied")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

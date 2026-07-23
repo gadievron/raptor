@@ -16,8 +16,14 @@ Usage:
 If <dir> is omitted, uses the active project.
 Accepts: project output dir, run dir, target path, or project name.
 """
+import faulthandler
+import signal
 import sys
 from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
 import os
