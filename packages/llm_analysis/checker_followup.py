@@ -19,8 +19,10 @@ counter is bumped only when a match is actually recorded.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -129,6 +131,139 @@ def _resolve_match_function(
     return func.get("name") or None
 
 
+def _try_replay_from_library(
+    seed, *, engine: str, cwe: str, repo_root: Path, out_dir: Path,
+    checklist: Optional[Dict[str, Any]],
+    max_matches: int,
+) -> Optional[int]:
+    """Try replaying a proven rule from the SAGE library.
+
+    Returns match count if a rule was replayed, None if no qualifying
+    rule was found (caller falls through to normal synthesis).
+    """
+    try:
+        from core.sage.hooks import (
+            recall_proven_rules,
+            parse_rule_metadata,
+            should_replay_rule,
+        )
+    except ImportError:
+        return None
+
+    rows = recall_proven_rules(engine, cwe)
+    if not rows:
+        return None
+
+    for row in rows:
+        meta = parse_rule_metadata(row)
+        if not should_replay_rule(meta):
+            continue
+        rule_path_str = meta.get("rule_path", "")
+        if not rule_path_str:
+            continue
+        rule_path = Path(rule_path_str)
+        if not rule_path.is_file():
+            continue
+
+        try:
+            logger.debug(
+                "checker_followup: replaying library rule %s for %s:%s",
+                meta.get("rule_id", "?"), seed.file, seed.line_start,
+            )
+            from packages.checker_synthesis.models import SynthesisedRule
+            from packages.checker_synthesis.synthesise import _run_engine
+
+            rule_body = rule_path.read_text(encoding="utf-8")
+            rule = SynthesisedRule(
+                engine=engine,
+                rule_id=meta.get("rule_id", "library-replay"),
+                body=rule_body,
+            )
+            matches, errors = _run_engine(rule, rule_path, repo_root)
+            if errors:
+                logger.debug(
+                    "checker_followup: replay errors: %s", errors[:3])
+            if not matches:
+                continue
+
+            from packages.checker_synthesis.models import CheckerSynthesisResult
+            result = CheckerSynthesisResult(
+                seed=seed,
+                rule=rule,
+                rule_path=rule_path,
+                positive_control=True,
+                dual_control=True,
+                matches=matches[:max_matches],
+            )
+            return _record_matches(
+                seed=seed, result=result,
+                out_dir=out_dir, checklist=checklist, repo_root=repo_root,
+            )
+        except Exception:
+            logger.debug(
+                "checker_followup: replay failed for %s",
+                meta.get("rule_id", "?"), exc_info=True,
+            )
+            continue
+
+    return None
+
+
+def _promote_to_library(result, *, out_dir: Path) -> None:
+    """Copy a dual-control-passing rule to the rule library and
+    store metadata in SAGE."""
+    if result.rule is None or not result.dual_control:
+        return
+    if result.rule_path is None:
+        return
+
+    try:
+        from core.sage.hooks import store_proven_rule_metadata
+    except ImportError:
+        return
+
+    engine = result.rule.engine
+    lib_dir = out_dir / "rule-library" / engine
+    lib_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = ".yml" if engine == "semgrep" else ".cocci"
+    lib_path = lib_dir / (result.rule.rule_id + ext)
+    try:
+        shutil.copy2(str(result.rule_path), str(lib_path))
+    except OSError:
+        logger.debug("checker_followup: failed to copy rule to library")
+        return
+
+    rule_body = result.rule.body.encode("utf-8")
+    body_hash = hashlib.sha256(rule_body).hexdigest()[:12]
+
+    tp_count = 0
+    fp_count = 0
+    for t in result.triage or []:
+        if t.status == "variant":
+            tp_count += 1
+        elif t.status == "false_positive":
+            fp_count += 1
+    if tp_count == 0 and fp_count == 0:
+        tp_count = len(result.matches)
+
+    store_proven_rule_metadata(
+        engine=engine,
+        cwe=result.seed.cwe or "",
+        rule_id=result.rule.rule_id,
+        rule_body_hash=body_hash,
+        rule_path=str(lib_path),
+        tp_count=tp_count,
+        fp_count=fp_count,
+        total_matches=len(result.matches),
+        dual_control_passed=True,
+    )
+    logger.debug(
+        "checker_followup: promoted rule %s to library at %s",
+        result.rule.rule_id, lib_path,
+    )
+
+
 def emit_variant_matches_for_finding(
     vuln,
     *,
@@ -183,6 +318,22 @@ def emit_variant_matches_for_finding(
             seed.file, seed.line_start, seed.function,
         )
 
+        cwe = seed.cwe or ""
+        from packages.checker_synthesis import detect_engine
+        engine = detect_engine(seed.file)
+        if engine and cwe:
+            replay_count = _try_replay_from_library(
+                seed,
+                engine=engine,
+                cwe=cwe,
+                repo_root=repo_root,
+                out_dir=out_dir,
+                checklist=checklist,
+                max_matches=max_matches,
+            )
+            if replay_count is not None:
+                return replay_count
+
         if refine:
             from packages.checker_synthesis import synthesise_with_refinement
             result = synthesise_with_refinement(
@@ -228,6 +379,8 @@ def emit_variant_matches_for_finding(
     )
     if not result.matches:
         return 0
+
+    _promote_to_library(result, out_dir=out_dir)
 
     return _record_matches(
         seed=seed,
