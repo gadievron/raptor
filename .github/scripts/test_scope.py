@@ -76,6 +76,18 @@ TIERS: dict[str, dict] = {
     "orchestration": {
         "test_dirs": ["core/orchestration/tests"],
     },
+    "zkpox": {
+        # ZKPoX regression is a Rust (SP1) + bash build job under
+        # core/zkpox, gated by a single boolean — not a pytest tier in
+        # the import graph. Trigger on any change to the Rust workspace
+        # or its Python orchestration package. Cross-tier interactions
+        # with shared core/ deps are covered by the force_full sweep on
+        # schedule / merge_group. No test_dirs: the gate consumer
+        # (.github/workflows/tests.yml zkpox-regression) needs only the
+        # boolean, not a file list.
+        "extra_triggers": ["core/zkpox", "packages/zkpox"],
+        "outside_graph": True,
+    },
     "sca": {
         "test_dirs": ["packages/sca"],
     },

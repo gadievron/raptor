@@ -1,0 +1,15 @@
+[package]
+name = "zkpox-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sp1-zkvm = { version = "6.0.1" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+# build.rs invokes clang directly rather than going through cc-rs:
+# cc-rs derives flags from the cargo TARGET env, but SP1's target
+# (`riscv64im-succinct-zkvm-elf`) isn't a real LLVM platform and Apple
+# clang lacks the RISC-V backend. A manual invocation is simpler than
+# fighting cc-rs's heuristics.

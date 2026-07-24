@@ -1,21 +1,37 @@
 #!/usr/bin/env python3
-"""ZKPoX operator CLI — assemble bundles and reproduce witnesses.
+"""ZKPoX operator CLI — the single entry point for all tiers.
 
-Two subcommands covering the dependency-free tiers:
+Five subcommands, one per tier of the proving stack:
+
+    raptor-zkpox eligible [--run-dir <dir>] [--project-root <dir>]
+        FREE: classify which witnesses are ZKPoX-eligible. Pure
+        field-reading — no execution, no artifacts. The same summary
+        the end-of-run report prints, available on demand.
 
     raptor-zkpox bundle <witness_store> <witness_hash> --out <dir>
         Tier 0/1: assemble a prover-ready bundle for one eligible
         witness, persisted under <out>/zkpox/<witness_hash>/.
 
     raptor-zkpox reproduce <bundle_dir> [--binary <path>] [--n 3]
-        Tier 1.5: re-run the bundle's witness N times in the
-        sandbox, confirm the recorded outcome reproduces, and fold
-        the result back into the bundle manifest (bumps tier to 1.5
-        when it reproduces).
+        Tier 1.5: re-run the bundle's witness N times in the sandbox,
+        confirm the recorded outcome reproduces, and fold the result
+        back into the bundle manifest (bumps tier to 1.5 on success).
 
-Eligibility is FREE and surfaced automatically in run summaries;
-these subcommands are the ON-REQUEST steps. The tier model lives in
-the package docstring (packages/zkpox/__init__.py).
+    raptor-zkpox prove [flags...]
+        Tier 2/3: the heavy SP1 STARK proof. Currently delegates to
+        ``raptor_zkpox.py prove`` (Phase 1.5 driver — drives the Rust
+        prover, builds the CBOR disclosure bundle, optionally anchors
+        to Sigstore Rekor). Requires the proving stack — gated by
+        ``packages.zkpox.require_proving_stack``.
+
+    raptor-zkpox verify [flags...] <bundle.cbor>
+        Tier 2/3: verify a CBOR disclosure bundle via the standalone
+        ``zkpox-verify`` Rust binary. Delegates to
+        ``raptor_zkpox.py verify``.
+
+The tier model lives in the package docstring
+(packages/zkpox/__init__.py). Eligibility is FREE (default-on);
+bundle / reproduce / prove / verify are ON-REQUEST.
 """
 import faulthandler
 import signal
@@ -40,9 +56,34 @@ if not (os.environ.get("CLAUDECODE")
 
 import argparse
 import json
+import subprocess
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 import core.startup.process_init  # noqa: E402,F401
+
+
+def _cmd_eligible(args) -> int:
+    """Tier 0 — print the free eligibility summary for a run / project.
+
+    Resolves the same witness stores the end-of-run report uses
+    (run-local + sibling runs when a project is active) and renders
+    the standard "N of M witnesses are ZKPoX-eligible" block. Exits
+    0 on success regardless of whether any witnesses qualify — this
+    is a status query, not a gate.
+    """
+    from packages.zkpox import render_run_eligibility
+
+    out_dir = Path(args.run_dir).resolve() if args.run_dir else None
+    project_root = (
+        Path(args.project_root).resolve() if args.project_root else None
+    )
+    block = render_run_eligibility(out_dir, project_root=project_root)
+    if block is None:
+        print("(no witnesses discovered)")
+        return 0
+    print(block)
+    return 0
 
 
 def _cmd_bundle(args) -> int:
@@ -159,25 +200,124 @@ def _cmd_reproduce(args) -> int:
     return 1 if result.attempted else 2
 
 
+def _delegate_to_driver(verb: str, passthrough: list[str]) -> int:
+    """Pass an unparsed argv tail straight to ``raptor_zkpox.py``.
+
+    ``prove`` and ``verify`` are the Tier 2/3 entry points; their
+    full flag schema (witness, target, wrap, vendor-pubkey, anchor
+    options, …) lives in the driver and will evolve as #470 lands
+    the proper bundle-centric flow. Mirroring that argparse in two
+    places would just create a drift hazard. Pass everything
+    through verbatim — argparse errors surface from the driver with
+    a ``raptor_zkpox`` ``prog=``, which is fine for now.
+
+    ``prove`` is gated at the dispatch layer on
+    :func:`packages.zkpox.require_proving_stack`. The driver's own
+    prover-binary check would still catch a missing built binary,
+    but it would not surface the actionable
+    ``ProvingStackUnavailable`` message that reassures the operator
+    that Tiers 0/1 and 1.5 keep working without SP1 / RISC-V. The
+    gate fires here so the operator sees that message at the
+    operator surface — independent of whether the binary happens
+    to exist on disk (e.g. a stale build from a partial install).
+    ``verify`` is NOT gated: the verifier binary, once built,
+    needs no part of the proving toolchain to run.
+
+    A bare ``--help`` / ``-h`` request bypasses the gate so the
+    driver's help text is always readable, even on a host without the
+    proving stack installed.
+    """
+    is_help = any(a in ("--help", "-h") for a in passthrough)
+    if verb == "prove" and not is_help:
+        from packages.zkpox import require_proving_stack
+        require_proving_stack()  # raises ProvingStackUnavailable on bare boxes
+    driver = REPO_ROOT / "raptor_zkpox.py"
+    if not driver.is_file():
+        sys.stderr.write(f"driver missing: {driver}\n")
+        return 2
+    # RAPTOR_DIR is the driver's hard lookup (see CLAUDE.md sys.path
+    # rule). When invoked under the trust-marker bypass without it
+    # being set, fall back to the repo root we already resolved.
+    env = dict(os.environ)
+    env.setdefault("RAPTOR_DIR", str(REPO_ROOT))
+    return subprocess.call(
+        [sys.executable, str(driver), verb, *passthrough],
+        env=env,
+    )
+
+
+_USAGE = (
+    "usage: raptor-zkpox {eligible,bundle,reproduce,prove,verify} [args...]"
+)
+
+
 def main() -> int:
+    # ``prove`` and ``verify`` accept the driver's full flag schema
+    # verbatim. argparse REMAINDER on a subparser doesn't reliably
+    # catch a leading ``--flag`` (the parent parser claims it before
+    # the subparser sees it), so we peel them off before argparse
+    # runs at all — preserves ``--witness …`` / ``--help`` /
+    # everything as raw argv into the driver.
+    argv = sys.argv[1:]
+    if argv and argv[0] in ("prove", "verify"):
+        return _delegate_to_driver(argv[0], argv[1:])
+
     ap = argparse.ArgumentParser(
         prog="raptor-zkpox",
-        description="ZKPoX bundle assembly + witness reproduction.",
+        description=(
+            "ZKPoX — eligibility, bundles, reproduction, and the "
+            "Tier 2/3 proof. One dispatcher across all tiers."
+        ),
+        epilog=(
+            "Subcommands not shown above (handled before argparse): "
+            "`prove [flags...]`, `verify [flags...]` — pass-through to "
+            "raptor_zkpox.py; run `raptor-zkpox prove --help` for the "
+            "driver's full flag list."
+        ),
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    b = sub.add_parser("bundle", help="Tier 0/1: assemble a bundle")
+    e = sub.add_parser(
+        "eligible",
+        help="Tier 0 (free): show which witnesses are ZKPoX-eligible",
+    )
+    e.add_argument(
+        "--run-dir",
+        help=(
+            "Run output directory whose witnesses to inspect. Default: "
+            "discover from cwd / active project."
+        ),
+    )
+    e.add_argument(
+        "--project-root",
+        help=(
+            "Project root to scan sibling runs from (overrides the "
+            "active-project default)."
+        ),
+    )
+
+    b = sub.add_parser(
+        "bundle",
+        help="Tier 0/1: assemble a prover-ready bundle for one witness",
+    )
     b.add_argument("witness_store", help="WitnessStore root dir")
     b.add_argument("witness_hash", help="sha256 of the witness bytes")
     b.add_argument("--out", required=True, help="output dir")
 
-    r = sub.add_parser("reproduce", help="Tier 1.5: reproduce a bundle")
+    r = sub.add_parser(
+        "reproduce",
+        help="Tier 1.5: N× reproduce the witness in the sandbox",
+    )
     r.add_argument("bundle_dir", help="bundle dir (with manifest.json)")
     r.add_argument("--binary", help="target binary (FUZZ/replay sources)")
-    r.add_argument("--n", type=int, default=3,
-                   help="consecutive runs (default 3)")
+    r.add_argument(
+        "--n", type=int, default=3,
+        help="consecutive runs (default 3)",
+    )
 
     args = ap.parse_args()
+    if args.cmd == "eligible":
+        return _cmd_eligible(args)
     if args.cmd == "bundle":
         return _cmd_bundle(args)
     if args.cmd == "reproduce":
