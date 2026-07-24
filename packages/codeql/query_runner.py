@@ -205,6 +205,9 @@ class QueryRunner:
         from pathlib import Path
         return [str(Path(self.codeql_cli).resolve().parent)]
 
+    def _codeql_env(self) -> dict:
+        return RaptorConfig.get_safe_env()
+
     def run_suite(
         self,
         database_path: Path,

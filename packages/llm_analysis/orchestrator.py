@@ -21,10 +21,12 @@ import sys
 import threading
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+from packages.llm_analysis.codex_dispatch import CODEX_MODEL, invoke_codex_exec
 from packages.llm_analysis.finding_adapter import FindingAdapter
 from core.reporting.formatting import format_elapsed as _format_elapsed
 
@@ -34,6 +36,98 @@ logger = logging.getLogger(__name__)
 CUTOFF_SKIP_CONSENSUS = 0.70
 CUTOFF_SKIP_EXPLOITS = 0.85
 CUTOFF_SINGLE_MODEL = 0.95
+
+
+_CODEX_DISABLED_STAGES = frozenset({
+    "retry",
+    "consensus",
+    "judge",
+    "aggregate",
+    "exploit",
+    "patch",
+    "group",
+})
+
+
+@dataclass(frozen=True)
+class OrchestrationModePolicy:
+    """Derived dispatch-mode policy for labels, metadata, and stage gates."""
+
+    dispatch_mode: str
+    is_codex_dispatch: bool
+    is_cc_dispatch: bool
+    analysis_only: bool
+    model_label: str
+    report_analysis_model: Optional[str]
+    report_analysis_models: Tuple[str, ...]
+    cost_usd_unknown: bool
+    billing_source: Optional[str]
+
+    def allows_stage(self, stage: str) -> bool:
+        return not (self.analysis_only and stage in _CODEX_DISABLED_STAGES)
+
+
+def _model_name(model: Any) -> Optional[str]:
+    name = getattr(model, "model_name", None)
+    return str(name) if name else None
+
+
+def _build_orchestration_mode_policy(
+    *,
+    use_codex_exec: bool,
+    llm_config: Any,
+    role_resolution: Dict[str, Any],
+) -> OrchestrationModePolicy:
+    """Return mode-derived orchestration policy without touching dispatch."""
+
+    has_external_llm = bool(llm_config and getattr(llm_config, "primary_model", None))
+    is_codex_dispatch = bool(use_codex_exec)
+    is_cc_dispatch = not is_codex_dispatch and not has_external_llm
+    dispatch_mode = (
+        "codex_exec" if is_codex_dispatch
+        else ("external_llm" if has_external_llm else "cc_dispatch")
+    )
+
+    analysis_models = tuple(
+        name for name in (
+            _model_name(model)
+            for model in role_resolution.get("analysis_models", [])
+            if model is not None
+        )
+        if name
+    )
+    analysis_model_name = _model_name(role_resolution.get("analysis_model"))
+    if len(analysis_models) > 1:
+        model_label = ", ".join(analysis_models)
+    else:
+        model_label = analysis_model_name or (
+            "Codex exec" if is_codex_dispatch
+            else ("Claude Code" if is_cc_dispatch else "unknown")
+        )
+
+    report_analysis_model = analysis_model_name
+    report_analysis_models = analysis_models
+    if not report_analysis_model and is_codex_dispatch:
+        report_analysis_model = CODEX_MODEL
+    elif not report_analysis_model and is_cc_dispatch:
+        report_analysis_model = "Claude Code"
+    if not report_analysis_models:
+        if is_codex_dispatch:
+            report_analysis_models = (CODEX_MODEL,)
+        elif is_cc_dispatch:
+            report_analysis_models = ("Claude Code",)
+
+    return OrchestrationModePolicy(
+        dispatch_mode=dispatch_mode,
+        is_codex_dispatch=is_codex_dispatch,
+        is_cc_dispatch=is_cc_dispatch,
+        analysis_only=is_codex_dispatch,
+        model_label=model_label,
+        report_analysis_model=report_analysis_model,
+        report_analysis_models=report_analysis_models,
+        cost_usd_unknown=is_codex_dispatch,
+        billing_source="codex_subscription" if is_codex_dispatch else None,
+    )
 
 
 class CostTracker:
@@ -520,6 +614,7 @@ def orchestrate(
     deep_validate_budget: float = 0.60,
     allow_unreachable: bool = False,
     checklist: Optional[Dict[str, Any]] = None,
+    use_codex_exec: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -528,6 +623,7 @@ def orchestrate(
     group analysis.
 
     Dispatch routing:
+    - use_codex_exec True -> authenticated codex exec analysis transport
     - llm_config provided (external LLM) -> parallel generate_structured()
     - llm_config None + claude on PATH -> claude -p sub-agents
     - Neither -> return None
@@ -545,6 +641,10 @@ def orchestrate(
         accept_weakened_defenses: If True, allow PASSTHROUGH fallback when
             the model fails the envelope probe. If False (default), abort
             orchestration with a clear error instead of silently weakening.
+        use_codex_exec: Use authenticated Codex CLI web-login state through
+            ``codex exec``. Limits this mode to analysis-only evidence
+            review; exploit, patch, retry, consensus, judge, aggregate, and
+            group LLM tasks remain disabled.
 
     Returns:
         Orchestrated report dict, or None if orchestration was skipped.
@@ -626,22 +726,22 @@ def orchestrate(
     n_judge = len(role_resolution.get("judge_models", []))
     n_aggregate = len(role_resolution.get("aggregate_models", []))
     analysis_model = role_resolution.get("analysis_model")
-    analysis_model_name = analysis_model.model_name if analysis_model else ""
-    is_cc_dispatch = not (llm_config and llm_config.primary_model)
+    analysis_models_all = role_resolution.get("analysis_models", [])
+    mode_policy = _build_orchestration_mode_policy(
+        use_codex_exec=use_codex_exec,
+        llm_config=llm_config,
+        role_resolution=role_resolution,
+    )
 
     if max_parallel <= 0:
         from core.llm.concurrency import derive_max_workers
+        analysis_model_name = _model_name(analysis_model) or ""
         max_parallel = derive_max_workers(analysis_model_name) if analysis_model_name else 3
         logger.info(
             "auto workers: model=%s → max_parallel=%d",
             analysis_model_name or "(cc)", max_parallel,
         )
-    analysis_models_all = role_resolution.get("analysis_models", [])
     n_analysis = len(analysis_models_all)
-    if n_analysis > 1:
-        model_label = ", ".join(m.model_name for m in analysis_models_all)
-    else:
-        model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
     n = len(findings)
     extras = []
     if n_analysis > 1:
@@ -653,12 +753,12 @@ def orchestrate(
     if n_aggregate:
         extras.append(f"{n_aggregate} aggregate")
     extra_str = f" ({', '.join(extras)})" if extras else ""
-    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
+    print(f"\n  {n} finding{'s' if n != 1 else ''} → {mode_policy.model_label}{extra_str}")
 
     try:
         from core.run.estimator import estimate_from_scorecard, format_estimate
         _sc_est = estimate_from_scorecard(
-            analysis_model_name or "", n, max_parallel=max_parallel,
+            _model_name(analysis_model) or "", n, max_parallel=max_parallel,
         )
         _sc_line = format_estimate(_sc_est)
         if _sc_line:
@@ -678,8 +778,10 @@ def orchestrate(
     )
     from core.security.prompt_telemetry import defense_telemetry
 
-    dispatch_mode = "none"
-    dispatch_fn = None
+    dispatch_mode = mode_policy.dispatch_mode
+    dispatch_fn: Optional[
+        Callable[[str, Optional[Dict[str, Any]], Optional[str], float, Any], DispatchResult]
+    ] = None
     start_time = time.monotonic()
 
     # Bound across both dispatch modes so the merged-dict construction
@@ -687,29 +789,58 @@ def orchestrate(
     # the CC paths (where it stays None and the count is 0).
     client = None
 
-    if llm_config and llm_config.primary_model:
+    if use_codex_exec:
+        from core.startup.codex import check_codex_auth
+        codex_status = check_codex_auth(timeout=10)
+        codex_bin = codex_status.executable
+        if not codex_status.authenticated or not codex_bin:
+            detail = codex_status.detail.strip()
+            print("\n  Codex authentication unavailable — cannot dispatch Codex exec analysis")
+            if detail:
+                print(f"  {detail}")
+            print("  Run `python3 raptor.py doctor --codex-login` for browser login")
+            print("  or `python3 raptor.py doctor --codex-device-login` for device auth")
+            return None
+
+        def codex_dispatch_fn(
+            prompt: str,
+            schema: Optional[Dict[str, Any]],
+            system_prompt: Optional[str],
+            temperature: float,
+            model: Any,
+        ) -> DispatchResult:
+            full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+            return invoke_codex_exec(
+                full,
+                schema,
+                repo_path,
+                codex_bin,
+                out_dir,
+                auth_preflighted=True,
+            )
+
+        dispatch_fn = codex_dispatch_fn
+    elif llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
         from core.llm.client import LLMClient
-        client = LLMClient(llm_config)
+        llm_client = LLMClient(llm_config)
+        client = llm_client
 
-        # Multi-model duplicate guard: when a primary model fails and
-        # the client silently falls back, the fallback target may
-        # already be one of the OTHER active analysis models — and the
-        # multi-model panel collapses to duplicate analysed_by entries
-        # (e.g. ``[pro, flash]`` becomes ``[flash, flash]`` if pro
-        # falls back to flash). Pass the names of all active analysis
-        # models to the client so it skips them as fallback targets
-        # for any one dispatch. Other fallback targets (cross-family
-        # resilience) still work normally.
         _active_analysis_names = {
             m.model_name for m in role_resolution.get("analysis_models", [])
             if m and getattr(m, "model_name", None)
         }
 
-        def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+        def external_dispatch_fn(
+            prompt: str,
+            schema: Optional[Dict[str, Any]],
+            system_prompt: Optional[str],
+            temperature: float,
+            model: Any,
+        ) -> DispatchResult:
             other_active = _active_analysis_names - {model.model_name}
             if schema:
-                response = client.generate_structured(
+                response = llm_client.generate_structured(
                     prompt=prompt, schema=schema, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
                     exclude_fallback_to=other_active,
@@ -728,7 +859,7 @@ def orchestrate(
                     resolved_model=response.resolved_model,
                 )
             else:
-                response = client.generate(
+                response = llm_client.generate(
                     prompt=prompt, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
                     exclude_fallback_to=other_active,
@@ -740,7 +871,7 @@ def orchestrate(
                     resolved_model=response.resolved_model,
                 )
 
-        dispatch_mode = "external_llm"
+        dispatch_fn = external_dispatch_fn
     else:
         # CC: dispatch via claude -p subprocess
         if block_cc_dispatch:
@@ -754,14 +885,19 @@ def orchestrate(
             print("  Install Claude Code: npm install -g @anthropic-ai/claude-code", file=sys.stderr)
             return None
 
-        def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-            # CC's invoke_cc_simple has no separate system_prompt slot — everything
-            # goes via stdin. Prepend the system prompt so the bundle migration's
-            # role-separated build_prompt (user-only) doesn't lose its instructions.
+        def cc_dispatch_fn(
+            prompt: str,
+            schema: Optional[Dict[str, Any]],
+            system_prompt: Optional[str],
+            temperature: float,
+            model: Any,
+        ) -> DispatchResult:
             full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
             return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
-        dispatch_mode = "cc_dispatch"
+        dispatch_fn = cc_dispatch_fn
+
+    assert dispatch_fn is not None
 
     # --- Canary probe: verify model handles the defense envelope ---
     # Multi-model: probe each analysis model; use strictest compatible profile.
@@ -855,7 +991,7 @@ def orchestrate(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
             )
             if not accept_weakened_defenses:
-                print(f"\n  ✗ Envelope probe failed for {model_label}: {_fail_summary}", file=sys.stderr)
+                print(f"\n  ✗ Envelope probe failed for {mode_policy.model_label}: {_fail_summary}", file=sys.stderr)
                 print("  The model cannot honour the defence envelope — aborting.", file=sys.stderr)
                 print("  To proceed with weakened defences, re-run with --accept-weakened-defenses", file=sys.stderr)
                 return None
@@ -879,7 +1015,7 @@ def orchestrate(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
                     _fmname, _ferr,
                 )
-            print(f"\n  ⚠️  Defence warning: envelope probe failed for {model_label}", file=sys.stderr)
+            print(f"\n  ⚠️  Defence warning: envelope probe failed for {mode_policy.model_label}", file=sys.stderr)
             print("  Running with reduced defences (--accept-weakened-defenses)", file=sys.stderr)
             print(f"  Reason: {_fail_summary}", file=sys.stderr)
             print("  Model-independent floor still applies (autofetch redaction,"
@@ -893,12 +1029,15 @@ def orchestrate(
     # short-circuit FP result on trusted cells so the full ANALYSE
     # call is skipped; bumps ``client.short_circuits`` so /agentic
     # surfaces the savings count.
-    prefilter_fn = None
+    prefilter_fn: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None
     if dispatch_mode == "external_llm":
         from packages.llm_analysis.prefilter import prefilter_for_finding
+        assert client is not None
 
-        def prefilter_fn(item):
+        def external_prefilter_fn(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return prefilter_for_finding(client, item)
+
+        prefilter_fn = external_prefilter_fn
 
     analysis_results = dispatch_task(
         AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
@@ -916,9 +1055,17 @@ def orchestrate(
             print("\n  ⚠️  All external LLM calls failed — falling back to Claude Code", file=sys.stderr)
             dispatch_mode = "cc_fallback"
 
-            def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+            def cc_fallback_dispatch_fn(
+                prompt: str,
+                schema: Optional[Dict[str, Any]],
+                system_prompt: Optional[str],
+                temperature: float,
+                model: Any,
+            ) -> DispatchResult:
                 full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
                 return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
+
+            dispatch_fn = cc_fallback_dispatch_fn
 
             # Carry the per-model intersected profile into the
             # CC-fallback AnalysisTask. Pre-fix `AnalysisTask()`
@@ -937,6 +1084,18 @@ def orchestrate(
                 results_by_id, cost_tracker, max_parallel,
             )
             analysis_results = _external_failures + analysis_results
+
+    # A non-empty dispatch batch with no usable response is materially
+    # different from an empty scan or a partial failure. Keep the report so
+    # scanner evidence and diagnostics survive, but make the failed analysis
+    # state explicit to both operators and downstream consumers.
+    analysis_all_errored = bool(analysis_results) and all(
+        "error" in result for result in analysis_results
+    )
+    if dispatch_mode == "codex_exec" and analysis_all_errored:
+        print("\n  All Codex exec calls failed — no findings were analysed.")
+        print("  Check Codex authentication with:")
+        print("  python3 raptor.py doctor --codex-login")
 
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
@@ -1104,10 +1263,11 @@ def orchestrate(
             verdicts_pre_retry[fid] = bool(r.get("is_exploitable", False))
 
     # Stage F: self-consistency check + retry contradictions and low confidence
-    dispatch_task(
-        RetryTask(results_by_id=results_by_id, profile=profile), findings,
-        dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
-    )
+    if mode_policy.allows_stage("retry"):
+        dispatch_task(
+            RetryTask(results_by_id=results_by_id, profile=profile), findings,
+            dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
+        )
 
     # Snapshot original primary verdicts BEFORE the consensus
     # stage runs. ConsensusTask.finalize() mutates
@@ -1135,7 +1295,7 @@ def orchestrate(
     consensus_models = role_resolution.get("consensus_models", [])
     consensus_budget_skipped = False
     consensus_all_errored = False
-    if consensus_models:
+    if consensus_models and mode_policy.allows_stage("consensus"):
         consensus_task = ConsensusTask(profile=profile)
         eligible = consensus_task.select_items(findings, results_by_id)
         # Snapshot the cost tracker state BEFORE dispatch so we can
@@ -1181,7 +1341,7 @@ def orchestrate(
 
     # Judge review (if configured) — sees primary reasoning, critiques it
     judge_models = role_resolution.get("judge_models", [])
-    if judge_models:
+    if judge_models and mode_policy.allows_stage("judge"):
         # Use the pre-consensus snapshot so JUDGE_REVIEW producer
         # sees the actual primary verdict, not the consensus-
         # overridden one. Falls back to the post-consensus state
@@ -1367,7 +1527,7 @@ def orchestrate(
     # changing per-finding verdicts.
     aggregate_models = role_resolution.get("aggregate_models", [])
     aggregation = None
-    if aggregate_models:
+    if aggregate_models and mode_policy.allows_stage("aggregate"):
         if n_analysis_models < 2:
             print("\n  Aggregate: skipped — requires at least two analysis models")
         else:
@@ -1391,13 +1551,13 @@ def orchestrate(
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
     # only select findings that are exploitable AND missing exploit_code/patch_code,
     # so this is a no-op when CC already generated them.
-    if not no_exploits:
+    if not no_exploits and mode_policy.allows_stage("exploit"):
         dispatch_task(
             ExploitTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
-    if not no_patches:
+    if not no_patches and mode_policy.allows_stage("patch"):
         dispatch_task(
             PatchTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
@@ -1421,10 +1581,12 @@ def orchestrate(
     group_task = GroupAnalysisTask(
         results_by_id=results_by_id, findings=findings, profile=profile,
     )
-    group_results = dispatch_task(
-        group_task, groups, dispatch_fn, role_resolution,
-        results_by_id, cost_tracker, max_parallel,
-    )
+    group_results = []
+    if mode_policy.allows_stage("group"):
+        group_results = dispatch_task(
+            group_task, groups, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+        )
     group_analyses = {}
     for r in group_results:
         gid = r.get("finding_id")  # group_id comes through as finding_id
@@ -1486,15 +1648,13 @@ def orchestrate(
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
-    analysis_models_list = role_resolution.get("analysis_models", [])
     merged["orchestration"] = {
         "mode": dispatch_mode,
-        "multi_model": len(analysis_models_list) > 1,
-        "analysis_model": (role_resolution.get("analysis_model").model_name
-                          if role_resolution.get("analysis_model")
-                          else ("Claude Code" if is_cc_dispatch else None)),
-        "analysis_models": ([m.model_name for m in analysis_models_list]
-                           or (["Claude Code"] if is_cc_dispatch else [])),
+        "multi_model": len(mode_policy.report_analysis_models) > 1,
+        "analysis_model": mode_policy.report_analysis_model,
+        "analysis_models": list(mode_policy.report_analysis_models),
+        "cost_usd_unknown": mode_policy.cost_usd_unknown,
+        "billing_source": mode_policy.billing_source,
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
@@ -1515,6 +1675,7 @@ def orchestrate(
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
+        "analysis_all_errored": analysis_all_errored,
         "failed_by_model": _per_model_failure_summary(analysis_results),
         "structural_groups": len(groups),
         "cross_family_checked": cross_family_checked,
@@ -1713,8 +1874,12 @@ def _intersect_profiles(profiles: list) -> Any:
     base = profiles[0]
     tag_styles = {p.tag_style for p in profiles}
     role_placements = {p.role_placement for p in profiles}
+    profile_names = {
+        str(name) for name in (getattr(p, "name", "") for p in profiles)
+        if name
+    }
     return ModelDefenseProfile(
-        name="multi-" + "+".join(sorted({p.name for p in profiles})),
+        name="multi-" + "+".join(sorted(profile_names or {"unknown"})),
         tag_style=base.tag_style if len(tag_styles) == 1 else "nonce-only",
         envelope_xml=all(p.envelope_xml for p in profiles),
         datamarking=all(p.datamarking for p in profiles),
@@ -1924,10 +2089,11 @@ def _detect_multi_model_collapse(
         if not isinstance(analyses, list) or not analyses:
             continue
         distinct = {
-            a.get("model") for a in analyses if isinstance(a, dict)
+            model for model in (
+                a.get("model") for a in analyses if isinstance(a, dict)
+            )
+            if isinstance(model, str) and model != "?"
         }
-        distinct.discard("?")
-        distinct.discard(None)
         if len(distinct) < n_analysis_models:
             collapsed.append((fid, sorted(distinct)))
     return collapsed

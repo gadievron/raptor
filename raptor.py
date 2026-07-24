@@ -318,6 +318,12 @@ def _wants_help(args: list) -> bool:
     return "--help" in args or "-h" in args
 
 
+def _uses_codex_exec(script_path: Path, args: list) -> bool:
+    """True when the child uses Codex CLI auth instead of LLM SDK creds."""
+
+    return script_path.name == "raptor_agentic.py" and "--codex-exec" in args
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -623,7 +629,7 @@ def _run_script(script_path: Path, args: list) -> int:
 
     try:
         from core.config import RaptorConfig
-        dispatcher = _get_or_start_dispatcher()
+        dispatcher = None if _uses_codex_exec(script_path, args) else _get_or_start_dispatcher()
         if dispatcher is not None:
             from core.llm.dispatcher.spawn import spawn_worker
             proc = spawn_worker(

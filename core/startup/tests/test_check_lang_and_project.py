@@ -21,12 +21,34 @@ For each tested function, three scenarios are pinned:
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
 from core.startup import init as startup_init
+
+
+class CheckLlmTest(unittest.TestCase):
+    """`check_llm` — keep optional Codex detection lightweight."""
+
+    def test_codex_cli_banner_does_not_probe_auth(self) -> None:
+        with TemporaryDirectory() as d, \
+             mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(startup_init.Path, "home", return_value=Path(d)), \
+             mock.patch(
+                 "core.startup.init.shutil.which",
+                 side_effect=lambda name: "/usr/bin/codex" if name == "codex" else None,
+             ), \
+             mock.patch(
+                 "core.startup.codex.check_codex_auth",
+                 side_effect=AssertionError("startup must not run codex login status"),
+             ):
+            lines, warnings = startup_init.check_llm()
+
+        assert "        codex cli ✓" in lines
+        assert not any("Codex CLI" in warning for warning in warnings)
 
 
 class CheckLangTest(unittest.TestCase):

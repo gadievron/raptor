@@ -1332,6 +1332,13 @@ Examples:
              "base64) are disabled; model-independent floor still holds. "
              "Logged in run metadata and flagged in the final report.",
     )
+    parser.add_argument(
+        "--codex-exec",
+        action="store_true",
+        help="Use authenticated Codex CLI web-login state via `codex exec` "
+             "for Phase 4 analysis. Analysis-only bridge; exploit, "
+             "patch, consensus, judge, aggregate, and group LLM tasks are disabled.",
+    )
     model_group = parser.add_argument_group(
         "multi-model analysis",
         "Choose which LLMs analyse findings. The primary model is auto-detected "
@@ -1437,6 +1444,9 @@ Examples:
     args = parser.parse_args()
 
     apply_cli_args(args, parser=parser)
+
+    if args.codex_exec and args.sequential:
+        parser.error("--codex-exec requires Phase 4 orchestration; remove --sequential")
 
     if args.threat_model_only:
         args.threat_model = True
@@ -2566,13 +2576,14 @@ Examples:
     analysis = {}
     autonomous_out = None
     analysis_report = None
-    if not llm_env.llm_available:
+    if not llm_env.llm_available and not args.codex_exec:
         print("\n⚠️  Phase 3 skipped - No LLM provider available")
         print("    To enable autonomous analysis, either:")
         print("    1. Set ANTHROPIC_API_KEY environment variable, OR")
         print("    2. Set OPENAI_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY, OR")
         print("    3. Run Ollama locally (https://ollama.ai), OR")
-        print("    4. Run inside Claude Code (claude)")
+        print("    4. Run inside Claude Code (claude), OR")
+        print("    5. Run `python3 raptor.py doctor --codex-login` and pass --codex-exec")
         logger.warning("Phase 3 skipped - No LLM provider configured")
     else:
         autonomous_out = out_dir / "autonomous"
@@ -2625,7 +2636,7 @@ Examples:
             analysis_cmd.append("--no-patches")
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
-        if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+        if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
             analysis_cmd.append("--prep-only")
 
         rc, stdout, stderr = run_command_streaming(
@@ -2704,7 +2715,7 @@ Examples:
     except ImportError:
         pass
     orchestration_result = None
-    if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+    if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
         print("\n" + "=" * 70)
         print("ANALYSING", flush=True)
         print("=" * 70)
@@ -2714,7 +2725,7 @@ Examples:
                 build_llm_config_from_flags, orchestrate,
             )
 
-            llm_config = build_llm_config_from_flags(
+            llm_config = None if args.codex_exec else build_llm_config_from_flags(
                 models=getattr(args, "model", []) or [],
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
@@ -2723,17 +2734,14 @@ Examples:
             )
             if llm_config and getattr(args, "max_cost_usd", None) is not None:
                 llm_config.max_cost_per_scan = args.max_cost_usd
-            # Dataflow validation is on by default when CodeQL ran;
-            # `--no-validate-dataflow` opts out entirely. `--deep-validate`
-            # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
                 out_dir=out_dir,
                 max_parallel=args.max_parallel or 0,
                 max_findings=args.max_findings,
-                no_exploits=args.no_exploits,
-                no_patches=args.no_patches,
+                no_exploits=args.no_exploits or args.codex_exec,
+                no_patches=args.no_patches or args.codex_exec,
                 llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
                 accept_weakened_defenses=args.accept_weakened_defenses,
@@ -2743,12 +2751,13 @@ Examples:
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
                 allow_unreachable=getattr(args, "allow_unreachable", False),
                 checklist=scan_inventory,
+                use_codex_exec=args.codex_exec,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
     elif not llm_env.llm_available:
         print("\n  No LLM available. Findings prepared for manual review.")
-        print("  For automated analysis, set an API key or install Claude Code.")
+        print("  For automated analysis, set an API key, install Claude Code, or pass --codex-exec after Codex login.")
 
     # ========================================================================
     # POST-PASS: /validate (opt-in via --validate)
@@ -3273,13 +3282,20 @@ Examples:
         print(f"   ✓ Analysed {sca_metrics.get('deps_analysed', 0)} dependencies (SCA)")
     if validation_result:
         print("   ✓ Deduplicated findings")
-    print("   ✓ Analysed vulnerabilities")
+    orch = orchestration_result.get("orchestration", {}) if orchestration_result else {}
+    analysis_all_errored = bool(orch.get("analysis_all_errored"))
+    if analysis_all_errored:
+        if orch.get("mode") == "codex_exec":
+            print("   Analysis failed: all Codex exec calls failed")
+        else:
+            print("   Analysis failed: all analysis calls failed")
+    else:
+        print("   ✓ Analysed vulnerabilities")
     if exploits_count > 0:
         print(f"   ✓ Generated {exploits_count} exploit{'s' if exploits_count != 1 else ''}")
     if patches_count > 0:
         print(f"   ✓ Created {patches_count} patch{'es' if patches_count != 1 else ''}")
     if orchestration_result:
-        orch = orchestration_result.get("orchestration", {})
         mode = orch.get("mode", "unknown")
         if mode == "cc_dispatch":
             via = "Claude Code"
@@ -3287,10 +3303,13 @@ Examples:
             via = orch.get("analysis_model") or "external LLM"
         elif mode == "cc_fallback":
             via = "Claude Code (fallback)"
+        elif mode == "codex_exec":
+            via = "Codex exec"
         else:
             via = mode
         n = orch.get('findings_analysed', 0)
-        print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
+        if not analysis_all_errored:
+            print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
         if orch.get("aggregated"):
             print("   ✓ Aggregated multi-model findings")
     print("\nReview the outputs and apply patches as needed.")
@@ -3311,6 +3330,8 @@ Examples:
         via = orch_phase.get("analysis_model") or "external LLM"
     elif mode == "cc_fallback":
         via = "Claude Code (fallback)"
+    elif mode == "codex_exec":
+        via = "Codex exec"
     else:
         via = None
 

@@ -2918,6 +2918,12 @@ def main() -> None:
              "findings for external orchestration",
     )
     ap.add_argument(
+        "--codex-exec",
+        action="store_true",
+        help="Prep findings, then analyse them through authenticated `codex exec` "
+             "(analysis-only bridge; no exploit or patch generation).",
+    )
+    ap.add_argument(
         "--max-parallel", type=int, default=0,
         help="Max parallel dispatch threads (0 = auto from model RPM)",
     )
@@ -2980,6 +2986,7 @@ def main() -> None:
         getattr(args, "consensus", None),
         getattr(args, "judge", None),
         getattr(args, "aggregate", None),
+        getattr(args, "codex_exec", False),
     ])
 
     try:
@@ -3049,32 +3056,34 @@ def main() -> None:
             exclude_globs=args.exclude_dir,
         )
 
-    # Orchestrated path: role flags → prep then parallel dispatch
+    # Orchestrated path: role/Codex flags → prep then parallel dispatch.
     if _has_role_flags and report.get("mode") == "prep_only":
         prep_report_path = out_dir / "autonomous_analysis_report.json"
         if prep_report_path.exists():
             from packages.llm_analysis.orchestrator import (
                 build_llm_config_from_flags, orchestrate,
             )
-            llm_config = build_llm_config_from_flags(
+            use_codex_exec = bool(getattr(args, "codex_exec", False))
+            llm_config = None if use_codex_exec else build_llm_config_from_flags(
                 models=args.model or [],
                 consensus=args.consensus,
                 judge=args.judge,
                 aggregate=args.aggregate,
             )
-            if llm_config:
+            if llm_config or use_codex_exec:
                 result = orchestrate(
                     prep_report_path=prep_report_path,
                     repo_path=repo_path,
                     out_dir=out_dir,
                     max_parallel=args.max_parallel,
                     max_findings=args.max_findings,
-                    no_exploits=args.no_exploits,
-                    no_patches=args.no_patches,
+                    no_exploits=args.no_exploits or use_codex_exec,
+                    no_patches=args.no_patches or use_codex_exec,
                     llm_config=llm_config,
                     deep_validate=getattr(args, "deep_validate", False),
                     deep_validate_disabled=getattr(args, "no_deep_validate", False),
                     checklist=checklist,
+                    use_codex_exec=use_codex_exec,
                 )
                 if result:
                     return

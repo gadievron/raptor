@@ -429,11 +429,45 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
             completed += 1
             elapsed = time.monotonic() - start
 
+            failure: Optional[Dict[str, Any]] = None
+            dispatch_result: Optional[DispatchResult] = None
+            processed: Dict[str, Any] = {}
             try:
                 dispatch_result = future.result()
                 processed = task.process_result(item, dispatch_result)
                 processed["finding_id"] = item_id
                 processed["_quality"] = getattr(dispatch_result, "quality", 1.0)
+            except Exception as exc:
+                # Python/runtime failures are exceptional: normalize them here
+                # without confusing them with a remote analysis failure returned
+                # normally by a transport adapter.
+                err_str = str(exc)
+                failure = {
+                    "finding_id": item_id,
+                    "error": err_str,
+                    "error_type": _classify_error(err_str),
+                    "analysed_by": model.model_name if model is not None else "?",
+                }
+            else:
+                # Transport adapters report expected launch/auth/parse failures
+                # as DispatchResult error envelopes so one failed call does not
+                # escape the worker and crash orchestration. Keep those failures
+                # as data, then route them through the shared failure handling
+                # below so Codex, Claude Code, and external providers agree on
+                # progress, counters, accounting, and defense telemetry.
+                if "error" in processed:
+                    failure = {
+                        **processed,
+                        "error": str(processed.get("error") or "unknown dispatch error"),
+                        "error_type": processed.get("error_type")
+                        or _classify_error(str(processed.get("error") or "")),
+                        "analysed_by": processed.get("analysed_by") or (
+                            model.model_name if model is not None else "?"
+                        ),
+                    }
+                    failure.pop("_quality", None)
+
+            if failure is None:
                 item_cost = processed.get("cost_usd", 0)
                 running_cost += item_cost
                 results.append(processed)
@@ -537,13 +571,21 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
                 )
                 print(f"{prefix} {display} {status}{cost_str}")
 
-            except Exception as e:
-                err_str = str(e)
-                error_type = _classify_error(err_str)
-                model_name = model.model_name if model is not None else "?"
-                results.append({"finding_id": item_id, "error": err_str,
-                                "error_type": error_type,
-                                "analysed_by": model_name})
+            if failure is not None:
+                err_str = str(failure["error"])
+                error_type = str(failure["error_type"])
+                model_name = str(failure["analysed_by"])
+                results.append(failure)
+                if dispatch_result is not None:
+                    # Failed provider calls may still consume billable tokens.
+                    # Preserve the same accounting applied on the success path.
+                    item_cost = failure.get("cost_usd", 0) or 0
+                    item_tokens = getattr(dispatch_result, "tokens", 0) or 0
+                    running_cost += item_cost
+                    if item_cost > 0 or item_tokens > 0:
+                        cost_tracker.add_cost(
+                            model_name, item_cost, tokens=item_tokens,
+                        )
                 display = task.get_item_display(item)
                 prefix = (
                     f"  [{completed}/{total} "
