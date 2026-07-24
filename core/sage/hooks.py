@@ -501,10 +501,10 @@ def recall_prior_finding_verdict(
         )
         for row in results:
             content = str(row.get("content") or "")
-            if f"src={source_hash}" not in content:
+            if f"||src={source_hash}||" not in content:
                 continue
             for v in _SUPPRESS_VERDICTS:
-                if f"verdict={v}" in content:
+                if f"||verdict={v}||" in content:
                     _sage_metrics["recall_hits"] += 1
                     return {
                         "verdict": v,
@@ -543,7 +543,7 @@ def store_finding_verdict(
             content=(
                 f"Finding verdict: fp={fp} rule={rule_id} "
                 f"file={file_path} fn={function} "
-                f"src={source_hash} verdict={verdict}"
+                f"||src={source_hash}|| ||verdict={verdict}||"
             ),
             memory_type="fact",
             domain_tag=_fp_domain(repo_path),

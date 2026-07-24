@@ -2642,10 +2642,8 @@ class AutonomousSecurityAgentV2:
                                     _v = "false_positive"
                                 elif is_ex:
                                     _v = "exploitable"
-                                elif is_tp and not is_ex:
-                                    _v = "not_exploitable"
                                 else:
-                                    _v = "true_positive"
+                                    _v = "not_exploitable"
                                 if store_finding_verdict(
                                     str(self.repo_path), _rule,
                                     _rel, _fn, _src_hash, _v,
