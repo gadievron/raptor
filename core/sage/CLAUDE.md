@@ -17,6 +17,7 @@ If this file is loaded, SAGE is available — use it.
 - `raptor-sca-{repo_key}` — SCA findings and verdicts (repo-scoped)
 - `raptor-methodology` — Analysis methodology and expert reasoning
 - `raptor-fp-{repo_key}` — Finding verdicts for cross-run FP suppression (repo-scoped)
+- `raptor-rule-library` — Proven checker rules (engine + CWE keyed, cross-target)
 - `raptor-concepts` — Study concept recall (N1, planned)
 
 ## Domain rationale
@@ -38,6 +39,8 @@ flag. No prompt injection (recalled text dropped into an LLM prompt).
 | `recall_context_for_codeql_build` / `store_codeql_build_reliability` / `infer_codeql_build_from_sage_recall_row` | Recall prior CodeQL build outcomes; mechanically infer build command from successful priors | `raptor-methodology` |
 | `recall_prior_finding_verdict` / `store_finding_verdict` | Cross-run FP suppression: skip LLM for findings with a prior false_positive/not_exploitable verdict and unchanged source | `raptor-fp-{key}` |
 | `compute_finding_source_hash` | Hash source lines around a finding line for staleness detection | (utility) |
+| `recall_proven_rules` / `store_proven_rule_metadata` | Accumulate proven checker rules; recall by engine+CWE for replay | `raptor-rule-library` |
+| `parse_rule_metadata` / `should_replay_rule` | Parse structured fields from recall rows; gate replay on TP rate, dual control, target count | (utility) |
 
 ## When to use
 

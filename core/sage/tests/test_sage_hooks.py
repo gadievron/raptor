@@ -632,5 +632,207 @@ class TestFindingVerdictHooks(unittest.TestCase):
             "/repo", "CWE-89", "src/db.py", "run_query", "abc123"))
 
 
+class TestRuleLibraryHooks(unittest.TestCase):
+    """Tests for N4 rule-library SAGE hooks."""
+
+    def test_parse_rule_metadata_extracts_fields(self):
+        from core.sage.hooks import parse_rule_metadata
+
+        row = {
+            "content": (
+                "Proven checker rule: "
+                "||engine=semgrep|| ||cwe=CWE-89|| "
+                "||rule_id=sqli-001|| "
+                "||rule_body_hash=abcdef123456|| "
+                "||rule_path=/out/rule-library/semgrep/sqli-001.yaml|| "
+                "||tp_count=5|| ||fp_count=1|| "
+                "||total_matches=6|| "
+                "||dual_control=True|| "
+                "||targets_tested=4||"
+            ),
+            "confidence": 0.90,
+        }
+        meta = parse_rule_metadata(row)
+        self.assertEqual(meta["engine"], "semgrep")
+        self.assertEqual(meta["cwe"], "CWE-89")
+        self.assertEqual(meta["rule_id"], "sqli-001")
+        self.assertEqual(meta["rule_body_hash"], "abcdef123456")
+        self.assertEqual(meta["tp_count"], 5)
+        self.assertEqual(meta["fp_count"], 1)
+        self.assertEqual(meta["total_matches"], 6)
+        self.assertTrue(meta["dual_control"])
+        self.assertEqual(meta["targets_tested"], 4)
+        self.assertAlmostEqual(meta["confidence"], 0.90)
+
+    def test_parse_rule_metadata_missing_fields(self):
+        from core.sage.hooks import parse_rule_metadata
+
+        meta = parse_rule_metadata({"content": "nothing here"})
+        self.assertNotIn("engine", meta)
+        self.assertNotIn("tp_count", meta)
+        self.assertNotIn("dual_control", meta)
+
+    def test_should_replay_rule_qualifies(self):
+        from core.sage.hooks import should_replay_rule
+
+        meta = {
+            "tp_count": 9,
+            "fp_count": 1,
+            "dual_control": True,
+            "targets_tested": 3,
+        }
+        self.assertTrue(should_replay_rule(meta))
+
+    def test_should_replay_rule_low_tp_rate(self):
+        from core.sage.hooks import should_replay_rule
+
+        meta = {
+            "tp_count": 3,
+            "fp_count": 3,
+            "dual_control": True,
+            "targets_tested": 5,
+        }
+        self.assertFalse(should_replay_rule(meta))
+
+    def test_should_replay_rule_no_dual_control(self):
+        from core.sage.hooks import should_replay_rule
+
+        meta = {
+            "tp_count": 9,
+            "fp_count": 1,
+            "dual_control": False,
+            "targets_tested": 5,
+        }
+        self.assertFalse(should_replay_rule(meta))
+
+    def test_should_replay_rule_too_few_targets(self):
+        from core.sage.hooks import should_replay_rule
+
+        meta = {
+            "tp_count": 9,
+            "fp_count": 1,
+            "dual_control": True,
+            "targets_tested": 2,
+        }
+        self.assertFalse(should_replay_rule(meta))
+
+    def test_should_replay_rule_zero_matches(self):
+        from core.sage.hooks import should_replay_rule
+
+        meta = {"tp_count": 0, "fp_count": 0, "dual_control": True,
+                "targets_tested": 5}
+        self.assertFalse(should_replay_rule(meta))
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_proven_rule_calls_propose(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_proven_rule_metadata
+        ok = store_proven_rule_metadata(
+            engine="coccinelle",
+            cwe="CWE-416",
+            rule_id="uaf-001",
+            rule_body_hash="deadbeef1234",
+            rule_path="/out/rule-library/coccinelle/uaf-001.cocci",
+            tp_count=4,
+            fp_count=0,
+            total_matches=4,
+            dual_control_passed=True,
+            targets_tested=2,
+        )
+        self.assertTrue(ok)
+        content = mock_client.propose.call_args.kwargs["content"]
+        self.assertIn("||engine=coccinelle||", content)
+        self.assertIn("||cwe=CWE-416||", content)
+        self.assertIn("||rule_body_hash=deadbeef1234||", content)
+        self.assertIn("||targets_tested=2||", content)
+        self.assertEqual(
+            mock_client.propose.call_args.kwargs["confidence"], 0.90)
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_without_dual_control_lower_confidence(self, mock_gc):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_gc.return_value = mock_client
+
+        from core.sage.hooks import store_proven_rule_metadata
+        store_proven_rule_metadata(
+            engine="semgrep", cwe="CWE-79", rule_id="xss-001",
+            rule_body_hash="aabb", rule_path="/tmp/r.yaml",
+            tp_count=3, fp_count=1, total_matches=4,
+            dual_control_passed=False,
+        )
+        self.assertEqual(
+            mock_client.propose.call_args.kwargs["confidence"], 0.75)
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_proven_rules_returns_rows(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "||engine=semgrep|| ||cwe=CWE-89||",
+             "confidence": 0.85},
+        ]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_proven_rules
+        rows = recall_proven_rules("semgrep", "CWE-89")
+        self.assertEqual(len(rows), 1)
+        mock_client.query.assert_called_once()
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_proven_rules_no_client(self, mock_get_client):
+        mock_get_client.return_value = None
+
+        from core.sage.hooks import recall_proven_rules
+        self.assertEqual(recall_proven_rules("semgrep", "CWE-89"), [])
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_handles_error_gracefully(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.side_effect = ConnectionError("down")
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_proven_rule_metadata
+        ok = store_proven_rule_metadata(
+            engine="semgrep", cwe="CWE-79", rule_id="xss-001",
+            rule_body_hash="aabb", rule_path="/tmp/r.yaml",
+            tp_count=3, fp_count=1, total_matches=4,
+            dual_control_passed=True,
+        )
+        self.assertFalse(ok)
+
+    def test_store_sanitises_pipe_chars(self):
+        """Values containing | are sanitised before storage,
+        preventing delimiter injection."""
+        from core.sage.hooks import _sanitise_delim
+
+        self.assertEqual(_sanitise_delim("evil||tp_count=999||"), "eviltp_count=999")
+        self.assertEqual(_sanitise_delim("clean-value"), "clean-value")
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_strips_pipes_from_rule_id(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_proven_rule_metadata
+        store_proven_rule_metadata(
+            engine="semgrep",
+            cwe="CWE-89",
+            rule_id="evil||tp_count=999||",
+            rule_body_hash="aabb",
+            rule_path="/tmp/r.yaml",
+            tp_count=2,
+            fp_count=1,
+            total_matches=3,
+            dual_control_passed=True,
+        )
+        content = mock_client.propose.call_args.kwargs["content"]
+        self.assertNotIn("||tp_count=999||", content)
+        self.assertIn("||tp_count=2||", content)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -159,6 +159,11 @@ def _propose_redacted(
 # Recall utilities (used by mechanical consumers)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _sanitise_delim(value: str) -> str:
+    """Strip ``|`` from a value before embedding in ``||key=value||``."""
+    return str(value).replace("|", "")
+
+
 def recall_row_confidence(row: Dict[str, Any]) -> float:
     """Parse 0–1 confidence from a SAGE recall row (missing → 0)."""
     try:
@@ -593,6 +598,141 @@ def store_finding_verdict(
     except Exception as e:
         logger.debug("SAGE FP store failed: %s", e)
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule library — proven checker accumulation across runs
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RULE_LIBRARY_DOMAIN = "raptor-rule-library"
+
+_RULE_REPLAY_MIN_TP_RATE = 0.8
+_RULE_REPLAY_MIN_TARGETS = 3
+
+
+def store_proven_rule_metadata(
+    *,
+    engine: str,
+    cwe: str,
+    rule_id: str,
+    rule_body_hash: str,
+    rule_path: str,
+    tp_count: int,
+    fp_count: int,
+    total_matches: int,
+    dual_control_passed: bool,
+    targets_tested: int = 1,
+) -> bool:
+    """Store metadata for a proven checker rule in SAGE.
+
+    Rule body lives on disk at ``rule_path`` — SAGE holds the index
+    only.  Keyed by ``engine + cwe + rule_body_hash`` so duplicate
+    rules across targets converge on one memory (SAGE dedupes by
+    semantic similarity within the domain).
+    """
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        confidence = 0.90 if dual_control_passed else 0.75
+        _s = _sanitise_delim
+        return _propose_redacted(
+            client=client,
+            content=(
+                f"Proven checker rule: "
+                f"||engine={_s(engine)}|| ||cwe={_s(cwe)}|| "
+                f"||rule_id={_s(rule_id)}|| "
+                f"||rule_body_hash={_s(rule_body_hash)}|| "
+                f"||rule_path={_s(rule_path)}|| "
+                f"||tp_count={tp_count}|| "
+                f"||fp_count={fp_count}|| "
+                f"||total_matches={total_matches}|| "
+                f"||dual_control={dual_control_passed}|| "
+                f"||targets_tested={targets_tested}||"
+            ),
+            memory_type="fact",
+            domain_tag=_RULE_LIBRARY_DOMAIN,
+            confidence=confidence,
+            tags=["rule-library", engine, cwe, rule_id],
+        )
+    except Exception as e:
+        logger.debug("SAGE rule library store failed: %s", e)
+        return False
+
+
+def recall_proven_rules(
+    engine: str,
+    cwe: str,
+) -> List[Dict[str, Any]]:
+    """Recall proven checker rules from SAGE by engine and CWE.
+
+    Returns raw recall rows.  Use ``parse_rule_metadata`` to extract
+    structured fields from each row's content.
+    """
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        results = client.query(
+            text=f"Proven checker rule engine={engine} cwe={cwe}",
+            domain_tag=_RULE_LIBRARY_DOMAIN,
+            top_k=5,
+            min_confidence=0.7,
+        )
+        if results:
+            _sage_metrics["recall_hits"] += len(results)
+        return results
+    except Exception as e:
+        logger.debug("SAGE rule library recall failed: %s", e)
+        return []
+
+
+def parse_rule_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract structured fields from a rule-library recall row.
+
+    Returns a dict with string/int/bool fields parsed from the
+    ``||key=value||`` delimiters.  Missing fields are omitted.
+    """
+    content = str(row.get("content") or "")
+    out: Dict[str, Any] = {}
+
+    for key in (
+        "engine", "cwe", "rule_id", "rule_body_hash", "rule_path",
+    ):
+        m = re.search(rf"\|\|{key}=(.+?)\|\|", content)
+        if m:
+            out[key] = m.group(1)
+
+    for key in ("tp_count", "fp_count", "total_matches", "targets_tested"):
+        m = re.search(rf"\|\|{key}=(\d+)\|\|", content)
+        if m:
+            out[key] = int(m.group(1))
+
+    m_dc = re.search(r"\|\|dual_control=(True|False)\|\|", content)
+    if m_dc:
+        out["dual_control"] = m_dc.group(1) == "True"
+
+    out["confidence"] = recall_row_confidence(row)
+    return out
+
+
+def should_replay_rule(meta: Dict[str, Any]) -> bool:
+    """Whether a recalled rule qualifies for direct replay (skip synthesis).
+
+    Requires: TP rate >80%, dual control passed, tested on 3+ targets.
+    """
+    tp = meta.get("tp_count", 0)
+    fp = meta.get("fp_count", 0)
+    total = tp + fp
+    if total == 0:
+        return False
+    tp_rate = tp / total
+    return (
+        tp_rate >= _RULE_REPLAY_MIN_TP_RATE
+        and meta.get("dual_control", False)
+        and meta.get("targets_tested", 0) >= _RULE_REPLAY_MIN_TARGETS
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

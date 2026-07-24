@@ -17,6 +17,11 @@ from .hooks import (
     recall_prior_finding_verdict,
     store_finding_verdict,
     compute_finding_source_hash,
+    # Rule library — proven checker accumulation
+    store_proven_rule_metadata,
+    recall_proven_rules,
+    parse_rule_metadata,
+    should_replay_rule,
 )
 
 __all__ = [
@@ -32,4 +37,8 @@ __all__ = [
     "recall_prior_finding_verdict",
     "store_finding_verdict",
     "compute_finding_source_hash",
+    "store_proven_rule_metadata",
+    "recall_proven_rules",
+    "parse_rule_metadata",
+    "should_replay_rule",
 ]
