@@ -41,8 +41,15 @@ RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 # direct socket permissions need the sg wrapper. Re-exec under sg if
 # docker is not directly accessible; the re-exec inherits the
 # environment (CLAUDECODE, SAGE_*) and stdin/stdout for MCP.
+# Guard: only re-exec when sg docker actually fixes the problem,
+# otherwise exit — without this, a genuinely-down docker daemon
+# causes an infinite exec loop.
 if ! docker info >/dev/null 2>&1; then
-    exec sg docker -c "\"$0\""
+    if command -v sg >/dev/null 2>&1 && sg docker -c "docker info" >/dev/null 2>&1; then
+        exec sg docker -c "\"$0\""
+    fi
+    echo "raptor-sage-mcp: Docker daemon is not running or not accessible." >&2
+    exit 3
 fi
 
 exec docker compose \

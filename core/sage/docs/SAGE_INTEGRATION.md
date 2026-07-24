@@ -105,32 +105,47 @@ core/sage/docker-compose.yml down -v` to wipe them.
 
 ## SAGE Domains
 
-| Domain | Purpose |
-|--------|---------|
-| `raptor-findings` | Vulnerability findings and analysis results |
-| `raptor-fuzzing` | Fuzzing strategies, crash patterns, exploit techniques |
-| `raptor-crashes` | Crash analysis patterns and root causes |
-| `raptor-forensics` | OSS forensics evidence and investigation patterns |
-| `raptor-exploits` | Exploit development patterns and constraints |
-| `raptor-methodology` | Analysis methodology and expert reasoning |
-| `raptor-campaigns` | Campaign history and outcomes |
-| `raptor-reports` | Report structures and templates |
-| `raptor-agents` | Agent role definitions and capabilities |
-| `raptor-primitives` | Exploitation primitives and dependency graphs |
-| `raptor-prompts` | LLM system prompts and personas |
-| `raptor-personas` | Expert persona definitions |
-| `raptor-config` | Configuration knowledge |
+Repo-scoped domains use a `{repo_key}` suffix (SHA-256 prefix of the target
+path) to prevent cross-project leakage. Global domains apply across targets.
+
+| Domain | Scope | Purpose |
+|--------|-------|---------|
+| `raptor-findings-{repo_key}` | repo | Vulnerability findings and analysis results |
+| `raptor-sca-{repo_key}` | repo | SCA findings and verdicts |
+| `raptor-fp-{repo_key}` | repo | Finding verdicts for cross-run FP suppression |
+| `raptor-fuzzing` | global | Fuzzing strategies and crash outcomes |
+| `raptor-methodology` | global | Analysis methodology and expert reasoning |
+| `raptor-rule-library` | global | Proven checker rules (engine + CWE keyed, cross-target) |
+| `raptor-concepts` | global | Study concept recall (planned) |
+
+See `core/sage/CLAUDE.md` for the authoritative domain list and hook table.
 
 ## Configuration
 
 ### Environment Variables
 
+**RAPTOR-side** (set in `.claude/settings.local.json` or shell):
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SAGE_ENABLED` | `false` | Enable SAGE integration |
+| `SAGE_ENABLED` | `false` | Enable SAGE integration in Python pipelines |
 | `SAGE_URL` | `http://localhost:8090` | SAGE API URL |
-| `SAGE_IDENTITY_PATH` | auto | Path to agent key file |
+| `SAGE_IDENTITY_PATH` | auto | Path to agent key file (in-container) |
 | `SAGE_TIMEOUT` | `15.0` | API request timeout (seconds) |
+
+**Container-side** (set in `docker-compose.yml`, passed to the SAGE container):
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SAGE_HOME` | `/root/.sage` | SAGE data directory inside the container |
+| `SAGE_EMBEDDING_PROVIDER` | `ollama` | Embedding backend (`ollama`, `openai-compatible`, or `hash`) |
+| `SAGE_EMBEDDING_BASE_URL` | `http://ollama:11434` | Ollama API URL (container-internal) |
+| `SAGE_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model name |
+| `REST_ADDR` | `0.0.0.0:8080` | SAGE REST API listen address |
+
+If `SAGE_EMBEDDING_PROVIDER` is unset, SAGE defaults to `hash` — keyword
+matching only, no semantic recall. The docker-compose.yml sets it to `ollama`
+so semantic embeddings are active out of the box.
 
 ### MCP Configuration
 
@@ -169,12 +184,17 @@ to `/root/.sage` (SAGE 11.x). When `libexec/raptor-sage-setup` detects an
 existing container with the old mount, it automatically migrates the data:
 
 1. Stops the sage service (retains the container).
-2. Copies SAGE_HOME data from the writable layer to a host-side backup.
-3. Populates the named volume via a disposable container.
+2. Copies data from both `/root/.sage-gui` (volume) and `/root/.sage`
+   (writable layer — agent keys, ledger) to a host-side backup.
+3. If the destination volume is empty: full copy via a disposable container.
+   If it already has data: merges only files that don't exist in the
+   destination (preserves existing state, adds missing agent keys).
 4. Writes a `.migration-complete` marker.
+5. Preserves the backup directory for operator verification — the script
+   prints its path and the operator removes it manually after checking.
 
-The migration is non-destructive — it skips if the destination volume already
-has data, and never overwrites divergent content.
+On an already-migrated setup (container mounts `/root/.sage`), the function
+exits immediately — no backup is created and no data is touched.
 
 ## How It Works
 
@@ -235,12 +255,20 @@ docker compose -f core/sage/docker-compose.yml logs sage
 ### Embedding model not loaded
 
 ```bash
+# Check which embedding provider SAGE is using
+docker compose -f core/sage/docker-compose.yml exec -T sage printenv SAGE_EMBEDDING_PROVIDER
+
 # Check Ollama models
 curl http://localhost:11435/api/tags
 
 # Pull model manually
 docker compose -f core/sage/docker-compose.yml exec ollama ollama pull nomic-embed-text
 ```
+
+If `SAGE_EMBEDDING_PROVIDER` prints empty or `hash`, SAGE is running with
+keyword matching only — semantic recall will be degraded. Check that the
+docker-compose.yml has `SAGE_EMBEDDING_PROVIDER=ollama` in the sage service's
+environment block.
 
 ### Memory not persisting
 

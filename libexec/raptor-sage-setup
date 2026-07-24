@@ -296,8 +296,7 @@ migrate_sage_home_if_needed() {
         | grep -m1 'sage' || true)
     [ -z "$sage_image" ] && sage_image="ghcr.io/l33tdawg/sage:11.11.6"
 
-    # Only populate destination if the backup has content and the destination
-    # volume is empty (avoid overwriting divergent data).
+    # Only populate destination if the backup has content.
     if [ -d "$backup" ] && [ "$(ls -A "$backup" 2>/dev/null)" ]; then
         local dest_marker
         dest_marker=$(docker run --rm \
@@ -306,24 +305,46 @@ migrate_sage_home_if_needed() {
             "$sage_image" \
             -c 'ls -A /dest 2>/dev/null | head -1' 2>/dev/null || true)
         if [ -z "$dest_marker" ]; then
+            # Destination empty — full copy.
             docker run --rm \
                 -v "$backup:/src:ro" \
                 -v "$volume_name:/dest" \
                 --entrypoint /bin/sh \
                 "$sage_image" \
                 -c 'cp -a /src/. /dest/'
+            echo "Volume migration complete (full copy)."
+        else
+            # Destination already has data. Merge files that don't exist
+            # in the destination (agent keys, ledger fragments from the
+            # writable layer). tar -k skips existing files.
             docker run --rm \
+                -v "$backup:/src:ro" \
                 -v "$volume_name:/dest" \
                 --entrypoint /bin/sh \
                 "$sage_image" \
-                -c 'date -u > /dest/.migration-complete'
-            echo "Volume migration complete."
-        else
-            echo "Destination volume already has data — skipping copy to avoid overwrite."
+                -c 'cd /src && tar cf - . | (cd /dest && tar xf - -k 2>/dev/null; true)'
+            echo "Destination volume already has data — merged missing files only."
         fi
+        docker run --rm \
+            -v "$volume_name:/dest" \
+            --entrypoint /bin/sh \
+            "$sage_image" \
+            -c 'date -u > /dest/.migration-complete'
     fi
 
-    rm -rf "$backup"
+    # Preserve backup so the operator can verify before removing.
+    if [ -d "$backup" ] && [ "$(ls -A "$backup" 2>/dev/null)" ]; then
+        # Remove from cleanup trap so it survives script exit.
+        local i new_tmps=()
+        for i in "${_RAPTOR_TMP_FILES[@]}"; do
+            [ "$i" = "$backup" ] || new_tmps+=("$i")
+        done
+        _RAPTOR_TMP_FILES=("${new_tmps[@]}")
+        echo "Migration backup preserved at: $backup"
+        echo "  Remove manually after verifying: rm -rf $backup"
+    else
+        rm -rf "$backup"
+    fi
 }
 
 generate_mcp_entry() {
@@ -353,7 +374,9 @@ generate_mcp_entry() {
 }
 
 smoke_test_mcp() {
-    # Send an MCP initialize request to the wrapper and check for a valid response.
+    # Send an MCP initialize + notifications/initialized sequence and check for
+    # a valid response. The MCP protocol requires notifications/initialized after
+    # the server responds to initialize before tool calls are accepted.
     # Non-fatal — warn and continue if it fails (container may need more startup time).
     # The wrapper requires CLAUDECODE or _RAPTOR_TRUSTED to pass its trust-marker
     # check — export CLAUDECODE for the duration of this test.
@@ -364,7 +387,9 @@ smoke_test_mcp() {
     elif command -v gtimeout >/dev/null 2>&1; then
         timeout_cmd="gtimeout 10"
     fi
-    response=$(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-smoke-test","version":"1.0.0"}}}' \
+    response=$(printf '%s\n%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-smoke-test","version":"1.0.0"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         | CLAUDECODE=1 $timeout_cmd "$MCP_WRAPPER" 2>/dev/null || true)
     if printf '%s' "$response" | grep -q '"result"'; then
         echo "MCP smoke test passed."
