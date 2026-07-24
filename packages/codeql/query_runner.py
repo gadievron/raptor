@@ -206,13 +206,7 @@ class QueryRunner:
         return [str(Path(self.codeql_cli).resolve().parent)]
 
     def _codeql_env(self) -> dict:
-        env = RaptorConfig.get_safe_env()
-        # Internal pid1-shim marker only: this authorises RAPTOR's own
-        # sandbox wrapper to dispatch CodeQL. The shim strips
-        # _RAPTOR_TRUSTED before exec'ing the target process, so this
-        # is not target-repo trust and is not equivalent to --trust-repo.
-        env["_RAPTOR_TRUSTED"] = "1"
-        return env
+        return RaptorConfig.get_safe_env()
 
     def run_suite(
         self,

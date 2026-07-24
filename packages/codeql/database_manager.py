@@ -730,11 +730,6 @@ class DatabaseManager:
                 cached=False,
             )
         env = RaptorConfig.get_safe_env()
-        # Internal pid1-shim marker only: this authorises RAPTOR's own
-        # sandbox wrapper to dispatch CodeQL. The shim strips
-        # _RAPTOR_TRUSTED before exec'ing the target build, so this is not
-        # target-repo trust and is not equivalent to --trust-repo.
-        env["_RAPTOR_TRUSTED"] = "1"
         if build_system and build_system.env_vars:
             # Filter build env vars through the same blocklist — a malicious
             # repo's build config could try to re-inject LD_PRELOAD, BASH_ENV, etc.
