@@ -3,9 +3,10 @@
 from .config import SageConfig
 from .client import SageClient
 from .hooks import (
-    # CodeQL build flags (upgrade to mechanical pending U1)
+    # CodeQL build flags (mechanical inference from prior outcomes)
     recall_context_for_codeql_build,
     store_codeql_build_reliability,
+    infer_codeql_build_from_sage_recall_row,
     # Fuzzing strategy (mechanical AFL flag inference)
     recall_context_for_fuzzing_strategy,
     store_fuzzing_strategy_outcome,
@@ -23,6 +24,7 @@ __all__ = [
     "SageClient",
     "recall_context_for_codeql_build",
     "store_codeql_build_reliability",
+    "infer_codeql_build_from_sage_recall_row",
     "recall_context_for_fuzzing_strategy",
     "store_fuzzing_strategy_outcome",
     "recall_context_for_sca",

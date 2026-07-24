@@ -35,7 +35,7 @@ flag. No prompt injection (recalled text dropped into an LLM prompt).
 | `recall_context_for_sca` / `store_sca_outcomes` | Short-circuit: skip LLM for confirmed-malicious packages | `raptor-sca-{key}` |
 | `recall_context_for_fuzzing_strategy` / `store_fuzzing_strategy_outcome` | Mechanical AFL flag inference from prior strategy rows | `raptor-fuzzing` |
 | `infer_afl_fuzz_flags_from_sage_recall_row` | Derive `-L 0`, `-D`, `-p explore` from recall content | (utility) |
-| `recall_context_for_codeql_build` / `store_codeql_build_reliability` | Accumulate CodeQL build reliability data (upgrade to mechanical pending) | `raptor-methodology` |
+| `recall_context_for_codeql_build` / `store_codeql_build_reliability` / `infer_codeql_build_from_sage_recall_row` | Recall prior CodeQL build outcomes; mechanically infer build command from successful priors | `raptor-methodology` |
 | `recall_prior_finding_verdict` / `store_finding_verdict` | Cross-run FP suppression: skip LLM for findings with a prior false_positive/not_exploitable verdict and unchanged source | `raptor-fp-{key}` |
 | `compute_finding_source_hash` | Hash source lines around a finding line for staleness detection | (utility) |
 

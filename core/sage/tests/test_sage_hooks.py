@@ -107,6 +107,77 @@ class TestCodeQLBuildHooks(unittest.TestCase):
         self.assertEqual(kwargs["confidence"], 0.85)
 
 
+class TestInferCodeQLBuild(unittest.TestCase):
+    def test_extracts_successful_build_command(self):
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = {
+            "content": (
+                "CodeQL build reliability for repo myapp: "
+                "languages cpp, outcome success, "
+                "build command cmake -B build && cmake --build build, "
+                "analyses completed 5, failure modes none."
+            ),
+            "confidence": 0.85,
+        }
+        hint = infer_codeql_build_from_sage_recall_row(row)
+        self.assertEqual(hint["outcome"], "success")
+        self.assertEqual(
+            hint["build_command"],
+            "cmake -B build && cmake --build build")
+        self.assertEqual(hint["languages"], "cpp")
+
+    def test_no_command_on_failure(self):
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = {
+            "content": (
+                "CodeQL build reliability for repo myapp: "
+                "languages java, outcome failure, "
+                "build command mvn clean compile, "
+                "analyses completed 0, failure modes build timeout."
+            ),
+            "confidence": 0.75,
+        }
+        hint = infer_codeql_build_from_sage_recall_row(row)
+        self.assertEqual(hint["outcome"], "failure")
+        self.assertNotIn("build_command", hint)
+
+    def test_skips_auto_command(self):
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = {
+            "content": (
+                "CodeQL build reliability for repo myapp: "
+                "languages python, outcome success, "
+                "build command auto, "
+                "analyses completed 3, failure modes none."
+            ),
+            "confidence": 0.85,
+        }
+        hint = infer_codeql_build_from_sage_recall_row(row)
+        self.assertEqual(hint["outcome"], "success")
+        self.assertNotIn("build_command", hint)
+
+    def test_empty_row_returns_empty(self):
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        self.assertEqual(infer_codeql_build_from_sage_recall_row(None), {})
+        self.assertEqual(
+            infer_codeql_build_from_sage_recall_row({"content": ""}), {})
+
+    def test_multi_language(self):
+        from core.sage.hooks import infer_codeql_build_from_sage_recall_row
+        row = {
+            "content": (
+                "CodeQL build reliability for repo myapp: "
+                "languages cpp, javascript, outcome success, "
+                "build command make all, "
+                "analyses completed 2, failure modes none."
+            ),
+            "confidence": 0.85,
+        }
+        hint = infer_codeql_build_from_sage_recall_row(row)
+        self.assertEqual(hint["languages"], "cpp, javascript")
+        self.assertEqual(hint["build_command"], "make all")
+
+
 class TestFuzzingStrategyHooks(unittest.TestCase):
     @patch("core.sage.hooks._get_client")
     def test_recall_context_for_fuzzing_strategy_handles_failure(self, mock_get_client):

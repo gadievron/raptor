@@ -12,6 +12,7 @@ weighed them correctly.
 
 import math
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -352,6 +353,45 @@ def store_codeql_build_reliability(
         )
     except Exception as e:
         logger.debug(f"SAGE codeql reliability store failed: {e}")
+
+
+def infer_codeql_build_from_sage_recall_row(
+    row: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Extract a build hint from a SAGE CodeQL build-reliability row.
+
+    Returns a dict with ``outcome``, and optionally ``build_command``
+    and ``languages``.  Empty dict if nothing useful can be parsed.
+
+    Recognised content shape (written by ``store_codeql_build_reliability``)::
+
+      "CodeQL build reliability for repo X: languages cpp, outcome success,
+       build command cmake ..., analyses completed 5, failure modes none."
+
+    Only returns ``build_command`` when ``outcome`` is ``success`` — a
+    prior failure is useful for avoidance logging but not for mechanical
+    override.
+    """
+    if not row:
+        return {}
+    text = str(row.get("content") or "")
+    out: Dict[str, str] = {}
+
+    m_outcome = re.search(r"outcome (\w+)", text)
+    if m_outcome:
+        out["outcome"] = m_outcome.group(1)
+
+    m_cmd = re.search(r"build command (.+?), analyses completed", text)
+    if m_cmd and out.get("outcome") == "success":
+        cmd = m_cmd.group(1).strip()
+        if cmd and cmd != "auto":
+            out["build_command"] = cmd
+
+    m_lang = re.search(r"languages ([^,]+(?:, [^,]+)*), outcome", text)
+    if m_lang:
+        out["languages"] = m_lang.group(1).strip()
+
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

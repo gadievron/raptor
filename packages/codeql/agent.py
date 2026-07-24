@@ -207,7 +207,6 @@ class CodeQLAgent:
         force_db_creation: bool = False,
         use_extended: bool = False,
         min_files: int = 3,
-        sage_build_recall: Optional[str] = None,
     ) -> CodeQLWorkflowResult:
         """
         Run complete autonomous CodeQL analysis workflow.
@@ -218,18 +217,34 @@ class CodeQLAgent:
             force_db_creation: Force database recreation
             use_extended: Use extended security suites
             min_files: Minimum files to consider a language present
-            sage_build_recall: Optional formatted SAGE recall text for CodeQL build hints
 
         Returns:
             CodeQLWorkflowResult with complete analysis results
         """
         errors = []
 
-        self.build_detector.sage_prior_build_notes = (
-            sage_build_recall.strip() if sage_build_recall else None
-        )
-        if self.build_detector.sage_prior_build_notes:
-            logger.info("SAGE CodeQL build recall will be passed into CC flag-suggestion prompts when used.")
+        sage_build_cmd: Optional[str] = None
+        sage_build_langs: Optional[str] = None
+        try:
+            from core.sage.hooks import (
+                recall_context_for_codeql_build,
+                infer_codeql_build_from_sage_recall_row,
+                pick_strongest_recall_row,
+            )
+            rows = recall_context_for_codeql_build(
+                str(self.repo_path), languages)
+            best = pick_strongest_recall_row(rows, min_confidence=0.7)
+            hint = infer_codeql_build_from_sage_recall_row(best)
+            if hint.get("build_command"):
+                sage_build_cmd = hint["build_command"]
+                sage_build_langs = hint.get("languages", "")
+                logger.info(
+                    "SAGE: prior successful build command recalled: %s"
+                    " (languages: %s)",
+                    sage_build_cmd, sage_build_langs or "unknown",
+                )
+        except Exception:
+            pass
 
         try:
             # PHASE 1: Language Detection
@@ -355,6 +370,25 @@ class CodeQLAgent:
                     else:
                         # Try to synthesise a build command for compiled languages
                         build_system = self.build_detector.synthesise_build_command(lang)
+                        _sage_lang_set = {
+                            s.strip()
+                            for s in (sage_build_langs or "").split(",")
+                        } if sage_build_langs else set()
+                        if (
+                            not build_system
+                            and sage_build_cmd
+                            and lang in _sage_lang_set
+                        ):
+                            logger.info(
+                                "SAGE: using prior build command for %s", lang)
+                            build_system = BuildSystem(
+                                type="sage_prior",
+                                command=sage_build_cmd,
+                                working_dir=self.repo_path,
+                                env_vars={},
+                                confidence=0.7,
+                                detected_files=[],
+                            )
                         if not build_system:
                             # Interpreted language or no source files — use no-build mode
                             build_system = self.build_detector.generate_no_build_config(lang)
