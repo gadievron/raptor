@@ -349,7 +349,7 @@ class TestOrchestrate:
         out_file = tmp_path / "orch" / "orchestrated_report.json"
         assert out_file.exists()
 
-    def test_codex_exec_dispatch_is_analysis_only(self, tmp_path):
+    def test_codex_exec_dispatch_is_analysis_only(self, tmp_path, capsys):
         """Codex PR2 dispatches analysis and skips later LLM stages."""
         findings = [_make_finding("f-001", "py/sql-injection", "db.py", 42)]
         report = _make_prep_report(findings=findings)
@@ -395,10 +395,16 @@ class TestOrchestrate:
         assert result["orchestration"]["cost_usd_unknown"] is True
         assert result["orchestration"]["billing_source"] == "codex_subscription"
         assert result["orchestration"]["analysis_all_errored"] is False
+        assert result["orchestration"]["defense_profile"] == "conservative"
+        assert result["orchestration"]["defense_profile_verified"] is False
+        assert result["orchestration"]["defense_profile_verification"] == "unverified"
         assert len(prompts) == 1
         assert "Stage A:" in prompts[0]
         assert "Generate a proof-of-concept exploit" not in prompts[0]
         assert result["orchestration"]["group_analyses"] == 0
+        output = capsys.readouterr()
+        assert "Codex exec uses the conservative prompt profile" in output.err
+        assert "envelope canary was not verified" in output.err
 
     def test_codex_exec_all_errors_are_operator_visible(self, tmp_path, capsys):
         """A failed Codex batch remains reportable but cannot look successful."""

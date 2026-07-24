@@ -921,6 +921,16 @@ def orchestrate(
         [analysis_model] if analysis_model else []
     )
     _probe_failed = False
+    defense_profile_verified = True
+    defense_profile_verification = "verified"
+    if mode_policy.is_codex_dispatch and not _models_to_probe:
+        defense_profile_verified = False
+        defense_profile_verification = "unverified"
+        print(
+            "\n  Defence warning: Codex exec uses the conservative prompt profile, "
+            "but the envelope canary was not verified for this transport.",
+            file=sys.stderr,
+        )
     if dispatch_fn and _models_to_probe:
         from core.security.envelope_probe import probe_envelope_compatibility
         # Per-model profile collection. Pre-fix the outer `profile`
@@ -1671,6 +1681,8 @@ def orchestrate(
         "cost_usd_unknown": mode_policy.cost_usd_unknown,
         "billing_source": mode_policy.billing_source,
         "defense_profile": profile.name,
+        "defense_profile_verified": defense_profile_verified,
+        "defense_profile_verification": defense_profile_verification,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
         "consensus_agreed": consensus_agreed,
