@@ -39,13 +39,13 @@ _HEADER_EXTENSIONS = frozenset({".h", ".hpp", ".hxx", ".hh", ".h++"})
 _DECL_RE = re.compile(
     r"(?a)"
     r"(?:^|;|\})\s*"
-    r"(?:__attribute__\s*\(\((?:[^()]*|\([^()]*\))*\)\)\s+)*"
+    r"(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s+)*"
     r"(?:__declspec\s*\([^)]*\)\s+)*"
     r"(?:(?:\w+|\*)\s+)*?"
     r"[*\s]*"
     r"(\w+)"                       # capture: function name
     r"\s*\([^)]*\)"                # parameter list
-    r"\s*(?:__attribute__\s*\(\((?:[^()]*|\([^()]*\))*\)\)\s*)*"
+    r"\s*(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s*)*"
     r"\s*;",                       # ends with `;`
     re.MULTILINE,
 )
