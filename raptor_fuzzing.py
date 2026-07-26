@@ -29,12 +29,9 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sage.hooks import (
-    format_sage_memories_for_prompt,
     infer_afl_fuzz_flags_from_sage_recall_row,
     pick_strongest_recall_row,
-    recall_context_for_crash_analysis,
     recall_context_for_fuzzing_strategy,
-    store_crash_analysis_pattern,
     store_fuzzing_strategy_outcome,
 )
 from packages.fuzzing import AFLRunner, CrashCollector
@@ -479,7 +476,6 @@ Examples:
             logger.info(f"Average confidence: {stats['average_confidence']:.2f}")
 
         # Check for past strategies for this binary + SAGE cross-run priors
-        sage_strategy_text = format_sage_memories_for_prompt(sage_strategy_rows)
         if sage_strategy_rows:
             top = pick_strongest_recall_row(sage_strategy_rows, min_confidence=0.0)
             top_c = float(top.get("confidence") or 0) if top else 0.0
@@ -492,14 +488,9 @@ Examples:
         best_strategy = memory.get_best_strategy(binary_hash)
         if best_strategy:
             logger.info(f"✨ Found best strategy from memory: {best_strategy}")
-        elif sage_strategy_text:
-            logger.info(
-                "No local FuzzingMemory strategy entry; using SAGE recall as planning context."
-            )
 
         planner = FuzzingPlanner(
             memory=memory,
-            sage_planning_notes=sage_strategy_text or None,
             sage_strategy_rows=sage_strategy_rows,
         )
 
@@ -701,14 +692,6 @@ Examples:
                 input_file=crash.input_file,
                 signal=crash.signal or "unknown",
             )
-            sage_crash_rows = recall_context_for_crash_analysis(
-                repo_path=str(binary_path.parent),
-                binary_fingerprint=binary_hash,
-                signal=crash_context.signal,
-                function_name=crash_context.function_name,
-            )
-            sage_crash_text = format_sage_memories_for_prompt(sage_crash_rows)
-
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
                 logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
@@ -722,17 +705,6 @@ Examples:
             # Classify crash type
             crash_context.crash_type = crash_analyser.classify_crash_type(crash_context)
             logger.info(f"Crash type (heuristic): {crash_context.crash_type}")
-            # Persist coarse crash pattern outcome into SAGE for cross-run recall.
-            store_crash_analysis_pattern(
-                repo_path=str(binary_path.parent),
-                binary_path=str(binary_path),
-                signal=crash_context.signal,
-                function_name=crash_context.function_name or "unknown",
-                crash_type=crash_context.crash_type,
-                source_location=crash_context.source_location,
-                stack_hash=crash_context.stack_hash,
-                exploitability_hint=crash_context.exploitability,
-            )
 
             # LLM analysis - use multi-turn if autonomous mode
             if args.autonomous and multi_turn:
@@ -740,7 +712,6 @@ Examples:
                 deep_analysis = multi_turn.analyse_crash_deeply(
                     crash_context,
                     max_turns=3,
-                    sage_prior_recall=sage_crash_text or None,
                 )
                 logger.info(f"Multi-turn analysis confidence: {deep_analysis['confidence']:.2f}")
 
@@ -766,7 +737,6 @@ Examples:
                 # Standard single-shot analysis
                 if llm_agent.analyse_crash(
                     crash_context,
-                    sage_prior_recall=sage_crash_text or None,
                 ):
                     analysed += 1
 

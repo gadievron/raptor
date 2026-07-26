@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Multi-pass study loop: prep → study → drain reading list → repeat.
+
+Runs the study pipeline iteratively until the reading list converges
+(no pending items remain, or no progress between passes).  Each pass:
+
+1. Run raptor-study-prep (Phase 1) with accumulated identifiers/concepts
+2. Run raptor-study-run (Phase 2+3) to produce/update domain-model.json
+3. Check reading-list.json for pending items
+4. If pending items exist, feed them back into the next prep pass
+
+Terminates when:
+- Reading list is empty (converged)
+- Pending count did not decrease between passes (stalled)
+
+Usage:
+    raptor-study-loop <target> <output_dir> [options]
+
+Options:
+    --root <path>         Source root for include resolution
+    --identifier <names>  Initial identifiers (comma-separated)
+    --concept <names>     Initial semantic concepts (comma-separated)
+    --model <name>        LLM model override for study-run
+    --include-dir <dir>   Additional include search dirs (repeatable)
+    -v, --verbose         Verbose output
+"""
+import argparse
+import faulthandler
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check ───
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ───
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def _run(cmd: list[str], *, verbose: bool = False) -> int:
+    """Run a subprocess, streaming stderr."""
+    env = os.environ.copy()
+    env["_RAPTOR_TRUSTED"] = "1"
+    result = subprocess.run(
+        cmd, env=env,
+        stdout=None if verbose else subprocess.DEVNULL,
+        stderr=None,
+    )
+    return result.returncode
+
+
+def _load_pending_reading_list(output_dir: Path) -> list[dict]:
+    """Load pending items from reading-list.json."""
+    rl_path = output_dir / "reading-list.json"
+    if not rl_path.is_file():
+        return []
+    try:
+        raw = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [i for i in raw.get("items", []) if not i.get("resolved")]
+
+
+def _extract_rl_identifiers(pending: list[dict]) -> tuple[list[str], list[str]]:
+    """Partition pending reading-list items into identifiers and concepts.
+
+    For "identifier" resolution items, extracts concrete names from the
+    context (backtick-quoted) or question (struct X / C identifiers).
+    Items that don't yield a concrete identifier are reclassified as concepts.
+    """
+    identifiers: list[str] = []
+    concepts: list[str] = []
+    seen: set[str] = set()
+    for item in pending:
+        resolution = item.get("resolution", "identifier")
+        q = item.get("question", "").strip()
+        if not q or q in seen:
+            continue
+        seen.add(q)
+        if resolution == "concept":
+            concepts.append(q)
+            continue
+        # Try backtick-quoted names in context first
+        ctx = item.get("context", "")
+        m = re.search(r"`([A-Za-z_]\w*)`", ctx)
+        if m:
+            identifiers.append(m.group(1))
+            continue
+        # Try backtick-quoted in question
+        m = re.search(r"`([A-Za-z_]\w*)`", q)
+        if m:
+            identifiers.append(m.group(1))
+            continue
+        # Try "struct X" or C-style identifiers (lowercase included)
+        m = re.search(r"\b(struct\s+\w+|[A-Za-z_]\w{3,}_[A-Za-z_]\w*)\b", q)
+        if m:
+            identifiers.append(m.group(1))
+            continue
+        # No concrete identifier found — treat as a concept instead
+        concepts.append(q)
+    return identifiers, concepts
+
+
+def _resolve_covered_items(output_dir: Path) -> int:
+    """Mark reading-list items as resolved if domain-model covers them.
+
+    Compares pending item questions/identifiers against concept IDs and
+    descriptions in domain-model.json.  Returns count of items resolved.
+    """
+    dm_path = output_dir / "domain-model.json"
+    rl_path = output_dir / "reading-list.json"
+    if not dm_path.is_file() or not rl_path.is_file():
+        return 0
+
+    try:
+        dm = json.loads(dm_path.read_text(encoding="utf-8"))
+        rl_data = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+
+    concept_ids = {c.get("id", "").lower() for c in dm.get("concepts", [])}
+    concept_descs = " ".join(
+        c.get("description", "") for c in dm.get("concepts", [])
+    ).lower()
+    contract_fns = {c.get("function", "").lower() for c in dm.get("contracts", [])}
+
+    def _word_in_corpus(word: str) -> bool:
+        """Word-boundary match against the concatenated descriptions."""
+        if len(word) < 4:
+            return False
+        return bool(re.search(r"\b" + re.escape(word) + r"\b", concept_descs))
+
+    resolved_count = 0
+    for item in rl_data.get("items", []):
+        if item.get("resolved"):
+            continue
+        q = item.get("question", "").lower().strip()
+        if not q:
+            continue
+
+        # Check if any concrete identifier from the question appears in concepts
+        backtick = re.search(r"`([a-z_]\w*)`", q)
+        ident = backtick.group(1) if backtick else None
+
+        covered = False
+        if ident:
+            covered = (
+                ident in concept_ids
+                or ident in contract_fns
+                or _word_in_corpus(ident)
+            )
+        if not covered:
+            terms = [w for w in re.split(r"\s+", q) if len(w) > 4]
+            if terms:
+                hits = sum(1 for t in terms if _word_in_corpus(t))
+                covered = hits >= len(terms) * 0.6
+
+        if covered:
+            item["resolved"] = True
+            item["resolved_concept_id"] = "study-loop-auto"
+            resolved_count += 1
+
+    if resolved_count:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(rl_path.parent), suffix=".tmp", prefix=".rl-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(rl_data, f, indent=2)
+                f.write("\n")
+            Path(tmp_name).rename(rl_path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
+        print(f"study-loop: resolved {resolved_count} reading-list items "
+              f"(covered by domain model)", file=sys.stderr)
+
+    return resolved_count
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-study-loop",
+        description="Multi-pass study loop: prep → study → drain reading list → repeat.",
+    )
+    ap.add_argument("target", help="Study scope (directory or file).")
+    ap.add_argument("output_dir", help="Output directory for study artefacts.")
+    ap.add_argument("--root", default=None,
+                    help="Source root for include resolution.")
+    ap.add_argument("--identifier", default=None,
+                    help="Initial identifiers (comma-separated).")
+    ap.add_argument("--concept", default=None,
+                    help="Initial semantic concepts (comma-separated).")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override for study-run.")
+    ap.add_argument("--include-dir", action="append", default=None,
+                    dest="include_dirs", metavar="DIR",
+                    help="Additional include search directories (repeatable).")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    parsed = ap.parse_args()
+
+    target = Path(parsed.target).resolve()
+    output_dir = Path(parsed.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    libexec_dir = Path(__file__).resolve().parent
+    prep_bin = str(libexec_dir / "raptor-study-prep")
+    run_bin = str(libexec_dir / "raptor-study-run")
+
+    identifiers = parsed.identifier or ""
+    concepts = parsed.concept or ""
+    pending: list[dict] = []
+    prev_pending_count = float("inf")
+    pass_num = 0
+
+    while True:
+        pass_num += 1
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"study-loop: pass {pass_num}", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+
+        # --- Phase 1: prep ---
+        prep_cmd = [sys.executable, prep_bin, str(target), str(output_dir)]
+        if parsed.root:
+            prep_cmd.extend(["--root", parsed.root])
+        if identifiers:
+            prep_cmd.extend(["--identifier", identifiers])
+        if concepts:
+            prep_cmd.extend(["--concept", concepts])
+        rl_path = output_dir / "reading-list.json"
+        if rl_path.is_file():
+            prep_cmd.extend(["--reading-list", str(rl_path)])
+        if parsed.include_dirs:
+            for d in parsed.include_dirs:
+                prep_cmd.extend(["--include-dir", d])
+
+        print("study-loop: running prep...", file=sys.stderr)
+        rc = _run(prep_cmd, verbose=parsed.verbose)
+        if rc != 0:
+            print(f"study-loop: prep failed (exit {rc})", file=sys.stderr)
+            return rc
+
+        study_list = output_dir / "study-list.json"
+        if not study_list.is_file():
+            print("study-loop: prep produced no study-list.json", file=sys.stderr)
+            return 1
+
+        # Check item count
+        try:
+            data = json.loads(study_list.read_text(encoding="utf-8"))
+            n_items = len(data.get("items", []))
+        except (OSError, json.JSONDecodeError):
+            n_items = 0
+
+        if n_items == 0:
+            print("study-loop: no study items — nothing to analyse", file=sys.stderr)
+            return 0
+
+        # --- Phase 2+3: LLM study ---
+        run_cmd = [sys.executable, run_bin, str(output_dir)]
+        if parsed.model:
+            run_cmd.extend(["--model", parsed.model])
+        if parsed.verbose:
+            run_cmd.append("-v")
+
+        print(f"study-loop: running study ({n_items} items)...", file=sys.stderr)
+        rc = _run(run_cmd, verbose=parsed.verbose)
+        if rc != 0:
+            print(f"study-loop: study-run failed (exit {rc})", file=sys.stderr)
+            return rc
+
+        # --- Resolve reading-list items covered by domain model ---
+        _resolve_covered_items(output_dir)
+
+        # --- Check reading list for next pass ---
+        pending = _load_pending_reading_list(output_dir)
+        if not pending:
+            print(f"study-loop: reading list empty — converged after {pass_num} pass(es)",
+                  file=sys.stderr)
+            break
+
+        current_pending = len(pending)
+        if current_pending >= prev_pending_count:
+            print(f"study-loop: stalled — {current_pending} pending items "
+                  f"(was {prev_pending_count}), stopping", file=sys.stderr)
+            break
+        prev_pending_count = current_pending
+
+        print(f"study-loop: {current_pending} pending reading-list items — "
+              f"feeding into next pass", file=sys.stderr)
+
+        # Extract identifiers/concepts from pending items for next prep pass
+        rl_idents, rl_concepts = _extract_rl_identifiers(pending)
+
+        # Merge with existing (deduplicated by prep)
+        if rl_idents:
+            existing = [x.strip() for x in identifiers.split(",") if x.strip()]
+            merged = list(dict.fromkeys(existing + rl_idents))
+            identifiers = ",".join(merged)
+        if rl_concepts:
+            existing = [x.strip() for x in concepts.split(",") if x.strip()]
+            merged = list(dict.fromkeys(existing + rl_concepts))
+            concepts = ",".join(merged)
+
+    # Summary
+    dm_path = output_dir / "domain-model.json"
+    if dm_path.is_file():
+        try:
+            dm = json.loads(dm_path.read_text(encoding="utf-8"))
+            print(f"\nstudy-loop: DONE — domain-model.json: "
+                  f"{len(dm.get('concepts', []))} concepts, "
+                  f"{len(dm.get('invariants', []))} invariants, "
+                  f"{len(dm.get('contracts', []))} contracts",
+                  file=sys.stderr)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

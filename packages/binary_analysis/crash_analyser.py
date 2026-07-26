@@ -17,7 +17,6 @@ from typing import Dict, List, Optional
 from core.config import RaptorConfig
 from core.hash import sha256_string
 from core.logging import get_logger
-from core.sage.hooks import store_crash_analysis_pattern
 from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 # _run_trusted: read-only tools (file, readelf, nm, strings, etc.) — no namespace overhead.
 # Crash-analysis work runs a debugger or ASAN-instrumented binary:
@@ -464,19 +463,6 @@ class CrashAnalyser:
         context.stack_hash = self._compute_stack_hash(context.stack_trace)
         if context.stack_hash:
             logger.info(f"  Stack hash: {context.stack_hash}")
-
-        # Future-agent note: this hook is additive and must remain best-effort.
-        # Do not let memory persistence affect crash-analysis success path.
-        store_crash_analysis_pattern(
-            repo_path=str(self.binary.parent),
-            binary_path=str(self.binary),
-            signal=context.signal,
-            function_name=context.function_name,
-            crash_type=context.crash_type,
-            source_location=context.source_location,
-            stack_hash=context.stack_hash,
-            exploitability_hint=context.exploitability,
-        )
 
         return context
 

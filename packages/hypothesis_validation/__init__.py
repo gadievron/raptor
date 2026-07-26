@@ -4,9 +4,8 @@ The LLM forms hypotheses about security weaknesses ("input X flows unchecked
 to sink Y"); deterministic tools (Semgrep, Coccinelle, CodeQL, SMT) test
 those hypotheses; the LLM never directly classifies code as vulnerable.
 
-Research basis: KNighter (SOSP 2025, 92 kernel bugs), SAILOR
-(arXiv:2604.06506, 379 vulns vs 12 pure-agentic), IRIS (ICLR 2025, 2x
-CodeQL recall). Pure self-critique without tool grounding actively
+Research basis: KNighter (SOSP 2025, 92 kernel bugs), IRIS (ICLR 2025,
+2x CodeQL recall). Pure self-critique without tool grounding actively
 degrades quality (IEEE-ISTAS 2025: 37.6% more critical vulns after 5
 iterations) — this package exists to ground LLM reasoning in mechanical
 evidence.

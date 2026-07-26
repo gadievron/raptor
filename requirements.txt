@@ -59,6 +59,9 @@ defusedxml==0.7.1
 # compromise-detection corpus). Pin alongside the SCA hard deps.
 packaging==25.0
 
+# Optional: Faster JSON parse/serialise (transparent fallback to stdlib json)
+# orjson==3.11.9
+
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.15.4.0  # see requirements-dev.txt for bookworm/aarch64 cap
 

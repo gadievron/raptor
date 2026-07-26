@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,9 @@ def _platform(manifest: Any) -> str:
 def recover_external_ingress(
     manifest: Any,
     context_map: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     """Recover externally drivable interfaces without claiming reachability."""
-    records: list[EvidenceRecord] = []
+    records: list[BinaryEvidenceRecord] = []
     candidates: list[ExternalIngressCandidate] = []
     seen: set[tuple[str, str, str]] = set()
     platform = _platform(manifest)

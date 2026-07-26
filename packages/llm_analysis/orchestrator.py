@@ -185,8 +185,8 @@ def _finalize_results_for_emit(results: list) -> None:
     * ``repo_path`` is an absolute filesystem path on the operator's
       machine (``/home/alice/projects/my-target``,
       ``/tmp/raptor/foo``); stamping it onto each finding earlier in
-      the pipeline (line ~303) is necessary for SAGE enrichment
-      scoping, but leaking it into the persisted report exposes
+      the pipeline (line ~303) is necessary for prompt builders,
+      but leaking it into the persisted report exposes
       operator filesystem layout downstream (username, project
       naming, runner tmp-dir hierarchy). Strip AFTER all internal
       consumers have used it (judge, consensus, aggregation) and
@@ -584,9 +584,7 @@ def orchestrate(
     from core.security import prompt_telemetry as _pt
     _pt.defense_telemetry.reset()
 
-    # Stamp repo_path so build_analysis_prompt_bundle_from_finding forwards it to
-    # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
-    # the enrichment a no-op for every finding on the dispatch path.
+    # Stamp repo_path so downstream prompt builders can resolve file paths.
     for f in findings:
         f.setdefault("repo_path", str(repo_path))
 
@@ -602,19 +600,6 @@ def orchestrate(
         prepare_source_intel(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
-
-    precall_path = Path(out_dir) / "sage_precall_scan.json"
-    if precall_path.is_file():
-        try:
-            precall_raw = load_json(precall_path)
-            mems = (precall_raw or {}).get("memories") or []
-            from core.sage.hooks import format_sage_memories_for_prompt
-            precall_txt = format_sage_memories_for_prompt(mems)
-            if precall_txt:
-                for f in findings:
-                    f.setdefault("_sage_precall_scan_context", precall_txt)
-        except Exception as e:
-            logger.debug("SAGE precall for orchestration skipped: %s", e)
 
     if max_findings > 0 and len(findings) > max_findings:
         logger.info(f"Capping at {max_findings} findings (of {len(findings)})")

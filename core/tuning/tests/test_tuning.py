@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from core.json import load_json_with_comments
 from core.tuning import (
     Tuning,
     load_tuning,
@@ -238,6 +239,37 @@ class TestLoadTuning(unittest.TestCase):
             p.write_text(json.dumps({"codeql_enabled": "false"}))
             t = load_tuning(p)
             self.assertIs(t.codeql_enabled, True)
+
+    def test_deprecated_key_stripped_from_config(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({
+                "max_agentic_parallel": 3,
+                "max_semgrep_workers": 8,
+            }))
+            with self.assertLogs("core.tuning", level="INFO") as cm:
+                t = load_tuning(p)
+            self.assertEqual(t.max_semgrep_workers, 8)
+            self.assertFalse(hasattr(t, "max_agentic_parallel"))
+            self.assertTrue(any("deprecated" in m and "max_agentic_parallel" in m for m in cm.output))
+            reloaded = load_json_with_comments(p)
+            self.assertNotIn("max_agentic_parallel", reloaded)
+
+    def test_deprecated_migration_preserves_passthrough_keys(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({
+                "max_agentic_parallel": 3,
+                "max_llm_workers": 6,
+                "throttle_cooldown_s": 5,
+                "max_semgrep_workers": 8,
+            }))
+            load_tuning(p)
+            reloaded = load_json_with_comments(p)
+            self.assertNotIn("max_agentic_parallel", reloaded)
+            self.assertEqual(reloaded["max_llm_workers"], 6)
+            self.assertEqual(reloaded["throttle_cooldown_s"], 5)
+            self.assertEqual(reloaded["max_semgrep_workers"], 8)
 
     def test_auto_creates_default_file(self):
         with TemporaryDirectory() as d:

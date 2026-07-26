@@ -76,7 +76,11 @@ def _set_ptracer_any_in_child() -> None:
     SEIZE will fail and the parent's diagnostic fires there.
     """
     import ctypes
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    import ctypes.util
+    _libc_name = ctypes.util.find_library("c")
+    if not _libc_name:
+        return
+    libc = ctypes.CDLL(_libc_name, use_errno=True)
     libc.prctl.argtypes = [
         ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
         ctypes.c_ulong, ctypes.c_ulong,

@@ -301,16 +301,32 @@ Annotations are stamped with a hash of the function's source, so `/annotate
 stale` can detect when code has changed since the note was written.
 
 
+## SAGE persistent memory
+
+SAGE is an optional consensus-validated knowledge layer that gives RAPTOR
+institutional memory across conversations.  Memories go through BFT
+consensus, carry confidence scores, and decay over time.  Only committed
+memories are returned to the LLM.
+
+SAGE runs as a Docker sidecar (`libexec/raptor-sage-setup` installs it).
+Once running, `/sage` exposes the operator CLI: `status`, `recall`,
+`remember`, `forget`, `domains`, `timeline`, `backlog`, `task`, `link`,
+`corroborate`, and `get`.  The MCP integration feeds relevant memories
+into each conversation turn automatically.
+
+SAGE is not required.  Without it, RAPTOR works identically but has no
+cross-session memory.  See [commands](commands.md#sage) for the full
+subcommand reference.
+
+
 ## Offline and airgapped use
 
 RAPTOR's capabilities degrade gracefully without network access:
 
 | Component | Online | Offline |
 |-----------|--------|---------|
-| Custom Semgrep rules (169) | works | works |
+| Custom rules (185 across Semgrep, Coccinelle, CodeQL) | works | works |
 | Registry Semgrep packs (~950 rules) | fetched from semgrep.dev | requires pre-cached bundle (see below) |
-| CodeQL | works | works after initial setup |
-| Coccinelle | works | works |
 | Analysis dispatch (Ollama) | not needed | works (free, local) |
 | Analysis dispatch (cloud LLM) | works | unavailable |
 | SCA advisory matching | fetches from OSV/KEV | unavailable |

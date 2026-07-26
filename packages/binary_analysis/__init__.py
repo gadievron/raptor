@@ -14,7 +14,7 @@ from .radare2_understand import (
     analyse_binary_context,
     probe_capability as probe_radare2_capability,
 )
-from core.evidence import EvidenceRecord, EvidenceTier
+from core.evidence import BinaryEvidenceRecord, EvidenceTier
 from .graph_store import BinaryGraphStore, graph_summary as binary_graph_summary
 from .manifest import BinaryManifest, RuntimeSignal, build_manifest
 from .ingress import ExternalIngressCandidate, recover_external_ingress
@@ -58,7 +58,7 @@ __all__ = [
     'BinaryAnalysisResult',
     'BinaryGraphStore',
     'BinaryManifest',
-    'EvidenceRecord',
+    'BinaryEvidenceRecord',
     'EvidenceTier',
     'RuntimeSignal',
     'ExternalIngressCandidate',

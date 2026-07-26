@@ -710,9 +710,10 @@ class QueryRunner:
         """
         from core.config import RaptorConfig
 
-        # Master kill-switch — operators can disable IRIS Tier 1
-        # globally via `RaptorConfig.IRIS_TIER1_ENABLED = False`. /codeql
-        # CLI's `--no-iris-tier1` flag flips this for a single invocation.
+        if not RaptorConfig.CODEQL_ENABLED:
+            logger.info("IRIS pack analysis skipped: CODEQL_ENABLED is False")
+            return {}
+
         if not RaptorConfig.IRIS_TIER1_ENABLED:
             logger.info("IRIS pack analysis skipped: IRIS_TIER1_ENABLED is False")
             return {}

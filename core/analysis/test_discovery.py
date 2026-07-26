@@ -33,6 +33,8 @@ _TEST_FUNC_PATTERN = re.compile(
 class TestCase:
     """A test case that exercises a target function."""
 
+    __test__ = False
+
     test_file: str
     test_function: str
     target_function: str

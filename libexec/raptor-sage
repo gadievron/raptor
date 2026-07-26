@@ -1,0 +1,670 @@
+#!/usr/bin/env python3
+"""SAGE persistent memory — operator CLI.
+
+Usage:
+  raptor-sage                  Show help
+  raptor-sage status           Show memory store status
+  raptor-sage recall <query>   Semantic recall (requires embeddings)
+  raptor-sage list             List memories (filterable)
+  raptor-sage remember <text>  Store a new memory
+  raptor-sage forget <id>      Deprecate a memory
+  raptor-sage domains          Per-domain breakdown
+  raptor-sage timeline         Time-bucketed activity view
+  raptor-sage backlog          Open tasks
+  raptor-sage task <text>      Create/update a task
+  raptor-sage link <src> <dst> Link two memories
+  raptor-sage corroborate <id> Independently back a memory
+  raptor-sage get <id>         Show a single memory in full
+  raptor-sage help             Show this help
+"""
+import faulthandler
+import os
+import signal
+import sys
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+import argparse  # noqa: E402
+import logging  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from typing import Any, Dict  # noqa: E402
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+from core.sage.config import SageConfig  # noqa: E402
+
+
+def _get_client(timeout: float = 0):
+    """Lazy-import and return a sage_sdk SageClient, or None.
+
+    ``timeout`` overrides the config default when non-zero (CLI --timeout).
+    """
+    try:
+        from sage_sdk.client import SageClient
+        from sage_sdk.auth import AgentIdentity
+    except ImportError:
+        sys.stderr.write(
+            "SAGE is not installed.\n"
+            "  Run: libexec/raptor-sage-setup\n"
+            "  Or manually: pip install sage-agent-sdk httpx\n"
+        )
+        return None
+    cfg = SageConfig.from_env()
+    identity_path = cfg.identity_path
+    if identity_path and Path(identity_path).exists():
+        identity = AgentIdentity.from_file(identity_path)
+    else:
+        identity = AgentIdentity.default()
+    return SageClient(
+        base_url=cfg.url,
+        identity=identity,
+        timeout=timeout if timeout > 0 else cfg.timeout,
+    )
+
+
+def _health_check(client) -> bool:
+    """Quick health check — True if SAGE is reachable."""
+    try:
+        h = client.health()
+        return h.get("status") == "healthy"
+    except Exception:
+        return False
+
+
+def _relative_time(ts_str: str) -> str:
+    """Format an ISO timestamp as a relative string."""
+    try:
+        if ts_str.endswith("Z"):
+            ts_str = ts_str[:-1] + "+00:00"
+        dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        secs = int(delta.total_seconds())
+        if secs < 60:
+            return f"{secs}s ago"
+        if secs < 3600:
+            return f"{secs // 60}m ago"
+        if secs < 86400:
+            return f"{secs // 3600}h ago"
+        days = secs // 86400
+        if days < 30:
+            return f"{days}d ago"
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return ts_str
+
+
+def _trunc(text: str, width: int = 80) -> str:
+    """Truncate text to width, adding ellipsis if needed."""
+    text = text.replace("\n", " ").strip()
+    if len(text) <= width:
+        return text
+    return text[:width - 1] + "…"
+
+
+def _strip_domain_prefix(domain: str) -> str:
+    """Strip raptor- prefix for display."""
+    return domain[7:] if domain.startswith("raptor-") else domain
+
+
+def _confidence_pct(val) -> str:
+    """Format confidence as percentage."""
+    if val is None:
+        return "--"
+    return f"{float(val) * 100:.0f}%"
+
+
+def _print_table(headers, rows, col_gap=2):
+    """Print a simple aligned table."""
+    if not rows:
+        print("  (none)")
+        return
+    widths = [len(h) for h in headers]
+    str_rows = []
+    for row in rows:
+        sr = [str(c) for c in row]
+        str_rows.append(sr)
+        for i, c in enumerate(sr):
+            if i < len(widths):
+                widths[i] = max(widths[i], len(c))
+    gap = " " * col_gap
+    fmt = gap.join(f"{{:<{w}}}" for w in widths)
+    print(f"  {fmt.format(*headers)}")
+    print(f"  {gap.join('-' * w for w in widths)}")
+    for sr in str_rows:
+        while len(sr) < len(widths):
+            sr.append("")
+        print(f"  {fmt.format(*sr)}")
+
+
+# ── Subcommands ──────────────────────────────────────────────
+
+def _fetch_all_memories(client, batch=200):
+    """Fetch all memories from SAGE, paginating if needed."""
+    all_mems = []
+    offset = 0
+    while True:
+        resp = client.list_memories(limit=batch, offset=offset)
+        memories = resp.memories if hasattr(resp, "memories") else []
+        all_mems.extend(memories)
+        total = getattr(resp, "total", len(all_mems))
+        if len(all_mems) >= total or not memories:
+            break
+        offset += len(memories)
+    return all_mems, total
+
+
+def cmd_status(client, args):
+    from collections import Counter
+    try:
+        memories, total = _fetch_all_memories(client)
+    except Exception as e:
+        print(f"SAGE unreachable: {e}")
+        return 1
+
+    domains = Counter()
+    statuses = Counter()
+    latest = ""
+    for m in memories:
+        domains[getattr(m, "domain_tag", "unknown")] += 1
+        st = getattr(m, "status", None)
+        statuses[str(st.value) if hasattr(st, "value") else str(st)] += 1
+        created = str(getattr(m, "created_at", "") or "")
+        if created > latest:
+            latest = created
+
+    print(f"Total memories:  {total}")
+    if statuses:
+        parts = [f"{k}: {v}" for k, v in sorted(statuses.items())]
+        print(f"By status:       {', '.join(parts)}")
+    if latest:
+        print(f"Last activity:   {_relative_time(latest)}")
+    print()
+
+    if domains:
+        sorted_domains = sorted(domains.items(), key=lambda x: -x[1])
+        _print_table(
+            ["Domain", "Count"],
+            [(_strip_domain_prefix(d), str(c)) for d, c in sorted_domains],
+        )
+    return 0
+
+
+def cmd_recall(client, args):
+    query_text = " ".join(args.query)
+    if not query_text:
+        print("Usage: raptor-sage recall <query> [--domain D] [--top N]",
+              file=sys.stderr)
+        return 1
+
+    kwargs: Dict[str, Any] = {}
+    if args.domain:
+        kwargs["domain_tag"] = args.domain
+    top_k = args.top or 5
+
+    try:
+        embedding = client.embed(query_text)
+        query_kwargs: Dict[str, Any] = dict(
+            embedding=embedding,
+            top_k=top_k,
+        )
+        if args.domain:
+            query_kwargs["domain_tag"] = args.domain
+        if args.min_confidence:
+            query_kwargs["min_confidence"] = args.min_confidence
+        response = client.query(**query_kwargs)
+    except Exception as e:
+        print(f"Recall failed: {e}", file=sys.stderr)
+        return 1
+
+    results = response.results if hasattr(response, "results") else []
+    if not results:
+        print("No results.")
+        return 0
+
+    for i, r in enumerate(results, 1):
+        conf = _confidence_pct(getattr(r, "confidence_score", None))
+        domain = _strip_domain_prefix(getattr(r, "domain_tag", ""))
+        content = getattr(r, "content", "")
+        print(f"  {i}. [{conf}] ({domain}) {content}")
+    return 0
+
+
+def cmd_list(client, args):
+    kwargs: Dict[str, Any] = dict(limit=args.limit or 25)
+    if args.domain:
+        kwargs["domain"] = args.domain
+    if args.tag:
+        kwargs["tag"] = args.tag
+    if args.status:
+        kwargs["status"] = args.status
+    if args.sort:
+        kwargs["sort"] = args.sort
+
+    try:
+        response = client.list_memories(**kwargs)
+    except Exception as e:
+        print(f"List failed: {e}", file=sys.stderr)
+        return 1
+
+    memories = response.memories if hasattr(response, "memories") else []
+    if not memories:
+        print("No memories found.")
+        return 0
+
+    rows = []
+    for m in memories:
+        mid = getattr(m, "memory_id", "")[:12]
+        domain = _strip_domain_prefix(getattr(m, "domain_tag", ""))
+        st = getattr(m, "status", "")
+        status = st.value if hasattr(st, "value") else str(st)
+        conf = _confidence_pct(getattr(m, "confidence_score", None))
+        content = _trunc(getattr(m, "content", ""))
+        rows.append((mid, domain, status, conf, content))
+
+    _print_table(["ID", "Domain", "Status", "Conf", "Content"], rows)
+    total = getattr(response, "total", None)
+    if total is not None and total > len(memories):
+        print(f"\n  Showing {len(memories)} of {total}. Use --limit to see more.")
+    return 0
+
+
+def cmd_remember(client, args):
+    content = " ".join(args.content)
+    if not content:
+        print("Usage: raptor-sage remember <text> [--domain D] [--type T]",
+              file=sys.stderr)
+        return 1
+
+    domain = args.domain or "general"
+    memory_type = args.type or "observation"
+    confidence = args.confidence or 0.8
+    tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+
+    try:
+        from sage_sdk.models import MemoryType
+        type_map = {
+            "fact": MemoryType.fact,
+            "observation": MemoryType.observation,
+            "inference": MemoryType.inference,
+            "task": MemoryType.task,
+        }
+        mt = type_map.get(memory_type)
+        if mt is None:
+            print(f"Unknown type: {memory_type}. "
+                  f"Valid: {', '.join(type_map)}", file=sys.stderr)
+            return 1
+
+        embedding = client.embed(content)
+        propose_kwargs: Dict[str, Any] = dict(
+            content=content,
+            memory_type=mt,
+            domain_tag=domain,
+            confidence=confidence,
+            embedding=embedding,
+        )
+        if tags:
+            propose_kwargs["tags"] = tags
+        client.propose(**propose_kwargs)
+        print(f"Stored ({memory_type}) in {_strip_domain_prefix(domain)} "
+              f"at {_confidence_pct(confidence)} confidence.")
+    except Exception as e:
+        print(f"Remember failed: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_forget(client, args):
+    try:
+        client.forget(args.memory_id, reason=args.reason)
+        print(f"Deprecated {args.memory_id[:12]}.")
+    except Exception as e:
+        print(f"Forget failed: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_domains(client, args):
+    from collections import Counter
+    try:
+        memories, total = _fetch_all_memories(client)
+    except Exception as e:
+        print(f"Failed: {e}", file=sys.stderr)
+        return 1
+
+    domains = Counter()
+    for m in memories:
+        domains[getattr(m, "domain_tag", "unknown")] += 1
+
+    if not domains:
+        print("No domains found.")
+        return 0
+
+    sorted_domains = sorted(domains.items(), key=lambda x: -x[1])
+    _print_table(
+        ["Domain", "Count", "%"],
+        [(_strip_domain_prefix(d), str(c), f"{c * 100 // total}%")
+         for d, c in sorted_domains],
+    )
+    print(f"\n  Total: {total}")
+    return 0
+
+
+def cmd_timeline(client, args):
+    kwargs: Dict[str, Any] = {}
+    if args.domain:
+        kwargs["domain"] = args.domain
+    if args.bucket:
+        kwargs["bucket"] = args.bucket
+    if getattr(args, "from_time", None):
+        kwargs["from_time"] = args.from_time
+    if getattr(args, "to_time", None):
+        kwargs["to_time"] = args.to_time
+
+    try:
+        response = client.timeline(**kwargs)
+    except Exception as e:
+        print(f"Timeline failed: {e}", file=sys.stderr)
+        return 1
+
+    buckets = getattr(response, "buckets", [])
+    if not buckets:
+        print("No timeline data.")
+        return 0
+
+    for b in buckets:
+        period = getattr(b, "period", "?")
+        count = getattr(b, "count", 0)
+        bar = "█" * min(count, 40)
+        print(f"  {period:20s} {count:4d} {bar}")
+    return 0
+
+
+def cmd_backlog(client, args):
+    kwargs: Dict[str, Any] = {}
+    if args.domain:
+        kwargs["domain"] = args.domain
+
+    try:
+        response = client.list_tasks(**kwargs)
+    except Exception as e:
+        print(f"Backlog failed: {e}", file=sys.stderr)
+        return 1
+
+    tasks = getattr(response, "tasks", [])
+    if not tasks:
+        print("No open tasks.")
+        return 0
+
+    for i, t in enumerate(tasks, 1):
+        st = getattr(t, "task_status", "?")
+        status = st.value if hasattr(st, "value") else str(st)
+        domain = _strip_domain_prefix(getattr(t, "domain_tag", ""))
+        content = _trunc(getattr(t, "content", ""), 100)
+        print(f"  {i}. [{status}] ({domain}) {content}")
+    return 0
+
+
+def cmd_task(client, args):
+    content = " ".join(args.content)
+
+    if args.id:
+        if not args.task_status:
+            print("--status required when updating a task", file=sys.stderr)
+            return 1
+        try:
+            client.update_task_status(args.id, args.task_status)
+            print(f"Task {args.id[:12]} -> {args.task_status}")
+        except Exception as e:
+            print(f"Task update failed: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if not content:
+        print("Usage: raptor-sage task <text> [--domain D] [--status S]",
+              file=sys.stderr)
+        return 1
+
+    domain = args.domain or "general"
+    try:
+        from sage_sdk.models import MemoryType
+        embedding = client.embed(content)
+        client.propose(
+            content=content,
+            memory_type=MemoryType.task,
+            domain_tag=domain,
+            confidence=0.8,
+            embedding=embedding,
+        )
+        print(f"Task created in {_strip_domain_prefix(domain)}.")
+    except Exception as e:
+        print(f"Task creation failed: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_link(client, args):
+    link_type = args.link_type or "related"
+    try:
+        client.link_memories(args.source, args.target, link_type=link_type)
+        print(f"Linked {args.source[:12]} -> {args.target[:12]} ({link_type})")
+    except Exception as e:
+        print(f"Link failed: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_corroborate(client, args):
+    try:
+        client.corroborate(args.memory_id, evidence=args.evidence)
+        print(f"Corroborated {args.memory_id[:12]}.")
+    except Exception as e:
+        print(f"Corroborate failed: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_get(client, args):
+    try:
+        m = client.get_memory(args.memory_id)
+    except Exception as e:
+        print(f"Get failed: {e}", file=sys.stderr)
+        return 1
+
+    mid = getattr(m, "memory_id", args.memory_id)
+    domain = _strip_domain_prefix(getattr(m, "domain_tag", ""))
+    st = getattr(m, "status", "")
+    status = st.value if hasattr(st, "value") else str(st)
+    conf = _confidence_pct(getattr(m, "confidence_score", None))
+    mt = getattr(m, "memory_type", "")
+    mtype = mt.value if hasattr(mt, "value") else str(mt)
+    content = getattr(m, "content", "")
+    created = getattr(m, "created_at", "")
+    tags = getattr(m, "tags", []) or []
+
+    print(f"  ID:         {mid}")
+    print(f"  Domain:     {domain}")
+    print(f"  Type:       {mtype}")
+    print(f"  Status:     {status}")
+    print(f"  Confidence: {conf}")
+    if tags:
+        print(f"  Tags:       {', '.join(tags)}")
+    if created:
+        print(f"  Created:    {_relative_time(str(created))}")
+    print()
+    print(content)
+    return 0
+
+
+_EMBED_COMMANDS = frozenset({"recall", "remember", "task"})
+_EMBED_TIMEOUT = 30.0
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="raptor-sage",
+        description="SAGE persistent memory — operator CLI",
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=0,
+        help="SDK timeout in seconds (default: 15, 30 for recall/remember/task)",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # status
+    sub.add_parser("status", help="Show memory store status")
+
+    # recall
+    p = sub.add_parser("recall", help="Semantic recall")
+    p.add_argument("query", nargs="+")
+    p.add_argument("--domain", "-d")
+    p.add_argument("--top", "-n", type=int, default=5)
+    p.add_argument("--min-confidence", type=float)
+
+    # list
+    p = sub.add_parser("list", help="List memories")
+    p.add_argument("--domain", "-d")
+    p.add_argument("--tag", "-t")
+    p.add_argument("--status", "-s")
+    p.add_argument("--sort", choices=["newest", "oldest", "confidence"])
+    p.add_argument("--limit", "-n", type=int, default=25)
+
+    # remember
+    p = sub.add_parser("remember", help="Store a new memory")
+    p.add_argument("content", nargs="+")
+    p.add_argument("--domain", "-d", default="general")
+    p.add_argument("--type", choices=["fact", "observation", "inference", "task"],
+                   default="observation")
+    p.add_argument("--confidence", type=float, default=0.8)
+    p.add_argument("--tags")
+
+    # forget
+    p = sub.add_parser("forget", help="Deprecate a memory")
+    p.add_argument("memory_id")
+    p.add_argument("--reason", "-r")
+
+    # domains
+    sub.add_parser("domains", help="Per-domain breakdown")
+
+    # timeline
+    p = sub.add_parser("timeline", help="Time-bucketed activity")
+    p.add_argument("--domain", "-d")
+    p.add_argument("--bucket", choices=["hour", "day", "week", "month"])
+    p.add_argument("--from", dest="from_time")
+    p.add_argument("--to", dest="to_time")
+
+    # backlog
+    p = sub.add_parser("backlog", help="Open tasks")
+    p.add_argument("--domain", "-d")
+
+    # task
+    p = sub.add_parser("task", help="Create or update a task")
+    p.add_argument("content", nargs="*")
+    p.add_argument("--domain", "-d")
+    p.add_argument("--id")
+    p.add_argument("--status", dest="task_status",
+                   choices=["planned", "in_progress", "done", "dropped"])
+
+    # link
+    p = sub.add_parser("link", help="Link two memories")
+    p.add_argument("source")
+    p.add_argument("target")
+    p.add_argument("--type", dest="link_type", default="related",
+                   choices=["related", "supports", "contradicts",
+                            "causes", "precedes", "refines"])
+
+    # corroborate
+    p = sub.add_parser("corroborate", help="Independently back a memory")
+    p.add_argument("memory_id")
+    p.add_argument("--evidence", "-e")
+
+    # get
+    p = sub.add_parser("get", help="Show a single memory in full")
+    p.add_argument("memory_id")
+
+    # help
+    sub.add_parser("help", help="Show help")
+
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    command = args.command or "help"
+
+    if command == "help":
+        print("SAGE persistent memory\n")
+        print("  status                 Show memory store status")
+        print("  recall <query>         Semantic recall (--domain, --top, --min-confidence)")
+        print("  list                   List memories (--domain, --tag, --status, --limit)")
+        print("  remember <text>        Store a memory (--domain, --type, --confidence, --tags)")
+        print("  forget <id>            Deprecate a memory (--reason)")
+        print("  domains                Per-domain breakdown")
+        print("  timeline               Time-bucketed activity (--domain, --bucket, --from, --to)")
+        print("  backlog                Open tasks (--domain)")
+        print("  task <text>            Create/update a task (--domain, --id, --status)")
+        print("  link <src> <dst>       Link two memories (--type)")
+        print("  corroborate <id>       Independently back a memory (--evidence)")
+        print("  get <id>               Show a single memory in full")
+        print()
+        print("  --timeout <seconds>    Override SDK timeout (auto 30s for recall/remember/task)")
+        return 0
+
+    timeout = args.timeout
+    if timeout <= 0 and command in _EMBED_COMMANDS:
+        timeout = _EMBED_TIMEOUT
+
+    client = _get_client(timeout=timeout)
+    if client is None:
+        return 1
+
+    if not _health_check(client):
+        print("SAGE is not reachable.")
+        print("  Start:   docker compose -f core/sage/docker-compose.yml up -d")
+        print("  Install: libexec/raptor-sage-setup")
+        return 1
+
+    dispatch = {
+        "status": cmd_status,
+        "recall": cmd_recall,
+        "list": cmd_list,
+        "remember": cmd_remember,
+        "forget": cmd_forget,
+        "domains": cmd_domains,
+        "timeline": cmd_timeline,
+        "backlog": cmd_backlog,
+        "task": cmd_task,
+        "link": cmd_link,
+        "corroborate": cmd_corroborate,
+        "get": cmd_get,
+    }
+    fn = dispatch.get(command)
+    if fn is None:
+        print(f"Unknown subcommand: {command}", file=sys.stderr)
+        parser.print_help()
+        return 1
+    return fn(client, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

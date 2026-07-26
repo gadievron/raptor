@@ -40,6 +40,10 @@ _VALID_KEYS = frozenset({
     "throttle_cooldown_s",
 })
 
+_DEPRECATED_KEYS = frozenset({
+    "max_agentic_parallel",
+})
+
 # Keys that are valid in tuning.json but consumed directly by their
 # own modules (core/llm/concurrency.py) rather than through the
 # resolved Tuning dataclass. Excluded from _resolve() / Tuning.
@@ -49,6 +53,20 @@ _PASSTHROUGH_KEYS = frozenset({
 })
 
 _BOOLEAN_KEYS = frozenset({"codeql_enabled"})
+
+_KEY_COMMENTS = {
+    "codeql_enabled": "set false to disable CodeQL across all runs (licensing)",
+    "codeql_ram_mb": "MB of RAM for CodeQL (-M)",
+    "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
+    "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
+    "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
+    "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
+    "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
+    "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
+    "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",
+    "max_llm_workers": "parallel LLM API calls (consumed by core/llm/concurrency.py)",
+    "throttle_cooldown_s": "seconds to wait between LLM batches when rate-limited",
+}
 
 _DEFAULTS = {
     "codeql_enabled": True,
@@ -261,7 +279,7 @@ def _validate_value(key: str, raw: Any):
 def _resolve(raw_config: Dict[str, Any]) -> Tuning:
     """Resolve raw config dict into a validated Tuning instance."""
     for key in raw_config:
-        if key not in _VALID_KEYS:
+        if key not in _VALID_KEYS and key not in _DEPRECATED_KEYS:
             logger.warning('tuning.json: unknown key "%s" (ignored)', key)
 
     resolved = {}
@@ -274,12 +292,72 @@ def _resolve(raw_config: Dict[str, Any]) -> Tuning:
     return Tuning(**resolved)
 
 
+def _migrate_deprecated(raw: Dict[str, Any], path: Path) -> None:
+    """Strip deprecated keys from raw config and rewrite the file.
+
+    Mutates ``raw`` in place. Rewrites the file atomically when at
+    least one deprecated key was present; degrades gracefully on
+    read-only filesystems.
+    """
+    found = [k for k in list(raw) if k in _DEPRECATED_KEYS]
+    if not found:
+        return
+    for k in found:
+        del raw[k]
+        logger.info('tuning.json: removed deprecated key "%s"', k)
+    try:
+        _rewrite_tuning(raw, path)
+    except OSError as exc:
+        logger.debug("could not rewrite %s after deprecation cleanup: %s", path, exc)
+
+
+def _rewrite_tuning(values: Dict[str, Any], path: Path) -> None:
+    """Rewrite tuning.json preserving all current valid keys."""
+    import json as _json
+    base_keys = [k for k in _DEFAULTS if k not in _PASSTHROUGH_KEYS]
+    extra_keys = [k for k in values if k in _VALID_KEYS and k not in _DEFAULTS]
+    key_order = base_keys + extra_keys
+    merged = dict(_DEFAULTS)
+    for k in key_order:
+        if k in values:
+            merged[k] = values[k]
+    entries = []
+    for i, key in enumerate(key_order):
+        val = _json.dumps(merged[key])
+        comma = "," if i < len(key_order) - 1 else ""
+        entries.append((f'  "{key}": {val}{comma}', _KEY_COMMENTS.get(key, "")))
+    col = max(len(e) for e, _ in entries) + 2
+    lines = ["{"]
+    for entry, comment in entries:
+        if comment:
+            lines.append(f"{entry:<{col}}// {comment}")
+        else:
+            lines.append(entry)
+    lines.append("}")
+    content = "\n".join(lines) + "\n"
+    tmp = path.with_name(
+        f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+    )
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def load_tuning(path: Optional[Path] = None) -> Tuning:
     """Load and resolve tuning from disk. Falls back to defaults.
 
     If the file does not exist at the default location, it is
     silently created with shipped defaults so users can discover
     and edit it.
+
+    Deprecated keys are stripped from the file on first load so
+    stale operator configs self-heal without manual intervention.
     """
     p = path or _TUNING_PATH
     raw = load_json_with_comments(p)
@@ -291,6 +369,7 @@ def load_tuning(path: Optional[Path] = None) -> Tuning:
     if not isinstance(raw, dict):
         logger.warning("tuning.json: expected object, using all defaults")
         raw = {}
+    _migrate_deprecated(raw, p)
     return _resolve(raw)
 
 
@@ -309,26 +388,13 @@ def _create_default_file(path: Path) -> None:
         rename, and the final rename is last-writer-wins.
     """
     try:
-        # Import here to avoid circular dep with libexec/raptor-tune
-        # which also writes this file. Use the same format.
         import json
-        comments = {
-            "codeql_enabled": "set false to disable CodeQL across all runs (licensing)",
-            "codeql_ram_mb": "MB of RAM for CodeQL (-M)",
-            "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
-            "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
-            "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
-            "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
-            "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
-            "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
-            "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",
-        }
         keys = list(_DEFAULTS.keys())
         entries = []
         for i, key in enumerate(keys):
             val = json.dumps(_DEFAULTS[key])
             comma = "," if i < len(keys) - 1 else ""
-            entries.append((f'  "{key}": {val}{comma}', comments[key]))
+            entries.append((f'  "{key}": {val}{comma}', _KEY_COMMENTS.get(key, "")))
         col = max(len(e) for e, _ in entries) + 2
         lines = ["{"]
         for entry, comment in entries:

@@ -941,6 +941,46 @@ Discover, acquire, and diff the fix commit for a CVE.
 
 ---
 
+### /sage
+
+SAGE persistent memory -- operator CLI for the consensus-validated
+knowledge layer.
+
+```
+/sage status
+/sage recall <query>
+/sage list [--domain <name>]
+/sage remember <text>
+/sage forget <id>
+/sage domains
+/sage timeline
+/sage backlog
+/sage task <text>
+/sage link <src> <dst>
+/sage corroborate <id>
+/sage get <id>
+```
+
+| Subcommand | What it does |
+|------------|--------------|
+| `status` | Memory store overview (count, domains, health) |
+| `recall <query>` | Semantic recall against stored memories (requires embeddings) |
+| `list` | List memories, optionally filtered by `--domain` |
+| `remember <text>` | Store a new memory |
+| `forget <id>` | Deprecate a memory |
+| `domains` | Per-domain breakdown |
+| `timeline` | Time-bucketed activity view |
+| `backlog` | Open tasks |
+| `task <text>` | Create or update a task |
+| `link <src> <dst>` | Link two memories |
+| `corroborate <id>` | Independently back a memory |
+| `get <id>` | Show a single memory in full |
+
+Requires the SAGE Docker sidecar.  Run `libexec/raptor-sage-setup` to
+install it.
+
+---
+
 ### /version
 
 Print the running RAPTOR framework version.

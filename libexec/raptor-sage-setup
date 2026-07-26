@@ -182,7 +182,7 @@ merge_mcp_entry() {
     # file. Same-fs mktemp ensures the rename is atomic at the
     # filesystem-metadata level.
     local tmp
-    tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
+    tmp=$(mktemp "$(dirname "$MCP")/.tmp.mcp.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     jq -s '.[0] * .[1]' "$MCP" "$TEMPLATE" > "$tmp"
     mv "$tmp" "$MCP"
@@ -194,7 +194,7 @@ remove_mcp_entry() {
     [ -f "$MCP" ] || return 0
     # Same same-fs mktemp pattern as merge_mcp_entry above.
     local tmp
-    tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
+    tmp=$(mktemp "$(dirname "$MCP")/.tmp.mcp.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     jq 'del(.mcpServers.sage)' "$MCP" > "$tmp"
     mv "$tmp" "$MCP"
@@ -307,7 +307,7 @@ enable_sage_env() {
     # but containers and CI runners sometimes set 755 with operator
     # adjacency). Same-fs mktemp keeps mv atomic and inherits the
     # parent dir's permissions.
-    tmp=$(mktemp -p "$(dirname "$SETTINGS_LOCAL")" .tmp.settings.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
+    tmp=$(mktemp "$(dirname "$SETTINGS_LOCAL")/.tmp.settings.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"; umask "$_saved_umask"' RETURN
     if [ ! -f "$SETTINGS_LOCAL" ]; then
         echo "$fragment" | jq . > "$SETTINGS_LOCAL"
@@ -329,7 +329,7 @@ disable_sage_env() {
     [ -f "$SETTINGS_LOCAL" ] || return 0
     local tmp
     # Same-fs mktemp — see enable_sage_env above for the rationale.
-    tmp=$(mktemp -p "$(dirname "$SETTINGS_LOCAL")" .tmp.settings.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
+    tmp=$(mktemp "$(dirname "$SETTINGS_LOCAL")/.tmp.settings.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     # Remove env.SAGE_ENABLED; if env becomes empty, drop env entirely.
     # Pre-fix the top-level "is the whole settings object now empty?"

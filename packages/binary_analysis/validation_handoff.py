@@ -11,7 +11,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from core.evidence import EvidenceRecord, EvidenceTier
+from core.evidence import BinaryEvidenceRecord, EvidenceTier
 
 
 def build_validation_handoff(
@@ -19,7 +19,7 @@ def build_validation_handoff(
     target_path: str,
     binary_sha256: str,
     context_map: dict[str, Any],
-    evidence: list[EvidenceRecord],
+    evidence: list[BinaryEvidenceRecord],
     decompilations: dict[str, Any],
 ) -> dict[str, Any]:
     tiers = {tier.value: 0 for tier in EvidenceTier}

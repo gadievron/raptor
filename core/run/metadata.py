@@ -65,7 +65,9 @@ def _find_claude_ancestor() -> Optional[int]:
 
     Returns the PID of the claude process, or None if not found.
     Works from any depth: Bash tool calls, hooks, Python subprocesses.
+    Uses /proc on Linux, ps(1) on macOS.
     """
+    import sys
     pid = os.getpid()
     for _ in range(20):
         try:
@@ -75,7 +77,14 @@ def _find_claude_ancestor() -> Optional[int]:
         if pid <= 1:
             return None
         try:
-            comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
+            if sys.platform == "linux":
+                comm = Path(f"/proc/{pid}/comm").read_text(
+                    encoding="utf-8"
+                ).strip()
+            else:
+                comm = _read_comm_ps(pid)
+                if comm is None:
+                    return None
         except OSError:
             return None
         if comm == "claude":
@@ -83,19 +92,29 @@ def _find_claude_ancestor() -> Optional[int]:
     return None
 
 
-def _read_ppid(pid: int) -> int:
-    """Read PPID from /proc/<pid>/stat (Linux-only).
+def _read_comm_ps(pid: int) -> Optional[str]:
+    """Read process name via ps(1) — portable fallback for non-Linux."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "comm=", "-p", str(pid)],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        return out.strip().rsplit("/", 1)[-1]
+    except (subprocess.SubprocessError, OSError):
+        return None
 
-    Race-aware error wrapping. Pre-fix `read_text()` raised
-    `FileNotFoundError` if the target process exited between the
-    caller's check (`os.kill(pid, 0)`) and the read; the unhandled
-    exception bubbled out of the ancestor walk in `_get_session_pid`
-    and aborted whatever lifecycle code was probing the parent
-    chain. The walk is best-effort — if a PID disappears mid-walk,
-    raise `ProcessLookupError` (the same exception class
-    `os.kill(pid, 0)` raises) so callers handle "ancestor died" via
+
+def _read_ppid(pid: int) -> int:
+    """Read PPID — /proc on Linux, ps(1) elsewhere.
+
+    Race-aware error wrapping. If a PID disappears mid-walk,
+    raises ProcessLookupError so callers handle "ancestor died" via
     one well-known exception type.
     """
+    import sys
+    if sys.platform != "linux":
+        return _read_ppid_ps(pid)
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -103,22 +122,30 @@ def _read_ppid(pid: int) -> int:
             f"_read_ppid: /proc/{pid}/stat vanished — process exited"
         ) from exc
     except PermissionError:
-        # /proc is normally world-readable for `stat`, but a kernel
-        # built with hidepid=2 / a pid namespace boundary can hide
-        # the file. Treat as "unknown" via PermissionError pass-through.
         raise
     except OSError as exc:
-        # Other I/O failure (rare — /proc unmounted, ENFILE). Map
-        # to ProcessLookupError so the walker has one error class
-        # to handle for "we can't determine the parent".
         raise ProcessLookupError(
             f"_read_ppid: /proc/{pid}/stat unreadable: {exc}"
         ) from exc
     # Format: pid (comm) state ppid ...
-    # comm can contain spaces/parens, so find the last ')' first
     close_paren = stat.rfind(")")
     fields = stat[close_paren + 2:].split()
-    return int(fields[1])  # ppid is field index 1 after state
+    return int(fields[1])
+
+
+def _read_ppid_ps(pid: int) -> int:
+    """Read PPID via ps(1) — portable fallback."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        return int(out.strip())
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        raise ProcessLookupError(
+            f"_read_ppid_ps: ps failed for pid {pid}: {exc}"
+        ) from exc
 
 
 def _get_session_pid() -> Optional[int]:

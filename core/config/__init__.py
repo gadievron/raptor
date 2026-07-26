@@ -467,6 +467,11 @@ class RaptorConfig:
         "LD_DEBUG",        # Loader debug output — info leak (maps, symbols)
         "LD_PROFILE",      # Loader profiling — writes profile data, side-channel
         "LD_SHOW_AUXV",    # Prints auxv including randomised addresses
+        # macOS dyld equivalents — no-ops on Linux, critical on macOS
+        "DYLD_INSERT_LIBRARIES",      # macOS equivalent of LD_PRELOAD
+        "DYLD_LIBRARY_PATH",          # macOS equivalent of LD_LIBRARY_PATH
+        "DYLD_FALLBACK_LIBRARY_PATH", # macOS fallback library resolution
+        "DYLD_FRAMEWORK_PATH",        # macOS framework injection
         # glibc data-module hijack (survives AT_SECURE on setuid binaries)
         "GCONV_PATH",      # iconv gconv-modules path — loads attacker .so on iconv use
         "LOCPATH",         # Locale data path — loads attacker locale modules

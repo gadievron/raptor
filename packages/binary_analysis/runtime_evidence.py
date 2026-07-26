@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ def load_runtime_evidence(
     *,
     target_path: str,
     binary_sha256: str,
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     """Load matching Frida output without executing the target.
 
     Runtime observation is opt-in: callers pass a run directory produced by
@@ -29,7 +29,7 @@ def load_runtime_evidence(
         logger.debug("packages.frida not available; skipping runtime evidence")
         return [], []
     events: list[dict[str, Any]] = []
-    records: list[EvidenceRecord] = []
+    records: list[BinaryEvidenceRecord] = []
     matches = discover_evidence([Path(runtime_dir)], target_path=target_path)
     for match in matches:
         event_path = match.run_dir / "events.jsonl"

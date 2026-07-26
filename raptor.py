@@ -458,34 +458,6 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         if _preflight_cost_gate(target, max_cost_usd, out_dir):
             return 1
 
-    # SAGE: Pre-scan recall
-    try:
-        from core.json import save_json
-        from core.sage.hooks import recall_context_for_scan
-        sage_context = recall_context_for_scan(target or "")
-        if sage_context:
-            # Same flush rationale as the lifecycle banner —
-            # when stdout is piped (operator's ``| tee``), block-
-            # buffering makes these lines appear AFTER the
-            # subprocess output unless explicitly flushed.
-            print(
-                f"📚 SAGE: Recalled {len(sage_context)} historical memories",
-                flush=True,
-            )
-            for mem in sage_context[:3]:
-                print(
-                    f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...",
-                    flush=True,
-                )
-        try:
-            save_json(
-                out_dir / "sage_precall_scan.json",
-                {"memories": sage_context},
-            )
-        except Exception:
-            pass
-    except Exception:
-        pass
 
     # Re-inject --max-cost-usd for downstream runtime enforcement.
     # The pre-flight gate consumed the value above; downstream
@@ -534,87 +506,6 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     except Exception:
         pass
 
-    # SAGE: Post-scan storage
-    if rc == 0:
-        try:
-            from core.sage.hooks import store_scan_results
-            import json
-            # Try to find and store SARIF results.
-            # `os.walk(followlinks=False)` instead of `Path.rglob`:
-            # rglob follows symlinks under Python <3.13. A scanner
-            # that drops a stray symlink into out_dir (some tools'
-            # caches link to /tmp paths that themselves get cleaned
-            # mid-run, leaving dangling symlinks) would either hang
-            # the SARIF discovery in a loop or escape out of the
-            # out_dir entirely and pick up an unrelated SARIF file
-            # from somewhere else on the filesystem.
-            sarif_files = []
-            seen_sarif = set()
-            for dirpath, _dirnames, filenames in os.walk(
-                str(out_dir), followlinks=False
-            ):
-                for fname in filenames:
-                    if not fname.endswith(".sarif"):
-                        continue
-                    fpath = Path(dirpath) / fname
-                    if fpath.is_symlink():
-                        continue
-                    key = str(fpath.resolve())
-                    if key in seen_sarif:
-                        continue
-                    seen_sarif.add(key)
-                    sarif_files.append(fpath)
-            sarif_files.sort()
-            findings = []
-            for sf in sarif_files:
-                try:
-                    # `encoding="utf-8-sig"` so a BOM-prefixed SARIF
-                    # file (some Windows-edited tool outputs, certain
-                    # MSBuild-emitted SARIFs, the IDE-reformatted
-                    # exports operators sometimes round-trip through)
-                    # parses cleanly. Pre-fix the bare `read_text()`
-                    # used the host locale's preferred encoding;
-                    # cp1252/latin-1 hosts mangled non-ASCII evidence,
-                    # AND a leading BOM landed at char 0 which the
-                    # JSON parser rejected with "Expecting value:
-                    # line 1 column 1 (char 0)" — no breadcrumb that
-                    # the encoding was the actual problem.
-                    sarif = json.loads(sf.read_text(encoding="utf-8-sig"))
-                    for run in (sarif.get("runs") or []):
-                        for result in (run.get("results") or []):
-                            # Defensive locations[] guard. Pre-fix
-                            # `result.get("locations") or [{}]` only
-                            # handled None and empty list — but
-                            # malformed SARIF emitters sometimes ship
-                            # `locations` as a single dict (instead
-                            # of array of dicts). Then `locs[0]`
-                            # raised KeyError 0 (dict has no integer
-                            # key) and the whole sarif-parse loop
-                            # crashed for the file. isinstance guard
-                            # falls back to `[{}]` so we get the
-                            # "unknown" path string instead of a
-                            # crash.
-                            locs = result.get("locations")
-                            if not isinstance(locs, list) or not locs:
-                                locs = [{}]
-                            first = locs[0] if isinstance(locs[0], dict) else {}
-                            findings.append({
-                                "rule_id": result.get("ruleId", "unknown"),
-                                "level": result.get("level", "warning"),
-                                "message": (result.get("message") or {}).get("text", ""),
-                                "file_path": (first
-                                              .get("physicalLocation", {})
-                                              .get("artifactLocation", {})
-                                              .get("uri", "unknown")),
-                            })
-                except (OSError, KeyError, TypeError, json.JSONDecodeError):
-                    continue
-            if findings:
-                stored = store_scan_results(target or "", findings, {"total_findings": len(findings)})
-                if stored > 0:
-                    print(f"\n📚 SAGE: Stored {stored} findings for cross-run learning")
-        except Exception:
-            pass
 
     if rc == 0:
         # Engine versions + deterministically_reproducible are filled by the

@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
 from core.json import load_json_with_comments
-from core.tuning import load_tuning, _DEFAULTS, _detect_available_cpus
+from core.tuning import load_tuning, _DEFAULTS, _KEY_COMMENTS, _detect_available_cpus
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TUNING_PATH = _REPO_ROOT / "tuning.json"
@@ -62,7 +62,6 @@ def _max_values() -> dict:
         "codeql_threads": cpus,
         "max_semgrep_workers": max(2, cpus),
         "max_codeql_workers": max(1, min(cpus // 2, 8, codeql_worker_ram_cap)),
-        "max_agentic_parallel": max(2, cpus),
         "max_fuzz_parallel": max(1, cpus // 2),
     }
 
@@ -77,7 +76,6 @@ def _balanced_values() -> dict:
         "codeql_threads": max(1, cpus // 2),
         "max_semgrep_workers": max(1, cpus // 4),
         "max_codeql_workers": 1,
-        "max_agentic_parallel": 2,
         "max_fuzz_parallel": 1,
     }
 
@@ -116,18 +114,7 @@ _PROFILES = {
     "default": (_default_values, "shipped defaults"),
 }
 
-_COMMENTS = {
-    "codeql_enabled": "set false to disable CodeQL across all runs",
-    "codeql_ram_mb": "MB of RAM for CodeQL analysis",
-    "codeql_threads": "CPUs for CodeQL (0 = all available)",
-    "codeql_max_disk_cache_mb": "MB cap on CodeQL DB cache (0 = unbounded)",
-    "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
-    "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
-    "max_agentic_parallel": "parallel Claude Code agents for analysis",
-    "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
-    "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs)",
-    "max_json_memo_mb": "byte budget for in-process JSON cache; oldest entries evicted past this",
-}
+_COMMENTS = _KEY_COMMENTS
 
 _KEY_ORDER = [
     "codeql_enabled",
@@ -136,7 +123,6 @@ _KEY_ORDER = [
     "codeql_max_disk_cache_mb",
     "max_semgrep_workers",
     "max_codeql_workers",
-    "max_agentic_parallel",
     "max_fuzz_parallel",
     "max_inventory_workers",
     "max_json_memo_mb",
@@ -176,7 +162,6 @@ def _show() -> None:
         ("codeql_max_disk_cache_mb", t.codeql_max_disk_cache_mb, "MB"),
         ("max_semgrep_workers", t.max_semgrep_workers, ""),
         ("max_codeql_workers", t.max_codeql_workers, ""),
-        ("max_agentic_parallel", t.max_agentic_parallel, ""),
         ("max_fuzz_parallel", t.max_fuzz_parallel, ""),
         ("max_inventory_workers", t.max_inventory_workers, ""),
         ("max_json_memo_mb", t.max_json_memo_mb, "MB"),

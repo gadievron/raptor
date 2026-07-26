@@ -15,7 +15,6 @@ class TestPlannerSageMechanicalPrior(unittest.TestCase):
         ]
         planner = FuzzingPlanner(
             memory=None,
-            sage_planning_notes="notes",
             sage_strategy_rows=rows,
         )
         state = FuzzingState(start_time=0.0, current_time=1.0)

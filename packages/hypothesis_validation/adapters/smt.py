@@ -25,9 +25,6 @@ Different from the other adapters: there is no source code being scanned.
 The "matches" are Z3 model values (concrete input bytes that trigger the
 path). The `target` argument is informational only.
 
-Research basis: SAILOR (arXiv:2604.06506) used SMT to validate LLM-
-identified suspicious paths, achieving 379 vulnerabilities found vs 12
-for pure-agentic approaches.
 """
 
 from pathlib import Path

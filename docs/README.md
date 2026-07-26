@@ -41,6 +41,7 @@ overview:
 | `/diagram` | Mermaid diagram generation |
 | `/annotate` | Per-function annotations |
 | `/scorecard` | Model reliability inspection |
+| `/sage` | Persistent memory (store, recall, link, corroborate) |
 | `/threat-model` | Project threat model management |
 | `/cve-diff` | CVE patch discovery |
 | `/analyze` | LLM analysis of existing SARIF |

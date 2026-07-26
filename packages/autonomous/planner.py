@@ -110,7 +110,6 @@ class FuzzingPlanner:
     def __init__(
         self,
         memory=None,
-        sage_planning_notes: Optional[str] = None,
         sage_strategy_rows: Optional[List[Dict[str, Any]]] = None,
     ):
         """
@@ -118,13 +117,10 @@ class FuzzingPlanner:
 
         Args:
             memory: FuzzingMemory instance for learning (optional)
-            sage_planning_notes: Optional SAGE recall text (cross-run priors)
             sage_strategy_rows: Raw SAGE recall rows for confidence-weighted defaults
         """
         self.memory = memory
-        self.sage_planning_notes = (sage_planning_notes or "").strip()
         self.sage_strategy_rows: List[Dict[str, Any]] = list(sage_strategy_rows or [])
-        self._sage_notes_logged = False
         self.decision_history = []
         logger.info("Autonomous Fuzzing Planner initialised")
 
@@ -144,12 +140,6 @@ class FuzzingPlanner:
         logger.info("=" * 70)
         logger.info("AUTONOMOUS DECISION MAKING")
         logger.info("=" * 70)
-        if self.sage_planning_notes and not self._sage_notes_logged:
-            logger.info(
-                "SAGE cross-run strategy recall (planner bias):\n"
-                f"{self.sage_planning_notes[:4000]}",
-            )
-            self._sage_notes_logged = True
         logger.info(f"Elapsed time: {state.elapsed_time():.1f}s")
         logger.info(f"Total crashes: {state.total_crashes}")
         logger.info(f"Unique crashes: {state.unique_crashes}")

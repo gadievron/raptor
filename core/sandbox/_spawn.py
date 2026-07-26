@@ -72,6 +72,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+if sys.platform == "linux" and not hasattr(os, "unshare"):
+    raise RuntimeError(
+        f"RAPTOR sandbox requires Python 3.12+ (os.unshare); "
+        f"running {sys.version.split()[0]}"
+    )
+
 # CLONE flags from <linux/sched.h>. Python 3.12 exposes os.CLONE_* with the
 # same values — we prefer the stdlib names when available so any future
 # kernel-ABI churn surfaces via Python's own headers rather than our
@@ -1277,7 +1283,9 @@ def run_sandboxed(
                 # and accept that ns-pid procfs lookups will ENOENT.
                 try:
                     import ctypes as _ctypes
-                    _libc = _ctypes.CDLL("libc.so.6", use_errno=True)
+                    import ctypes.util as _ctypes_util
+                    _libc_name = _ctypes_util.find_library("c") or "libc.so.6"
+                    _libc = _ctypes.CDLL(_libc_name, use_errno=True)
                     _libc.mount(b"proc", b"/proc", b"proc", 0, None)
                 except Exception:  # noqa: BLE001
                     warn_post_fork(

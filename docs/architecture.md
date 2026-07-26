@@ -83,7 +83,6 @@ raptor/
 │   ├── raptor-tune                # LLM tuning helpers
 │   ├── raptor-understand          # Code understanding workflow
 │   ├── raptor-understand-annotate # Understanding annotation synthesis
-│   ├── raptor-understand-sage     # Understanding SAGE integration
 │   ├── raptor-validate-schema     # Schema validation
 │   ├── raptor-validation-helper   # Validation pipeline helper
 │   ├── raptor-verified-outcomes   # Verified outcome tracking

@@ -1709,24 +1709,6 @@ Examples:
 
     workflow_start = time.time()
 
-    # ========================================================================
-    # SAGE: Pre-scan recall — check for historical findings
-    # ========================================================================
-    sage_context = []
-    try:
-        from core.sage.hooks import recall_context_for_scan
-        sage_context = recall_context_for_scan(str(repo_path))
-        if sage_context:
-            print(f"\n📚 SAGE: Recalled {len(sage_context)} historical memories for context")
-            for mem in sage_context[:3]:
-                print(f"   [{mem['confidence']:.0%}] {mem['content'][:100]}...")
-        try:
-            save_json(out_dir / "sage_precall_scan.json", {"memories": sage_context})
-        except Exception:
-            pass
-    except Exception as e:
-        logger.debug(f"SAGE pre-scan recall skipped: {e}")
-
     # Detect LLM availability once — single source of truth for all phases
     from packages.llm_analysis import detect_llm_availability
     llm_env = detect_llm_availability()
@@ -1773,7 +1755,13 @@ Examples:
             print(format_analysis_summary(mitigation_result, verbose=True))
 
             verdict = mitigation_result.get('verdict', 'unknown')
-            if verdict == 'unlikely':
+            if verdict == 'unsupported_platform':
+                print("\n" + "=" * 70)
+                print("NOTE: EXPLOIT FEASIBILITY REQUIRES LINUX — SKIPPED")
+                print("=" * 70)
+                print("\nContinuing scan without mitigation analysis...")
+
+            elif verdict == 'unlikely':
                 print("\n" + "=" * 70)
                 print("NOTE: EXPLOITATION UNLIKELY WITH CURRENT MITIGATIONS")
                 print("=" * 70)
@@ -3008,60 +2996,6 @@ Examples:
             except Exception as e:
                 logger.error(f"Fuzz phase failed: {e}", exc_info=True)
                 print(f"\n  ✗ Fuzz phase error: {e}", file=sys.stderr)
-
-    # ========================================================================
-    # SAGE: Post-scan storage — store findings for cross-run learning
-    # ========================================================================
-    try:
-        from core.sage.hooks import store_scan_results, store_analysis_results
-
-        # Collect findings from orchestration results or analysis
-        findings_to_store = []
-        if orchestration_result:
-            findings_to_store = orchestration_result.get("results", [])
-        elif analysis:
-            findings_to_store = analysis.get("results", [])
-
-        sage_stored = store_scan_results(
-            repo_path=str(repo_path),
-            findings=findings_to_store,
-            scan_metrics=scan_metrics,
-        )
-
-        if analysis:
-            store_analysis_results(
-                repo_path=str(repo_path),
-                analysis=analysis,
-                orchestration=orchestration_result,
-            )
-
-        if sage_stored > 0:
-            print(f"\n📚 SAGE: Stored {sage_stored} findings for cross-run learning")
-
-        # Store exploit outcomes when exploit generation was attempted
-        if orchestration_result and not getattr(args, "no_exploits", True):
-            from core.sage.hooks import store_exploit_outcomes
-
-            exploit_outcomes = []
-            for f in orchestration_result.get("results", []):
-                if f.get("exploitable") or f.get("has_exploit"):
-                    exploit_outcomes.append({
-                        "finding_id": f.get("finding_id", ""),
-                        "vuln_type": f.get("rule_id", ""),
-                        "cwe_id": f.get("cwe_id", ""),
-                        "file_path": f.get("file_path", ""),
-                        "has_exploit": f.get("has_exploit", False),
-                        "result": "success" if f.get("has_exploit") else "blocked",
-                    })
-            if exploit_outcomes:
-                sage_exploits = store_exploit_outcomes(
-                    repo_path=str(repo_path),
-                    outcomes=exploit_outcomes,
-                )
-                if sage_exploits > 0:
-                    print(f"📚 SAGE: Stored {sage_exploits} exploit outcomes")
-    except Exception as e:
-        logger.debug(f"SAGE post-scan storage skipped: {e}")
 
     print("\n📊 Summary:")
     print(f"   Total findings: {scan_metrics.get('total_findings', 0)}")

@@ -22,7 +22,7 @@ from core.hash import sha256_file
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
 from .diff import diff_manifests
-from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from .fuzz_evidence import CrashEvidence, FuzzEvidenceBundle, load_fuzz_evidence
 from .fuzz_suitability import assess_fuzz_suitability
 from .graph_store import BinaryGraphStore, graph_path_for_run, graph_summary, stable_node_id
@@ -75,7 +75,7 @@ _FRAMEWORK_CALLBACK_SELECTORS = {
 class BinaryAnalysisResult:
     manifest: BinaryManifest
     context_map: dict[str, Any]
-    evidence: list[EvidenceRecord]
+    evidence: list[BinaryEvidenceRecord]
     input_channels: list[InputChannel]
     graph_path: Path
     fuzz: FuzzEvidenceBundle = field(default_factory=FuzzEvidenceBundle)
@@ -162,8 +162,8 @@ def _is_graph_worthy_method(name: str) -> bool:
     return True
 
 
-def _static_evidence(manifest: BinaryManifest, context: BinaryContextMap) -> list[EvidenceRecord]:
-    evidence: list[EvidenceRecord] = []
+def _static_evidence(manifest: BinaryManifest, context: BinaryContextMap) -> list[BinaryEvidenceRecord]:
+    evidence: list[BinaryEvidenceRecord] = []
     digest = manifest.binary_sha256
     if context.imports:
         evidence.append(make_evidence(
@@ -240,8 +240,8 @@ def _runtime_observation_summary(
 def _decompilation_artifact(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-) -> tuple[dict[str, Any], list[EvidenceRecord]]:
-    records: list[EvidenceRecord] = []
+) -> tuple[dict[str, Any], list[BinaryEvidenceRecord]]:
+    records: list[BinaryEvidenceRecord] = []
     functions: list[dict[str, Any]] = []
     for fn in context.interesting_functions:
         if not fn.decompiled:
@@ -297,7 +297,7 @@ def _runtime_input_flows(
     context: BinaryContextMap,
     channels: list[InputChannel],
     runtime_events: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     channel_by_kind = {channel.kind: channel for channel in channels}
     raw_functions = [
         fn for fn in context.interesting_functions
@@ -330,7 +330,7 @@ def _runtime_input_flows(
         item["events"].append(event)
 
     flows: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     for index, ((kind, fn_id), item) in enumerate(sorted(grouped.items()), start=1):
         channel = item["channel"]
         fn = item["function"]
@@ -378,7 +378,7 @@ def _runtime_parser_flows(
     context: BinaryContextMap,
     surface_details: list[dict[str, Any]],
     runtime_events: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     """Bind observed parser API callsites back to recovered functions."""
     parser_surfaces = {
         symbol_base_name(str(item.get("name") or "")): item
@@ -454,7 +454,7 @@ def _runtime_parser_flows(
             item["backtrace_function_names"].append(function_name)
 
     flows: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     for index, ((_surface_id, fn_id), item) in enumerate(sorted(grouped.items()), start=1):
         surface = item["surface"]
         fn = item["function"]
@@ -614,9 +614,9 @@ def _call_graph_edges(
 def _build_entry_points(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     entry_points: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     for fn in context.entry_points:
         if _is_runtime_support_name(fn.name):
             continue
@@ -653,10 +653,10 @@ def _build_entry_points(
 def _build_surfaces_and_sinks(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     surface_details: list[dict[str, Any]] = []
     sink_details: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
 
     for fn in context.dangerous_sinks:
         classification = classify_security_api(fn.name)
@@ -744,9 +744,9 @@ def _build_candidate_flows(
     manifest: BinaryManifest,
     context: BinaryContextMap,
     sink_details: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     candidate_flows: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     sink_by_name = {symbol_base_name(item["name"]): item["id"] for item in sink_details}
     for fn in context.interesting_functions:
         if _is_runtime_support_name(fn.name):
@@ -821,15 +821,15 @@ def _context_map(
     context: BinaryContextMap,
     channels: list[InputChannel],
     runtime_events: list[dict[str, Any]],
-    runtime_records: list[EvidenceRecord],
+    runtime_records: list[BinaryEvidenceRecord],
     fuzz: FuzzEvidenceBundle,
     constraints: Optional[dict[str, Any]],
     graph_path: Path,
-    static_records: list[EvidenceRecord],
+    static_records: list[BinaryEvidenceRecord],
     decompilations: dict[str, Any],
     runtime_input_flows: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[EvidenceRecord]]:
-    generated_evidence: list[EvidenceRecord] = []
+) -> tuple[dict[str, Any], list[BinaryEvidenceRecord]]:
+    generated_evidence: list[BinaryEvidenceRecord] = []
     class_inventory_evidence_ids = [
         record.id for record in static_records
         if record.kind == "class_metadata_inventory"
@@ -1857,7 +1857,7 @@ def analyse_blackbox_binary(
     evidence.extend(channel_evidence)
 
     runtime_events: list[dict[str, Any]] = []
-    runtime_records: list[EvidenceRecord] = []
+    runtime_records: list[BinaryEvidenceRecord] = []
     if runtime_dir is not None:
         runtime_events, runtime_records = load_runtime_evidence(
             Path(runtime_dir),
@@ -2204,8 +2204,8 @@ def append_fuzz_evidence_to_run(
     return bundle
 
 
-def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[EvidenceRecord]:
-    records: list[EvidenceRecord] = []
+def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[BinaryEvidenceRecord]:
+    records: list[BinaryEvidenceRecord] = []
     for item in items:
         if not isinstance(item, dict) or not item.get("id") or not item.get("tier"):
             continue
@@ -2214,7 +2214,7 @@ def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[Evidence
         except ValueError:
             logger.warning("skipping evidence record with unrecognised tier %r", item.get("tier"))
             continue
-        records.append(EvidenceRecord(
+        records.append(BinaryEvidenceRecord(
             id=str(item.get("id") or ""),
             kind=str(item.get("kind") or ""),
             source=str(item.get("source") or ""),

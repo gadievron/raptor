@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,8 @@ from core.analysis.binary_oracle_autodetect import (
     _classify_candidate,
     _has_dwarf,
 )
+
+_GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
 
 
 @pytest.fixture
@@ -176,7 +179,7 @@ def test_detect_finds_makefile_built_binary(tmp_path: Path) -> None:
     makefile.write_text(
         "CC ?= gcc\n"
         "CFLAGS ?= -g -O2 -ffunction-sections -fdata-sections\n"
-        "LDFLAGS ?= -Wl,--gc-sections\n"
+        f"LDFLAGS ?= {_GC_SECTIONS}\n"
         "\n"
         "all: build/vuln\n"
         "\n"

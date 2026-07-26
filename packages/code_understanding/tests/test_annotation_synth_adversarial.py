@@ -402,6 +402,7 @@ class TestHuntVariantsHostile:
     not crash, must not corrupt on-disk annotation format, and must
     bound resource use."""
 
+    @pytest.mark.slow
     def test_500_variant_stress(self, fixture):
         """Wide variant batch — picker / writer must scale linearly
         without blowing up. All 500 collide on the same (file,
