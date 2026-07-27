@@ -521,14 +521,15 @@ def check_stored_taint(
     for reader in readers:
         source = reader.get("source", "")
         has_sanitizer = bool(re.search(
-            r"(?:escape|sanitiz|sanitise|html_escape|quote|param)",
+            r"\b(?:escape|sanitiz|sanitise|html_escape|quote|param)\b",
             source, re.I,
         ))
         if has_sanitizer:
             continue
 
         has_render = bool(re.search(
-            r"(?:render|template|format|f[\"']|\.html|response|write)",
+            r"\b(?:render|template|format_html|format_template|render_template"
+            r"|innerHTML|response_write|write_html|f[\"']|\.html\b|response\.write)\b",
             source, re.I,
         ))
         if not has_render:

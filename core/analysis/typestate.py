@@ -280,7 +280,21 @@ def check_typestate_violations(
                     for am in alloc_models:
                         obj_key = f"{var}:{am.type_name}"
                         if obj_key in tracked and tracked[obj_key].state == "allocated":
-                            pass
+                            prev = tracked[obj_key]
+                            violations.append(TypeStateViolation(
+                                type_name=am.type_name,
+                                operation=alloc_name,
+                                current_state="allocated",
+                                required_states={"unallocated"},
+                                location=f"line {line_num}",
+                                path_description=(
+                                    f"`{var}` allocated at line "
+                                    f"{prev.alloc_line}, "
+                                    f"reallocated at line "
+                                    f"{line_num} without freeing"
+                                ),
+                                violation_kind="resource_leak",
+                            ))
                         tracked[obj_key] = _TrackedObject(
                             var=var, model=am,
                             state="allocated",
@@ -337,8 +351,7 @@ def check_typestate_violations(
                         violation_kind="use_after_free",
                     ))
 
-    if not error_path:
-        _check_resource_leaks(tracked, len(lines), violations)
+    _check_resource_leaks(tracked, len(lines), violations)
 
     return violations
 
@@ -503,9 +516,9 @@ def _var_used_after_free(
             if m:
                 return False
 
-    if re.match(rf"\s*{re.escape(var)}\s*=\s*NULL", line):
+    if re.search(rf"\b{re.escape(var)}\s*=\s*NULL\b", line):
         return False
-    if re.match(rf"\s*{re.escape(var)}\s*=\s*0\s*;", line):
+    if re.search(rf"\b{re.escape(var)}\s*=\s*0\s*;", line):
         return False
 
     return True

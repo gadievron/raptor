@@ -39,9 +39,9 @@ Static analysis scan using Semgrep (and optionally CodeQL and Coccinelle).
 | `--extra-config <path>` | Additional Semgrep config file (repeatable) |
 | `--show-suppressed` | Include suppressed findings in output |
 | `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) isolation |
-| `--audit` | Enable the systematic review layer |
-| `--audit-verbose` | Verbose audit output |
-| `--audit-budget <n>` | Maximum audit budget (finding count) |
+| `--audit` | Enable sandbox audit mode (log would-be-blocked syscalls) |
+| `--audit-verbose` | Verbose audit output (strace-style) |
+| `--audit-budget <n>` | Maximum audit event budget |
 
 See [architecture](architecture.md) for scanner configuration and rule-set
 details.
@@ -172,13 +172,13 @@ patches.
 | `--sandbox <mode>` | Sandbox mode: `debug`, `frida`, `full`, `network-only`, `none`, `strict`, `target_run` |
 | `--no-sandbox` | Disable sandbox entirely |
 
-**Audit layer**
+**Audit layer** (sandbox syscall audit)
 
 | Flag | Description |
 |------|-------------|
-| `--audit` | Enable systematic code review layer |
-| `--audit-verbose` | Verbose audit output |
-| `--audit-budget <n>` | Maximum audit budget |
+| `--audit` | Enable sandbox audit mode (log would-be-blocked syscalls) |
+| `--audit-verbose` | Verbose audit output (strace-style: every traced syscall) |
+| `--audit-budget <n>` | Maximum audit event budget |
 
 ---
 
@@ -390,6 +390,8 @@ code as vulnerable -- tool output is the verdict.
 | `--max-cost <USD>` | Stop after spending this many dollars on LLM calls |
 | `--max-time <seconds>` | Wall-clock time limit |
 | `--review-passes <N>` | Independent review passes per function for self-consistency |
+| `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
+| `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated) |
 | `--model <name>` | Model ID (repeatable for multi-model consensus) |
 | `--adversarial` | Adversarial reviewer that challenges positive verdicts |
 | `--no-validate` | Skip the /validate post-pass |
@@ -832,7 +834,7 @@ Markdown files mirroring the source tree, with `## function_name` sections.
 
 | Flag | Description |
 |------|-------------|
-| `--status {clean,suspicious,finding,error}` | Annotation status |
+| `--status {clean,suspicious,finding,dormant,error}` | Annotation status |
 | `--cwe <CWE-XX>` | Associated CWE identifier |
 | `-m` / `--body <text>` | Annotation body text |
 | `--body-file <path>` | Read annotation body from file |
@@ -861,8 +863,9 @@ Markdown files mirroring the source tree, with `## function_name` sections.
 | `--target <repo_root>` | Repository root for re-hashing |
 
 Status values: `clean` (reviewed, no concern), `suspicious` (real bug, not
-exploitable), `finding` (exploitable), `entry_point`, `sink`,
-`trust_boundary`, `flow_step`, `unchecked_flow`, `error`.
+exploitable), `finding` (exploitable), `dormant` (unreachable / dead code),
+`entry_point`, `sink`, `trust_boundary`, `flow_step`, `unchecked_flow`,
+`error`.
 
 Annotations are emitted automatically by `/agentic` and `/understand`.
 
@@ -1040,8 +1043,12 @@ operator annotations.
 | `gaps` | What needs review, and why |
 | `coverage [file]` | Mechanical tool coverage |
 | `note <file> <fn> -m "..."` | Add operator note |
+| `edit <file> <fn>` | Edit operator note in `$EDITOR` |
+| `notes` | List all operator notes |
+| `history <file> <fn>` | All reviews over time for a function |
 | `stale` | Source-drifted operator notes |
 | `stats` | Entry counts, costs, coverage % |
+| `compact` | Compact project journal index |
 
 Options: `--out DIR` (explicit output directory), `--raw` (JSON output).
 

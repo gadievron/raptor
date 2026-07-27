@@ -175,7 +175,8 @@ def check_all_fields(
                         )
                     )
                     covered_files.add(rs.file)
-            if not covered_files:
+            has_uncovered = any(rs.file not in covered_files for rs in field.read_sites)
+            if not covered_files or has_uncovered:
                 all_findings.extend(check_coverage(field))
         else:
             all_findings.extend(check_coverage(field))

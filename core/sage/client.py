@@ -128,7 +128,7 @@ class SageClient:
 
             resp = httpx.get(
                 f"{self._config.url}/health",
-                timeout=self._config.timeout,
+                timeout=min(self._config.timeout, 3.0),
             )
             return resp.status_code == 200 and "status" in resp.json()
         except Exception as e:

@@ -267,6 +267,10 @@ class EvidenceRecord:
             or self.app_sink_targets
             or self.binary_sink_edges
             or self.binary_layer0_findings
+            or self.negative_space
+            or self.sanitizer_calls
+            or self.binary_surface_category
+            or self.binary_parser_boundary
         )
 
     def all_joern_flows(self) -> list:
@@ -710,17 +714,16 @@ def build_evidence_index(
                 index[key].taint_approx = approx
         try:
             from core.analysis.taint_approx import compute_transitive_taint
-            bare_approx = {
-                k.split(":")[-1]: v
+            approx_by_key = {
+                k: v
                 for k, v in taint_approx_results.items()
                 if hasattr(v, "direct_flows")
             }
-            if bare_approx:
-                transitive = compute_transitive_taint(bare_approx)
+            if approx_by_key:
+                transitive = compute_transitive_taint(approx_by_key)
                 for key, rec in index.items():
-                    func_name = key.split(":")[-1]
-                    if func_name in transitive:
-                        rec.transitive_taint = transitive[func_name]
+                    if key in transitive:
+                        rec.transitive_taint = transitive[key]
         except Exception:
             _logger.debug("transitive taint computation failed", exc_info=True)
 
@@ -750,6 +753,18 @@ def build_evidence_index(
         for key, flows in imported_joern_flows.items():
             if key in index:
                 index[key].imported_joern_flows = list(flows)
+
+    if sarif_cache is not None:
+        for key, rec in index.items():
+            hits = sarif_cache.lookup(rec.file)
+            if hits is None:
+                continue
+            for hit in hits:
+                rule_id = hit.get("ruleId", "") or ""
+                if rule_id.startswith("codeql"):
+                    rec.codeql_alerts.append(hit)
+                else:
+                    rec.semgrep_hits.append(hit)
 
     if context_map_sinks:
         _attach_context_map_sinks(index, context_map_sinks)

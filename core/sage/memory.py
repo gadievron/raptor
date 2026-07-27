@@ -103,6 +103,8 @@ class SageFuzzingMemory(FuzzingMemory):
         similar = memory.recall_similar("heap overflow strategies")
     """
 
+    _AVAILABILITY_TTL_S = 300.0
+
     def __init__(
         self,
         memory_file: Optional[Path] = None,
@@ -113,17 +115,29 @@ class SageFuzzingMemory(FuzzingMemory):
         self._sage_config = sage_config or SageConfig.from_env()
         self._sage_client = SageClient(self._sage_config)
         self._sage_available = self._sage_client.is_available()
+        self._sage_available_checked_at = __import__("time").monotonic()
 
         if self._sage_available:
             logger.info("SAGE memory enabled — fuzzing knowledge will be persisted to SAGE")
         else:
             logger.info("SAGE unavailable — using JSON fallback only")
 
+    def _is_sage_available(self) -> bool:
+        """Return cached SAGE availability, re-probing after TTL on negative."""
+        import time
+        if self._sage_available:
+            return True
+        now = time.monotonic()
+        if (now - self._sage_available_checked_at) > self._AVAILABILITY_TTL_S:
+            self._sage_available = self._sage_client.is_available()
+            self._sage_available_checked_at = now
+        return self._sage_available
+
     def save(self):
         """Save to JSON (always) and SAGE (when available)."""
         super().save()
 
-        if not self._sage_available:
+        if not self._is_sage_available():
             return
 
         stored = 0
@@ -147,7 +161,7 @@ class SageFuzzingMemory(FuzzingMemory):
         """Store knowledge locally and in SAGE."""
         super().remember(knowledge)
 
-        if not self._sage_available:
+        if not self._is_sage_available():
             return
 
         try:
@@ -164,7 +178,7 @@ class SageFuzzingMemory(FuzzingMemory):
         """Record campaign locally and in SAGE."""
         super().record_campaign(campaign_data)
 
-        if not self._sage_available:
+        if not self._is_sage_available():
             return
 
         try:
@@ -193,7 +207,7 @@ class SageFuzzingMemory(FuzzingMemory):
         methodology domain and merges (de-duplicated), so exploit-adjacent
         recall still picks up generalised lessons.
         """
-        if not self._sage_available:
+        if not self._is_sage_available():
             return []
 
         if domain == "raptor-methodology":
@@ -225,7 +239,7 @@ class SageFuzzingMemory(FuzzingMemory):
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
         """Recall exploit technique patterns relevant to a crash type."""
-        if not self._sage_available:
+        if not self._is_sage_available():
             return []
 
         mitigations = ""
@@ -250,6 +264,6 @@ class SageFuzzingMemory(FuzzingMemory):
     def get_statistics(self) -> Dict:
         """Get memory statistics including SAGE status."""
         stats = super().get_statistics()
-        stats["sage_enabled"] = self._sage_available
-        stats["sage_url"] = self._sage_config.url if self._sage_available else None
+        stats["sage_enabled"] = self._is_sage_available()
+        stats["sage_url"] = self._sage_config.url if self._is_sage_available() else None
         return stats

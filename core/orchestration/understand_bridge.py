@@ -1351,6 +1351,11 @@ def _merge_attack_surface(
         merged_boundaries = new_boundaries
         changed = bool(new_sources or new_sinks or new_boundaries)
 
+    taint_confirmed = 0
+    for src in merged_sources:
+        if src.get("has_taint_flow"):
+            taint_confirmed += 1
+
     if changed:
         attack_surface = {
             "sources": merged_sources,
@@ -1359,6 +1364,9 @@ def _merge_attack_surface(
             "_imported_from": str(understand_dir / "context-map.json"),
             "_imported_at": datetime.now(timezone.utc).isoformat(),
         }
+        taint_summary = context_map.get("taint_summary")
+        if taint_summary:
+            attack_surface["taint_summary"] = taint_summary
         # mode=0o600 — attack-surface JSON lists entry points, trust
         # boundaries, and sinks. Default umask makes this readable to
         # other local users; on multi-tenant hosts the file is a soft-
@@ -1372,6 +1380,7 @@ def _merge_attack_surface(
         "trust_boundaries": len(merged_boundaries),
         "gaps": gap_count,
         "unchecked_flows": unchecked_count,
+        "taint_confirmed": taint_confirmed,
     }
 
 

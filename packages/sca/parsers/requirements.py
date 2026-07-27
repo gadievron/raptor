@@ -166,12 +166,20 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
             # what's left doesn't parse as a PEP 508 line, the parser
             # silently drops it (so ``# pip install foo`` and ``# this
             # is just a note`` don't pollute findings).
-            body = stripped.lstrip("#").lstrip()
+            raw_body = stripped.lstrip("#").lstrip()
+            body = _strip_comment(raw_body)
             if not body:
                 continue
+            # Preserve the inline comment for round-trip rewriting.
+            inline_note = raw_body[len(body):].lstrip()
+            if inline_note.startswith("#"):
+                inline_note = inline_note[1:].lstrip()
+            else:
+                inline_note = ""
             line = body
             commented = True
         else:
+            inline_note = ""
             line = _strip_comment(raw_line).strip()
             if not line:
                 continue
@@ -201,6 +209,7 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
         d = _parse_requirement_line(
             line, declared_in=resolved, editable=editable,
             commented=commented,
+            inline_comment=inline_note or None,
         )
         if d is not None:
             deps.append(d)
@@ -298,6 +307,7 @@ def _parse_requirement_line(
     declared_in: Path,
     editable: bool,
     commented: bool = False,
+    inline_comment: Optional[str] = None,
 ) -> Optional[Dependency]:
     """Parse one non-include requirement line; return None if unparseable."""
     if _looks_like_url_only(line):
@@ -355,6 +365,7 @@ def _parse_requirement_line(
         version_floor=version_floor,
         version_ceiling=version_ceiling,
         commented_out=commented,
+        inline_comment=inline_comment,
     )
 
 

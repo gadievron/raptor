@@ -12,13 +12,13 @@ If this file is loaded, SAGE is available — use it.
 
 ## Domains
 
-- `raptor-findings-{repo_key}` — CodeQL build reliability (repo-scoped)
+- `raptor-findings-{repo_key}` — Vulnerability findings and analysis results (repo-scoped)
 - `raptor-fuzzing` — Fuzzing strategies and crash outcomes
 - `raptor-sca-{repo_key}` — SCA findings and verdicts (repo-scoped)
 - `raptor-methodology` — Analysis methodology and expert reasoning
 - `raptor-fp-{repo_key}` — Finding verdicts for cross-run FP suppression (repo-scoped)
 - `raptor-rule-library` — Proven checker rules (engine + CWE keyed, cross-target)
-- `raptor-concepts` — Study concept recall (N1, planned)
+- `raptor-concepts-{repo_key}` — Study concept recall for `/understand --teach` (repo-scoped)
 
 ## Domain rationale
 

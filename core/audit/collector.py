@@ -208,15 +208,17 @@ class Collector:
         """Write all buffered state to disk in bulk."""
         if self._flushed:
             return
-        self._flushed = True
 
         try:
-            flush_journal(self.out_dir)
-        except Exception:
-            logger.debug("journal fsync failed", exc_info=True)
+            try:
+                flush_journal(self.out_dir)
+            except Exception:
+                logger.debug("journal fsync failed", exc_info=True)
 
-        if self._log_entries:
-            self._flush_audit_log()
+            if self._log_entries:
+                self._flush_audit_log()
+        finally:
+            self._flushed = True
 
     def _flush_audit_log(self) -> None:
         log_path = self.out_dir / ".audit-log.jsonl"

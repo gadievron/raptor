@@ -36,6 +36,24 @@ full flag table.
 /audit /path/to/code --model claude-opus-4-7 --model gpt-5 --adversarial
 ```
 
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--strategy <name>` | Filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing |
+| `--budget <N>` | Maximum functions to review (default: all gaps) |
+| `--scope <dir>` | Restrict to a subdirectory (successive scoped runs accumulate) |
+| `--out <dir>` | Output directory |
+| `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep |
+| `--max-cost <USD>` | Stop after spending this many dollars on LLM calls |
+| `--max-time <seconds>` | Wall-clock time limit |
+| `--review-passes <N>` | Independent review passes per function for self-consistency (default: 1) |
+| `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
+| `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated p90+2, floor 5, cap 15) |
+| `--model <name>` | Model ID (repeatable for multi-model consensus) |
+| `--adversarial` | Adversarial reviewer that challenges positive verdicts (requires `--model` x2+) |
+| `--no-validate` | Skip the /validate post-pass |
+
 
 ## Pipeline
 

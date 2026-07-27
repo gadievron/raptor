@@ -96,7 +96,10 @@ def write_findings(findings: List[Dict[str, Any]], out_dir: Path) -> Path:
             json.dump(findings, f, indent=2)
         os.replace(tmp, str(path))
     except BaseException:
-        os.unlink(tmp)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         raise
     return path
 

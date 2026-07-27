@@ -32,7 +32,12 @@ except ImportError:
 
 from .models import JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_path
-from .runner import _parse_dark_methods, _parse_output, _validate_query
+from .runner import (
+    _escape_scala_string,
+    _parse_dark_methods,
+    _parse_output,
+    _validate_query,
+)
 from .tunables import JoernTunables
 
 logger = logging.getLogger(__name__)
@@ -281,7 +286,7 @@ class JoernServer:
             logger.error("CPG file not found: %s", cpg_path)
             return False
 
-        safe_path = str(cpg_path).replace("\\", "\\\\").replace('"', '\\"')
+        safe_path = _escape_scala_string(str(cpg_path))
         query = f'importCpg("{safe_path}")'
 
         logger.info("loading CPG: %s", cpg_path)
@@ -317,7 +322,7 @@ class JoernServer:
             logger.error("target not a directory: %s", target_path)
             return False
 
-        safe_path = str(target_path).replace("\\", "\\\\").replace('"', '\\"')
+        safe_path = _escape_scala_string(str(target_path))
         query = f'importCode("{safe_path}")'
 
         logger.info("importing code: %s", target_path)
@@ -741,13 +746,15 @@ class JoernServer:
             "import io.shiftleft.codepropertygraph.generated.nodes.CfgNode",
             "import scala.util.Try",
             f"val batchConfig = EngineConfig(maxCallDepth = {max_call_depth})",
+            "implicit val batchContext: EngineContext = "
+            "EngineContext(config = batchConfig)",
         ]
 
         for i, (src, sink) in enumerate(valid_pairs):
             lines.append(
                 f'val src{i} = cpg.method.name("{src}").parameter\n'
                 f'val snk{i} = cpg.call.name("{sink}").argument\n'
-                f'val flows{i} = snk{i}.reachableByFlows(src{i})(batchConfig).take(50).l\n'
+                f'val flows{i} = snk{i}.reachableByFlows(src{i}).take(50).l\n'
                 f'flows{i}.foreach {{ flow =>\n'
                 f'  val steps = flow.elements.map {{ e =>\n'
                 f'    val ln = e.lineNumber.getOrElse(0)\n'

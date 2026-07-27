@@ -23,7 +23,7 @@ from ._types import DarkWitnessSpec
 # ---------------------------------------------------------------------------
 
 
-def _format_args_ruby_php_lua(args: list[Any], *, nil_kw: str = "nil") -> str:
+def _format_args_scripting(args: list[Any], *, nil_kw: str = "nil") -> str:
     """Format args for Ruby/PHP/Lua — languages that use nil/null keywords."""
     parts = []
     for a in args:
@@ -155,7 +155,13 @@ def generate_c_harness(
 
 
 def _c_format_for_type(return_type: str) -> str:
-    rt = return_type.strip().rstrip("*").strip()
+    stripped = return_type.strip()
+    if stripped.endswith("*"):
+        base = stripped.rstrip("*").strip()
+        if base == "char":
+            return "%s"
+        return "%p"
+    rt = stripped
     if rt in ("float", "double"):
         return "%g"
     if rt in ("char",):
@@ -369,7 +375,7 @@ def generate_ruby_harness(
         require_path = rel
 
     target_str = str(target_root.resolve())
-    args_str = _format_args_ruby_php_lua(spec.args, nil_kw="nil")
+    args_str = _format_args_scripting(spec.args, nil_kw="nil")
 
     return textwrap.dedent(f"""\
         require 'json'
@@ -406,7 +412,7 @@ def generate_php_harness(
     lc = spec.lang_config
     require_path = lc.get("require_path", spec.file)
     target_str = str(target_root.resolve())
-    args_str = _format_args_ruby_php_lua(spec.args, nil_kw="null")
+    args_str = _format_args_scripting(spec.args, nil_kw="null")
 
     return textwrap.dedent(f"""\
         <?php
@@ -532,10 +538,14 @@ def generate_java_harness(
 
     parts.append('        } catch (Exception e) {\n')
     parts.append(
+        '            String _msg = e.getMessage() == null ? "" : e.getMessage()'
+        '.replace("\\\\", "\\\\\\\\").replace("\\"", "\\\\\\"");\n'
+    )
+    parts.append(
         '            System.out.println('
         '"{\\"status\\":\\"exception\\",'
         '\\"type\\":\\"" + e.getClass().getSimpleName() + "\\",'
-        '\\"message\\":\\"" + e.getMessage() + "\\"}");\n'
+        '\\"message\\":\\"" + _msg + "\\"}");\n'
     )
     parts.append('        }\n')
     parts.append('    }\n')
@@ -561,7 +571,7 @@ def generate_lua_harness(
             rel = rel[:-4]
         require_path = rel.replace("/", ".")
 
-    args_str = _format_args_ruby_php_lua(spec.args, nil_kw="nil")
+    args_str = _format_args_scripting(spec.args, nil_kw="nil")
     target_str = str(target_root.resolve())
 
     return textwrap.dedent(f"""\
@@ -623,7 +633,7 @@ def generate_perl_harness(
         use_module = rel.replace("/", "::")
 
     target_str = str(target_root.resolve())
-    args_str = _format_args_ruby_php_lua(spec.args, nil_kw="undef")
+    args_str = _format_args_scripting(spec.args, nil_kw="undef")
 
     return textwrap.dedent(f"""\
         use strict;

@@ -95,7 +95,7 @@ def extract_bounds_constraints(
     # Resolve constants in the text
     resolved_text = text
     for name, value in sorted(guard.concrete_values.items(), key=lambda kv: -len(kv[0])):
-        resolved_text = resolved_text.replace(name, value)
+        resolved_text = re.sub(r'\b' + re.escape(name) + r'\b', value, resolved_text)
 
     # Forward: var op value
     for m in _COMPARISON_RE.finditer(resolved_text):
@@ -325,20 +325,24 @@ def _z3_integer_overflow_check(
         elif c.operator == "!=":
             solver.add(v != bv_val)
 
-    # Check: can multiplication of two constrained vars wrap?
+    # Check: can multiplication of any two constrained vars wrap?
     var_list = list(vars_map.values())
     if len(var_list) >= 2:
-        a, b = var_list[0], var_list[1]
-        # Overflow: upper 64 bits of 128-bit product are non-zero
-        a_ext = z3.ZeroExt(64, a)
-        b_ext = z3.ZeroExt(64, b)
-        full_product = a_ext * b_ext
-        upper_bits = z3.Extract(127, 64, full_product)
-        solver.add(upper_bits != z3.BitVecVal(0, 64))
+        for i in range(len(var_list)):
+            for j in range(i + 1, len(var_list)):
+                a, b = var_list[i], var_list[j]
+                solver.push()
+                # Overflow: upper 64 bits of 128-bit product are non-zero
+                a_ext = z3.ZeroExt(64, a)
+                b_ext = z3.ZeroExt(64, b)
+                full_product = a_ext * b_ext
+                upper_bits = z3.Extract(127, 64, full_product)
+                solver.add(upper_bits != z3.BitVecVal(0, 64))
 
-        result = solver.check()
-        if result == z3.sat:
-            return (True, "integer overflow in allocation size is possible")
+                result = solver.check()
+                solver.pop()
+                if result == z3.sat:
+                    return (True, "integer overflow in allocation size is possible")
         return (False, "allocation size cannot overflow given constraints")
 
     return (False, "insufficient variables for multiplication overflow check")

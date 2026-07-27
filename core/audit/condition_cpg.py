@@ -30,6 +30,10 @@ from .condition_extraction import SinkGuard
 
 logger = logging.getLogger(__name__)
 
+_ADMIN_RE = re.compile(
+    r"\b(?:admin|superuser|staff|owner)", re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -155,6 +159,9 @@ def _safe_name(value: str) -> Optional[str]:
     except ImportError:
         # Fallback: basic validation
         if not value or not value.replace(".", "").replace("_", "").isalnum():
+            return None
+        # Reject control characters (codepoint < 0x20)
+        if any(ord(ch) < 0x20 for ch in value):
             return None
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -582,11 +589,8 @@ def assess_exposure_context(
         auth_required = ep.get("auth_required", False)
 
         if auth_required or auth_decorators:
-            _admin_re = re.compile(
-                r"\b(?:admin|superuser|staff|owner)", re.IGNORECASE,
-            )
             is_admin = any(
-                _admin_re.search(str(d))
+                _ADMIN_RE.search(str(d))
                 for d in (auth_decorators or decorators)
             )
             if is_admin:
@@ -652,6 +656,29 @@ def _run_query(server: Any, query: str) -> Optional[list]:
         return None
 
 
+def _split_scala_items(text: str) -> list:
+    """Split comma-separated items, respecting double-quoted strings."""
+    items: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    for ch in text:
+        if ch == '"' and not in_quotes:
+            in_quotes = True
+            continue
+        if ch == '"' and in_quotes:
+            in_quotes = False
+            continue
+        if ch == ',' and not in_quotes:
+            items.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    tail = "".join(current).strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
 def _parse_scala_list(raw: str) -> list:
     """Best-effort parse of Joern's Scala list output.
 
@@ -679,14 +706,14 @@ def _parse_scala_list(raw: str) -> list:
                 elif ch == ")":
                     depth -= 1
                     if depth == 0:
-                        tuples.append([s.strip().strip('"') for s in current.split(",")])
+                        tuples.append(_split_scala_items(current))
                         current = ""
                         continue
                 if depth >= 1:
                     current += ch
             return tuples
-        # Simple list: List(a, b, c)
-        return [s.strip().strip('"') for s in inner.split(",")]
+        # Simple list: List(a, b, c) — handle commas inside quoted strings
+        return _split_scala_items(inner)
 
     # Newline-separated fallback
     lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]

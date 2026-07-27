@@ -125,14 +125,24 @@ def extract_conditions_from_cfg(cfg) -> List[ConditionEdge]:
             )
             false_cond = true_cond.negated()
 
+            # Determine true/false successor.  CFG builders link the
+            # then-body first (closest line to the condition node) and
+            # the else/fallthrough second.  Verify by line proximity;
+            # if the second successor is closer, swap.
+            true_succ, false_succ = successors[0], successors[1]
+            d_false = abs(false_succ.lineno - node.lineno)
+            d_true = abs(true_succ.lineno - node.lineno)
+            if d_false < d_true:
+                true_succ, false_succ = false_succ, true_succ
+
             edges.append(ConditionEdge(
                 src_line=node.lineno,
-                dst_line=successors[0].lineno,
+                dst_line=true_succ.lineno,
                 condition=true_cond,
             ))
             edges.append(ConditionEdge(
                 src_line=node.lineno,
-                dst_line=successors[1].lineno,
+                dst_line=false_succ.lineno,
                 condition=false_cond,
             ))
             for succ in successors[2:]:

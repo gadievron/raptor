@@ -38,6 +38,9 @@ class TestEvidenceSource:
         assert default_confidence(EvidenceSource.DYNAMIC_SANITIZER) == Confidence.HIGH
         assert default_confidence(EvidenceSource.DYNAMIC_FRIDA) == Confidence.HIGH
 
+    def test_dynamic_crash_is_medium(self):
+        assert default_confidence(EvidenceSource.DYNAMIC_CRASH) == Confidence.MEDIUM
+
     def test_corroborated_llm_is_medium(self):
         assert default_confidence(EvidenceSource.LLM_CORROBORATED) == Confidence.MEDIUM
 
@@ -228,6 +231,12 @@ class TestGradeReviewResult:
     def test_evidence_tool_dynamic(self):
         items = grade_review_result({}, evidence_tool="dynamic")
         assert any(e.source == EvidenceSource.DYNAMIC_SANITIZER for e in items)
+
+    def test_evidence_tool_dynamic_crash(self):
+        items = grade_review_result({}, evidence_tool="dynamic:crash")
+        crash = [e for e in items if e.source == EvidenceSource.DYNAMIC_CRASH]
+        assert len(crash) == 1
+        assert crash[0].confidence == Confidence.MEDIUM
 
     def test_evidence_tool_joern(self):
         items = grade_review_result({}, evidence_tool="joern:live")

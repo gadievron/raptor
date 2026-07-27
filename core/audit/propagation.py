@@ -643,7 +643,7 @@ def _try_joern_resolve(
     if not hasattr(rec, "joern_flows") or not hasattr(rec, "imported_joern_flows"):
         return None
 
-    all_flows = rec.joern_flows + rec.imported_joern_flows
+    all_flows = (rec.joern_flows or []) + (rec.imported_joern_flows or [])
     if not all_flows:
         return None
 

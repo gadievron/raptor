@@ -198,7 +198,10 @@ def _infer_target_functions(
                              "hasattr", "getattr", "setattr", "super",
                              "True", "False", "None", "mock", "patch",
                              "fixture", "parametrize", "raises", "warns",
-                             "mark", "skip", "xfail")
+                             "mark", "skip", "xfail",
+                             "open", "sorted", "map", "filter", "zip",
+                             "format", "bytes", "tuple", "os", "json",
+                             "re")
             and call not in targets
         ):
             targets.append(call)

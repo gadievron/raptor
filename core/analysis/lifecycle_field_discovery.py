@@ -24,9 +24,8 @@ logger = logging.getLogger(__name__)
 
 # --- Struct/class field extraction (regex-based, multi-language) ---
 
-_C_STRUCT_RE = re.compile(
-    r"(?:struct|union)\s+(\w+)\s*\{([^}]+)\}",
-    re.DOTALL,
+_C_STRUCT_KEYWORD_RE = re.compile(
+    r"(?:struct|union)\s+(\w+)\s*\{",
 )
 _C_FIELD_RE = re.compile(
     r"(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:struct\s+)?"
@@ -54,9 +53,18 @@ _JAVA_FIELD_RE = re.compile(
 def _extract_struct_fields_c(source: str) -> dict[str, list[str]]:
     """Extract struct/union definitions and their field names from C/C++ source."""
     result: dict[str, list[str]] = {}
-    for m in _C_STRUCT_RE.finditer(source):
+    for m in _C_STRUCT_KEYWORD_RE.finditer(source):
         struct_name = m.group(1)
-        body = m.group(2)
+        brace_start = m.end() - 1  # position of the '{'
+        depth = 1
+        pos = brace_start + 1
+        while pos < len(source) and depth > 0:
+            if source[pos] == "{":
+                depth += 1
+            elif source[pos] == "}":
+                depth -= 1
+            pos += 1
+        body = source[brace_start + 1:pos - 1]
         fields = [fm.group(2) for fm in _C_FIELD_RE.finditer(body)]
         if fields:
             result[struct_name] = fields
@@ -66,11 +74,24 @@ def _extract_struct_fields_c(source: str) -> dict[str, list[str]]:
 def _extract_class_fields_python(source: str) -> dict[str, list[str]]:
     """Extract class definitions and self.x assignments from Python source."""
     result: dict[str, list[str]] = {}
+    lines = source.splitlines(True)
     classes = list(_PY_CLASS_RE.finditer(source))
     for i, cm in enumerate(classes):
         class_name = cm.group(1)
+        class_line_start = source[:cm.start()].count("\n")
+        # Determine indent level of this class definition
+        cls_line = lines[class_line_start]
+        class_indent = len(cls_line) - len(cls_line.lstrip())
         start = cm.end()
-        end = classes[i + 1].start() if i + 1 < len(classes) else len(source)
+        # Find end: next class/def at same or lesser indentation
+        end = len(source)
+        for j in range(i + 1, len(classes)):
+            next_line_start = source[:classes[j].start()].count("\n")
+            nl = lines[next_line_start]
+            next_indent = len(nl) - len(nl.lstrip())
+            if next_indent <= class_indent:
+                end = classes[j].start()
+                break
         body = source[start:end]
         attrs = list(dict.fromkeys(
             am.group(1) for am in _PY_ATTR_ASSIGN_RE.finditer(body)

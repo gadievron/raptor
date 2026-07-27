@@ -40,16 +40,21 @@ services:
       - OLLAMA_HOST=http://ollama:11434
 
   sage:
-    image: ghcr.io/l33tdawg/sage:11.10.0
+    image: ghcr.io/l33tdawg/sage:11.11.6
     ports:
       - "8090:8080"
     volumes:
-      - sage_data:/root/.sage-gui
+      - sage_data:/root/.sage
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     environment:
-      - OLLAMA_URL=http://ollama:11434
+      - SAGE_HOME=/root/.sage
+      - SAGE_EMBEDDING_PROVIDER=ollama
+      - SAGE_EMBEDDING_BASE_URL=http://ollama:11434
+      - SAGE_EMBEDDING_MODEL=nomic-embed-text
       - REST_ADDR=0.0.0.0:8080
     healthcheck:
       # ghcr.io/l33tdawg/sage images ship with wget, not curl

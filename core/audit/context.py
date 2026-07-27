@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -243,7 +244,7 @@ def assemble_context(
             if injection_warnings:
                 ctx["injection_warnings"] = injection_warnings
     except Exception:
-        pass
+        logger.warning("prompt defence failed", exc_info=True)
 
     return ctx
 
@@ -1066,7 +1067,7 @@ def _find_headers(target_path: Path, source_file: str) -> List[Path]:
     cache_key = str(target_path)
     all_headers = _header_cache.get(cache_key)
     if all_headers is None:
-        all_headers = sorted(target_path.rglob("*.h"))
+        all_headers = sorted(islice(target_path.rglob("*.h"), 1000))
         _header_cache[cache_key] = all_headers
 
     for h in all_headers:
@@ -1135,11 +1136,12 @@ def _find_closing_brace(lines: List[str], start: int) -> int:
 
 def _callee_security_priority(callee: Dict[str, Any]) -> int:
     """Lower = higher priority for source enrichment."""
-    name = callee.get("name", "").lower().split(".")[-1]
-    if name in _DANGEROUS_APIS:
+    full_name = callee.get("name", "").lower()
+    short_name = full_name.split(".")[-1]
+    if full_name in _DANGEROUS_APIS or short_name in _DANGEROUS_APIS:
         return 0
     for pat in _SANITIZER_PATTERNS:
-        if pat in name:
+        if pat in short_name:
             return 1
     if callee.get("file", "") == "(external)":
         return 3
@@ -1366,7 +1368,7 @@ _DANGEROUS_APIS = frozenset({
     "sprintf", "snprintf", "vsprintf", "vsnprintf",
     "gets", "scanf", "sscanf", "fscanf",
     "system", "popen", "execve", "execvp", "exec",
-    "eval", "exec",
+    "eval",
     "malloc", "calloc", "realloc", "free",
     "fopen", "open", "read", "write",
     "sqlite3_exec", "mysql_query",

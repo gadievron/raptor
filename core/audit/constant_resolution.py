@@ -85,6 +85,9 @@ def _try_evaluate(body: str) -> int | None:
     if not _SAFE_ARITH_RE.match(cleaned):
         return None
 
+    if '**' in cleaned:
+        return None
+
     try:
         result = eval(cleaned, {"__builtins__": {}}, {})  # noqa: S307
         if isinstance(result, int):
@@ -115,6 +118,37 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
         text_joined = text.replace("\\\n", " ")
         cond_depth = _compute_conditional_depths(text)
 
+        # Build a mapping from joined-text position to original line number.
+        # Each "\\\n" removed shifts subsequent positions by 1 (2-char seq
+        # replaced by 1-char " "). Walk the original text to record where
+        # each continuation was removed.
+        _cont_offsets: list[int] = []
+        _search_pos = 0
+        while True:
+            _idx = text.find("\\\n", _search_pos)
+            if _idx < 0:
+                break
+            _cont_offsets.append(_idx)
+            _search_pos = _idx + 2
+
+        def _original_line(joined_pos: int) -> int:
+            """Map a position in text_joined to a 1-based line in text."""
+            # Each continuation before joined_pos added one extra newline
+            # that is absent in text_joined.
+            extra = 0
+            orig_pos = joined_pos
+            for off in _cont_offsets:
+                # In the joined text the continuation at original offset
+                # `off` becomes offset `off - extra` (each prior removal
+                # shifted by 1). If joined_pos is past that point, the
+                # original position is one further ahead.
+                if off - extra <= joined_pos:
+                    extra += 1
+                    orig_pos += 1
+                else:
+                    break
+            return text[:orig_pos].count("\n") + 1
+
         rel = str(p.relative_to(target_path)) if p.is_relative_to(target_path) else str(p)
 
         for m in _MACRO_DEF_RE.finditer(text_joined):
@@ -125,14 +159,14 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             body = m.group(3).strip()
             if not body:
                 continue
-            line = text_joined[:m.start()].count("\n") + 1
+            line = _original_line(m.start())
             depth = cond_depth.get(line, 0)
             defs.setdefault(name, []).append(
                 _RawDefinition(name, params, body, rel, line, depth)
             )
 
         for em in _ENUM_BLOCK_RE.finditer(text_joined):
-            block_line = text_joined[:em.start()].count("\n") + 1
+            block_line = _original_line(em.start())
             block_depth = cond_depth.get(block_line, 0)
             for ev in _ENUMERATOR_RE.finditer(em.group(1)):
                 ename = ev.group(1).strip()

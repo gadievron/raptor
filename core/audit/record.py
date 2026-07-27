@@ -289,5 +289,8 @@ def _update_coverage_audit(
             json.dump(audit_data, f, indent=2)
         os.replace(tmp, str(audit_path))
     except BaseException:
-        os.unlink(tmp)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         raise

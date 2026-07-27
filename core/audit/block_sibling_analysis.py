@@ -247,7 +247,7 @@ def _collect_branches_ts(
         return []
 
     ext = PurePosixPath(file_path).suffix
-    lang = language_for_file("x" + ext)
+    lang = language_for_file(ext)
     if not lang:
         return []
     parser = _get_parser(lang)

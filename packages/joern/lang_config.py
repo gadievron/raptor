@@ -158,12 +158,19 @@ def detect_language(target_path: str) -> str:
         ".go": "go",
     }
 
+    _EXCLUDED_DIRS = {
+        ".git", "node_modules", "vendor", "__pycache__",
+        ".tox", "target", "build",
+    }
+
     p = Path(target_path)
     if not p.is_dir():
         ext = p.suffix.lower()
         return ext_map.get(ext, "python")
 
     for f in p.rglob("*"):
+        if any(part in _EXCLUDED_DIRS for part in f.parts):
+            continue
         if f.is_file():
             lang = ext_map.get(f.suffix.lower())
             if lang:

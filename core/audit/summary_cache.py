@@ -82,10 +82,20 @@ class SummaryCache:
         library: str,
         version: str,
     ) -> Dict[str, CachedSummary]:
+        if not self._safe_component(library) or not self._safe_component(version):
+            return {}
         key = f"{library}/{version}"
         if key not in self._index:
             self._index[key] = self._load_version(library, version)
         return self._index[key]
+
+    @staticmethod
+    def _safe_component(value: str) -> bool:
+        if not value or ".." in value or "/" in value or "\\" in value:
+            return False
+        if Path(value).is_absolute():
+            return False
+        return True
 
     def store(
         self,
@@ -93,6 +103,8 @@ class SummaryCache:
         version: str,
         summaries: List[CachedSummary],
     ) -> Path:
+        if not self._safe_component(library) or not self._safe_component(version):
+            raise ValueError(f"unsafe cache key: {library!r}/{version!r}")
         lib_dir = self.cache_dir / library / version
         lib_dir.mkdir(parents=True, exist_ok=True)
 

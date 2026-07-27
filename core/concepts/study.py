@@ -62,8 +62,10 @@ def _load_doc_context(related_docs: list[dict]) -> str:
         filepath = entry.get("file", "")
         if not filepath:
             continue
-        # Defence: reject path traversal
+        # Defence: reject path traversal and absolute paths
         if ".." in Path(filepath).parts:
+            continue
+        if Path(filepath).is_absolute():
             continue
         try:
             content = Path(filepath).read_text(
@@ -1500,11 +1502,14 @@ def _dedup_concepts(concepts: list[Concept]) -> list[Concept]:
             if (
                 c.confidence in CONFIDENCE_GRADES
                 and existing.confidence in CONFIDENCE_GRADES
-                and CONFIDENCE_GRADES.index(c.confidence)
-                > CONFIDENCE_GRADES.index(existing.confidence)
             ):
-                existing.confidence = c.confidence
-                if len(c.description) > len(existing.description):
+                c_idx = CONFIDENCE_GRADES.index(c.confidence)
+                e_idx = CONFIDENCE_GRADES.index(existing.confidence)
+                if c_idx > e_idx:
+                    existing.confidence = c.confidence
+                    if len(c.description) > len(existing.description):
+                        existing.description = c.description
+                elif c_idx == e_idx and len(c.description) > len(existing.description):
                     existing.description = c.description
         else:
             c.id = norm

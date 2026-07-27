@@ -126,7 +126,7 @@ class BypassFinding:
             assumption=a_data.get("assumption", ""),
             category=cat,
             bug_class=a_data.get("bug_class", ""),
-            enforced_by=a_data.get("enforced_by", []),
+            enforced_by=a_data.get("enforced_by") or [],
         )
         try:
             tier = EvidenceTier(d.get("evidence_tier", "xref_backed"))
@@ -166,9 +166,9 @@ def assumption_from_dict(d: dict[str, Any]) -> SafetyAssumption:
         file=d.get("file", ""),
         assumption=d.get("assumption", ""),
         category=cat,
-        enforced_by=d.get("enforced_by", []),
+        enforced_by=d.get("enforced_by") or [],
         bug_class=d.get("bug_class", ""),
-        params_affected=d.get("params_affected", []),
+        params_affected=d.get("params_affected") or [],
         confidence=d.get("confidence", 0.5),
         evidence_tier=tier,
         source=d.get("source", ""),

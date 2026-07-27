@@ -21,6 +21,7 @@ complexity analysis itself.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
@@ -384,9 +385,9 @@ def _topological_sort(cfg, nodes: list) -> list:
     visited: Set[int] = set()
     order: list = []
 
-    stack = [entry]
+    stack = deque([entry])
     while stack:
-        node = stack.pop(0)
+        node = stack.popleft()
         nid = id(node)
         if nid in visited:
             continue

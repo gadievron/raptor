@@ -162,7 +162,10 @@ def run_executor_sync(
         if not tasks:
             _flush_glance_batch()
             if graph.pending > 0:
-                logger.warning("executor: no ready tasks but %d pending — cycle?", graph.pending)
+                logger.warning(
+                    "executor: no ready tasks but %d pending — cycle?",
+                    graph.pending,
+                )
             break
 
         task = tasks[0]
@@ -434,7 +437,8 @@ async def _run_async_body(
                 raise
             for t in batch_tasks:
                 graph.mark_complete(t.key)
-                stats.completed += 1
+                async with review_idx_lock:
+                    stats.completed += 1
             await _after_completion()
 
     async def _run_task(task: Any) -> None:
@@ -477,7 +481,8 @@ async def _run_async_body(
                 raise
 
             graph.mark_complete(task.key)
-            stats.completed += 1
+            async with review_idx_lock:
+                stats.completed += 1
             await _after_completion()
 
     initial = graph.pop_ready(ec.max_workers)
@@ -539,7 +544,8 @@ async def _run_async_body(
                         result.terminated_by = "llm_budget_exceeded"
                         return
                     raise
-                stats.repass_completed += 1
+                async with review_idx_lock:
+                    stats.repass_completed += 1
 
         repass_inflight: set[asyncio.Task] = set()
         for task in repass:
@@ -666,4 +672,11 @@ def _process_glance_batch(
             except RuntimeError as exc:
                 if "budget exceeded" in str(exc).lower():
                     raise
+            except Exception:
+                logger.warning(
+                    "glance fallback failed for %s:%s",
+                    task.gap.get("file", "?"),
+                    task.gap.get("name", "?"),
+                    exc_info=True,
+                )
 

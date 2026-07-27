@@ -30,14 +30,8 @@ def _extract_condition_from_label(label: str) -> Optional[str]:
 
 def _find_node_at_line(cfg, line: int):
     """Find the CFG node closest to the given source line."""
-    best = None
-    best_dist = float("inf")
-    for node in cfg.nodes():
-        dist = abs(node.lineno - line)
-        if dist < best_dist:
-            best_dist = dist
-            best = node
-    return best
+    from .cfg_utils import find_node_at_line
+    return find_node_at_line(cfg, line)
 
 
 def collect_guards_at_site(

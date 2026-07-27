@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -69,7 +70,7 @@ def _match_to_spec_key(match: dict, specs: list[TaintSpec]) -> str | None:
     """Map a CodeQL match back to the spec that produced it."""
     msg = match.get("message", "")
     for spec in specs:
-        if spec.function in msg:
+        if re.search(r'\b' + re.escape(spec.function) + r'\b', msg):
             return f"{spec.function}:{spec.file}:{spec.role}"
     return None
 
@@ -96,7 +97,7 @@ def make_codeql_tool_runner(
     Returns ``None`` if CodeQL CLI is not available.
     """
     try:
-        from packages.codeql.query_runner import CodeQLRunner
+        from packages.codeql.query_runner import QueryRunner as CodeQLRunner
     except ImportError:
         logger.debug("CodeQL runner not importable")
         return None

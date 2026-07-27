@@ -72,8 +72,8 @@ _NULL_RE = re.compile(
     r"|\b(?:nil|null|nullptr|NULL|Nil)\b"
     r"|\b\w+\s*(?:==|!=)\s*(?:nil|null|nullptr|NULL|None)\b"
     r"|\b(?:nil|null|nullptr|NULL|None)\s*(?:==|!=)\s*\w+"
-    # C-style: if (ptr), if (!ptr)
-    r"|!\s*\w+\s*[)\s{]"
+    # C-style: if (!ptr) — require pointer-like identifiers
+    r"|!\s*(?:p(?:tr)?|buf(?:fer)?|data|ctx|obj|handle|node|ref|mem|alloc|str|msg|dev|req|res|conn)\s*[)\s{]"
     # Optional chaining / unwrap
     r"|\?\."
     # Go: err != nil

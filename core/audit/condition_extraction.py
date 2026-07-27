@@ -789,6 +789,8 @@ def extract_sink_guards(
     # Extract guards for each call site
     results: List[SinkGuard] = []
 
+    from .condition_classifier import classify_condition
+
     for sink_line, sink_api in call_sites:
         # Find enclosing function
         target = _find_node_at_line(root, sink_line - 1)
@@ -806,7 +808,6 @@ def extract_sink_guards(
         for _cond_node, cond_text, polarity in conditionals:
             if not cond_text:
                 continue
-            from .condition_classifier import classify_condition
             category = classify_condition(cond_text, lang)
             guards.append(GuardCondition(
                 text=cond_text,

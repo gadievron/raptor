@@ -73,7 +73,7 @@ _SOURCE_CONFIDENCE: Dict[EvidenceSource, Confidence] = {
     EvidenceSource.LLM_CORROBORATED: Confidence.MEDIUM,
     EvidenceSource.DYNAMIC_SANITIZER: Confidence.HIGH,
     EvidenceSource.DYNAMIC_FRIDA: Confidence.HIGH,
-    EvidenceSource.DYNAMIC_CRASH: Confidence.HIGH,
+    EvidenceSource.DYNAMIC_CRASH: Confidence.MEDIUM,
     EvidenceSource.DYNAMIC_WITNESS: Confidence.HIGH,
     EvidenceSource.LIFECYCLE: Confidence.HIGH,
 }
@@ -235,6 +235,64 @@ def grade_evidence_record(record: Any) -> List[GradedEvidence]:
         items.append(grade_evidence(
             EvidenceSource.BINARY_ORACLE,
             f"{len(record.binary_sink_edges)} binary call edges to sinks",
+        ))
+
+    sink_args = getattr(record, "joern_sink_args", [])
+    if sink_args:
+        items.append(grade_evidence(
+            EvidenceSource.JOERN,
+            f"{len(sink_args)} sink argument flows",
+        ))
+
+    if getattr(record, "context_map_sink", None) is not None:
+        items.append(grade_evidence(
+            EvidenceSource.CALL_GRAPH,
+            "context-map sink match",
+        ))
+
+    if getattr(record, "transitive_taint", None) is not None:
+        items.append(grade_evidence(
+            EvidenceSource.TAINT_APPROX,
+            "transitive taint propagation",
+        ))
+
+    if getattr(record, "prefilter", None) is not None:
+        items.append(grade_evidence(
+            EvidenceSource.PREFILTER,
+            "prefilter match",
+        ))
+
+    app_sinks = getattr(record, "app_sink_targets", [])
+    if app_sinks:
+        items.append(grade_evidence(
+            EvidenceSource.CALL_GRAPH,
+            f"{len(app_sinks)} application sink targets",
+        ))
+
+    sanitizers = getattr(record, "sanitizer_calls", [])
+    if sanitizers:
+        items.append(grade_evidence(
+            EvidenceSource.TAINT_APPROX,
+            f"{len(sanitizers)} sanitizer calls",
+        ))
+
+    if getattr(record, "binary_surface_category", None):
+        items.append(grade_evidence(
+            EvidenceSource.BINARY_ORACLE,
+            f"surface category: {record.binary_surface_category}",
+        ))
+
+    if getattr(record, "binary_parser_boundary", False):
+        items.append(grade_evidence(
+            EvidenceSource.BINARY_ORACLE,
+            "parser boundary function",
+        ))
+
+    layer0 = getattr(record, "binary_layer0_findings", [])
+    if layer0:
+        items.append(grade_evidence(
+            EvidenceSource.BINARY_ORACLE,
+            f"{len(layer0)} layer-0 binary findings",
         ))
 
     return items

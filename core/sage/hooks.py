@@ -583,12 +583,13 @@ def store_finding_verdict(
         return False
     try:
         fp = _finding_fingerprint(rule_id, file_path, function)
+        _s = _sanitise_delim
         return _propose_redacted(
             client=client,
             content=(
-                f"Finding verdict: fp={fp} rule={rule_id} "
-                f"file={file_path} fn={function} "
-                f"||src={source_hash}|| ||verdict={verdict}||"
+                f"Finding verdict: fp={fp} rule={_s(rule_id)} "
+                f"file={_s(file_path)} fn={_s(function)} "
+                f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}||"
             ),
             memory_type="fact",
             domain_tag=_fp_domain(repo_path),

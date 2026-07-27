@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -90,6 +91,8 @@ class BuildIDCache:
         data: Dict[str, Any],
         source_command: str = "",
     ) -> Path:
+        if not re.match(r'^[0-9a-fA-F]+$', build_id):
+            return
         entry_dir = self.cache_dir / build_id
         entry_dir.mkdir(parents=True, exist_ok=True)
 

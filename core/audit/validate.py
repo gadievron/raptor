@@ -170,6 +170,7 @@ def _dispatch_validate_unsafe(
             "validate post-pass: %d findings; truncating to %d",
             findings_count, _MAX_VALIDATE_FINDINGS,
         )
+        findings_count = _MAX_VALIDATE_FINDINGS
 
     target_path = Path(target_path).resolve()
     audit_out_dir = Path(audit_out_dir).resolve()

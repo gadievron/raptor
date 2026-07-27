@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from core.audit.dynamic_sweep import (
+    DynamicSweepResult,
     _has_sanitizer_output,
     _is_buffer_overflow,
     _is_compilable_language,
@@ -47,6 +48,11 @@ class TestShouldRunDynamic:
 
     def test_already_dynamic_does_not_trigger(self):
         o = FakeOutcome(status="finding", evidence_tool="dynamic")
+        c = FakeConfig(dynamic_validation=True)
+        assert should_run_dynamic(o, c) is False
+
+    def test_already_dynamic_crash_does_not_trigger(self):
+        o = FakeOutcome(status="finding", evidence_tool="dynamic:crash")
         c = FakeConfig(dynamic_validation=True)
         assert should_run_dynamic(o, c) is False
 
@@ -184,3 +190,31 @@ class TestBugClassDetection:
         assert _is_compilable_language("c.cpp") is True
         assert _is_compilable_language("d.go") is False
         assert _is_compilable_language("e.rs") is False
+
+
+class TestEvidenceStrength:
+    """Sanitiser hits and bare crashes must produce different strengths."""
+
+    def test_sanitizer_hit_is_sanitizer(self):
+        r = DynamicSweepResult(
+            compiled=True, ran=True, crashed=True,
+            sanitizer_output="ERROR: AddressSanitizer: heap-buffer-overflow",
+            exit_code=1, evidence_strength="sanitizer", duration_s=0.1,
+        )
+        assert r.evidence_strength == "sanitizer"
+
+    def test_bare_crash_is_crash(self):
+        r = DynamicSweepResult(
+            compiled=True, ran=True, crashed=True,
+            sanitizer_output=None,
+            exit_code=139, evidence_strength="crash", duration_s=0.1,
+        )
+        assert r.evidence_strength == "crash"
+
+    def test_clean_exit_is_inconclusive(self):
+        r = DynamicSweepResult(
+            compiled=True, ran=True, crashed=False,
+            sanitizer_output=None,
+            exit_code=0, evidence_strength="inconclusive", duration_s=0.1,
+        )
+        assert r.evidence_strength == "inconclusive"

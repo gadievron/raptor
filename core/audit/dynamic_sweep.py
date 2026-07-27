@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -54,7 +55,7 @@ def should_run_dynamic(
         return False
 
     evidence_tool = getattr(outcome, "evidence_tool", "")
-    if evidence_tool == "dynamic":
+    if evidence_tool and evidence_tool.startswith("dynamic"):
         return False
 
     file_path = getattr(outcome, "file", "")
@@ -103,6 +104,9 @@ def generate_c_harness(
     source = ctx.get("source", "")
     file_path = getattr(outcome, "file", "")
 
+    if not _is_valid_identifier(function_name):
+        return ""
+
     cwe = ""
     review = getattr(outcome, "review_result", None) or {}
     cwe = review.get("cwe_class", "") or review.get("cwe", "")
@@ -128,7 +132,12 @@ def generate_python_harness(
     hypothesis = getattr(outcome, "hypothesis", "")
     file_path = getattr(outcome, "file", "")
 
+    if not _is_valid_identifier(function_name):
+        return ""
+
     module = file_path.removesuffix(".py").replace("/", ".")
+    if not all(_is_valid_identifier(part) for part in module.split(".")):
+        return ""
 
     return (
         f"import sys\n"
@@ -197,7 +206,11 @@ def _run_c_harness(
     if not harness_code:
         return None
 
-    target_path = Path(getattr(config, "target_path", "."))
+    raw_target = getattr(config, "target_path", None)
+    if not raw_target:
+        logger.warning("dynamic_sweep: target_path not set, skipping C harness")
+        return None
+    target_path = Path(raw_target)
     file_path = getattr(outcome, "file", "")
     compiler = _detect_compiler(target_path, file_path)
 
@@ -269,9 +282,9 @@ def _run_c_harness(
         sanitizer_hit = _has_sanitizer_output(combined_output)
 
         if sanitizer_hit:
-            strength = "confirmed"
+            strength = "sanitizer"
         elif crashed:
-            strength = "confirmed"
+            strength = "crash"
         else:
             strength = "inconclusive"
 
@@ -279,7 +292,9 @@ def _run_c_harness(
             compiled=True,
             ran=True,
             crashed=crashed,
-            sanitizer_output=combined_output[:2000] if sanitizer_hit or crashed else None,
+            sanitizer_output=(
+                combined_output[:2000] if sanitizer_hit or crashed else None
+            ),
             exit_code=run_result.returncode,
             evidence_strength=strength,
             duration_s=time.monotonic() - start,
@@ -294,7 +309,13 @@ def _run_python_harness(
 ) -> Optional[DynamicSweepResult]:
     """Run a Python test harness."""
     harness_code = generate_python_harness(outcome, ctx)
-    target_path = Path(getattr(config, "target_path", "."))
+    if not harness_code:
+        return None
+    raw_target = getattr(config, "target_path", None)
+    if not raw_target:
+        logger.warning("dynamic_sweep: target_path not set, skipping Python harness")
+        return None
+    target_path = Path(raw_target)
 
     safe_env = _get_safe_env()
     safe_env["PYTHONPATH"] = str(target_path)
@@ -304,12 +325,23 @@ def _run_python_harness(
         harness_path.write_text(harness_code)
 
         try:
-            run_result = subprocess.run(
-                ["python3", str(harness_path)],
-                capture_output=True, text=True,
-                timeout=_HARNESS_TIMEOUT_S,
-                env=safe_env,
-            )
+            try:
+                from core.sandbox import run as sandbox_run
+                run_result = sandbox_run(
+                    ["python3", str(harness_path)],
+                    block_network=True,
+                    caller_label="dynamic_sweep_python_harness",
+                    capture_output=True, text=True,
+                    timeout=_HARNESS_TIMEOUT_S,
+                    env=safe_env,
+                )
+            except (ImportError, OSError):
+                run_result = subprocess.run(
+                    ["python3", str(harness_path)],
+                    capture_output=True, text=True,
+                    timeout=_HARNESS_TIMEOUT_S,
+                    env=safe_env,
+                )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return DynamicSweepResult(
                 compiled=True, ran=False, crashed=False,
@@ -331,8 +363,8 @@ def _run_python_harness(
 
         has_unexpected = "UNEXPECTED_EXCEPTION" in combined_output
 
-        if crashed or has_unexpected:
-            strength = "confirmed"
+        if has_unexpected or crashed:
+            strength = "crash"
         else:
             strength = "inconclusive"
 
@@ -340,11 +372,21 @@ def _run_python_harness(
             compiled=True,
             ran=True,
             crashed=crashed,
-            sanitizer_output=combined_output[:2000] if crashed or has_unexpected else None,
+            sanitizer_output=(
+                combined_output[:2000] if crashed or has_unexpected else None
+            ),
             exit_code=run_result.returncode,
             evidence_strength=strength,
             duration_s=time.monotonic() - start,
         )
+
+
+_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _is_valid_identifier(name: str) -> bool:
+    """Return True when *name* is a safe C/Python identifier."""
+    return bool(_IDENT_RE.match(name))
 
 
 def _is_compilable_language(file_path: str) -> bool:
@@ -370,10 +412,18 @@ def _has_sanitizer_output(output: str) -> bool:
     return any(m in output for m in markers)
 
 
+_CWE_SPLIT_RE = re.compile(r'[\s,;/|]+')
+
+
+def _cwe_tokens(cwe: str) -> set[str]:
+    """Split a CWE string into exact tokens for membership tests."""
+    return set(_CWE_SPLIT_RE.split(cwe.upper())) if cwe else set()
+
+
 def _is_buffer_overflow(cwe: str, hypothesis: str) -> bool:
-    cwe_upper = cwe.upper()
+    tokens = _cwe_tokens(cwe)
     return (
-        any(c in cwe_upper for c in ("CWE-120", "CWE-121", "CWE-122", "CWE-787"))
+        bool(tokens & {"CWE-120", "CWE-121", "CWE-122", "CWE-787"})
         or "buffer overflow" in hypothesis.lower()
         or "out of bounds" in hypothesis.lower()
     )
@@ -381,14 +431,15 @@ def _is_buffer_overflow(cwe: str, hypothesis: str) -> bool:
 
 def _is_format_string(cwe: str, hypothesis: str) -> bool:
     return (
-        "CWE-134" in cwe.upper()
+        "CWE-134" in _cwe_tokens(cwe)
         or "format string" in hypothesis.lower()
     )
 
 
 def _is_use_after_free(cwe: str, hypothesis: str) -> bool:
+    tokens = _cwe_tokens(cwe)
     return (
-        any(c in cwe.upper() for c in ("CWE-416", "CWE-415"))
+        bool(tokens & {"CWE-416", "CWE-415"})
         or "use after free" in hypothesis.lower()
         or "use-after-free" in hypothesis.lower()
         or "double free" in hypothesis.lower()
@@ -397,18 +448,20 @@ def _is_use_after_free(cwe: str, hypothesis: str) -> bool:
 
 def _is_null_deref(cwe: str, hypothesis: str) -> bool:
     return (
-        "CWE-476" in cwe.upper()
+        "CWE-476" in _cwe_tokens(cwe)
         or "null" in hypothesis.lower()
     )
 
 
 def _harness_buffer_overflow(func: str, source: str, file_path: str) -> str:
+    # Syntactic probe only — does not link the target; compiled=False is the
+    # expected result when the target's symbols are not self-contained.
     return (
         f'#include <string.h>\n'
         f'#include <stdlib.h>\n'
         f'#include <stdio.h>\n'
         f'\n'
-        f'// Include the target source inline for standalone compilation\n'
+        f'// Syntactic probe — does not link the target\n'
         f'// Hypothesis: buffer overflow in {func}\n'
         f'\n'
         f'int main(void) {{\n'

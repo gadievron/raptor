@@ -511,11 +511,24 @@ def check_operation_order(
     if len(common) < 2:
         return None
 
+    positions_a: dict[str, list[int]] = {}
+    for idx, op in enumerate(ops_a):
+        positions_a.setdefault(op, []).append(idx)
+    positions_b: dict[str, list[int]] = {}
+    for idx, op in enumerate(ops_b):
+        positions_b.setdefault(op, []).append(idx)
+
     for i in range(len(common) - 1):
-        idx_a_i = ops_a.index(common[i])
-        idx_a_next = ops_a.index(common[i + 1])
-        idx_b_i = ops_b.index(common[i])
-        idx_b_next = ops_b.index(common[i + 1])
+        idxs_a_i = positions_a.get(common[i], [])
+        idxs_a_next = positions_a.get(common[i + 1], [])
+        idxs_b_i = positions_b.get(common[i], [])
+        idxs_b_next = positions_b.get(common[i + 1], [])
+        if not idxs_a_i or not idxs_a_next or not idxs_b_i or not idxs_b_next:
+            continue
+        idx_a_i = idxs_a_i[-1]
+        idx_a_next = idxs_a_next[-1]
+        idx_b_i = idxs_b_i[-1]
+        idx_b_next = idxs_b_next[-1]
 
         if (idx_a_i < idx_a_next) != (idx_b_i < idx_b_next):
             return (
@@ -558,7 +571,8 @@ def format_asymmetry_report(asymmetries: List[Asymmetry]) -> str:
         "",
     ]
 
-    for a in sorted(asymmetries, key=lambda x: ("high", "medium", "low").index(x.severity)):
+    _sev_order = {"high": 0, "medium": 1, "low": 2}
+    for a in sorted(asymmetries, key=lambda x: _sev_order.get(x.severity, 3)):
         lines.append(format_asymmetry_finding(a))
         lines.append("")
 

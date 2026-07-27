@@ -83,11 +83,10 @@ def validate_spec(spec: DarkWitnessSpec) -> str | None:
     is the primary defense, this catches obvious injection attempts
     before code generation.
     """
-    lang = spec.language
-
     if not _IDENTIFIER_RE.match(spec.function):
         return f"invalid function name: {spec.function!r}"
-    if lang in ("ruby", "php", "perl") and spec.function.lower() in _DANGEROUS_INTERP_FUNCS:
+    if spec.language in ("python", "ruby", "php", "perl", "javascript", "typescript",
+                         "lua") and spec.function.lower() in _DANGEROUS_INTERP_FUNCS:
         return f"dangerous builtin as function name: {spec.function!r}"
 
     lc = spec.lang_config
@@ -244,9 +243,18 @@ def _classify_json_output(
             )
         if spec.expected_return is not None:
             if language == "python":
+                # Python harness uses repr(), which includes quotes for strings
                 expected_repr = repr(spec.expected_return)
             else:
                 expected_repr = str(spec.expected_return)
+                # Strip surrounding quotes from actual output for non-Python
+                # languages — harnesses may quote the value in JSON
+                if (
+                    len(actual_repr) >= 2
+                    and actual_repr[0] in ('"', "'")
+                    and actual_repr[-1] == actual_repr[0]
+                ):
+                    actual_repr = actual_repr[1:-1]
             if actual_repr == expected_repr:
                 return DarkVerifyResult(
                     finding_key=spec.finding_key, verdict="confirmed",
@@ -309,6 +317,10 @@ def _run_script_witness(
                 tool_paths=[str(script_file.parent)],
             )
         except ImportError:
+            logger.warning(
+                "sandbox unavailable, falling back to unsandboxed execution for %s",
+                language,
+            )
             from core.config import RaptorConfig
             proc = subprocess.run(
                 cmd_prefix + [str(script_file)],
@@ -410,6 +422,10 @@ def _run_native_binary(
             strict_env=True,
         )
     except ImportError:
+        logger.warning(
+            "sandbox unavailable, falling back to unsandboxed"
+            " execution for native binary",
+        )
         proc = subprocess.run(
             [str(binary)],
             capture_output=True, text=True,
@@ -606,8 +622,14 @@ def _execute_go(
         build_files = [str(harness_file)]
         if go_package == "main":
             source_file = target_root / spec.file
+            src_text = source_file.read_text(encoding="utf-8")
+            src_text = re.sub(
+                r'(?m)^func\s+main\s*\(\s*\)\s*\{',
+                'func _original_main() {',
+                src_text,
+            )
             target_copy = work_dir / "target_source.go"
-            target_copy.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
+            target_copy.write_text(src_text, encoding="utf-8")
             build_files.append(str(target_copy))
 
         from core.config import RaptorConfig
@@ -722,12 +744,14 @@ def _execute_rust(
         binary = work_dir / "harness_bin"
 
         source_file = target_root / spec.file
+        source_copy = work_dir / "target_source.rs"
+        src_content = source_file.read_text(encoding="utf-8")
+        source_copy.write_text(src_content, encoding="utf-8")
         compile_cmd = [
             rustc, "--edition", "2021",
             "-Z", "sanitizer=address",
             "-g", "-o", str(binary),
-            str(harness_file),
-            "--extern", f"target={source_file}",
+            str(harness_file), str(source_copy),
         ]
 
         from core.config import RaptorConfig
@@ -742,7 +766,7 @@ def _execute_rust(
             compile_cmd_simple = [
                 rustc, "--edition", "2021",
                 "-g", "-o", str(binary),
-                str(source_file),
+                str(harness_file), str(source_copy),
             ]
             comp = subprocess.run(
                 compile_cmd_simple, capture_output=True, text=True,
@@ -834,6 +858,10 @@ def _execute_java(
                 tool_paths=[str(work_dir)],
             )
         except ImportError:
+            logger.warning(
+                "sandbox unavailable, falling back to"
+                " unsandboxed execution for java",
+            )
             proc = subprocess.run(
                 run_cmd, capture_output=True, text=True,
                 timeout=timeout_s, env=safe_env,

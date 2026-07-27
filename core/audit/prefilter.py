@@ -289,7 +289,7 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
         m = re.search(r"return\s+(\w+)$", body)
         if m:
             returned = m.group(1).lower()
-            if returned not in _SECURITY_SENSITIVE_NAMES:
+            if not any(s in returned for s in _SECURITY_SENSITIVE_NAMES):
                 return True
 
     return False
@@ -502,7 +502,7 @@ def _check_c_use_after_free(
                 ))
 
         for var in list(freed_vars):
-            if re.search(rf'\b{re.escape(var)}\s*=\s*', stripped):
+            if re.search(rf'\b{re.escape(var)}\s*(?<!=)=(?!=)\s*', stripped):
                 if not re.search(r'\bfree\s*\(', stripped):
                     del freed_vars[var]
 
@@ -739,7 +739,7 @@ def run_prefilter_batch(
                 try:
                     all_lines = full.read_text(errors="replace").splitlines()
                     start = max(0, func.get("line_start", 1) - 1)
-                    end = func.get("line_end", start + 50)
+                    end = func.get("line_end") or (start + 50)
                     source = "\n".join(all_lines[start:end])
                 except OSError:
                     source = ""

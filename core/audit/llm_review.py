@@ -599,7 +599,12 @@ def make_review_fn(
                 raise _ContentFilterError(str(exc)) from exc
             raise
 
-        result = response.result if hasattr(response, "result") else response[0]
+        if hasattr(response, "result"):
+            result = response.result
+        elif response:
+            result = response[0]
+        else:
+            result = {"status": "error", "body": "empty LLM response"}
         duration = time.monotonic() - t0
 
         status = result.get("status", "suspicious")
@@ -664,6 +669,8 @@ def make_review_fn(
 def call_llm_for_rule_refinement(
     prompt: str,
     config: OrchestratorConfig,
+    *,
+    client: Optional[Any] = None,
 ) -> Optional[str]:
     """Single-shot free-form LLM call for Semgrep rule refinement.
 
@@ -671,8 +678,9 @@ def call_llm_for_rule_refinement(
     Uses the same LLM dispatch as the review loop.
     """
     try:
-        from core.llm.client import LLMClient
-        client = LLMClient()
+        if client is None:
+            from core.llm.client import LLMClient
+            client = LLMClient()
         response = client.generate(
             prompt,
             system_prompt="You are a Semgrep rule author. Return only YAML.",

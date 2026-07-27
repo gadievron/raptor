@@ -156,9 +156,9 @@ def is_entry_unreachable(
     if function_name in entry_names:
         return False
 
-    for edge in call_edges:
-        if edge.get("callee") == function_name:
-            return False
+    callee_set = {edge.get("callee") for edge in call_edges}
+    if function_name in callee_set:
+        return False
 
     if joern_server is not None:
         joern_callers = _joern_find_callers(function_name, joern_server)

@@ -376,6 +376,23 @@ libexec/raptor-build-cpg-cache "$RESOLVED_TARGET" "$WORKDIR"
 Opt-in — skipped when Joern is not installed or the target has no
 supported source files. Writes `cpg-cache-manifest.json` to `$WORKDIR`.
 
+**[MAP-5i] Enrich with Joern taint-flow confirmation (optional)**
+
+After building the CPG cache (MAP-5h), confirm which entry-point → sink
+pairs have a mechanically-verified taint flow. Annotates entry points
+with `has_taint_flow` and `taint_reaches_sinks`, sinks with
+`taint_reached_from`, and adds a `taint_summary` to the context map.
+
+```bash
+libexec/raptor-enrich-context-map-taint "$WORKDIR"
+```
+
+Opt-in — skipped when no CPG cache exists or Joern is not installed.
+Caps at 500 (entry × sink) pairs to prevent combinatorial explosion.
+Idempotent. Downstream consumers: `/validate` Stage B imports
+`has_taint_flow` via the understand bridge, pre-confirming B-3.1
+reachability. `/diagram` renders confirmed flows as solid edges.
+
 **[MAP-6] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.

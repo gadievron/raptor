@@ -265,7 +265,11 @@ def _detect_go_sentinel(
             continue
 
         m = _GO_MAP_NO_OK.search(line)
-        if m and "," not in line[:line.index("[")]:
+        try:
+            bracket_idx = line.index("[")
+        except ValueError:
+            bracket_idx = len(line)
+        if m and "," not in line[:bracket_idx]:
             var_name = m.group(1)
             window_end = min(lineno_0 + 5, len(lines))
             window = "\n".join(lines[lineno_0:window_end])
@@ -496,11 +500,15 @@ def _is_inside_except(
     node: ast.AST, func_node: ast.AST,
 ) -> bool:
     """Check if a node is inside an except handler within the function."""
+    node_line = getattr(node, "lineno", -1)
+    if node_line < 0:
+        return False
     for handler_node in ast.walk(func_node):
         if isinstance(handler_node, ast.ExceptHandler):
-            for child in ast.walk(handler_node):
-                if child is node:
-                    return True
+            h_start = getattr(handler_node, "lineno", -1)
+            h_end = getattr(handler_node, "end_lineno", -1)
+            if h_start <= node_line <= h_end:
+                return True
     return False
 
 

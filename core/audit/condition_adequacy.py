@@ -210,7 +210,7 @@ _register((
 ), _EXEC_SPEC)
 
 _register((
-    "eval", "exec", "compile", "Function",
+    "eval", "eval_exec", "compile", "Function",
     "__import__", "importlib.import_module",
     "loadstring", "dofile", "load",
 ), _EVAL_SPEC)

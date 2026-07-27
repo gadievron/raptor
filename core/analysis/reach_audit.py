@@ -41,6 +41,7 @@ _LIVE_VERDICTS = frozenset({
 })
 # "uncertain" is neither — the substrate declines to claim.
 
+# NOTE: single-threaded use assumed — no synchronisation on this global.
 _joern_server = None
 
 

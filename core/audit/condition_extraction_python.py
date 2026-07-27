@@ -364,9 +364,10 @@ def extract_sink_guards_python(
 
     if sink_lines is not None:
         # Find calls at specified lines
+        sink_lines_set = set(sink_lines)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and hasattr(node, "lineno"):
-                if node.lineno in sink_lines:
+                if node.lineno in sink_lines_set:
                     name = _call_name(node)
                     call_sites.append((node, name or "<unknown>"))
     else:

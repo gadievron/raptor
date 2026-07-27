@@ -75,6 +75,32 @@ At each sink, record:
 - What an attacker could inject and what the effect would be
 - What would need to be true for exploitation (prerequisites)
 
+**[TRACE-4b] Mechanical Taint Verification (optional)**
+
+If a CPG is available (built by `--map` MAP-5h or present in the project
+cache), mechanically confirm or refute the traced flow using Joern taint
+analysis. Uses `core.orchestration.joern_trace.enrich_trace_with_joern`.
+
+For each source-to-sink pair identified in TRACE-2, run a taint-exists
+query. Record the result in `joern_verification` on the trace:
+
+```json
+{
+  "joern_verification": {
+    "verified": true,
+    "joern_flow_count": 2,
+    "elapsed_ms": 1200,
+    "joern_steps": [{"file": "...", "line": 31, "code": "...", "function": "..."}]
+  }
+}
+```
+
+When Joern refutes a flow the LLM marked high-confidence, downgrade to
+`"confidence": "mechanical_refuted"` and note the discrepancy. When Joern
+confirms, upgrade to `"confidence": "mechanically_confirmed"`.
+
+Opt-in — skipped when Joern is not installed or no CPG cache exists.
+
 **[TRACE-5] Control Assessment**
 
 Summarize what the attacker controls:

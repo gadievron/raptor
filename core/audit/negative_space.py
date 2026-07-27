@@ -288,7 +288,7 @@ def discover_conventions(
             source = gap.get("source", "")
             if not source:
                 continue
-            key = f"{gap['file']}:{gap['name']}"
+            key = f"{gap.get('file', '')}:{gap.get('name', '')}"
 
             for pat in patterns_to_check:
                 try:
@@ -471,7 +471,7 @@ def _looks_like_handler(gap: Dict[str, Any]) -> bool:
         "index", "show", "edit", "new",
     ]
     for sig in handler_signals:
-        if sig in name:
+        if re.search(r'(?:^|_)' + re.escape(sig) + r'(?:_|$)', name):
             return True
 
     source = gap.get("source", "")
@@ -505,6 +505,7 @@ def check_sibling_negative_space(
     """
     from core.audit.sibling_analysis import (
         SiblingGroup,
+        SiblingPath,
         SiblingType,
         find_asymmetries,
         identify_peer_groups,
@@ -527,9 +528,21 @@ def check_sibling_negative_space(
     findings: List[NegativeSpaceFinding] = []
 
     for pg in peer_groups:
+        enriched_siblings = []
+        for sibling in pg.siblings:
+            sib_copy = SiblingPath(
+                label=sibling.label,
+                file=sibling.file,
+                function=sibling.function,
+                line=sibling.line,
+                is_error_path=sibling.is_error_path,
+                properties=dict(sibling.properties),
+            )
+            enriched_siblings.append(sib_copy)
+
         for conv in conventions:
-            for sibling in pg.siblings:
-                key = f"{sibling.file}:{sibling.function}"
+            for sib_copy in enriched_siblings:
+                key = f"{sib_copy.file}:{sib_copy.function}"
                 gap = gap_by_key.get(key)
                 if not gap:
                     continue
@@ -540,13 +553,13 @@ def check_sibling_negative_space(
                         adheres = bool(re.search(conv.pattern, source))
                     except re.error:
                         pass
-                sibling.properties[f"convention_{conv.concern}"] = adheres
+                sib_copy.properties[f"convention_{conv.concern}"] = adheres
 
         enriched_group = SiblingGroup(
             group_id=pg.group_id,
             sibling_type=SiblingType.PEER_FUNCTIONS,
             description=pg.description,
-            siblings=pg.siblings,
+            siblings=enriched_siblings,
         )
         asymmetries = find_asymmetries(enriched_group)
 
@@ -723,7 +736,11 @@ def check_resource_exhaustion(
                 ))
 
         if _HASH_COLLISION.search(source):
-            if not _HASH_COLLISION_GUARD.search(source):
+            has_external_input = bool(re.search(
+                r'\b(?:request|input|argv|user|params|query|form|body|headers)\b',
+                source, re.I,
+            ))
+            if has_external_input and not _HASH_COLLISION_GUARD.search(source):
                 findings.append(NegativeSpaceFinding(
                     check_type="resource_exhaustion",
                     expected="size limit on hash-based container with external keys",
@@ -1054,12 +1071,12 @@ def check_signal_safety(
     handler_funcs: Set[str] = set()
     for gap in gaps:
         source = gap.get("source", "")
-        if re.search(r"signal\s*\(|sigaction\s*\(", source):
-            callees = gap.get("callees", [])
-            for c in callees:
-                name = c if isinstance(c, str) else c.get("name", "")
-                if name:
-                    handler_funcs.add(name)
+        handler_matches = re.findall(
+            r"signal\s*\(\s*\w+\s*,\s*(\w+)\s*\)", source,
+        )
+        for hname in handler_matches:
+            if hname not in ("SIG_IGN", "SIG_DFL"):
+                handler_funcs.add(hname)
 
     for gap in gaps:
         name = gap.get("name", "")

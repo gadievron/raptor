@@ -69,14 +69,8 @@ def _default_guard_classifier(condition: ControlCondition, variable: str) -> boo
 
 def _find_node_at_line(cfg, line: int):
     """Find the CFG node at or nearest to the given line."""
-    best = None
-    best_dist = float("inf")
-    for node in cfg.nodes():
-        dist = abs(node.lineno - line)
-        if dist < best_dist:
-            best_dist = dist
-            best = node
-    return best
+    from .cfg_utils import find_node_at_line
+    return find_node_at_line(cfg, line)
 
 
 def _find_guards(
@@ -194,6 +188,14 @@ def query(
 
     paths, complete = _enumerate_paths(cfg, source_node, sink_node)
 
+    if not paths:
+        return GuardBypassResult(
+            bypassable_paths=[],
+            constraining_guards=guards,
+            must_visit_guards=[],
+            confidence="structural" if complete else "incomplete",
+        )
+
     bypassable: List[List[int]] = []
     must_visit: Set[int] = set(range(len(guards)))
 
@@ -235,7 +237,7 @@ def check_guard_coverage(
     if read_node is None:
         return False
 
-    entry_node = cfg.entry
+    entry_node = cfg.entry_node if hasattr(cfg, "entry_node") else cfg.entry
     condition_edges = extract_conditions_from_cfg(cfg)
 
     guard_lines: Set[int] = set()

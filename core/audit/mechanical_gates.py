@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections import deque
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -71,9 +72,9 @@ def build_provenance_map(
         }
 
         visited: set[str] = set()
-        queue = [ep_key]
+        queue = deque([ep_key])
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             if current in visited:
                 continue
             visited.add(current)
@@ -360,6 +361,8 @@ def detect_constant_dangerous_calls(
             arg_strs = []
             for arg in node.args:
                 arg_strs.append(_const_repr(arg, module_constants))
+            for kw in node.keywords:
+                arg_strs.append(_const_repr(kw.value, module_constants))
             results.append({
                 "call": call_name,
                 "line": getattr(node, "lineno", 0),
@@ -394,7 +397,9 @@ def _is_constant(node: ast.AST, module_constants: dict[str, Any]) -> bool:
             all(_is_constant(k, module_constants) for k in node.keys if k)
             and all(_is_constant(v, module_constants) for v in node.values)
         )
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+    if isinstance(node, ast.UnaryOp) and isinstance(
+        node.op, (ast.Not, ast.USub, ast.UAdd, ast.Invert),
+    ):
         return _is_constant(node.operand, module_constants)
     return False
 

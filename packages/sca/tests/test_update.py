@@ -102,6 +102,7 @@ def test_pom_xml_rewrite_bumps_version(tmp_path: Path) -> None:
     out = tmp_path / "out"
     rc = update.main([
         "--findings", str(findings), "--out", str(out), "--allow-major",
+        "--offline",
     ])
     assert rc == 0
     # Find the proposed file by walking the tree (path layout depends on cwd).
@@ -133,7 +134,8 @@ def test_pom_xml_with_property_reference_skipped(tmp_path: Path) -> None:
         manifest=pom,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out), "--allow-major"])
+    update.main(["--findings", str(findings), "--out", str(out), "--allow-major",
+                  "--offline"])
     changes = json.loads((out / "changes.json").read_text())
     assert changes[0]["skipped_reason"] is not None
     assert "property reference" in changes[0]["skipped_reason"]
@@ -155,7 +157,7 @@ def test_package_json_caret_preserved(tmp_path: Path) -> None:
         manifest=pkg, pin_style="caret",
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("package.json"))[0]
     obj = json.loads(proposed.read_text())
     assert obj["dependencies"]["lodash"] == "^4.17.21"
@@ -173,7 +175,7 @@ def test_package_json_exact_pin_replaced(tmp_path: Path) -> None:
         manifest=pkg,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("package.json"))[0]
     assert json.loads(proposed.read_text())["dependencies"]["lodash"] == "4.17.21"
 
@@ -189,7 +191,7 @@ def test_package_json_git_url_skipped(tmp_path: Path) -> None:
         manifest=pkg,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     changes = json.loads((out / "changes.json").read_text())
     assert changes[0]["skipped_reason"] is not None
 
@@ -207,7 +209,7 @@ def test_requirements_txt_rewrite(tmp_path: Path) -> None:
         manifest=req,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("requirements.txt"))[0]
     body = proposed.read_text()
     assert "django==4.2.10" in body
@@ -227,7 +229,7 @@ def test_requirements_txt_pep503_normalisation(tmp_path: Path) -> None:
         manifest=req,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("requirements.txt"))[0]
     assert "==1.0.1" in proposed.read_text()
 
@@ -248,7 +250,7 @@ def test_requirements_txt_prose_comment_not_mangled(tmp_path: Path) -> None:
         manifest=req,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("requirements-dev.txt"))[0]
     body = proposed.read_text()
     assert "pytest==9.1.1" in body
@@ -272,7 +274,7 @@ def test_requirements_txt_bare_commented_dep_gets_pinned(tmp_path: Path) -> None
         manifest=req,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("requirements.txt"))[0]
     body = proposed.read_text()
     assert "pytest==9.1.1" in body
@@ -299,7 +301,7 @@ dependencies = [
         manifest=py,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("pyproject.toml"))[0]
     body = proposed.read_text()
     assert '"django==4.2.10"' in body
@@ -319,7 +321,7 @@ django = "^4.2.7"
         manifest=py,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("pyproject.toml"))[0]
     body = proposed.read_text()
     assert 'django = "^4.2.10"' in body
@@ -348,6 +350,7 @@ def test_fix_filter_restricts_to_listed_advisories(tmp_path: Path) -> None:
         "--findings", str(findings),
         "--out", str(out),
         "--fix", "GHSA-keep",
+        "--offline",
     ])
     changes = json.loads((out / "changes.json").read_text())
     names = {c["name"] for c in changes}
@@ -369,7 +372,7 @@ def test_minimal_picks_max_fix_across_findings(tmp_path: Path) -> None:
                   advisory_id="GHSA-2"),
     ])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     proposed = list((out / "proposed").rglob("package.json"))[0]
     assert json.loads(proposed.read_text())["dependencies"]["x"] == "1.10.0"
 
@@ -385,6 +388,7 @@ def test_allow_major_gates_cross_major_upgrade(tmp_path: Path) -> None:
     out_no_major = tmp_path / "out_no_major"
     rc = update.main([
         "--findings", str(findings), "--out", str(out_no_major),
+        "--offline",
     ])
     # No proposed file because the only fix crosses a major boundary
     # and --allow-major wasn't supplied.
@@ -394,7 +398,7 @@ def test_allow_major_gates_cross_major_upgrade(tmp_path: Path) -> None:
     out_allow = tmp_path / "out_allow"
     update.main([
         "--findings", str(findings), "--out", str(out_allow),
-        "--allow-major",
+        "--allow-major", "--offline",
     ])
     proposed = list((out_allow / "proposed").rglob("package.json"))[0]
     assert json.loads(proposed.read_text())["dependencies"]["x"] == "2.0.0"
@@ -413,7 +417,7 @@ def test_pin_only_skips_loose_pins(tmp_path: Path) -> None:
     ])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out),
-                 "--pin-only"])
+                 "--pin-only", "--offline"])
     changes = {c["name"]: c for c in json.loads(
         (out / "changes.json").read_text(),
     )}

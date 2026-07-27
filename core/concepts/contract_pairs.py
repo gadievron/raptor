@@ -415,14 +415,14 @@ def _enrich_with_call_graph(
         evidence: dict[str, dict[str, list[dict[str, Any]]]] = {}
         for pname in prod_names:
             for fpath, caller, line in callee_callers.get(pname, []):
-                key = f"{fpath}:{caller}"
+                key = f"{fpath}\x00{caller}"
                 evidence.setdefault(key, {"producers": [], "consumers": []})
                 evidence[key]["producers"].append(
                     {"function": pname, "line": line},
                 )
         for cname in cons_names:
             for fpath, caller, line in callee_callers.get(cname, []):
-                key = f"{fpath}:{caller}"
+                key = f"{fpath}\x00{caller}"
                 evidence.setdefault(key, {"producers": [], "consumers": []})
                 evidence[key]["consumers"].append(
                     {"function": cname, "line": line},
@@ -430,7 +430,7 @@ def _enrich_with_call_graph(
 
         for caller_key, ev in evidence.items():
             if ev["producers"] and ev["consumers"]:
-                fpath, caller = caller_key.split(":", 1)
+                fpath, caller = caller_key.split("\x00", 1)
                 group.callers_evidence.append({
                     "caller_file": fpath,
                     "caller": caller,

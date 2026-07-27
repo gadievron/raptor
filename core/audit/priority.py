@@ -133,7 +133,7 @@ def score_functions(
         score = 0
 
         is_entry_point = key in entry_points
-        if is_entry_point and gap["priority"] <= -1:
+        if is_entry_point:
             score += SCORE_ENTRY_POINT
         if key in sinks:
             score += SCORE_SINK
@@ -184,11 +184,11 @@ def score_functions(
                 score += max(-SCORE_STRATEGY_MAX_BOOST, min(SCORE_STRATEGY_MAX_BOOST, boost))
 
         func_name = gap.get("name", "")
-        if func_name in binary_sink_callers:
+        if key in binary_sink_callers or func_name in binary_sink_callers:
             score += SCORE_BINARY_SINK
-        if func_name in binary_surface_scores:
+        if key in binary_surface_scores or func_name in binary_surface_scores:
             score += SCORE_BINARY_SURFACE
-        if func_name in binary_boundary_fns:
+        if key in binary_boundary_fns or func_name in binary_boundary_fns:
             score += SCORE_PARSER_BOUNDARY
 
         sloc = gap.get("sloc", 0)

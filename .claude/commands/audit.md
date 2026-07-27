@@ -114,7 +114,7 @@ These tools are available for hypothesis validation. The orchestrator invokes th
 | **SMT** | `raptor-audit sweep --tool smt --smt-verb check-overflow --smt-args '{"var":"len","type":"int32","op":"len*size","bound":"4294967295"}' --file F --function FN --out $DIR` | Arithmetic/bounds/path feasibility |
 | **Joern** | CPG-based dataflow queries (background build, drain on ready) | Complex dataflow reachability |
 
-**SMT verbs:** `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `validate-path`
+**SMT verbs:** `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `check-negative-bypass`, `validate-path`
 
 **Manual sweep logging** (for tools not yet auto-executed):
 ```bash

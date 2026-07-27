@@ -1212,6 +1212,15 @@ def _ts_language(lang: str):
             return Language(ts.language_php())
         elif lang == "lua":
             import tree_sitter_lua as ts
+        elif lang == "scala":
+            # Without this branch .scala fell through to the regex
+            # extractor: no ``line_end`` on any function, and roughly a
+            # third fewer functions found. ``line_end`` is what the
+            # source-slicing consumers key on, so a JVM target like
+            # Kafka (Scala broker core, Java clients) silently got a
+            # partial inventory on its Scala half only. Same failure
+            # shape as the cpp and typescript branches above.
+            import tree_sitter_scala as ts
         else:
             return None
         return Language(ts.language())
@@ -1268,6 +1277,13 @@ class TreeSitterExtractor:
         # ``function_signature_item`` — intentionally excluded (no code).
         "rust": ("function_item",),
         "lua": ("function_declaration", "function_definition"),
+        # Scala: ``def`` with a body is ``function_definition`` — NOT
+        # Java's ``method_declaration``. Reusing the Java node names
+        # here extracts zero functions from a file that parses cleanly.
+        # An abstract trait/interface ``def`` with no body parses as
+        # ``function_declaration`` and is intentionally excluded (no
+        # code to review), matching the Rust rule above.
+        "scala": ("function_definition",),
     }
 
     _CLASS_TYPES = {
@@ -1289,6 +1305,10 @@ class TreeSitterExtractor:
         # ``trait T`` with ``T`` (for default methods).
         "rust": ("impl_item", "trait_item"),
         "lua": (),
+        # Scala hosts methods in all three; ``object`` is where the
+        # singleton/companion helpers live, which is a lot of a typical
+        # Scala service's logic.
+        "scala": ("class_definition", "object_definition", "trait_definition"),
     }
 
     def __init__(self, language: str):
@@ -2116,6 +2136,13 @@ class TreeSitterExtractor:
         return None
 
 
+# Languages ``_ts_language`` has a loader branch for. Probed to build the
+# startup banner's grammar list; keep in sync with that branch.
+_TS_PROBE_LANGUAGES = (
+    "python", "java", "javascript", "typescript", "tsx", "c", "cpp",
+    "go", "rust", "csharp", "ruby", "php", "lua", "scala",
+)
+
 _cached_ts_languages: Optional[List[str]] = None
 
 
@@ -2128,7 +2155,12 @@ def _get_ts_languages() -> List[str]:
         _cached_ts_languages = []
         return []
     available = []
-    for lang in ("python", "java", "javascript", "c", "go", "lua"):
+    # Every language ``_ts_language`` can load. This list drifted behind
+    # the loader — cpp, typescript, rust, csharp, ruby and php all had
+    # working branches but were absent here, so the startup banner
+    # under-reported what the inventory could actually parse. Keep the
+    # two in sync when adding a grammar.
+    for lang in _TS_PROBE_LANGUAGES:
         if _ts_language(lang):
             available.append(lang)
     _cached_ts_languages = available

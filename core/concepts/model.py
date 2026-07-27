@@ -246,7 +246,10 @@ class DomainModel:
         return [c for c in self.contracts if c.function == function]
 
     def concepts_at_confidence(self, min_grade: str) -> list[Concept]:
-        floor = CONFIDENCE_GRADES.index(min_grade)
+        try:
+            floor = CONFIDENCE_GRADES.index(min_grade)
+        except ValueError:
+            return []
         return [
             c for c in self.concepts
             if c.confidence in CONFIDENCE_GRADES

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -59,7 +60,19 @@ def save_state_fields(
 
     data["state_fields"] = [f.to_dict() for f in fields]
 
-    cm_path.write_text(json.dumps(data, indent=2) + "\n")
+    fd, tmp_path = tempfile.mkstemp(dir=str(cm_path.parent), suffix=".tmp")
+    try:
+        with open(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        import os
+        os.replace(tmp_path, str(cm_path))
+    except BaseException:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     return cm_path
 
 

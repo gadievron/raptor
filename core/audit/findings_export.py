@@ -122,7 +122,7 @@ def build_graded_finding(
         "duration_s": getattr(outcome, "duration_s", 0.0),
         "run_id": run_id,
         "checker_id": checker_id,
-        "summary_source": summary_source or "joern" if discovery_sources and "joern" in discovery_sources else "llm",
+        "summary_source": summary_source or ("joern" if discovery_sources and "joern" in discovery_sources else "llm"),
     }
     finding["model"] = getattr(outcome, "model", "")
     finding["cost_usd"] = getattr(outcome, "cost_usd", 0.0)

@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading as _threading
 import time
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -274,6 +275,7 @@ def run_orchestrator(
         OrchestratorResult summarizing the run.
     """
     start_time = time.monotonic()
+    _sink_guard_cache.clear()
     result = OrchestratorResult()
     _jt = _joern_tunables(overrides=config.joern_overrides)
     if _jt is not None:
@@ -916,8 +918,10 @@ def review_one_function(
             from .dynamic_sweep import should_run_dynamic, run_dynamic_sweep
             if should_run_dynamic(outcome, config):
                 dyn_result = run_dynamic_sweep(outcome, ctx, config)
-                if dyn_result and dyn_result.evidence_strength == "confirmed":
+                if dyn_result and dyn_result.evidence_strength == "sanitizer":
                     outcome.evidence_tool = "dynamic"
+                elif dyn_result and dyn_result.evidence_strength == "crash":
+                    outcome.evidence_tool = "dynamic:crash"
                 elif dyn_result and dyn_result.evidence_strength == "refuted":
                     outcome = _demote_outcome(outcome, "[dynamic: refuted]")
         except Exception:
@@ -926,6 +930,10 @@ def review_one_function(
                 gap.get("file"), gap.get("name"), exc_info=True,
             )
 
+        # Frida runs as a second opinion when the dynamic sweep produced only
+        # a bare crash ("dynamic:crash") — that's weak evidence and Frida may
+        # upgrade it to runtime-confirmed. Skip only when the sanitiser already
+        # confirmed ("dynamic").
         if outcome.status == "finding" and outcome.evidence_tool != "dynamic":
             try:
                 from .frida_observe import should_run_frida, run_frida_observation
@@ -2026,7 +2034,16 @@ def _run_audit_body(
                         )
                         ctx["live_sinks"] = sorted(live_classifications.sinks)
                         ctx["triage_bucket"] = "DEEP_DIVE"
+                        prior = next(
+                            (o for o in result.outcomes
+                             if o.file == target_gap["file"]
+                             and o.function == target_gap["name"]),
+                            None,
+                        )
                         outcome = review_fn(ctx, config)
+                        if prior is not None:
+                            _untally_outcome(result, prior)
+                            result.outcomes.remove(prior)
                         _tally_outcome(result, outcome)
                         if collector is not None:
                             collector.submit(outcome, target_gap)
@@ -2160,10 +2177,13 @@ def _run_audit_body(
             from .iris_specs import compile_joern_config
             requery_cfg = compile_joern_config(iris_taint_specs)
             if requery_cfg.strip():
-                requery_hits = _joern_live_query(
-                    joern_server, requery_cfg,
-                    label="iris-requery",
-                )
+                try:
+                    requery_hits = _joern_live_query(
+                        joern_server, requery_cfg, [],
+                    )
+                except Exception:
+                    logger.debug("IRIS re-query failed", exc_info=True)
+                    requery_hits = []
                 if requery_hits:
                     for hit in requery_hits:
                         key = hit.get("key", "")
@@ -2217,9 +2237,23 @@ def _run_audit_body(
                     analyzer = CompositionalAnalyzer(call_graphs)
                     def bypass_runner(assumptions):
                         findings = []
+                        seen: set[tuple[str, str, str]] = set()
                         for a in assumptions:
                             findings.extend(analyzer.detect_bypasses(a))
-                        return findings
+                            findings.extend(analyzer.detect_ordering_violations(a))
+                            findings.extend(analyzer.detect_type_hierarchy_bypasses(a))
+                        widened: list = []
+                        for f in findings:
+                            if f.via_intermediate:
+                                widened.extend(analyzer.widen_from_finding(f))
+                        findings.extend(widened)
+                        deduped: list = []
+                        for f in findings:
+                            key = (f.caller_file, f.caller_function, f.missing_enforcer)
+                            if key not in seen:
+                                seen.add(key)
+                                deduped.append(f)
+                        return deduped
             except Exception:
                 logger.debug("IRIS bypass analyzer init failed", exc_info=True)
 
@@ -2314,6 +2348,30 @@ def _run_audit_body(
             post_loop_findings.append(tf.to_dict())
         for tf in check_config_dependent(gaps):
             post_loop_findings.append(tf.to_dict())
+
+        try:
+            from core.iris.synthesise import stored_taint_assumptions, config_provenance_assumptions
+            heuristic_assumptions = stored_taint_assumptions(gaps) + config_provenance_assumptions(gaps)
+            # Only pass assumptions that have enforcers — without enforced_by,
+            # detect_bypasses flags every caller as "unsafe" (false positive flood).
+            heuristic_with_enforcers = [a for a in heuristic_assumptions if a.enforced_by]
+            if heuristic_with_enforcers and bypass_runner is not None:
+                heuristic_bypasses = bypass_runner(heuristic_with_enforcers)
+                for bf in heuristic_bypasses:
+                    post_loop_findings.append({
+                        "check": f"iris_{bf.assumption.bug_class or 'bypass'}",
+                        "title": f"IRIS bypass: {bf.caller_function} skips {bf.missing_enforcer}",
+                        "description": (
+                            f"Caller {bf.caller_file}:{bf.caller_function} reaches "
+                            f"{bf.assumption.target} without {bf.missing_enforcer}"
+                        ),
+                        "file": bf.caller_file,
+                        "function": bf.caller_function,
+                        "cwe": bf.assumption.bug_class or "",
+                        "confidence": "medium",
+                    })
+        except Exception:
+            logger.debug("IRIS heuristic assumption bypass failed", exc_info=True)
 
         from .negative_space import (
             check_deployment_assumptions,
@@ -3344,8 +3402,9 @@ def _retry_error_outcomes(
     for outcome in error_outcomes:
         try:
             ctx = _build_context(
+                config,
                 {"file": outcome.file, "name": outcome.function},
-                checklist, config, shared, llm_client, sarif_cache,
+                checklist, None,
             )
         except Exception:
             continue
@@ -3412,6 +3471,8 @@ def _tally_outcome(
         elif outcome.status == "clean":
             result.clean += 1
         elif outcome.status == "dormant":
+            result.dormant += 1
+        elif outcome.status == "dark":
             result.dormant += 1
         elif outcome.status == "error":
             result.errors += 1
@@ -3995,14 +4056,22 @@ def _run_tool_chain(
                             )
                         continue
 
+                rule_path = tool_cfg["rule"]
                 sweep = run_semgrep_sweep(
                     target_path=config.target_path,
                     file_path=file_path,
                     function_name=function_name,
-                    rule_config=tool_cfg["rule"],
+                    rule_config=rule_path,
                     line_start=line_start,
                     line_end=line_start + 50 if line_start else 0,
                 )
+                if rule_path and os.path.basename(rule_path).startswith(
+                    "audit_sweep_"
+                ):
+                    try:
+                        os.unlink(rule_path)
+                    except OSError:
+                        pass
                 if sweep.outcome == "confirmed":
                     confirmed.append(
                         f"semgrep:{sweep.rule_id or 'hypothesis'}"
@@ -4957,95 +5026,6 @@ def _deepen_suspicious(
     return result
 
 
-def _dedup_attributed_findings(
-    result: OrchestratorResult,
-    context_map: Optional[Dict[str, Any]],
-    audit_log: Optional[List[Dict[str, Any]]] = None,
-) -> OrchestratorResult:
-    """Demote findings that attribute the same root cause to a caller.
-
-    When two findings share the same CWE and one function calls the other,
-    the bug lives at the callee (closer to the sink). The caller-side
-    finding is demoted to suspicious.
-    """
-    if not context_map:
-        return result
-
-    findings = [o for o in result.outcomes if o.status == "finding"]
-    if len(findings) < 2:
-        return result
-
-    calls: Dict[str, set] = {}
-    for edge in context_map.get("call_edges", []):
-        caller_key = f"{edge.get('caller_file', '')}:{edge.get('caller', '')}"
-        callee_name = edge.get("callee", "")
-        if callee_name:
-            calls.setdefault(caller_key, set()).add(callee_name)
-
-    to_demote: set = set()
-    for i, a in enumerate(findings):
-        a_key = f"{a.file}:{a.function}"
-        a_cwe = (a.review_result or {}).get("cwe", "") if a.review_result else ""
-        a_hyp = a.hypothesis or ""
-        for b in findings[i + 1:]:
-            b_key = f"{b.file}:{b.function}"
-            b_cwe = (b.review_result or {}).get("cwe", "") if b.review_result else ""
-            b_hyp = b.hypothesis or ""
-
-            same_cwe = a_cwe and b_cwe and a_cwe == b_cwe
-
-            a_calls_b = b.function in calls.get(a_key, set())
-            b_calls_a = a.function in calls.get(b_key, set())
-            if not (a_calls_b or b_calls_a):
-                continue
-
-            a_cites_b = b.function in a_hyp
-            b_cites_a = a.function in b_hyp
-
-            if not (same_cwe or a_cites_b or b_cites_a):
-                continue
-
-            if a_calls_b:
-                to_demote.add(id(a))
-                logger.info(
-                    "attribution dedup: %s demoted (calls %s, CWE %s/%s)",
-                    a_key, b_key, a_cwe, b_cwe,
-                )
-            elif b_calls_a:
-                to_demote.add(id(b))
-                logger.info(
-                    "attribution dedup: %s demoted (calls %s, CWE %s/%s)",
-                    b_key, a_key, b_cwe, a_cwe,
-                )
-
-    if not to_demote:
-        return result
-
-    for outcome in list(result.outcomes):
-        if id(outcome) in to_demote:
-            old_status = outcome.status
-            outcome.status = "suspicious"
-            outcome.body = (
-                f"[attribution dedup: same CWE as a callee finding] "
-                f"{outcome.body}"
-            )
-            if old_status == "finding":
-                result.findings -= 1
-                result.suspicious += 1
-            elif old_status == "clean":
-                result.clean -= 1
-                result.suspicious += 1
-            if audit_log is not None:
-                audit_log.append({
-                    "action": "attribution_dedup",
-                    "key": f"{outcome.file}:{outcome.function}",
-                    "status": "suspicious",
-                    "reason": "same CWE as callee finding",
-                })
-
-    return result
-
-
 def _iterative_re_review(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -5368,6 +5348,8 @@ def _untally_outcome(result: OrchestratorResult, outcome: ReviewOutcome) -> None
         result.clean -= 1
     elif outcome.status == "dormant":
         result.dormant -= 1
+    elif outcome.status == "dark":
+        result.dormant -= 1
     elif outcome.status == "error":
         result.errors -= 1
         if outcome.error_class and outcome.error_class in result.error_counts:
@@ -5661,6 +5643,7 @@ def _resolve_gate_demoted(
             )
             result.outcomes[i] = resolved
             result.suspicious -= 1
+            result.dormant += 1
             logger.info(
                 "gate-resolved %s:%s → dark "
                 "(no mechanical corroboration, class not tool-covered)",
@@ -5779,45 +5762,6 @@ def _constraints_for_function(
             })
 
     return relevant[:15]
-
-
-def _structural_signature(gap: Dict[str, Any], ctx: Dict[str, Any]) -> str:
-    """Compute a structural fingerprint for grouping similar functions.
-
-    Functions with the same fingerprint have the same callee set, similar
-    SLOC, and same file extension. A verdict on one likely applies to all.
-    """
-    callees = ctx.get("callees", [])
-    callee_names = sorted(c.get("name", "") for c in callees if c.get("name"))
-    ext = Path(gap.get("file", "")).suffix
-    sloc = gap.get("sloc", 0)
-    sloc_bucket = sloc // 10
-    return f"{ext}|{sloc_bucket}|{','.join(callee_names)}"
-
-
-def _apply_group_verdicts(
-    result: OrchestratorResult,
-    config: OrchestratorConfig,
-    checklist: Dict[str, Any],
-    context_map: Optional[Dict[str, Any]],
-    evidence_index: Optional[Dict[str, EvidenceRecord]] = None,
-) -> OrchestratorResult:
-    """Apply verdicts from reviewed functions to unreviewed structurally
-    similar ones. Saves tokens by not reviewing functions whose structure
-    matches an already-reviewed function that was clean.
-
-    Only propagates clean verdicts (finding verdicts require individual
-    assessment). Only applies within the same file.
-    """
-    reviewed_sigs: Dict[str, ReviewOutcome] = {}
-
-    for o in result.outcomes:
-        if o.status != "clean":
-            continue
-        sig = f"{Path(o.file).suffix}|{o.function}"
-        reviewed_sigs[sig] = o
-
-    return result
 
 
 def _review_flow_traces(
@@ -6024,8 +5968,6 @@ def _persist_project_learnings(
             logger.debug("could not save project context", exc_info=True)
 
 
-
-
 def _is_tool_confirmed(evidence_tool: str) -> bool:
     """Return True if evidence_tool was set by an actual tool run.
 
@@ -6158,34 +6100,6 @@ def _smt_demotion_reason(
             "impossible (Z3 UNSAT)]"
         )
     return None
-
-
-_DANGEROUS_CALL_RE = re.compile(
-    r"\b(?:memcpy|memmove|strcpy|strncpy|strcat|strncat|"
-    r"sprintf|snprintf|vsprintf|vsnprintf|"
-    r"gets|system|popen|exec[lv]p?e?|"
-    r"scanf|sscanf|fscanf|"
-    r"sqlite3_exec|mysql_query)\s*\(",
-)
-
-
-def _source_calls_dangerous_fn(
-    outcome: ReviewOutcome,
-    config: OrchestratorConfig,
-    checklist: Dict[str, Any],
-) -> bool:
-    """Return True if the function's source contains calls to dangerous C functions."""
-    gap = _find_gap_in_checklist(checklist, outcome.file, outcome.function)
-    if not gap:
-        return False
-    source = _read_raw_source(
-        config.target_path, outcome.file,
-        gap.get("line_start", 0), gap.get("line_end"),
-    )
-    if not source:
-        return False
-    return bool(_DANGEROUS_CALL_RE.search(source))
-
 
 
 
@@ -7386,32 +7300,13 @@ def _codeql_pre_sweep(
     CodeQL alerts are available as pre-evidence.
     """
     try:
-        from packages.codeql.runner import run_standard_queries
+        from packages.codeql.query_runner import QueryRunner  # noqa: F401
     except ImportError:
         logger.debug("codeql runner not importable; skipping pre-sweep")
         return
 
-    scan_dir = config.out_dir / "scan"
-    scan_dir.mkdir(parents=True, exist_ok=True)
-    sarif_path = scan_dir / "codeql-pre-sweep.sarif"
-
-    if sarif_path.exists():
-        return
-
-    try:
-        run_standard_queries(
-            config.codeql_db_path,
-            output=str(sarif_path),
-            timeout=600,
-        )
-        if sarif_path.exists():
-            fresh = SarifCache.from_directory(config.out_dir)
-            for key, results_list in fresh._by_file.items():
-                sarif_cache._by_file.setdefault(key, []).extend(results_list)
-            total = sum(len(v) for v in fresh._by_file.values())
-            logger.info("codeql pre-sweep: loaded %d alerts", total)
-    except Exception:
-        logger.debug("codeql pre-sweep failed", exc_info=True)
+    # TODO: wire QueryRunner to replace removed run_standard_queries
+    pass
 
 
 def _build_sink_results(
@@ -7599,9 +7494,9 @@ def _sample_entry_point_depths(
     for ep in list(entry_points)[:50]:
         name = ep.split(":")[-1] if ":" in ep else ep
         visited: set = set()
-        queue = [(name, 0)]
+        queue = deque([(name, 0)])
         while queue:
-            func, depth = queue.pop(0)
+            func, depth = queue.popleft()
             if func in visited:
                 continue
             visited.add(func)
@@ -7796,11 +7691,12 @@ def _check_layer_disagreement(outcome, ctx, gap):
     )
 
     dynamic_claim = None
-    if outcome.evidence_tool == "dynamic":
+    et = outcome.evidence_tool or ""
+    if et.startswith("dynamic"):
         dynamic_claim = LayerClaim(
             layer=LayerVerdict.DYNAMIC,
             reachable=True,
-            has_flow=True,
+            has_flow=et == "dynamic",
         )
 
     language = gap.get("language", "")

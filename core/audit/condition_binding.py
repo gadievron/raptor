@@ -120,9 +120,11 @@ def extract_sink_arg_identifiers(
             # Find the sink API call on this line
             idx = line.find(sink_api)
             if idx < 0:
-                # Try last component
+                # Try last component with word boundary
                 parts = sink_api.split(".")
-                idx = line.find(parts[-1])
+                wb_match = re.search(r'\b' + re.escape(parts[-1]) + r'\b', line)
+                if wb_match:
+                    idx = wb_match.start()
             if idx >= 0:
                 started = True
                 line = line[idx:]

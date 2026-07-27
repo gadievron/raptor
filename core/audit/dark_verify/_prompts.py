@@ -303,8 +303,35 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         brace = text.find("{")
         if brace >= 0:
+            depth = 0
+            end = -1
+            in_string = False
+            escape = False
+            for i in range(brace, len(text)):
+                ch = text[i]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end < 0:
+                logger.debug("failed to parse witness response: %s", text[:200])
+                return None
             try:
-                data = json.loads(text[brace:])
+                data = json.loads(text[brace:end])
             except json.JSONDecodeError:
                 logger.debug("failed to parse witness response: %s", text[:200])
                 return None
