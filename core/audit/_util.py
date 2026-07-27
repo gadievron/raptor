@@ -47,6 +47,7 @@ TOOL_EVIDENCE_NAMESPACES = frozenset({
     "codeql",
     "smt",
     "joern",
+    "dynamic",
 })
 
 # Receipts emitted as bare tokens, each only after an observed run:
