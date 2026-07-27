@@ -1275,9 +1275,23 @@ class TestCheckFindingGates:
         v = _check_finding_gates(self._outcome(evidence_tool="prefilter:buffer-overflow"))
         assert not any("G2" in x for x in v)
 
-    def test_g2_joern_passes(self):
-        v = _check_finding_gates(self._outcome(evidence_tool="joern"))
+    def test_g2_joern_receipt_passes(self):
+        v = _check_finding_gates(self._outcome(evidence_tool="joern:live"))
         assert not any("G2" in x for x in v)
+
+    def test_g2_bare_joern_fails(self):
+        """A bare tool name is a model claim, not an orchestrator receipt.
+
+        Only ``_stamp_evidence`` mints a receipt, and it always writes
+        ``<namespace>:<detail>``. Accepting the bare name let an
+        un-run tool stand in for a real one.
+        """
+        v = _check_finding_gates(self._outcome(evidence_tool="joern"))
+        assert any("G2" in x for x in v)
+
+    def test_g2_arbitrary_string_fails(self):
+        v = _check_finding_gates(self._outcome(evidence_tool="madeup:thing"))
+        assert any("G2" in x for x in v)
 
     def test_g5_memory_cwe_in_python_file(self):
         o = ReviewOutcome(

@@ -15,6 +15,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
+from ._util import sanitize_llm_evidence_tool
 from .context import format_context_for_prompt
 from .orchestrator import OrchestratorConfig, ReviewOutcome, _ContentFilterError
 
@@ -448,16 +449,14 @@ def _is_content_filter_error(exc: Exception) -> bool:
     return any(m in msg for m in _CONTENT_FILTER_MARKERS)
 
 
-_LLM_ONLY_EVIDENCE = frozenset({
-    "manual", "manual code review", "manual review", "code review",
-    "llm", "llm review", "none", "n/a", "",
-})
-
-
 def _normalize_evidence_tool(raw: str) -> str:
-    if raw.lower().strip() in _LLM_ONLY_EVIDENCE:
-        return "llm"
-    return raw
+    """Namespace the model's evidence claim so it can't pass as a receipt.
+
+    The review schema asks the model to name a supporting tool. That is
+    a claim; only ``_stamp_evidence`` (after a tool has actually run)
+    issues a receipt. See ``core.audit._util`` for the contract.
+    """
+    return sanitize_llm_evidence_tool(raw)
 
 
 _DISMISSIVE_COUNTER = frozenset({
@@ -629,6 +628,15 @@ def make_review_fn(
 
         raw_ev = result.get("evidence_tool") or ""
         evidence_tool = _normalize_evidence_tool(raw_ev)
+        # Sanitize the structured result too, not just the outcome field.
+        # Several consumers (G2, _sweep_validate, _proactive_validate,
+        # multi-pass merging) read review_result["evidence_tool"] in
+        # preference to the outcome, so leaving the raw model string here
+        # would route straight around the boundary. The claim is kept
+        # verbatim under its own key for the annotation trail.
+        if raw_ev:
+            result["evidence_tool_claim"] = raw_ev
+        result["evidence_tool"] = evidence_tool
 
         hypotheses_raw = result.get("hypotheses") or []
         hypotheses = [

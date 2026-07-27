@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading as _threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -39,7 +40,15 @@ from .constraints import (
     save_constraints,
 )
 from .context import assemble_context
-from .gaps import compute_gaps, load_checklist, load_context_map, mark_checked, write_gaps
+from .gaps import (
+    compute_gaps,
+    gap_for_site,
+    hydrate_gap_source,
+    load_checklist,
+    load_context_map,
+    mark_checked,
+    write_gaps,
+)
 from .priority import (
     group_by_subsystem, load_flow_traces, load_fuzz_coverage as _load_fuzz_coverage_from_runs,
     load_tool_failures, score_functions,
@@ -72,7 +81,10 @@ from .exploit_feedback import (
     FeedbackState, load_feedback_state, format_feedback_summary,
     format_feedback_for_context,
 )
-from ._util import extract_context_map_set
+from ._util import (
+    extract_context_map_set,
+    is_stamped_tool_evidence,
+)
 from core.analysis.reachability_gates import (
     build_sink_reachable_set,
     check_sink_guarded,
@@ -931,7 +943,12 @@ def review_one_function(
     if outcome.status == "finding" and outcome.evidence_tool:
         try:
             from .checker_synthesis import synthesize_and_sweep
-            seen_keys = (reviewed_set or set()) | {
+            # Current-run workqueue only. Folding in `reviewed_set` (which
+            # get_reviewed_set loads from the *persisted* audit log, so it
+            # spans prior runs) suppressed exactly the sites worth
+            # re-reviewing: a synthesized checker encodes a pattern that was
+            # unknown when those functions were first looked at.
+            seen_keys = {
                 f"{g['file']}:{g['name']}" for g in (workqueue or [])
             }
             synth = synthesize_and_sweep(
@@ -1350,6 +1367,14 @@ def _run_audit_body(
 
     if config.budget and config.budget > 0:
         gaps = gaps[:config.budget]
+
+    # Hydrate function bodies once the gap list is final — after the
+    # stale merge, scoring and budget truncation. The mechanical
+    # detectors below (negative-space conventions, sibling asymmetry)
+    # read gap["source"] and no-op without it, and doing it here rather
+    # than in compute_gaps means stale gaps are covered and no source is
+    # read for gaps the budget dropped.
+    hydrate_gap_source(gaps, Path(config.target_path))
 
     # Triage classification — assign depth buckets before review
     entry_points = extract_context_map_set(context_map, "entry_points")
@@ -1818,11 +1843,19 @@ def _run_audit_body(
     if shared.synthesis_queue and not executor_stats.budget_stopped:
         synth_hits = list(shared.synthesis_queue)
         shared.synthesis_queue.clear()
-        logger.info(
-            "synthesis pass: %d targets from mid-loop synthesis",
-            len(synth_hits),
+        synth_gaps = _synthesis_hits_to_gaps(
+            synth_hits, checklist, config.out_dir,
         )
-        synth_graph = TaskGraph.from_workqueue(synth_hits, call_edges)
+        logger.info(
+            "synthesis pass: %d targets from mid-loop synthesis "
+            "(%d hits resolved to reviewable functions)",
+            len(synth_hits), len(synth_gaps),
+        )
+    else:
+        synth_gaps = []
+
+    if synth_gaps:
+        synth_graph = TaskGraph.from_workqueue(synth_gaps, call_edges)
         run_executor_sync(
             synth_graph, review_fn, shared, config, result,
             executor_config,
@@ -2943,10 +2976,38 @@ def _commit_outcome(
     append_audit_log(config.out_dir, entry)
 
 
-_LLM_ONLY_EVIDENCE = frozenset({
-    "manual", "manual code review", "manual review", "code review",
-    "llm", "llm review", "none", "n/a", "",
-})
+_GATE_DEMOTION_PREFIX = "[gate violation:"
+
+
+def _is_evidence_only_gate_demotion(body: str) -> bool:
+    """True when a gate demotion cited G2 (no receipt) and nothing else.
+
+    G2 says "no tool has confirmed this *yet*" — running a tool later and
+    getting a receipt is precisely the resolution, so the post-loop sweep
+    must still be allowed to promote it. Every other gate (no hypothesis,
+    empty body, language/CWE mismatch) is a reasoning defect that a tool
+    hit does not repair, and those stay authoritative.
+    """
+    if not body.startswith(_GATE_DEMOTION_PREFIX):
+        return False
+    end = body.find("]")
+    if end == -1:
+        return False
+    inner = body[len(_GATE_DEMOTION_PREFIX):end]
+    reasons = [r.strip() for r in inner.split(";") if r.strip()]
+    return bool(reasons) and all(r.startswith("G2") for r in reasons)
+
+
+def _is_ungrounded_evidence(evidence: str) -> bool:
+    """True when *evidence* carries no orchestrator-issued tool receipt.
+
+    Stated positively rather than as a blacklist: G2 passes only for a
+    value ``_stamp_evidence`` could have issued. A blacklist let every
+    unenumerated string through — the sentinels (``llm``, ``manual``)
+    were caught, but a bare ``joern`` or an arbitrary ``madeup:thing``
+    was read as grounded.
+    """
+    return not is_stamped_tool_evidence((evidence or "").strip())
 
 
 def _match_domain_model_invariants(
@@ -3006,7 +3067,7 @@ def _check_finding_gates(
     if not hypothesis or hypothesis.strip() == "":
         violations.append("G1: finding emitted without testable hypothesis")
 
-    if not evidence or evidence.lower().strip() in _LLM_ONLY_EVIDENCE:
+    if _is_ungrounded_evidence(evidence):
         matched_invariants = _match_domain_model_invariants(
             hypothesis, outcome.file, domain_model,
         )
@@ -3433,6 +3494,121 @@ def _batch_trivial(
             remaining.extend(items)
 
     return batches, remaining
+
+
+def _synthesis_hits_to_gaps(
+    hits: List[Dict[str, Any]],
+    checklist: Dict[str, Any],
+    out_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Resolve Mode-2 sweep hits into reviewable gaps.
+
+    Checker synthesis reports *sites* — ``{file, line, function: "",
+    snippet}`` — because a codebase-wide rule matches text, not
+    functions. The review loop is keyed on functions, so each site is
+    resolved to the checklist function that encloses it.
+
+    A site that resolves to no reviewable function (a top-level
+    initializer, a macro, generated code, a checklist entry with no
+    line span) cannot become a review task — but it is still tool
+    signal, so it is written to ``unresolved-synthesis-hits.json``
+    rather than discarded.
+
+    Functions reviewed in an earlier round or run are deliberately NOT
+    skipped: a synthesized checker encodes a pattern that was unknown
+    when they were reviewed, which is exactly when re-review pays.
+    """
+    gaps: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    unresolved: List[Dict[str, Any]] = []
+
+    for hit in hits:
+        file_path = hit.get("file", "")
+        try:
+            line = int(hit.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+
+        gap = gap_for_site(checklist, file_path, line) if line else None
+        if gap is None:
+            unresolved.append(hit)
+            continue
+
+        key = f"{gap['file']}:{gap['name']}"
+        if key in seen:
+            continue
+        # Skip the seed's own function: the rule was synthesised *from*
+        # it, so it is already a finding, not a new variant.
+        origin_file = hit.get("origin_file", "")
+        origin_function = hit.get("origin_function", "")
+        if origin_function and key == f"{origin_file}:{origin_function}":
+            continue
+        seen.add(key)
+
+        if hit.get("priority_score") is not None:
+            gap["priority_score"] = hit["priority_score"]
+        gap["from_synthesis"] = True
+        if hit.get("snippet"):
+            gap["synthesis_snippet"] = hit["snippet"]
+        gaps.append(gap)
+
+    if unresolved:
+        logger.info(
+            "synthesis pass: %d/%d hits did not resolve to a checklist "
+            "function — recorded as unresolved sites",
+            len(unresolved), len(hits),
+        )
+        if out_dir is not None:
+            _write_unresolved_synthesis_hits(unresolved, out_dir)
+
+    return gaps
+
+
+def _write_unresolved_synthesis_hits(
+    hits: List[Dict[str, Any]],
+    out_dir: Path,
+) -> None:
+    """Persist synthesis sites that have no enclosing reviewable function."""
+    path = out_dir / "unresolved-synthesis-hits.json"
+    tmp = None
+    # One non-fatal boundary around read, normalise, serialise and write.
+    # This is a diagnostic artifact: a malformed, mis-encoded or
+    # unserialisable one must never take the run down with it.
+    try:
+        existing: List[Dict[str, Any]] = []
+        if path.is_file():
+            try:
+                prior = json.loads(
+                    path.read_text(encoding="utf-8", errors="replace"),
+                )
+            except json.JSONDecodeError:
+                prior = None
+            # Tolerate any prior shape — a truncated write, a hand-edit,
+            # a bare list — and replace what can't be understood.
+            if isinstance(prior, dict) and isinstance(prior.get("hits"), list):
+                existing = prior["hits"]
+            elif isinstance(prior, list):
+                existing = prior
+            elif prior is not None:
+                logger.debug("replacing malformed %s", path.name)
+
+        existing = list(existing) + list(hits)
+        payload = json.dumps(
+            {"hits": existing, "count": len(existing)},
+            indent=2, default=str,
+        )
+
+        fd, tmp = tempfile.mkstemp(dir=str(out_dir), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, str(path))
+    except (OSError, UnicodeError, TypeError, ValueError):
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        logger.debug("could not persist unresolved synthesis hits", exc_info=True)
 
 
 def _review_items(
@@ -5270,10 +5446,13 @@ def _promote_suspicious(
             continue
 
         if outcome.body.startswith((
-            "[gate violation:", "[sink-unreachability:",
+            "[sink-unreachability:",
             "[guarded-sink:", "[smt-infeasible:",
             "[entry-unreachability:", "[self-contradiction:",
-        )):
+        )) or (
+            outcome.body.startswith("[gate violation:")
+            and not _is_evidence_only_gate_demotion(outcome.body)
+        ):
             logger.debug(
                 "sweep skipped %s:%s — mechanical gate demotion is authoritative",
                 outcome.file, outcome.function,
@@ -5845,23 +6024,40 @@ def _persist_project_learnings(
             logger.debug("could not save project context", exc_info=True)
 
 
-_TOOL_EVIDENCE_PREFIXES = ("prefilter", "critique", "sweep")
 
 
 def _is_tool_confirmed(evidence_tool: str) -> bool:
     """Return True if evidence_tool was set by an actual tool run.
 
-    Actual tool evidence uses namespaced prefixes (prefilter:, critique:,
-    sweep:).  LLM-suggested values like "Semgrep" or "CodeQL" are bare
-    names that should not short-circuit mechanical validation.
+    A receipt is ``<namespace>:<detail>`` issued by ``_stamp_evidence``
+    after the tool ran (or one of the bare dynamic/Frida tokens). A
+    model-supplied value arrives namespaced as ``llm-claimed:…`` and is
+    therefore never a receipt — see ``core.audit._util``.
+
+    This is what stops a claimed ``evidence_tool`` from short-circuiting
+    mechanical validation in ``_sweep_validate``.
     """
-    if not evidence_tool or evidence_tool == "none":
-        return False
-    return evidence_tool.startswith(_TOOL_EVIDENCE_PREFIXES)
+    return is_stamped_tool_evidence(evidence_tool)
 
 
 def _stamp_evidence(outcome: ReviewOutcome, tool: str) -> ReviewOutcome:
-    """Stamp evidence_tool onto an outcome."""
+    """Issue a tool receipt onto an outcome.
+
+    This is the *only* way a value that satisfies ``_is_tool_confirmed``
+    is created, and callers must have run the tool first. A label that
+    isn't a well-formed receipt is still recorded (the annotation trail
+    keeps it) but is logged loudly, because it means a new stamp
+    namespace was added without registering it in
+    ``_util.TOOL_EVIDENCE_NAMESPACES`` — which would silently downgrade
+    real evidence to "not tool-confirmed".
+    """
+    if not is_stamped_tool_evidence(tool):
+        logger.warning(
+            "evidence stamp %r for %s:%s is not a recognised receipt "
+            "(expected <namespace>:<detail>); register the namespace in "
+            "core.audit._util.TOOL_EVIDENCE_NAMESPACES",
+            tool, outcome.file, outcome.function,
+        )
     outcome.evidence_tool = tool
     if outcome.review_result:
         outcome.review_result["evidence_tool"] = tool

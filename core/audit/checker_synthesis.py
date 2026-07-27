@@ -116,7 +116,10 @@ def synthesize_and_sweep(
     Args:
         outcome: ReviewOutcome with file, function, hypothesis, review_result.
         config: OrchestratorConfig with target_path, out_dir, codeql_db_path.
-        seen_keys: Set of file:function keys already in the workqueue.
+        seen_keys: Retained for logging only. Site-level dedup happens
+            downstream in ``orchestrator._synthesis_hits_to_gaps``, after
+            each site is resolved to its enclosing function — a set of
+            ``file:function`` keys cannot filter function-less sites.
         synthesis_count: How many syntheses have been done this run.
         max_per_run: Maximum synthesis attempts per run.
 
@@ -201,16 +204,31 @@ def synthesize_and_sweep(
     file_path = getattr(outcome, "file", "")
     function = getattr(outcome, "function", "")
 
+    # Emit every match, each carrying its origin. Two filters used to
+    # live here and both dropped real variants:
+    #
+    #   * the dedup key was `<matched file>:<seed function>` — the seed's
+    #     function name paired with a different file, which identifies
+    #     nothing, and matched `seen_keys` only by accident;
+    #   * `m.file != file_path` discarded every same-file match, so a
+    #     second vulnerable sibling in the same source file was lost.
+    #
+    # Sites are function-less by nature (a codebase-wide rule matches
+    # text), so both dedup and seed exclusion belong downstream in
+    # `orchestrator._synthesis_hits_to_gaps`, once each site has been
+    # resolved to its enclosing function. Excluding by line here would be
+    # wrong anyway: `outcome.line` is the function's line_start, not the
+    # vulnerable line, and is 0 when the inventory recorded none.
     new_hits = []
     for m in cs_result.matches:
-        key = f"{m.file}:{function}"
-        if key not in seen_keys and m.file != file_path:
-            new_hits.append({
-                "file": m.file,
-                "line": m.line,
-                "function": "",
-                "snippet": m.snippet or "",
-            })
+        new_hits.append({
+            "file": m.file,
+            "line": m.line,
+            "function": "",
+            "snippet": m.snippet or "",
+            "origin_file": file_path,
+            "origin_function": function,
+        })
 
     logger.info(
         "synthesis %s: %d sweep matches, %d new (deduped against %d seen)",

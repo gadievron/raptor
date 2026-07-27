@@ -230,24 +230,48 @@ class TestGradeReviewResult:
         assert any(e.source == EvidenceSource.DYNAMIC_SANITIZER for e in items)
 
     def test_evidence_tool_joern(self):
-        items = grade_review_result({}, evidence_tool="joern")
+        items = grade_review_result({}, evidence_tool="joern:live")
         assert any(e.source == EvidenceSource.JOERN for e in items)
 
     def test_evidence_tool_semgrep(self):
-        items = grade_review_result({}, evidence_tool="semgrep")
+        items = grade_review_result({}, evidence_tool="semgrep:rule_7")
         assert any(e.source == EvidenceSource.SEMGREP for e in items)
 
     def test_evidence_tool_codeql(self):
-        items = grade_review_result({}, evidence_tool="codeql")
+        items = grade_review_result({}, evidence_tool="codeql:dataflow")
         assert any(e.source == EvidenceSource.CODEQL for e in items)
 
     def test_evidence_tool_coccinelle(self):
-        items = grade_review_result({}, evidence_tool="coccinelle")
+        items = grade_review_result({}, evidence_tool="coccinelle:bounds")
         assert any(e.source == EvidenceSource.COCCINELLE for e in items)
 
     def test_evidence_tool_smt(self):
-        items = grade_review_result({}, evidence_tool="smt")
+        items = grade_review_result({}, evidence_tool="smt:check-oob")
         assert any(e.source == EvidenceSource.SMT for e in items)
+
+    def test_composite_receipt_grades_every_component(self):
+        items = grade_review_result(
+            {}, evidence_tool="smt:check-oob+coccinelle:bounds",
+        )
+        sources = {e.source for e in items}
+        assert EvidenceSource.SMT in sources
+        assert EvidenceSource.COCCINELLE in sources
+
+    def test_critique_receipt_grades_the_wrapped_tool(self):
+        items = grade_review_result({}, evidence_tool="critique:semgrep:r1")
+        assert any(e.source == EvidenceSource.SEMGREP for e in items)
+
+    def test_bare_tool_name_is_not_a_receipt(self):
+        """A bare name is what a model types, not what a tool run stamps."""
+        for bare in ("joern", "semgrep", "codeql", "coccinelle", "smt"):
+            items = grade_review_result({}, evidence_tool=bare)
+            assert not any(
+                e.confidence == Confidence.HIGH for e in items
+            ), bare
+
+    def test_model_claim_earns_no_tool_grade(self):
+        items = grade_review_result({}, evidence_tool="llm-claimed:joern")
+        assert not any(e.source == EvidenceSource.JOERN for e in items)
 
 
 class TestFormatEvidenceChain:

@@ -396,3 +396,71 @@ class TestDefaultSystemPrompt:
         review_fn(ctx, config)
         assert len(calls) == 1
         assert calls[0] == custom
+
+
+class TestEvidenceProvenanceThroughFactory:
+    """End-to-end: no model response can produce a tool receipt.
+
+    Exercises the real factory rather than mirroring its logic, so a
+    regression in make_review_fn itself is caught.
+    """
+
+    def _ctx(self):
+        return {
+            "file": "src/x.c",
+            "function": "parse",
+            "source": "void parse(char *b, int n) { memcpy(d, b, n); }",
+            "line_start": 1,
+            "line_end": 1,
+        }
+
+    def _config(self, tmp_path: Path):
+        return OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path,
+        )
+
+    @pytest.mark.parametrize("claimed", [
+        "prefilter", "joern", "semgrep", "codeql", "smt", "coccinelle",
+        "joern:live", "prefilter:rule_1", "smt:check-oob",
+        "dynamic", "frida", "lifecycle", "dark_verify",
+        "critique:semgrep:r", "sarif_cache:semgrep",
+    ])
+    def test_no_model_value_becomes_a_receipt(self, claimed, tmp_path: Path):
+        from core.audit._util import is_stamped_tool_evidence
+
+        client = FakeLLMClient({
+            "status": "finding",
+            "body": "found it",
+            "hypothesis": "unchecked length reaches memcpy",
+            "evidence_tool": claimed,
+        })
+        outcome = make_review_fn(client)(self._ctx(), self._config(tmp_path))
+
+        assert not is_stamped_tool_evidence(outcome.evidence_tool), claimed
+        assert not is_stamped_tool_evidence(
+            outcome.review_result["evidence_tool"]
+        ), claimed
+
+    def test_finding_with_claimed_tool_is_demoted_by_g2(self, tmp_path: Path):
+        from core.audit.orchestrator import _check_finding_gates
+
+        client = FakeLLMClient({
+            "status": "finding",
+            "body": "found it",
+            "hypothesis": "unchecked length reaches memcpy",
+            "evidence_tool": "joern",
+        })
+        outcome = make_review_fn(client)(self._ctx(), self._config(tmp_path))
+        assert any(
+            v.startswith("G2") for v in _check_finding_gates(outcome)
+        )
+
+    def test_claim_survives_for_the_annotation_trail(self, tmp_path: Path):
+        client = FakeLLMClient({
+            "status": "finding",
+            "body": "found it",
+            "hypothesis": "h",
+            "evidence_tool": "joern",
+        })
+        outcome = make_review_fn(client)(self._ctx(), self._config(tmp_path))
+        assert outcome.review_result["evidence_tool_claim"] == "joern"

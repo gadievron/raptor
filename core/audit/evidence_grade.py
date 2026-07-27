@@ -19,6 +19,8 @@ import enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from ._util import is_stamped_tool_evidence
+
 
 class EvidenceSource(str, enum.Enum):
     """Where a piece of evidence came from."""
@@ -41,6 +43,8 @@ class EvidenceSource(str, enum.Enum):
     DYNAMIC_SANITIZER = "dynamic:sanitizer"
     DYNAMIC_FRIDA = "dynamic:frida"
     DYNAMIC_CRASH = "dynamic:crash"
+    DYNAMIC_WITNESS = "dynamic:witness"
+    LIFECYCLE = "mechanical:lifecycle"
 
 
 class Confidence(str, enum.Enum):
@@ -70,6 +74,8 @@ _SOURCE_CONFIDENCE: Dict[EvidenceSource, Confidence] = {
     EvidenceSource.DYNAMIC_SANITIZER: Confidence.HIGH,
     EvidenceSource.DYNAMIC_FRIDA: Confidence.HIGH,
     EvidenceSource.DYNAMIC_CRASH: Confidence.HIGH,
+    EvidenceSource.DYNAMIC_WITNESS: Confidence.HIGH,
+    EvidenceSource.LIFECYCLE: Confidence.HIGH,
 }
 
 _CONFIDENCE_PRIORITY: Dict[Confidence, int] = {
@@ -265,43 +271,72 @@ def grade_review_result(
             confidence_override=Confidence.HIGH,
         ))
 
-    if evidence_tool == "dynamic":
-        items.append(grade_evidence(
-            EvidenceSource.DYNAMIC_SANITIZER,
-            "confirmed by dynamic sanitizer",
-        ))
-    elif evidence_tool == "frida":
-        items.append(grade_evidence(
-            EvidenceSource.DYNAMIC_FRIDA,
-            "confirmed by Frida runtime observation",
-        ))
-    elif evidence_tool == "joern":
-        items.append(grade_evidence(
-            EvidenceSource.JOERN,
-            "confirmed by Joern CPG analysis",
-        ))
-    elif evidence_tool == "semgrep":
-        items.append(grade_evidence(
-            EvidenceSource.SEMGREP,
-            "confirmed by Semgrep pattern match",
-        ))
-    elif evidence_tool == "codeql":
-        items.append(grade_evidence(
-            EvidenceSource.CODEQL,
-            "confirmed by CodeQL analysis",
-        ))
-    elif evidence_tool == "coccinelle":
-        items.append(grade_evidence(
-            EvidenceSource.COCCINELLE,
-            "confirmed by Coccinelle",
-        ))
-    elif evidence_tool == "smt":
-        items.append(grade_evidence(
-            EvidenceSource.SMT,
-            "path feasibility confirmed by SMT solver",
-        ))
+    items.extend(_grade_tool_receipt(evidence_tool))
 
     return items
+
+
+_RECEIPT_GRADES: Dict[str, tuple] = {
+    "dynamic": (EvidenceSource.DYNAMIC_SANITIZER, "confirmed by dynamic sanitizer"),
+    "frida": (EvidenceSource.DYNAMIC_FRIDA, "confirmed by Frida runtime observation"),
+    "joern": (EvidenceSource.JOERN, "confirmed by Joern CPG analysis"),
+    "semgrep": (EvidenceSource.SEMGREP, "confirmed by Semgrep pattern match"),
+    "sarif_cache": (EvidenceSource.SEMGREP, "confirmed by cached Semgrep result"),
+    "codeql": (EvidenceSource.CODEQL, "confirmed by CodeQL analysis"),
+    "coccinelle": (EvidenceSource.COCCINELLE, "confirmed by Coccinelle"),
+    "smt": (EvidenceSource.SMT, "path feasibility confirmed by SMT solver"),
+    "prefilter": (EvidenceSource.PREFILTER, "matched by mechanical prefilter"),
+    "lifecycle": (EvidenceSource.LIFECYCLE, "confirmed by lifecycle precondition check"),
+    "dark_verify": (EvidenceSource.DYNAMIC_WITNESS, "confirmed by executed dark witness"),
+}
+
+
+def _grade_tool_receipt(evidence_tool: str) -> List[GradedEvidence]:
+    """Grade an orchestrator-issued tool receipt.
+
+    Only a value ``_stamp_evidence`` could have issued is graded — a
+    model naming a tool in its own response is a claim, arrives
+    namespaced ``llm-claimed:``, and earns no tool confidence.
+
+    Receipts are ``<namespace>:<detail>`` (``joern:live``,
+    ``smt:check-oob``), optionally ``+``-joined, or one of the bare
+    dynamic tokens. Grading by namespace means a real receipt is
+    recognised — matching bare names alone silently graded nothing,
+    because no genuine stamp is a bare tool name.
+    """
+    if not is_stamped_tool_evidence(evidence_tool):
+        return []
+
+    graded: List[GradedEvidence] = []
+    seen: set = set()
+    for part in evidence_tool.split("+"):
+        part = part.strip()
+        # Grade a component only if it is a receipt in its own right.
+        # The validator anchors on the leading component (so a `+` inside
+        # a rule id doesn't reject a real receipt); grading every
+        # fragment regardless would then invent evidence from the tail —
+        # `smt:check-oob+joern` must grade SMT only, never Joern.
+        if not part or not is_stamped_tool_evidence(part):
+            continue
+        namespace = _receipt_namespace(part)
+        entry = _RECEIPT_GRADES.get(namespace)
+        if entry is None or namespace in seen:
+            continue
+        seen.add(namespace)
+        source, description = entry
+        graded.append(grade_evidence(source, description, detail=part))
+    return graded
+
+
+def _receipt_namespace(receipt: str) -> str:
+    """Namespace a receipt grades under, unwrapping `critique:` fully."""
+    value = receipt
+    for _ in range(8):
+        namespace, sep, detail = value.partition(":")
+        if namespace != "critique" or not sep:
+            return namespace
+        value = detail
+    return ""
 
 
 def format_evidence_chain(chain: List[GradedEvidence]) -> str:

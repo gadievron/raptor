@@ -1,8 +1,9 @@
 """Shared low-level helpers for core.audit modules.
 
-Three concerns that recur across constraints, propagation, sweep, gaps,
-and priority: path containment, identifier validation, and checklist
-lookups.  Consolidated here to avoid drift between copies.
+Four concerns that recur across constraints, propagation, sweep, gaps,
+and priority: path containment, identifier validation, checklist
+lookups, and evidence provenance.  Consolidated here to avoid drift
+between copies.
 """
 
 from __future__ import annotations
@@ -10,6 +11,120 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+
+
+# ── Evidence provenance ──────────────────────────────────────────────
+#
+# G2 [TOOL-GROUNDED] rests on being able to tell a *receipt* from a
+# *claim*.  Both arrive as the same ``evidence_tool`` string, so the
+# distinction has to be structural:
+#
+#   receipt — stamped by the orchestrator only after a tool actually
+#     ran.  Always ``<namespace>:<detail>`` (``prefilter:rule_id``,
+#     ``smt:check-oob``, ``joern:live``, ``critique:semgrep:r``), or
+#     several of those joined by ``+``.  Two bare tokens are also
+#     authoritative because only the verified dynamic/Frida paths set
+#     them.
+#
+#   claim — the LLM is asked to name the tool that supports its
+#     finding.  That is a hypothesis about evidence, not evidence.
+#     ``sanitize_llm_evidence_tool`` moves every model-supplied value
+#     into the ``llm-claimed:`` namespace so it can never be read as a
+#     receipt by ``is_stamped_tool_evidence``, by the G2 gate, or by
+#     evidence grading.
+#
+# Keep this list in sync with the ``confirmed.append`` / ``_stamp_evidence``
+# call sites in orchestrator.py — a stamp whose namespace is missing here
+# is silently downgraded to "not tool-confirmed".
+
+TOOL_EVIDENCE_NAMESPACES = frozenset({
+    "prefilter",
+    # `critique:<inner-receipt>` — the wrapped value is validated too.
+    "critique",
+    "sarif_cache",
+    "semgrep",
+    "coccinelle",
+    "codeql",
+    "smt",
+    "joern",
+})
+
+# Receipts emitted as bare tokens, each only after an observed run:
+# dynamic sweep, Frida observation, lifecycle precondition check, and
+# dark-witness verification.
+BARE_TOOL_EVIDENCE = frozenset({
+    "dynamic",
+    "frida",
+    "lifecycle",
+    "dark_verify",
+})
+
+LLM_CLAIM_PREFIX = "llm-claimed:"
+
+# `critique:` wraps one receipt; a real label nests it at most once.
+# Bounded so a pathological string cannot recurse into a RecursionError.
+_MAX_CRITIQUE_NESTING = 4
+
+# Model-supplied values that already mean "no tool evidence"; these keep
+# collapsing to the plain ``llm`` sentinel the G2 gate already knows.
+LLM_ONLY_EVIDENCE = frozenset({
+    "manual", "manual code review", "manual review", "code review",
+    "llm", "llm review", "none", "n/a", "",
+})
+
+
+def is_stamped_tool_evidence(evidence_tool: str, _depth: int = 0) -> bool:
+    """Return True when *evidence_tool* is an orchestrator-issued receipt.
+
+    Validation is anchored on the **leading** component. A composite
+    label is built by ``"+".join(confirmed)`` from receipts the
+    orchestrator just issued, and receipt details are free text —
+    a Semgrep ``rule_id`` or a Coccinelle rule stem can legitimately
+    contain ``+``. Splitting on every ``+`` and demanding each fragment
+    parse would reject those real receipts, which is the worse error:
+    a false negative here silently downgrades genuine tool evidence.
+
+    Anchoring on the prefix is sound because the prefix is exactly what
+    a claim cannot forge — every model-supplied value arrives under the
+    ``llm-claimed:`` namespace.
+    """
+    if not evidence_tool or _depth > _MAX_CRITIQUE_NESTING:
+        return False
+    value = evidence_tool.strip()
+    if not value:
+        return False
+
+    head = value.split("+", 1)[0].strip()
+    if head in BARE_TOOL_EVIDENCE:
+        return True
+
+    namespace, sep, detail = head.partition(":")
+    if not sep or not detail.strip():
+        return False
+    if namespace not in TOOL_EVIDENCE_NAMESPACES:
+        return False
+    # `critique:` re-runs another tool; the wrapped value must itself be
+    # a receipt, so `critique:madeup:x` does not pass on the wrapper.
+    if namespace == "critique":
+        return is_stamped_tool_evidence(detail, _depth + 1)
+    return True
+
+
+def sanitize_llm_evidence_tool(raw: str) -> str:
+    """Normalise an ``evidence_tool`` value that came from the model.
+
+    Values meaning "no tool" collapse to ``llm``.  Everything else is
+    preserved for the annotation trail but namespaced under
+    ``llm-claimed:`` so it cannot satisfy
+    :func:`is_stamped_tool_evidence`.  A real receipt overwrites it
+    later via ``_stamp_evidence`` once a tool has actually run.
+    """
+    value = (raw or "").strip()
+    if value.lower() in LLM_ONLY_EVIDENCE:
+        return "llm"
+    if value.startswith(LLM_CLAIM_PREFIX):
+        return value
+    return f"{LLM_CLAIM_PREFIX}{value}"
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

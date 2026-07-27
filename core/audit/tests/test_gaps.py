@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.audit.gaps import (
     PRIORITY_DEAD_CODE,
     PRIORITY_ENTRY_POINT,
@@ -444,3 +446,231 @@ class TestMarkChecked:
         result = self._read_checklist(tmp_path)
         checked = result["files"][0]["items"][0]["checked_by"]
         assert set(checked) == {"tool1", "tool2"}
+
+
+class TestGapSourceHydration:
+    """Gaps carry their function body so the mechanical detectors work.
+
+    negative_space.discover_conventions and sibling_analysis both read
+    ``gap["source"]`` and skip any gap without it, so an unhydrated gap
+    list makes those passes silently no-op.
+    """
+
+    def _target(self, tmp_path: Path) -> Path:
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "handler.c").write_text(
+            "\n".join(
+                ["// line 1", "// line 2"]
+                + [f"    body_{i}();" for i in range(3, 21)]
+            )
+            + "\n"
+        )
+        return target
+
+    def _checklist(self):
+        return {
+            "files": [
+                {
+                    "path": "src/handler.c",
+                    "items": [
+                        {"name": "parse", "kind": "function",
+                         "line_start": 3, "line_end": 8},
+                    ],
+                },
+            ],
+        }
+
+    def test_source_absent_without_target_path(self):
+        gaps = compute_gaps(self._checklist(), [])
+        assert gaps
+        assert "source" not in gaps[0]
+
+    def test_source_present_with_target_path(self, tmp_path: Path):
+        target = self._target(tmp_path)
+        gaps = compute_gaps(self._checklist(), [], target_path=target)
+        assert gaps
+        assert "body_3();" in gaps[0]["source"]
+        assert "body_8();" in gaps[0]["source"]
+
+    def test_hydration_respects_the_line_span(self, tmp_path: Path):
+        target = self._target(tmp_path)
+        gaps = compute_gaps(self._checklist(), [], target_path=target)
+        assert gaps[0]["source"].count("\n") == 6
+        assert "body_9();" not in gaps[0]["source"]
+
+    def test_missing_file_is_not_fatal(self, tmp_path: Path):
+        target = tmp_path / "empty"
+        target.mkdir()
+        gaps = compute_gaps(self._checklist(), [], target_path=target)
+        assert gaps
+        assert "source" not in gaps[0]
+
+    def test_path_traversal_is_refused(self, tmp_path: Path):
+        target = self._target(tmp_path)
+        (tmp_path / "secret.c").write_text("TOP SECRET\n" * 10)
+        checklist = {
+            "files": [
+                {
+                    "path": "../secret.c",
+                    "items": [
+                        {"name": "leak", "kind": "function",
+                         "line_start": 1, "line_end": 5},
+                    ],
+                },
+            ],
+        }
+        gaps = compute_gaps(checklist, [], target_path=target)
+        assert gaps
+        assert "source" not in gaps[0]
+
+    def test_oversized_function_is_skipped(self, tmp_path: Path):
+        target = self._target(tmp_path)
+        checklist = {
+            "files": [
+                {
+                    "path": "src/handler.c",
+                    "items": [
+                        {"name": "huge", "kind": "function",
+                         "line_start": 1, "line_end": 100_000},
+                    ],
+                },
+            ],
+        }
+        gaps = compute_gaps(checklist, [], target_path=target)
+        assert "source" not in gaps[0]
+
+    def test_hydrated_source_is_not_serialized_to_gaps_json(
+        self, tmp_path: Path,
+    ):
+        """gaps.json must not become a copy of the scanned tree."""
+        target = self._target(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        gaps = compute_gaps(self._checklist(), [], target_path=target)
+        assert "source" in gaps[0]
+
+        path = write_gaps(gaps, out_dir)
+        written = json.loads(path.read_text())
+        assert written["gaps"]
+        assert "source" not in written["gaps"][0]
+        # The in-memory list is untouched for the caller still using it.
+        assert "source" in gaps[0]
+
+    def test_negative_space_sees_hydrated_gaps(self, tmp_path: Path):
+        """The end the hydration serves: conventions become discoverable."""
+        from core.audit.negative_space import discover_conventions
+
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        body = []
+        for i in range(6):
+            body.append(f"int handler_{i}(struct req *r) {{")
+            body.append("    if (!check_permission(r)) return -EPERM;")
+            body.append("    return do_work(r);")
+            body.append("}")
+        (target / "src" / "ops.c").write_text("\n".join(body) + "\n")
+
+        items = [
+            {"name": f"handler_{i}", "kind": "function",
+             "line_start": 1 + i * 4, "line_end": 4 + i * 4}
+            for i in range(6)
+        ]
+        checklist = {"files": [{"path": "src/ops.c", "items": items}]}
+
+        dry = compute_gaps(checklist, [])
+        assert discover_conventions(dry) == []
+
+        hydrated = compute_gaps(checklist, [], target_path=target)
+        assert all("source" in g for g in hydrated)
+        assert discover_conventions(hydrated) != []
+
+
+class TestGapSourceHydrationBounds:
+    """The advertised ceiling has to be a real one."""
+
+    def _target_with(self, tmp_path: Path, name: str, content: str) -> Path:
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True, exist_ok=True)
+        (target / "src" / name).write_text(content)
+        return target
+
+    def _checklist(self, name: str, line_end: int):
+        return {
+            "files": [
+                {
+                    "path": f"src/{name}",
+                    "items": [
+                        {"name": "f", "kind": "function",
+                         "line_start": 1, "line_end": line_end},
+                    ],
+                },
+            ],
+        }
+
+    def test_repeated_calls_do_not_stack_budgets(self, tmp_path: Path):
+        """Idempotence: already-hydrated bodies count against the total."""
+        from core.audit.gaps import (
+            _MAX_HYDRATED_TOTAL_BYTES,
+            hydrate_gap_source,
+        )
+
+        target = self._target_with(tmp_path, "a.c", "x\n" * 100)
+        gaps = [
+            {"file": "src/a.c", "name": "f", "line_start": 1, "line_end": 10},
+            {"file": "src/a.c", "name": "g", "line_start": 11, "line_end": 20},
+        ]
+        assert hydrate_gap_source(gaps, target) == 2
+        # Second call is a no-op: everything already has source.
+        assert hydrate_gap_source(gaps, target) == 0
+        total = sum(len(g["source"].encode()) for g in gaps)
+        assert total <= _MAX_HYDRATED_TOTAL_BYTES
+
+    def test_binary_looking_file_is_refused(self, tmp_path: Path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "blob.c").write_bytes(b"int x;\n\x00\x00\x00binary\n" * 10)
+        gaps = compute_gaps(
+            self._checklist("blob.c", 5), [], target_path=target,
+        )
+        assert "source" not in gaps[0]
+
+    def test_oversized_file_is_refused(self, tmp_path: Path):
+        from core.audit.gaps import _MAX_HYDRATED_FILE_BYTES
+
+        target = self._target_with(
+            tmp_path, "big.c", "x" * (_MAX_HYDRATED_FILE_BYTES + 1) + "\n",
+        )
+        gaps = compute_gaps(
+            self._checklist("big.c", 1), [], target_path=target,
+        )
+        assert "source" not in gaps[0]
+
+    def test_single_huge_line_is_refused_by_the_byte_cap(self, tmp_path: Path):
+        """A one-line minified body satisfies the SLOC bound but not bytes."""
+        from core.audit.gaps import _MAX_HYDRATED_FUNCTION_BYTES
+
+        target = self._target_with(
+            tmp_path, "min.js", "y" * (_MAX_HYDRATED_FUNCTION_BYTES + 10) + "\n",
+        )
+        gaps = compute_gaps(
+            self._checklist("min.js", 1), [], target_path=target,
+        )
+        assert "source" not in gaps[0]
+
+    def test_symlink_escape_is_refused(self, tmp_path: Path):
+        import os
+
+        secret = tmp_path / "secret.c"
+        secret.write_text("TOP SECRET\n" * 5)
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        try:
+            os.symlink(secret, target / "src" / "link.c")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable")
+
+        gaps = compute_gaps(
+            self._checklist("link.c", 3), [], target_path=target,
+        )
+        assert "source" not in gaps[0]
