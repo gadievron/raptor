@@ -336,6 +336,7 @@ def grade_review_result(
 
 _RECEIPT_GRADES: Dict[str, tuple] = {
     "dynamic": (EvidenceSource.DYNAMIC_SANITIZER, "confirmed by dynamic sanitizer"),
+    "dynamic:crash": (EvidenceSource.DYNAMIC_CRASH, "non-zero exit without sanitizer confirmation"),
     "frida": (EvidenceSource.DYNAMIC_FRIDA, "confirmed by Frida runtime observation"),
     "joern": (EvidenceSource.JOERN, "confirmed by Joern CPG analysis"),
     "semgrep": (EvidenceSource.SEMGREP, "confirmed by Semgrep pattern match"),
@@ -377,7 +378,7 @@ def _grade_tool_receipt(evidence_tool: str) -> List[GradedEvidence]:
         if not part or not is_stamped_tool_evidence(part):
             continue
         namespace = _receipt_namespace(part)
-        entry = _RECEIPT_GRADES.get(namespace)
+        entry = _RECEIPT_GRADES.get(part) or _RECEIPT_GRADES.get(namespace)
         if entry is None or namespace in seen:
             continue
         seen.add(namespace)
