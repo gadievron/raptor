@@ -33,7 +33,13 @@ instructor==1.15.1
 # pip install botocore
 
 # Optional: Rich inventory metadata (decorators, annotations, visibility, typed params)
+# Without a grammar a language falls back to the regex extractor, which finds
+# fewer functions and no line_end — so anything that slices source by span
+# degrades silently. Install the grammars for the languages you scan.
 # pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript tree-sitter-c tree-sitter-go
+# JVM targets (Scala broker/service code alongside Java): tree-sitter-scala
+# Others with loader support: tree-sitter-cpp tree-sitter-typescript
+#   tree-sitter-rust tree-sitter-c-sharp tree-sitter-ruby tree-sitter-php tree-sitter-lua
 
 # Optional: For enhanced dataflow visualization (recommended)
 tabulate==0.10.0
