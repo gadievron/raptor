@@ -78,6 +78,29 @@ _SOURCE_CONFIDENCE: Dict[EvidenceSource, Confidence] = {
     EvidenceSource.LIFECYCLE: Confidence.HIGH,
 }
 
+VALID_EVIDENCE_TOOLS: frozenset = frozenset({
+    "semgrep", "coccinelle", "codeql", "smt", "joern",
+    "compilation", "dynamic", "dynamic:crash", "frida", "dark_verify",
+})
+
+_TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
+    "prefilter", "critique", "sweep", "sarif_cache",
+    "triage", "triage_batch",
+})
+
+
+def is_tool_evidence(stamp: str) -> bool:
+    """Return True if *stamp* was set by an actual tool run, not an LLM claim.
+
+    Matches exact canonical stamps (``"dynamic"``, ``"semgrep"``, etc.)
+    and namespaced composites (``"semgrep:rule-123"``, ``"critique:prefilter:id"``).
+    """
+    if not stamp or stamp == "none":
+        return False
+    root = stamp.split(":")[0] if ":" in stamp else stamp
+    return root in _TOOL_NAMESPACES or stamp in _TOOL_NAMESPACES
+
+
 _CONFIDENCE_PRIORITY: Dict[Confidence, int] = {
     Confidence.HIGH: 0,
     Confidence.MEDIUM: 1,

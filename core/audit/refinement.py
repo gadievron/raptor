@@ -57,8 +57,9 @@ def should_refine(
     if triage_bucket not in ("investigate", "deep_dive"):
         return False
 
+    from .evidence_grade import is_tool_evidence
     evidence_tool = getattr(outcome, "evidence_tool", "") or ""
-    if evidence_tool and evidence_tool != "llm":
+    if is_tool_evidence(evidence_tool):
         return False
 
     return True
@@ -123,10 +124,11 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     - If refined demotes from finding to clean, keep original (don't regress)
     - Otherwise use refined
     """
+    from .evidence_grade import is_tool_evidence
     refined_tool = getattr(refined, "evidence_tool", "") or ""
     original_tool = getattr(original, "evidence_tool", "") or ""
 
-    if refined_tool and refined_tool != "llm":
+    if is_tool_evidence(refined_tool):
         return refined
 
     orig_status = getattr(original, "status", "")

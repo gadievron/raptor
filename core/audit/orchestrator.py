@@ -948,7 +948,7 @@ def review_one_function(
                 )
 
     # ── Mid-loop synthesis ────────────────────────────────────────────
-    if outcome.status == "finding" and outcome.evidence_tool:
+    if outcome.status == "finding" and _is_tool_confirmed(outcome.evidence_tool or ""):
         try:
             from .checker_synthesis import synthesize_and_sweep
             # Current-run workqueue only. Folding in `reviewed_set` (which
@@ -3497,7 +3497,7 @@ def _accumulate_observations(
     source = f"{gap['file']}:{gap['name']}"
 
     if sweep_pre_status is not None:
-        if outcome.status == "finding" and outcome.evidence_tool:
+        if outcome.status == "finding" and _is_tool_confirmed(outcome.evidence_tool or ""):
             session_observations.append({
                 "source": source,
                 "text": (

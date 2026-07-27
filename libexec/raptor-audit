@@ -236,9 +236,11 @@ def cmd_record(args: argparse.Namespace) -> int:
     # G2: TOOL-GROUNDED — findings require evidence-tool + vuln-type
     if args.status == "finding":
         if not args.evidence_tool:
+            from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
+            tools = "|".join(sorted(VALID_EVIDENCE_TOOLS))
             print(
                 "error [G2 TOOL-GROUNDED]: --status finding requires "
-                "--evidence-tool (semgrep|coccinelle|codeql|smt|compilation).\n"
+                f"--evidence-tool ({tools}).\n"
                 "  If no tool confirms the hypothesis, use --status suspicious.",
                 file=sys.stderr,
             )
@@ -1103,8 +1105,9 @@ def main() -> int:
     p_rec.add_argument("--line-end", type=int, default=None)
     p_rec.add_argument("--cwe", default=None)
     p_rec.add_argument("--strategies", default=None)
+    from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
     p_rec.add_argument("--evidence-tool", default=None,
-                       choices=["semgrep", "coccinelle", "codeql", "smt", "compilation"],
+                       choices=sorted(VALID_EVIDENCE_TOOLS),
                        help="Required for --status finding")
     p_rec.add_argument("--hypothesis", default=None,
                        help="Required for --status finding/suspicious")

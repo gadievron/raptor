@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from core.audit.evidence_grade import (
+    VALID_EVIDENCE_TOOLS,
     Confidence,
     EvidenceSource,
     default_confidence,
@@ -14,6 +15,7 @@ from core.audit.evidence_grade import (
     grade_evidence,
     grade_evidence_record,
     grade_review_result,
+    is_tool_evidence,
 )
 
 
@@ -302,3 +304,27 @@ class TestFormatEvidenceChain:
         text = format_evidence_chain(chain)
         assert "[HIGH]" in text
         assert "semgrep" in text
+
+
+class TestIsToolEvidence:
+    """is_tool_evidence rejects LLM-hallucinated stamps."""
+
+    def test_canonical_stamps_accepted(self):
+        for stamp in VALID_EVIDENCE_TOOLS:
+            assert is_tool_evidence(stamp), stamp
+
+    def test_namespaced_composites_accepted(self):
+        assert is_tool_evidence("semgrep:rule-123")
+        assert is_tool_evidence("critique:prefilter:rule-id")
+        assert is_tool_evidence("smt:path_feasibility")
+        assert is_tool_evidence("sarif_cache:hit")
+
+    def test_llm_hallucinations_rejected(self):
+        assert not is_tool_evidence("Semgrep")
+        assert not is_tool_evidence("CodeQL")
+        assert not is_tool_evidence("llm")
+        assert not is_tool_evidence("llm-claimed:codeql")
+
+    def test_empty_and_none_rejected(self):
+        assert not is_tool_evidence("")
+        assert not is_tool_evidence("none")
