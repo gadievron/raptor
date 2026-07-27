@@ -412,6 +412,19 @@ class TestSarifCache:
         cache = SarifCache.from_directory(tmp_path)
         assert cache.lookup("anything.c") is None
 
+    def test_empty_cache_is_falsy(self, tmp_path: Path):
+        cache = SarifCache.from_directory(tmp_path)
+        assert not cache
+        assert len(cache) == 0
+
+    def test_populated_cache_is_truthy(self, tmp_path: Path):
+        self._write_sarif(tmp_path / "scan", "combined.sarif", [
+            self._make_result("src/handler.c", 42),
+        ])
+        cache = SarifCache.from_directory(tmp_path)
+        assert cache
+        assert len(cache) == 1
+
 
 # ── Joern sweep ─────────────────────────────────────────────────────
 

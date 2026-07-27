@@ -911,13 +911,16 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
     if (not effectively_disabled and not use_mount and not use_seatbelt
             and (target or output or allowed_tcp_ports)):
         if not check_landlock_available():
-            if state.warn_once("_landlock_warned_unavailable"):
-                logger.warning(
-                    "Sandbox: target/output/allowed_tcp_ports were set but "
-                    "Landlock is unavailable on this kernel — filesystem writes "
-                    "and TCP ports are NOT restricted. Consider --sandbox none "
-                    "to acknowledge, or upgrade to kernel 5.13+ for Landlock."
-                )
+            from .errors import SandboxSetupError
+            raise SandboxSetupError(
+                "Sandbox: target/output/allowed_tcp_ports were set but "
+                "Landlock is unavailable on this kernel — filesystem writes "
+                "and TCP ports would NOT be restricted.",
+                "Upgrade to kernel 5.13+ for Landlock, pass "
+                "--sandbox network-only to keep namespace/network isolation "
+                "without filesystem restriction, or --sandbox none to "
+                "disable all isolation.",
+            )
         else:
             abi = _get_landlock_abi()
             # Each ABI level adds a restriction mask bit. Warn once per

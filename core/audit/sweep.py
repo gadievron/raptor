@@ -52,6 +52,12 @@ class SarifCache:
     hit_count: int = 0
     miss_count: int = 0
 
+    def __bool__(self) -> bool:
+        return bool(self._by_file)
+
+    def __len__(self) -> int:
+        return len(self._by_file)
+
     def lookup(
         self, file_path: str, line_start: int = 0, line_end: int = 0,
     ) -> Optional[List[Dict[str, Any]]]:
@@ -558,6 +564,28 @@ def run_smt_verb_direct(
                     rule_id=f"smt:{verb}",
                 )
             result = check_oob(size, index, profile="uint64")
+        elif verb == "check-overflow-to-oob":
+            from packages.exploit_feasibility.smt_verbs import check_overflow_to_oob
+            count, elem_size, index = _extract_overflow_to_oob_operands(
+                hypothesis, source,
+            )
+            if not count or not elem_size or not index:
+                return SweepResult(
+                    tool="smt", file_path=file_path,
+                    function_name=function_name, outcome="inconclusive",
+                    rule_id=f"smt:{verb}",
+                )
+            result = check_overflow_to_oob(count, elem_size, index, profile="uint32")
+        elif verb == "validate-path":
+            from packages.exploit_feasibility.smt_path import validate_path
+            conditions = _extract_path_conditions(hypothesis, source)
+            if not conditions:
+                return SweepResult(
+                    tool="smt", file_path=file_path,
+                    function_name=function_name, outcome="inconclusive",
+                    rule_id=f"smt:{verb}",
+                )
+            result = validate_path(conditions)
         else:
             return SweepResult(
                 tool="smt", file_path=file_path,
@@ -678,6 +706,66 @@ def _extract_oob_operands(
         size = size_candidates[0] if size_candidates else None
 
     return index, size
+
+
+def _extract_overflow_to_oob_operands(
+    hypothesis: str, source: str,
+) -> tuple:
+    """Extract (count, element_size, index) for CWE-680 check."""
+    import re
+    backtick_ids = re.findall(r"`(\w+)`", hypothesis)
+    if len(backtick_ids) >= 3:
+        valid = [i for i in backtick_ids[:3] if _IDENT_RE.fullmatch(i)]
+        if len(valid) == 3:
+            return tuple(valid)
+
+    ids = _IDENT_RE.findall(hypothesis)
+    count_kw = ("count", "num", "nelem", "n", "nitems")
+    size_kw = ("size", "elem_size", "element_size", "stride", "width")
+    idx_kw = ("index", "idx", "i", "offset")
+
+    count = next(
+        (i for i in ids if any(k in i.lower() for k in count_kw)), None,
+    )
+    elem = next(
+        (i for i in ids if any(k in i.lower() for k in size_kw)), None,
+    )
+    index = next(
+        (i for i in ids if any(k in i.lower() for k in idx_kw)), None,
+    )
+
+    if not count:
+        src_ids = _IDENT_RE.findall(source)
+        count = next(
+            (i for i in src_ids if any(k in i.lower() for k in count_kw)), None,
+        )
+    if not elem:
+        elem = "4"
+
+    return count, elem, index
+
+
+def _extract_path_conditions(
+    hypothesis: str, source: str,
+) -> list:
+    """Extract condition strings for validate-path from hypothesis text.
+
+    Looks for backtick-quoted expressions first, then falls back to
+    quoted conditions or simple relational expressions.
+    """
+    import re
+    backtick_conds = re.findall(r"`([^`]*[<>=!]+[^`]*)`", hypothesis)
+    if backtick_conds:
+        return backtick_conds
+
+    quoted_conds = re.findall(r'"([^"]*[<>=!]+[^"]*)"', hypothesis)
+    if quoted_conds:
+        return quoted_conds
+
+    relational = re.findall(
+        r"(\w+\s*(?:[<>=!]=?|!=)\s*\w+)", hypothesis,
+    )
+    return relational or []
 
 
 def run_codeql_sweep(

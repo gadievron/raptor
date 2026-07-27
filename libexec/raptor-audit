@@ -1137,7 +1137,8 @@ def main() -> int:
                          choices=["confirmed", "refuted", "error", "inconclusive"])
     p_sweep.add_argument("--smt-verb", default=None,
                          choices=["check-overflow", "check-oob", "check-null-deref",
-                                  "check-overflow-to-oob", "validate-path"],
+                                  "check-overflow-to-oob", "check-negative-bypass",
+                                  "validate-path"],
                          help="SMT verb to run (requires --tool smt)")
     p_sweep.add_argument("--smt-args", default=None,
                          help="JSON dict of args for the SMT verb")

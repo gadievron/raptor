@@ -7300,13 +7300,81 @@ def _codeql_pre_sweep(
     CodeQL alerts are available as pre-evidence.
     """
     try:
-        from packages.codeql.query_runner import QueryRunner  # noqa: F401
+        from packages.codeql.query_runner import QueryRunner
     except ImportError:
         logger.debug("codeql runner not importable; skipping pre-sweep")
         return
 
-    # TODO: wire QueryRunner to replace removed run_standard_queries
-    pass
+    db_path = Path(config.codeql_db_path)
+    if not db_path.is_dir():
+        logger.warning("codeql_pre_sweep: database not found: %s", db_path)
+        return
+
+    import subprocess as _sp
+    try:
+        info = _sp.run(
+            ["codeql", "resolve", "database", str(db_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        language = None
+        for line in info.stdout.splitlines():
+            if line.startswith("primaryLanguage:"):
+                language = line.split(":", 1)[1].strip()
+                break
+        if not language:
+            logger.warning("codeql_pre_sweep: could not detect language")
+            return
+    except (OSError, _sp.TimeoutExpired) as exc:
+        logger.warning("codeql_pre_sweep: resolve database failed: %s", exc)
+        return
+
+    scan_dir = config.out_dir / "scan"
+    scan_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        runner = QueryRunner()
+        result = runner.run_suite(
+            database_path=db_path,
+            language=language,
+            out_dir=scan_dir,
+            use_extended=True,
+        )
+    except Exception as exc:
+        logger.warning("codeql_pre_sweep: suite run failed: %s", exc)
+        return
+
+    if not result.success or not result.sarif_path:
+        logger.warning(
+            "codeql_pre_sweep: suite returned success=%s sarif=%s errors=%s",
+            result.success, result.sarif_path, result.errors,
+        )
+        return
+
+    import json as _json_mod
+    try:
+        data = _json_mod.loads(result.sarif_path.read_text())
+    except (OSError, _json_mod.JSONDecodeError) as exc:
+        logger.warning("codeql_pre_sweep: failed to read SARIF: %s", exc)
+        return
+
+    ingested = 0
+    for run in data.get("runs", []):
+        for r in run.get("results", []):
+            locs = r.get("locations") or [{}]
+            loc = locs[0] if locs else {}
+            phys = loc.get("physicalLocation", {})
+            uri = phys.get("artifactLocation", {}).get("uri", "")
+            from .sweep import _normalize_sarif_path
+            normalized = _normalize_sarif_path(uri)
+            if normalized:
+                sarif_cache._by_file.setdefault(normalized, []).append(r)
+                ingested += 1
+
+    logger.info(
+        "codeql_pre_sweep: %s findings=%d ingested=%d duration=%.1fs",
+        language, result.findings_count, ingested,
+        result.duration_seconds,
+    )
 
 
 def _build_sink_results(

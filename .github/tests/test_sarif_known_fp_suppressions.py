@@ -116,23 +116,20 @@ class MatchKnownFPTests(unittest.TestCase):
         del result["ruleId"]
         self.assertIsNone(mod._matches_known_fp(result))
 
-
-class SanitizerFPTests(unittest.TestCase):
-    def test_matches_flow_through_redact_secrets(self):
-        result = _make_result_with_flow(
+    def test_matches_raptor_audit_logging_sink(self):
+        """libexec/raptor-audit is covered by a KnownFP entry because
+        CodeQL intermittently omits flow steps through redact_secrets."""
+        result = _make_result(
             "py/clear-text-logging-sensitive-data",
             "libexec/raptor-audit",
-            [
-                ("libexec/raptor-audit", "ctx from assemble_context"),
-                ("core/security/redaction.py", "call to redact_secrets"),
-                ("libexec/raptor-audit", "print sanitised output"),
-            ],
         )
         match = mod._matches_known_fp(result)
         self.assertIsNotNone(match)
-        self.assertIsInstance(match, mod.SanitizerFP)
+        self.assertIsInstance(match, mod.KnownFP)
 
-    def test_no_match_without_sanitiser_in_flow(self):
+    def test_raptor_audit_matched_even_without_sanitiser_flow(self):
+        """The KnownFP entry catches raptor-audit regardless of whether
+        CodeQL includes or omits flow steps through the sanitiser."""
         result = _make_result_with_flow(
             "py/clear-text-logging-sensitive-data",
             "libexec/raptor-audit",
@@ -142,12 +139,48 @@ class SanitizerFPTests(unittest.TestCase):
             ],
         )
         match = mod._matches_known_fp(result)
+        self.assertIsNotNone(match)
+        self.assertIsInstance(match, mod.KnownFP)
+
+
+class SanitizerFPTests(unittest.TestCase):
+    """Test the SanitizerFP flow-matching logic.
+
+    These tests use a sink URI NOT covered by KnownFP so the flow-based
+    matching is exercised independently.  The raptor-audit KnownFP is
+    tested separately in MatchKnownFPTests.
+    """
+
+    def test_matches_flow_through_redact_secrets(self):
+        result = _make_result_with_flow(
+            "py/clear-text-logging-sensitive-data",
+            "packages/llm_analysis/agent.py",
+            [
+                ("packages/llm_analysis/agent.py", "ctx"),
+                ("core/security/redaction.py", "call to redact_secrets"),
+                ("packages/llm_analysis/agent.py", "print sanitised"),
+            ],
+        )
+        match = mod._matches_known_fp(result)
+        self.assertIsNotNone(match)
+        self.assertIsInstance(match, mod.SanitizerFP)
+
+    def test_no_match_without_sanitiser_in_flow(self):
+        result = _make_result_with_flow(
+            "py/clear-text-logging-sensitive-data",
+            "packages/llm_analysis/agent.py",
+            [
+                ("packages/llm_analysis/agent.py", "ctx"),
+                ("packages/llm_analysis/agent.py", "print raw output"),
+            ],
+        )
+        match = mod._matches_known_fp(result)
         self.assertIsNone(match)
 
     def test_no_match_for_different_rule(self):
         result = _make_result_with_flow(
             "py/sql-injection",
-            "libexec/raptor-audit",
+            "packages/llm_analysis/agent.py",
             [
                 ("core/security/redaction.py", "call to redact_secrets"),
             ],
@@ -162,12 +195,12 @@ class SanitizerFPTests(unittest.TestCase):
         sanitiser file."""
         result = _make_result_with_flow(
             "py/clear-text-logging-sensitive-data",
-            "libexec/raptor-audit",
+            "packages/llm_analysis/agent.py",
             [
-                ("libexec/raptor-audit", "ctx from assemble_context"),
+                ("packages/llm_analysis/agent.py", "ctx"),
                 ("core/security/redaction.py", "value"),
                 ("core/security/redaction.py", "text"),
-                ("libexec/raptor-audit", "print output"),
+                ("packages/llm_analysis/agent.py", "print output"),
             ],
         )
         match = mod._matches_known_fp(result)
@@ -177,7 +210,7 @@ class SanitizerFPTests(unittest.TestCase):
     def test_matches_via_related_locations(self):
         result = _make_result(
             "py/clear-text-logging-sensitive-data",
-            "libexec/raptor-audit",
+            "packages/llm_analysis/agent.py",
         )
         result["relatedLocations"] = [
             {
@@ -195,7 +228,7 @@ class SanitizerFPTests(unittest.TestCase):
     def test_matches_via_snippet(self):
         result = _make_result(
             "py/clear-text-logging-sensitive-data",
-            "libexec/raptor-audit",
+            "packages/llm_analysis/agent.py",
         )
         result["codeFlows"] = [{
             "threadFlows": [{
@@ -220,7 +253,7 @@ class SanitizerFPTests(unittest.TestCase):
         sarif = _wrap_in_sarif([
             _make_result_with_flow(
                 "py/clear-text-logging-sensitive-data",
-                "libexec/raptor-audit",
+                "packages/llm_analysis/agent.py",
                 [
                     ("core/security/redaction.py", "call to redact_secrets"),
                 ],

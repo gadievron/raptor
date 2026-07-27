@@ -84,6 +84,23 @@ KNOWN_FP_RULES: tuple[KnownFP, ...] = (
         ),
     ),
     KnownFP(
+        rule_id="py/clear-text-logging-sensitive-data",
+        sink_file_prefixes=(
+            "libexec/raptor-audit",
+        ),
+        justification=(
+            "Output at raptor-audit:174 is explicitly guarded by "
+            "core.security.redaction.redact_secrets() which strips "
+            "vendor credential patterns, auth headers, URL-embedded "
+            "secrets, and JWTs before sys.stdout.write(). CodeQL "
+            "does not model redact_secrets as a sanitiser barrier "
+            "and its codeFlows intermittently omit steps inside the "
+            "sanitiser function, preventing flow-based matching. "
+            "Source is a heuristically-named variable "
+            "(core/threat_model/__init__.py:732). Triaged FP."
+        ),
+    ),
+    KnownFP(
         rule_id="py/clear-text-storage-of-sensitive-information",
         sink_file_prefixes=(
             "core/sandbox/summary.py",

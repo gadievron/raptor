@@ -11,6 +11,7 @@ user-invocable: false
 - Model: Opus for all code review. Sonnet for orchestration plumbing only.
 - Unit of review: directory (subsystem), not individual function.
 - Context slice: function source + 1-hop callers + 1-hop callees + checklist metadata.
+- Checklist item fields: `name`, `kind` (`"function"`/`"global"`/`"macro"`/`"class"`), `line_start`, `line_end`, `signature`, `checked_by`, `metadata` (`visibility`, `params`, `return_type`, `attributes`). The field is `kind`, not `type`. Source: `core/inventory/extractors.CodeItem`.
 - Findings format: standard `findings.json` (same as `/scan`, fed to `/validate` unchanged).
 - Annotations: markdown per source file, structured metadata in HTML comments.
 - Prerequisite: `/understand --map` must have run first. If `context-map.json` is missing from the output directory (or project siblings), auto-run it before starting the review loop.
