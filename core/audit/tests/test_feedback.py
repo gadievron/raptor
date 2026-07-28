@@ -14,13 +14,20 @@ from core.audit.feedback import (
     _extract_findings,
     _format_feedback_block,
 )
+from core.coverage.journal import (
+    ReviewJournalEntry, append_entry, latest_entries, now_iso,
+)
 
 
 # ---- helpers ----
 
 def _write_annotation(annotations_dir: Path, file_path: str,
                        function_name: str, status: str, body: str) -> None:
-    """Write a minimal annotation file for testing."""
+    """Write a legacy LLM-source annotation file. Used to exercise
+    the pre-migration fallback path — Reflexion still reads LLM
+    annotations from run dirs created before the annotation →
+    journal migration, but writes the corrected verdict to the
+    journal (never back to the annotation)."""
     ann_path = annotations_dir / f"{file_path}.md"
     ann_path.parent.mkdir(parents=True, exist_ok=True)
     meta = f"status={status} source=llm"
@@ -31,6 +38,38 @@ def _write_annotation(annotations_dir: Path, file_path: str,
         f"{body}\n"
     )
     ann_path.write_text(content)
+
+
+def _seed_journal_entry(out_dir: Path, file_path: str,
+                         function_name: str, verdict: str,
+                         body: str = "") -> None:
+    """Write a prior LLM review to the review journal at ``out_dir``
+    so ``import_validation_results`` finds it as the prior verdict."""
+    entry = ReviewJournalEntry(
+        ts=now_iso(),
+        run_id="test",
+        file=file_path,
+        function=function_name,
+        verdict=verdict,
+        source_hash="",
+        body=body,
+    )
+    append_entry(out_dir, entry)
+
+
+def _latest_journal_verdict(out_dir: Path, file_path: str,
+                             function_name: str) -> str | None:
+    """Return the latest journal entry's verdict for a function,
+    or None if no entry exists."""
+    entries = latest_entries(out_dir)
+    entry = entries.get(f"{file_path}:{function_name}")
+    return entry.verdict if entry else None
+
+
+def _latest_journal_entry(out_dir: Path, file_path: str,
+                           function_name: str) -> ReviewJournalEntry | None:
+    entries = latest_entries(out_dir)
+    return entries.get(f"{file_path}:{function_name}")
 
 
 def _write_coverage_audit(out_dir: Path, entries: dict) -> None:
@@ -242,8 +281,10 @@ class TestImportValidationResults:
     def test_downgrade_finding(self, tmp_path: Path):
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
-        _write_annotation(ann_dir, "src/vuln.c", "vuln_fn",
-                          "finding", "Confirmed format string")
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                             "finding", "Confirmed format string")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([{
@@ -256,22 +297,25 @@ class TestImportValidationResults:
         result = import_validation_results(
             validation_report=report_path,
             annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
         )
 
         assert result["updated"] == 1
         assert result["downgraded"] == 1
-
-        from core.annotations.storage import read_annotation
-        ann = read_annotation(ann_dir, "src/vuln.c", "vuln_fn")
-        assert ann.metadata["status"] == "clean"
-        assert "/validate feedback" in ann.body
-        assert "test code" in ann.body
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry is not None
+        assert entry.verdict == "clean"
+        assert entry.prior_review == "finding"
+        assert entry.validate_verdict == "disproven"
+        assert entry.validate_reason and "test code" in entry.validate_reason
 
     def test_upgrade_clean_to_finding(self, tmp_path: Path):
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
-        _write_annotation(ann_dir, "src/safe.c", "safe_fn",
-                          "clean", "Reviewed, looks safe")
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/safe.c", "safe_fn",
+                             "clean", "Reviewed, looks safe")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([{
@@ -284,20 +328,23 @@ class TestImportValidationResults:
         result = import_validation_results(
             validation_report=report_path,
             annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
         )
 
         assert result["upgraded"] == 1
-
-        from core.annotations.storage import read_annotation
-        ann = read_annotation(ann_dir, "src/safe.c", "safe_fn")
-        assert ann.metadata["status"] == "finding"
-        assert "missed vulnerability" in ann.body
+        entry = _latest_journal_entry(audit_out, "src/safe.c", "safe_fn")
+        assert entry is not None
+        assert entry.verdict == "finding"
+        assert entry.prior_review == "clean"
+        assert entry.lesson and "missed vulnerability" in entry.lesson
 
     def test_corroborate_finding(self, tmp_path: Path):
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
-        _write_annotation(ann_dir, "src/vuln.c", "vuln_fn",
-                          "finding", "Format string confirmed")
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                             "finding", "Format string confirmed")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([{
@@ -311,14 +358,18 @@ class TestImportValidationResults:
         result = import_validation_results(
             validation_report=report_path,
             annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
         )
 
         assert result["corroborated"] == 1
-
-        from core.annotations.storage import read_annotation
-        ann = read_annotation(ann_dir, "src/vuln.c", "vuln_fn")
-        assert ann.metadata["status"] == "finding"
-        assert "corroborates" in ann.body
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry is not None
+        assert entry.verdict == "finding"
+        assert entry.prior_review == "finding"
+        # No ``lesson`` for corroborations — /validate agreeing with
+        # /audit is not a Reflexion signal. The ``validate_verdict``
+        # + ``prior_review`` pair records the agreement.
+        assert entry.validate_verdict == "confirmed"
 
     def test_skip_unmatched(self, tmp_path: Path):
         ann_dir = tmp_path / "annotations"
@@ -345,8 +396,8 @@ class TestImportValidationResults:
         audit_out = tmp_path / "audit-out"
         audit_out.mkdir()
 
-        _write_annotation(ann_dir, "src/vuln.c", "vuln_fn",
-                          "finding", "Confirmed bug")
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                             "finding", "Confirmed bug")
         _write_coverage_audit(audit_out, {
             "src/vuln.c": {"vuln_fn": "finding"},
         })
@@ -375,8 +426,8 @@ class TestImportValidationResults:
         audit_out = tmp_path / "audit-out"
         audit_out.mkdir()
 
-        _write_annotation(ann_dir, "src/vuln.c", "vuln_fn",
-                          "finding", "Bug here")
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                             "finding", "Bug here")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([{
@@ -402,8 +453,10 @@ class TestImportValidationResults:
         """Accepts Stage-D output with nested ruling structure."""
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
-        _write_annotation(ann_dir, "src/a.c", "func_a",
-                          "suspicious", "Looks dodgy")
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/a.c", "func_a",
+                             "suspicious", "Looks dodgy")
 
         stage_d = {
             "stage": "D",
@@ -430,25 +483,24 @@ class TestImportValidationResults:
         result = import_validation_results(
             validation_report=report_path,
             annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
         )
 
         assert result["downgraded"] == 1
-
-        from core.annotations.storage import read_annotation
-        ann = read_annotation(ann_dir, "src/a.c", "func_a")
-        assert ann.metadata["status"] == "clean"
-        assert "no security impact" in ann.body
+        entry = _latest_journal_entry(audit_out, "src/a.c", "func_a")
+        assert entry is not None
+        assert entry.verdict == "clean"
+        assert entry.validate_reason and "no security impact" in entry.validate_reason
 
     def test_multiple_findings(self, tmp_path: Path):
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
 
-        _write_annotation(ann_dir, "src/a.c", "fn_a",
-                          "finding", "Bug A")
-        _write_annotation(ann_dir, "src/b.c", "fn_b",
-                          "clean", "Looks fine")
-        _write_annotation(ann_dir, "src/c.c", "fn_c",
-                          "finding", "Bug C")
+        _seed_journal_entry(audit_out, "src/a.c", "fn_a", "finding", "Bug A")
+        _seed_journal_entry(audit_out, "src/b.c", "fn_b", "clean", "Looks fine")
+        _seed_journal_entry(audit_out, "src/c.c", "fn_c", "finding", "Bug C")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([
@@ -463,6 +515,7 @@ class TestImportValidationResults:
         result = import_validation_results(
             validation_report=report_path,
             annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
         )
 
         assert result["downgraded"] == 1
@@ -474,8 +527,10 @@ class TestImportValidationResults:
         """is_true_positive=False alone triggers downgrade."""
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
-        _write_annotation(ann_dir, "src/x.c", "fn_x",
-                          "finding", "Suspected bug")
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/x.c", "fn_x",
+                             "finding", "Suspected bug")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([{
@@ -487,15 +542,15 @@ class TestImportValidationResults:
 
         result = import_validation_results(
             validation_report=report_path,
+            audit_out_dir=audit_out,
             annotations_dir=ann_dir,
         )
 
         assert result["downgraded"] == 1
-
-        from core.annotations.storage import read_annotation
-        ann = read_annotation(ann_dir, "src/x.c", "fn_x")
-        assert ann.metadata["status"] == "clean"
-        assert "hallucinated" in ann.body
+        entry = _latest_journal_entry(audit_out, "src/x.c", "fn_x")
+        assert entry is not None
+        assert entry.verdict == "clean"
+        assert entry.validate_reason and "hallucinated" in entry.validate_reason
 
     def test_human_annotation_preserved(self, tmp_path: Path):
         """Human annotations are skipped, not overwritten."""
@@ -534,8 +589,10 @@ class TestImportValidationResults:
         """Duplicate file+function in report: only last processed."""
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
-        _write_annotation(ann_dir, "src/a.c", "fn_a",
-                          "finding", "Bug found")
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/a.c", "fn_a",
+                             "finding", "Bug found")
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([
@@ -548,6 +605,7 @@ class TestImportValidationResults:
         result = import_validation_results(
             validation_report=report_path,
             annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
         )
 
         # Only the last entry should be processed

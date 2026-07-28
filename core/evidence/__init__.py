@@ -648,17 +648,25 @@ def build_evidence_index(
     prefilter_results: Optional[Dict[str, Any]] = None,
     context_map_sinks: Optional[List[Dict[str, Any]]] = None,
     binary_bridge: Optional[Any] = None,
+    scope: Optional[str] = None,
 ) -> Dict[str, EvidenceRecord]:
     """Build the per-function evidence index from pre-sweep outputs.
 
     Keys are "file:function". Each value aggregates all available
     mechanical evidence for that function.
+
+    When *scope* is set, only functions whose file path starts with the
+    prefix are indexed.  This avoids building evidence records (and
+    running downstream layer0 scans) for thousands of out-of-scope
+    functions when auditing a single file or subdirectory.
     """
     index: Dict[str, EvidenceRecord] = {}
 
     for file_entry in checklist.get("files", []):
         file_path = file_entry.get("path", "")
         if not file_path:
+            continue
+        if scope and not file_path.startswith(scope):
             continue
         for item in file_entry.get("items", []):
             func_name = item.get("name", "")

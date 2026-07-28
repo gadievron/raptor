@@ -82,12 +82,21 @@ def compute_gaps(
     if not entry_point_set:
         entry_point_set = _derive_entry_points(checklist)
 
+    effective_scope = scope
+    if scope:
+        target_path = checklist.get("target_path", "")
+        if target_path:
+            normalised = target_path.rstrip("/")
+            scope_norm = scope.rstrip("/")
+            if normalised.endswith("/" + scope_norm) or normalised == scope_norm:
+                effective_scope = None
+
     gaps: List[Dict[str, Any]] = []
 
     for file_info in checklist.get("files", []):
         file_path = file_info.get("path", "")
 
-        if scope and not file_path.startswith(scope):
+        if effective_scope and not file_path.startswith(effective_scope):
             continue
         items = file_info.get("items", file_info.get("functions", []))
 
@@ -169,6 +178,9 @@ def compute_gaps(
                     gap["module_aborts_on_load"] = True
             if isinstance(file_info.get("build_excluded"), dict):
                 gap["build_excluded"] = True
+
+            if gap.get("lexical_dead") or gap.get("module_aborts_on_load") or gap.get("build_excluded"):
+                gap["dead"] = True
 
             if reachable_sinks:
                 gap["reachable_sinks"] = reachable_sinks

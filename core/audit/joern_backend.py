@@ -80,7 +80,9 @@ def joern_tunables(overrides: Optional[Dict[str, Any]] = None):
 def start_joern_server(target_path, joern_overrides=None, tunables=None):
     """Start or reuse a persistent Joern server if Joern is available.
 
-    Returns the server instance or None.
+    Returns the server instance or None.  When reusing a lifecycle-managed
+    server, builds/imports the CPG for *target_path* so queries run
+    against the correct codebase.
     """
     if not joern_available(overrides=joern_overrides):
         return None
@@ -89,28 +91,53 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None):
             or target_has_joern_sources(target_path)):
         return None
 
+    srv = None
     try:
         from packages.joern.lifecycle import joern_acquire
         srv = joern_acquire(tunables)
-        if srv is not None:
-            return srv
     except Exception:
         logger.debug("joern lifecycle acquire failed; trying direct start",
                      exc_info=True)
 
+    if srv is None:
+        try:
+            from packages.joern.server import JoernServer
+        except ImportError:
+            return None
+        try:
+            srv = JoernServer.from_tunables(tunables)
+            srv.start()
+        except Exception:
+            logger.debug("Joern server failed to start; using subprocess fallback",
+                         exc_info=True)
+            return None
+
+    _ensure_cpg_loaded(srv, target_path, tunables)
+    return srv
+
+
+def _ensure_cpg_loaded(srv, target_path, tunables=None):
+    """Build and import the CPG for *target_path* into *srv*."""
+    if getattr(srv, "_cpg_loaded", False):
+        return
     try:
-        from packages.joern.server import JoernServer
+        from packages.joern.runner import build_cpg_cached
     except ImportError:
-        return None
+        logger.debug("joern runner not importable; skipping CPG import")
+        return
+
+    cpg_timeout = getattr(tunables, "cpg_timeout_s", 600) if tunables else 600
+    import_timeout = getattr(tunables, "import_timeout_s", 120) if tunables else 120
+
+    cache_dir = Path.home() / ".cache" / "raptor" / "joern-cpg"
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        srv = JoernServer.from_tunables(tunables)
-        srv.start()
-        return srv
+        cpg = build_cpg_cached(Path(target_path), cache_dir, timeout=cpg_timeout)
+        if cpg.exists():
+            srv.import_cpg(cpg.path, timeout=import_timeout)
     except Exception:
-        logger.debug("Joern server failed to start; using subprocess fallback",
-                     exc_info=True)
-        return None
+        logger.debug("CPG build/import failed for %s", target_path, exc_info=True)
 
 
 def stop_joern_server(server) -> None:

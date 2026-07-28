@@ -170,7 +170,7 @@ def run_rule(
     Returns:
         SpatchResult with matches parsed from COCCIRESULT lines.
     """
-    rule = Path(rule)
+    rule = Path(rule).resolve()
     target = Path(target)
     rule_name = rule.stem
 

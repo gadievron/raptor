@@ -80,7 +80,18 @@ class ReviewJournalEntry:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """UTC ISO-8601 timestamp with microsecond precision.
+
+    Microseconds (six digits) guarantee that sequential appends —
+    e.g. Reflexion's seed + correction pair, or a batched collector
+    flushing many outcomes in tight succession — sort strictly
+    monotonically. Prior second-only precision (%Y-%m-%dT%H:%M:%SZ)
+    caused ``latest_entries`` and ``merge_into_index`` to see ties,
+    which forced a choice between correctness (last-write-wins on
+    tie) and idempotency (equal-ts merge counts as no-op). The
+    strict-monotone stamp makes both cases align on `>` semantics.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 # ── Write ────────────────────────────────────────────────────────────
@@ -189,7 +200,15 @@ def reviewed_set(out_dir: Path) -> set[str]:
 
 
 def latest_entries(out_dir: Path) -> dict[str, ReviewJournalEntry]:
-    """Return the most recent entry per ``file:function`` key."""
+    """Return the most recent entry per ``file:function`` key.
+
+    Uses strict ``>`` on ``entry.ts`` (a microsecond-precision UTC
+    ISO string emitted by :func:`now_iso`). Two entries can only
+    tie if written within the same microsecond, which never happens
+    for sequential Python appends — so first-in-file wins on the
+    theoretically-possible tie, matching :func:`merge_into_index`
+    and preserving idempotent-merge semantics.
+    """
     best: dict[str, ReviewJournalEntry] = {}
     for entry in load_entries(out_dir):
         existing = best.get(entry.key)
@@ -224,7 +243,12 @@ _flock = contextlib.contextmanager(_flock)
 def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     """Merge run journal entries into the project-level index.
 
-    Keeps the most recent entry per ``(file, function)`` by timestamp.
+    Keeps the most recent entry per ``(file, function)`` by
+    timestamp. Uses strict ``>`` on ``ts`` (matches
+    :func:`latest_entries`) so re-running a merge on the same run
+    dir is a genuine no-op — no counted "merges" of unchanged
+    entries.
+
     Returns the number of entries merged (new or updated).
     """
     run_entries = load_entries(run_dir)

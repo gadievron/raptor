@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -174,18 +173,40 @@ def _build_taint_approx(
     return results or None
 
 
-def recreate_coverage_from_annotations(
+def recreate_coverage_from_journal(
     coverage_records: List[Dict[str, Any]],
-    annotations_dir: Path,
+    project_dir: Optional[Path],
     checklist: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Re-create coverage entries from annotations when runs are cleaned.
+    """Re-create coverage entries from the project-level review-journal
+    index when a run's coverage records have been cleaned.
 
-    Annotations survive /project clean; coverage records don't. When an
-    annotation exists for a function but no coverage record covers it,
-    synthesize a coverage record so compute_gaps doesn't re-review it.
+    Replaces the pre-migration
+    ``recreate_coverage_from_annotations``. Under the three-way-split
+    design (see ``design/coverage-annotation-redesign.md``) LLM
+    reviews are recorded in ``review-journal.jsonl`` and merged into
+    ``<project>/review-journal-index.json`` at run completion by
+    ``core.run.metadata._snapshot_run_coverage``. The index survives
+    ``/project clean`` and is the durable record of prior LLM
+    reviews. Annotations are human-only under this design, so an
+    annotation-based fallback is neither needed nor authoritative.
+
+    When an entry exists in the journal index for a function that
+    has no live coverage record, synthesize one so ``compute_gaps``
+    doesn't re-review it.
     """
-    if not annotations_dir.is_dir():
+    if not project_dir or not Path(project_dir).is_dir():
+        return coverage_records
+
+    try:
+        from core.coverage.journal import load_index
+    except Exception:  # noqa: BLE001
+        return coverage_records
+    try:
+        entries = load_index(Path(project_dir))
+    except Exception:  # noqa: BLE001
+        return coverage_records
+    if not entries:
         return coverage_records
 
     covered = set()
@@ -193,46 +214,22 @@ def recreate_coverage_from_annotations(
         for fa in rec.get("functions_analysed", []):
             covered.add((fa.get("file", ""), fa.get("function", "")))
 
-    _META_STATUS_RE = re.compile(r"status=(\S+)")
-
     synthetic = []
-    for ann_path in annotations_dir.rglob("*.md"):
-        rel = ann_path.relative_to(annotations_dir)
-        source_file = str(rel).removesuffix(".md")
-        try:
-            text = ann_path.read_text(errors="replace")
-        except OSError:
+    for entry in entries.values():
+        key = (entry.file, entry.function)
+        if key in covered:
             continue
-        current_func = None
-        current_status = "clean"
-        for line in text.splitlines():
-            if line.startswith("## ") and not line.startswith("## _"):
-                if current_func and (source_file, current_func) not in covered:
-                    synthetic.append({
-                        "file": source_file,
-                        "function": current_func,
-                        "status": current_status,
-                        "hash": None,
-                    })
-                    covered.add((source_file, current_func))
-                current_func = line[3:].strip()
-                current_status = "clean"
-            elif current_func and line.startswith("<!-- meta:"):
-                m = _META_STATUS_RE.search(line)
-                if m:
-                    current_status = m.group(1)
-        if current_func and (source_file, current_func) not in covered:
-            synthetic.append({
-                "file": source_file,
-                "function": current_func,
-                "status": current_status,
-                "hash": None,
-            })
-            covered.add((source_file, current_func))
+        synthetic.append({
+            "file": entry.file,
+            "function": entry.function,
+            "status": entry.verdict,
+            "hash": entry.source_hash or None,
+        })
+        covered.add(key)
 
     if synthetic:
         logger.info(
-            "coverage: re-created %d records from surviving annotations",
+            "coverage: re-created %d records from review-journal index",
             len(synthetic),
         )
         coverage_records = list(coverage_records)

@@ -153,9 +153,11 @@ def assemble_context(
     _enrich_callees_with_source(ctx["callees"], target_path, checklist)
     ctx["existing_annotation"] = _load_existing_annotation(
         annotations_dir, file_path, function_name,
+        out_dir=out_dir,
     )
     ctx["is_prior_audit_annotation"] = _is_prior_audit_annotation(
         annotations_dir, file_path, function_name,
+        out_dir=out_dir,
     )
     ctx["sinks"] = _extract_sinks(context_map, file_path, function_name)
     ctx["threat_model"] = _load_threat_model(target_path)
@@ -1357,11 +1359,29 @@ def _load_existing_annotation(
     annotations_dir: Optional[Path],
     file_path: str,
     function_name: str,
+    *,
+    out_dir: Optional[Path] = None,
 ) -> Optional[str]:
-    """Load an existing annotation for re-review context."""
+    """Load prior-review prose for re-review context.
+
+    Dual-source under the three-way-split design: LLM prior review
+    lives in the ``review-journal.jsonl``; human notes live in
+    annotations. Both are useful context — we prefer the journal
+    body when both exist (LLM's own prior reasoning is closer to
+    what the next LLM turn will build on) and fall back to the
+    human annotation body when there's no journal entry.
+    """
+    try:
+        if out_dir:
+            from .journal import latest_entries
+            latest = latest_entries(out_dir)
+            entry = latest.get(f"{file_path}:{function_name}")
+            if entry and entry.body:
+                return entry.body
+    except Exception:
+        pass
     if not annotations_dir:
         return None
-
     try:
         from core.annotations.storage import read_annotation
         ann = read_annotation(annotations_dir, file_path, function_name)
@@ -1376,8 +1396,27 @@ def _is_prior_audit_annotation(
     annotations_dir: Optional[Path],
     file_path: str,
     function_name: str,
+    *,
+    out_dir: Optional[Path] = None,
 ) -> bool:
-    """Check whether the existing annotation is from a prior /audit review."""
+    """Check whether the function has a prior /audit LLM verdict.
+
+    LLM verdicts live in the review journal (design: annotations
+    are human-only). We still allow a legacy annotation-based check
+    for backwards compatibility with pre-migration run dirs where
+    LLM annotations may still exist on disk.
+    """
+    try:
+        if out_dir:
+            from .journal import latest_entries
+            latest = latest_entries(out_dir)
+            entry = latest.get(f"{file_path}:{function_name}")
+            if entry and entry.verdict in (
+                "clean", "suspicious", "finding", "dormant", "error",
+            ):
+                return True
+    except Exception:
+        pass
     if not annotations_dir:
         return False
     try:

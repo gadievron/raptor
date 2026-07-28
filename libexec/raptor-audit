@@ -144,13 +144,27 @@ def cmd_context(args: argparse.Namespace) -> int:
         from core.audit.gaps import load_context_map
         context_map = load_context_map(out_dir)
 
+    line_start = args.line
+    line_end = None
+    if not line_start and checklist:
+        for fi in checklist.get("files", []):
+            if fi.get("path") == args.file:
+                for item in fi.get("items", fi.get("functions", [])):
+                    if item.get("name") == args.function:
+                        line_start = item.get("line_start", 0)
+                        line_end = item.get("line_end")
+                        break
+                break
+
     ctx = assemble_context(
         target_path=target_path,
         file_path=args.file,
         function_name=args.function,
-        line_start=args.line,
+        line_start=line_start or 0,
+        line_end=line_end,
         checklist=checklist,
         context_map=context_map,
+        inventory=checklist,
         annotations_dir=(
             Path(args.annotations_dir) if args.annotations_dir
             else out_dir / "annotations" if out_dir
@@ -444,13 +458,25 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     tool = args.tool
     func_key = f"{args.file}:{args.function}"
 
-    # Auto-run mode: --rule-file triggers actual tool execution
-    if args.rule_file and tool in ("semgrep", "coccinelle", "codeql"):
+    # Auto-run mode: --rule or --rule-file triggers actual tool execution
+    rule_file = args.rule_file
+    if not rule_file and args.rule and tool in ("semgrep", "coccinelle"):
+        import tempfile
+        suffix = ".yaml" if tool == "semgrep" else ".cocci"
+        _tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=suffix, dir=str(out_dir),
+            prefix=".sweep-rule-", delete=False,
+        )
+        _tmp.write(args.rule)
+        _tmp.close()
+        rule_file = _tmp.name
+
+    if rule_file and tool in ("semgrep", "coccinelle", "codeql"):
         from core.audit.sweep import (
             run_semgrep_sweep, run_coccinelle_sweep, run_codeql_sweep,
         )
 
-        rule_path = Path(args.rule_file)
+        rule_path = Path(rule_file)
         if not rule_path.exists():
             print(f"error: rule file {rule_path} not found", file=sys.stderr)
             return 1
@@ -479,8 +505,16 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             )
 
         entry = result.to_log_entry()
-        entry["rule_file"] = str(rule_path)
+        entry["rule_source"] = str(rule_path)
+        if args.rule and not args.rule_file:
+            entry["rule_inline"] = args.rule
         append_audit_log(out_dir, entry)
+
+        if not args.rule_file and rule_path.name.startswith(".sweep-rule-"):
+            try:
+                rule_path.unlink()
+            except OSError:
+                pass
 
         match_info = ""
         if result.matches:
@@ -728,14 +762,33 @@ def cmd_feedback(args: argparse.Namespace) -> int:
 
 def cmd_ast(args: argparse.Namespace) -> int:
     """Extract AST subtree and call targets for a function."""
-    from core.inventory.call_graph import build_call_graph
-
     file_path = Path(args.file)
     if not file_path.exists():
         print(f"file not found: {file_path}", file=sys.stderr)
         return 1
 
-    graph = build_call_graph(file_path)
+    ext = file_path.suffix.lower()
+    ext_to_lang = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".tsx": "tsx", ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp",
+        ".cxx": "cpp", ".hpp": "cpp", ".cs": "csharp", ".go": "go",
+        ".java": "java", ".lua": "lua", ".php": "php", ".rb": "ruby",
+        ".rs": "rust",
+    }
+    lang = ext_to_lang.get(ext)
+    if not lang:
+        print(f"unsupported file type: {ext}", file=sys.stderr)
+        return 1
+
+    from core.inventory.sink_discovery import _get_call_graph_extractors
+    extractors = _get_call_graph_extractors()
+    extractor = extractors.get(lang)
+    if not extractor:
+        print(f"no call graph extractor for {lang}", file=sys.stderr)
+        return 1
+
+    content = file_path.read_text(errors="replace")
+    graph = extractor(content)
     if graph is None:
         print("could not parse file", file=sys.stderr)
         return 1
@@ -1020,6 +1073,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         adversarial=args.adversarial,
         max_propagation_depth=args.max_propagation_depth,
         binary_verdicts=binary_verdicts,
+        no_binary_oracle=getattr(args, "no_binary_oracle", False),
     )
 
     # --- progress callback ---

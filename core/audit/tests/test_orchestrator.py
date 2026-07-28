@@ -1279,6 +1279,24 @@ class TestCheckFindingGates:
         v = _check_finding_gates(self._outcome(evidence_tool="joern"))
         assert not any("G2" in x for x in v)
 
+    def test_g2_review_result_joern_without_stamp_rejected(self):
+        """LLM writes 'joern' into review_result but no tool actually ran."""
+        o = self._outcome(evidence_tool="")
+        o.review_result = {"evidence_tool": "joern"}
+        v = _check_finding_gates(o)
+        assert any("G2" in x for x in v)
+
+    def test_g2_review_result_with_stamp_passes(self):
+        """review_result has raw LLM value but outcome.evidence_tool was stamped."""
+        o = self._outcome(evidence_tool="joern")
+        o.review_result = {"evidence_tool": "joern"}
+        v = _check_finding_gates(o)
+        assert not any("G2" in x for x in v)
+
+    def test_g2_llm_claimed_prefix_rejected(self):
+        v = _check_finding_gates(self._outcome(evidence_tool="llm-claimed:joern"))
+        assert any("G2" in x for x in v)
+
     def test_g5_memory_cwe_in_python_file(self):
         o = ReviewOutcome(
             file="app/views.py", function="handle",
@@ -2916,6 +2934,47 @@ class TestEnrichSummariesFromJoern:
 # ------------------------------------------------------------------
 # SAGE audit pathway tests
 # ------------------------------------------------------------------
+
+class TestCommitOutcomeJournal:
+    """Every ``_commit_outcome`` call must fold the LLM's body +
+    review context into ``review-journal.jsonl``. Pre-fix only
+    ``Collector.submit`` wrote to the journal — the 8 sites that
+    dispatch through ``_commit_outcome`` (prefilter/sweep/refinement/
+    dead-code-skip/etc.) silently dropped the LLM reasoning, and the
+    ``run_id`` also had to be routed through explicitly because
+    ``OrchestratorConfig`` doesn't carry one.
+    """
+
+    def test_commit_outcome_writes_journal_entry(self, tmp_path: Path):
+        from core.audit.orchestrator import _commit_outcome
+        from core.audit.journal import latest_entries
+
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(
+            target_path=target, out_dir=out, resume=False,
+        )
+        outcome = ReviewOutcome(
+            file="src/auth.c", function="check_pw",
+            status="finding", body="Hypothesis + tool evidence.",
+            hypothesis="strcpy without bound", model="test-model",
+            evidence_tool="semgrep:strcpy",
+        )
+        gap = {"file": "src/auth.c", "name": "check_pw",
+               "line_start": 1, "line_end": 3, "strategies": ["cwe-120"]}
+        _commit_outcome(config, outcome, gap)
+
+        entries = latest_entries(out)
+        entry = entries.get("src/auth.c:check_pw")
+        assert entry is not None
+        assert entry.verdict == "finding"
+        assert entry.body == "Hypothesis + tool evidence."
+        assert entry.model == "test-model"
+        assert entry.evidence_tools == ["semgrep:strcpy"]
+        assert entry.strategies == ["cwe-120"]
+        # run_id derived from run-dir basename, not empty string.
+        assert entry.run_id == out.name
+        assert entry.run_id != ""
+
 
 class TestSageHypothesisPathway:
     """Test the SAGE hypothesis verdict store/recall pathway through _commit_outcome."""

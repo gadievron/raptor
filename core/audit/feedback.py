@@ -61,8 +61,14 @@ def import_validation_results(
         Dict with counts: updated, downgraded, upgraded, corroborated,
         skipped.
     """
-    from core.annotations.storage import read_annotation, write_annotation
-    from core.annotations.models import Annotation
+    # Prior LLM verdict lives in the review journal (design:
+    # "annotations are human-only, LLMs use schemas and JSON"). The
+    # human-authored annotation is still consulted so operator notes
+    # can veto Reflexion — but no annotation is ever written back.
+    from core.annotations.storage import read_annotation
+    from .journal import (
+        ReviewJournalEntry, append_entry, latest_entries, now_iso,
+    )
 
     try:
         with open(validation_report) as f:
@@ -82,6 +88,15 @@ def import_validation_results(
         "skipped": 0,
     }
 
+    # Load prior LLM verdicts once — one journal read per audit-out
+    # dir instead of per finding.
+    prior_by_key: Dict[str, ReviewJournalEntry] = {}
+    if audit_out_dir:
+        try:
+            prior_by_key = latest_entries(audit_out_dir)
+        except Exception:  # noqa: BLE001
+            prior_by_key = {}
+
     for finding in findings:
         file_path = finding.get("file", "")
         function_name = finding.get("function", "")
@@ -89,12 +104,9 @@ def import_validation_results(
             counts["skipped"] += 1
             continue
 
-        existing = read_annotation(annotations_dir, file_path, function_name)
-        if not existing:
-            counts["skipped"] += 1
-            continue
-
-        if existing.metadata.get("source") == "human":
+        # Human notes veto Reflexion — the operator's judgement stands.
+        human_ann = read_annotation(annotations_dir, file_path, function_name)
+        if human_ann and human_ann.metadata.get("source") == "human":
             logger.info(
                 "Skipping feedback for %s:%s — human annotation preserved",
                 file_path, function_name,
@@ -102,30 +114,68 @@ def import_validation_results(
             counts["skipped"] += 1
             continue
 
+        key = f"{file_path}:{function_name}"
+        prior_entry = prior_by_key.get(key)
+        audit_status = prior_entry.verdict if prior_entry else ""
+        prior_body = prior_entry.body if prior_entry else ""
+
+        # Legacy path: run dirs created before the annotation → journal
+        # migration still carry LLM verdicts as annotations. When
+        # there's no journal entry, fall back to the LLM annotation
+        # so the Reflexion loop still fires on pre-migration state.
+        # The corrected verdict is still written to the journal
+        # (never back to the annotation) — annotations remain
+        # human-only for new writes.
+        if not audit_status and human_ann and (
+            human_ann.metadata.get("source") == "llm"
+        ):
+            audit_status = human_ann.metadata.get("status", "")
+            prior_body = human_ann.body
+
+        if not audit_status:
+            # No prior LLM verdict AND no human note — nothing to
+            # correct. The Reflexion pattern requires a prior claim
+            # to update; a bare finding without one is a new signal
+            # for the next audit run, not feedback.
+            counts["skipped"] += 1
+            continue
+
         validate_verdict = _classify_verdict(finding)
-        audit_status = existing.metadata.get("status", "")
         transition = _compute_transition(audit_status, validate_verdict)
 
         reason = _sanitize_markdown(_extract_reason(finding))
         lesson = _extract_lesson(finding, audit_status, validate_verdict)
 
-        feedback_block = _format_feedback_block(
-            validate_verdict, reason, lesson, transition,
+        # Write a NEW journal entry recording the corrected verdict
+        # + lesson. The journal is append-only, so
+        # ``latest_entries`` naturally returns this entry on the
+        # next call — no in-place mutation, no annotation write.
+        new_verdict = transition["new_status"] or audit_status
+        new_entry = ReviewJournalEntry(
+            ts=now_iso(),
+            run_id=(prior_entry.run_id if prior_entry else "") or "",
+            file=file_path,
+            function=function_name,
+            verdict=new_verdict,
+            source_hash=(prior_entry.source_hash if prior_entry else "") or "",
+            line_start=prior_entry.line_start if prior_entry else 0,
+            line_end=prior_entry.line_end if prior_entry else None,
+            cwe=prior_entry.cwe if prior_entry else None,
+            strategies=list(prior_entry.strategies) if prior_entry else [],
+            body=prior_body or "",
+            model=prior_entry.model if prior_entry else None,
+            prior_review=audit_status,
+            lesson=lesson or None,
+            validate_verdict=validate_verdict,
+            validate_reason=reason or None,
         )
-
-        new_body = existing.body.rstrip() + "\n\n" + feedback_block + "\n"
-
-        new_metadata = dict(existing.metadata)
-        if transition["new_status"]:
-            new_metadata["status"] = transition["new_status"]
-
-        updated_ann = Annotation(
-            file=existing.file,
-            function=existing.function,
-            body=new_body,
-            metadata=new_metadata,
-        )
-        write_annotation(annotations_dir, updated_ann, overwrite="all")
+        try:
+            append_entry(audit_out_dir or annotations_dir.parent, new_entry)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "journal append failed for %s:%s",
+                file_path, function_name, exc_info=True,
+            )
 
         counts["updated"] += 1
         counts[transition["kind"]] += 1

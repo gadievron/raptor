@@ -804,3 +804,40 @@ class TestCheckLockOrdering:
     def test_no_findings_clean(self):
         gaps = [{"name": "f", "file": "a.c", "source": "return 0;"}]
         assert check_lock_ordering(gaps) == []
+
+
+class TestDeadGapExclusion:
+    """Dead gaps must not pollute convention baselines or sibling votes."""
+
+    def _live_gaps(self):
+        return [
+            {"name": "render_a", "file": "v.py", "source": "html_escape(x)"},
+            {"name": "render_b", "file": "v.py", "source": "html_escape(y)"},
+            {"name": "render_c", "file": "v.py", "source": "html_escape(z)"},
+        ]
+
+    def test_discover_conventions_excludes_dead(self):
+        gaps = self._live_gaps() + [
+            {"name": "render_dead", "file": "v.py",
+             "source": "html_escape(w)", "dead": True},
+        ]
+        convs = discover_conventions(gaps)
+        for conv in convs:
+            assert "v.py:render_dead" not in conv.locations
+
+    def test_detect_framework_excludes_dead(self):
+        gaps = [
+            {"name": "a", "source": "from django.views import View"},
+            {"name": "b", "source": "from django.http import HttpResponse"},
+            {"name": "c", "source": "from django.db import models", "dead": True},
+        ]
+        fw = detect_framework(gaps)
+        assert fw == "django"
+
+    def test_detect_framework_dead_only_no_framework(self):
+        gaps = [
+            {"name": "a", "source": "from django.views import View", "dead": True},
+            {"name": "b", "source": "from django.http import HttpResponse", "dead": True},
+        ]
+        fw = detect_framework(gaps)
+        assert fw == ""

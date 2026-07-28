@@ -92,15 +92,27 @@ class BinaryBridgeResult:
         return {b.function for b in self.parser_boundaries}
 
 
+RUN_METADATA_FILE = ".raptor-run.json"
+
+
 def find_binary_run_dirs(
     out_dir: Path,
     *,
+    target_path: Optional[Path] = None,
     max_dirs: int = 10,
 ) -> List[Path]:
-    """Find sibling directories containing binary analysis output."""
+    """Find sibling directories containing binary analysis output.
+
+    When *target_path* is set, only siblings whose ``.raptor-run.json``
+    records the same resolved target are included.  This prevents
+    unrelated binary analyses (e.g. a SAProuter run) from leaking edges
+    into a kernel audit.
+    """
     parent = out_dir.parent
     if not parent.is_dir():
         return []
+
+    resolved_target = target_path.resolve() if target_path else None
 
     candidates: List[Path] = []
     try:
@@ -112,8 +124,22 @@ def find_binary_run_dirs(
             has_graph = (child / GRAPH_SUBDIR / GRAPH_FILENAME).exists()
             has_investigation = (child / INVESTIGATION_FILENAME).exists()
             has_context = (child / CONTEXT_MAP_FILENAME).exists()
-            if has_graph or has_investigation or has_context:
-                candidates.append(child)
+            if not (has_graph or has_investigation or has_context):
+                continue
+            if resolved_target is not None:
+                manifest = child / RUN_METADATA_FILE
+                if not manifest.exists():
+                    continue
+                try:
+                    meta = json.loads(manifest.read_text())
+                    sibling_target = meta.get("target_path") or meta.get("target", "")
+                    if not sibling_target:
+                        continue
+                    if Path(sibling_target).resolve() != resolved_target:
+                        continue
+                except (json.JSONDecodeError, OSError):
+                    continue
+            candidates.append(child)
     except OSError:
         return []
 
@@ -289,15 +315,18 @@ def _load_binary_context_map(run_dir: Path) -> tuple:
 def load_binary_bridge(
     out_dir: Path,
     *,
+    target_path: Optional[Path] = None,
     build_id_cache: Optional[object] = None,
 ) -> Optional[BinaryBridgeResult]:
     """Load all binary analysis artifacts from sibling run directories.
 
+    When *target_path* is set, only sibling runs that analysed the same
+    target are considered (via ``.raptor-run.json`` target_path match).
     When *build_id_cache* is provided, cached layer0 findings are merged
     in addition to sibling-directory scanning.  Returns None when no
     binary analysis output is found.
     """
-    run_dirs = find_binary_run_dirs(out_dir)
+    run_dirs = find_binary_run_dirs(out_dir, target_path=target_path)
 
     result = BinaryBridgeResult()
 

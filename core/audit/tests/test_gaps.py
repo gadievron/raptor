@@ -497,3 +497,38 @@ def test_build_excluded_propagated():
     }
     gaps = compute_gaps(checklist, [])
     assert gaps[0].get("build_excluded") is True
+
+
+def test_dead_flag_set_for_all_dead_code_signals():
+    checklist = {
+        "files": [
+            {
+                "path": "a.py",
+                "items": [
+                    {"name": "lexical", "line_start": 5, "line_end": 10,
+                     "lexical_dead": True},
+                    {"name": "live", "line_start": 15, "line_end": 20},
+                ],
+            },
+            {
+                "path": "b.py",
+                "module_aborts_on_load": {"line": 3, "summary": "raise"},
+                "items": [
+                    {"name": "after_abort", "line_start": 5, "line_end": 10},
+                ],
+            },
+            {
+                "path": "c.go",
+                "build_excluded": {"line": 1, "summary": "//go:build ignore"},
+                "items": [
+                    {"name": "excluded", "line_start": 5, "line_end": 15},
+                ],
+            },
+        ],
+    }
+    gaps = compute_gaps(checklist, [])
+    by_name = {g["name"]: g for g in gaps}
+    assert by_name["lexical"].get("dead") is True
+    assert by_name["after_abort"].get("dead") is True
+    assert by_name["excluded"].get("dead") is True
+    assert "dead" not in by_name["live"]

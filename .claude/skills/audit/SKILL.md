@@ -17,6 +17,29 @@ user-invocable: false
 - Prerequisite: `/understand --map` must have run first. If `context-map.json` is missing from the output directory (or project siblings), auto-run it before starting the review loop.
 - Scoping: `--scope <dir>` restricts gap selection to a subdirectory (e.g. `ipc/`, `net/ipv4/`). All annotations and coverage records still write to the project-level output dir, so successive scoped runs accumulate into one audit trail.
 
+## [DOMAIN] Optional: Learn the Codebase Before Auditing
+
+For unfamiliar codebases, run `/understand --study` before the review loop. It extracts a domain model (ownership, locking, refcounting, lifetime contracts) that prevents you from rediscovering the same patterns function by function. The output (`domain-model.json`) feeds into the context slice automatically.
+
+Three entry modes:
+
+| Mode | Command | When |
+|------|---------|------|
+| **Path-driven** | `/understand <target> --study crypto/` | Study a subsystem, discover what matters |
+| **Concept-driven** | `/understand <target> --study "rcu locking" --scope ipc/` | Study a named concept, find relevant code |
+| **Multi-identifier** | `/understand <target> --study "ipc_rcu_getref + ipc_rcu_putref"` | Study how specific identifiers relate — contracts, paired operations, invariants |
+
+Examples for a kernel IPC audit:
+```
+/understand /data/linux_kernel/linux-6.18.2/ --study ipc/
+/understand /data/linux_kernel/linux-6.18.2/ --study "sem_lock + sem_unlock" --scope ipc/
+/understand /data/linux_kernel/linux-6.18.2/ --study "page ownership" --scope mm/
+```
+
+The `+` separator in multi-identifier mode triggers correlation — the LLM examines how the identifiers relate to each other (e.g. lock/unlock pairing, get/put refcount symmetry), not just what each one does individually.
+
+Not mandatory, but strongly recommended for: kernel code, lock-heavy subsystems, refcounted object models, unfamiliar frameworks. Skip for small well-documented libraries.
+
 ## [EXEC] Execution Rules
 
 0. **No env-var prefixes on commands.** NEVER write `OUTPUT_DIR=... libexec/raptor-audit ...` or `VAR=val command`. It breaks permission patterns. Capture `OUTPUT_DIR` from `raptor-run-lifecycle start` output and pass it via `--out` flags on every subsequent command.

@@ -86,7 +86,7 @@ from .loaders import (
     load_fuzz_coverage as _load_fuzz_coverage,
     fuzz_coverage_for as _fuzz_coverage_for,
     load_or_build_taint_approx as _load_or_build_taint_approx_raw,
-    recreate_coverage_from_annotations as _recreate_coverage_from_annotations,
+    recreate_coverage_from_journal as _recreate_coverage_from_journal,
 )
 from .hypothesis_mapping import (
     hypothesis_to_semgrep_rule as _hypothesis_to_semgrep_rule,
@@ -173,6 +173,7 @@ class OrchestratorConfig:
     batch_sloc_threshold: int = 5
     propagate_constraints: bool = True
     binary_verdicts: Optional[Dict[str, str]] = None
+    no_binary_oracle: bool = False
     inventory: Optional[Dict[str, Any]] = None
     codeql_db_path: Optional[str] = None
     threat_model: Optional[Dict[str, Any]] = None
@@ -1267,7 +1268,12 @@ def _run_audit_body(
     )
 
     from .binary_bridge import load_binary_bridge
-    binary_bridge_early = load_binary_bridge(config.out_dir)
+    if config.no_binary_oracle:
+        binary_bridge_early = None
+    else:
+        binary_bridge_early = load_binary_bridge(
+            config.out_dir, target_path=config.target_path,
+        )
 
     evidence_index = build_evidence_index(
         checklist=checklist,
@@ -1279,6 +1285,7 @@ def _run_audit_body(
         sarif_cache=sarif_cache,
         context_map_sinks=cm_sinks or None,
         binary_bridge=binary_bridge_early,
+        scope=config.scope,
     )
 
     try:
@@ -1405,9 +1412,14 @@ def _run_audit_body(
         logger.debug("typestate model extraction failed", exc_info=True)
 
     coverage_records = _load_coverage_records(config.out_dir)
-    ann_dir = config.annotations_dir or _resolve_ann_dir(config.out_dir)
-    coverage_records = _recreate_coverage_from_annotations(
-        coverage_records, ann_dir, checklist,
+    # Rebuild coverage from the project-level review-journal index
+    # when this run's per-run coverage records are missing (e.g.
+    # after ``/project clean``). Annotations are human-only under
+    # the current design, so the journal index — not annotations —
+    # is the durable record of prior LLM reviews.
+    project_dir = Path(config.out_dir).parent if config.out_dir else None
+    coverage_records = _recreate_coverage_from_journal(
+        coverage_records, project_dir, checklist,
     )
     fuzz_coverage = _load_fuzz_coverage(config.out_dir)
 
@@ -1570,14 +1582,15 @@ def _run_audit_body(
         discover_conventions,
         check_sibling_negative_space,
     )
-    conventions = discover_conventions(gaps)
+    live_gaps = [g for g in gaps if not g.get("dead")]
+    conventions = discover_conventions(live_gaps)
     if conventions:
         logger.info(
             "negative-space: discovered %d security conventions",
             len(conventions),
         )
 
-    sibling_ns_findings = check_sibling_negative_space(gaps, conventions) if conventions else []
+    sibling_ns_findings = check_sibling_negative_space(live_gaps, conventions) if conventions else []
     if sibling_ns_findings:
         logger.info(
             "sibling analysis: %d asymmetry findings across peer groups",
@@ -3159,7 +3172,7 @@ def _commit_outcome(
     *,
     batch: bool = False,
 ) -> None:
-    """Write the review result to annotations + coverage-audit."""
+    """Write the review result to coverage-audit + review-journal.jsonl."""
     checked_by = ["audit"]
     if outcome.model:
         checked_by.append(outcome.model)
@@ -3174,6 +3187,28 @@ def _commit_outcome(
         line_start=gap.get("line_start", 0),
         line_end=gap.get("line_end"),
         strategies=gap.get("strategies"),
+        checked_by=checked_by,
+    )
+
+    # Persist the LLM's reasoning prose + full review context via the
+    # review journal. Without this, every non-Collector path (there
+    # are eight in this file) loses the outcome body — the LLM's
+    # hypotheses, tool evidence, and reasoning silently disappear
+    # after ``record_review`` because ``record_review`` itself only
+    # stamps status/hash/strategies into coverage-audit.json.
+    from .collector import append_journal_for_outcome
+    # ``run_id`` derived from the run-dir basename to match Collector's
+    # convention (see Collector construction ~orchestrator.py:1810).
+    # Without this every ``_commit_outcome`` journal entry would carry
+    # an empty ``run_id``, breaking cross-run queries and the project
+    # index's provenance.
+    run_id = config.out_dir.name if config.out_dir else ""
+    append_journal_for_outcome(
+        out_dir=config.out_dir,
+        target_path=config.target_path,
+        run_id=run_id,
+        outcome=outcome,
+        gap=gap,
         checked_by=checked_by,
     )
 
@@ -3226,12 +3261,6 @@ def _commit_outcome(
             )
 
 
-_LLM_ONLY_EVIDENCE = frozenset({
-    "manual", "manual code review", "manual review", "code review",
-    "llm", "llm review", "none", "n/a", "",
-})
-
-
 def _match_domain_model_invariants(
     hypothesis: str,
     file_path: str,
@@ -3277,19 +3306,22 @@ def _check_finding_gates(
     domain_model: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Check G1-G5 gates on a finding. Returns list of violations."""
+    from .evidence_grade import is_tool_evidence
     violations = []
     hypothesis = outcome.hypothesis or ""
     if outcome.review_result:
         hypothesis = outcome.review_result.get("hypothesis", hypothesis)
 
     evidence = outcome.evidence_tool or ""
-    if outcome.review_result:
-        evidence = outcome.review_result.get("evidence_tool", evidence)
+    if not evidence and outcome.review_result:
+        evidence = _sanitize_llm_et(
+            outcome.review_result.get("evidence_tool", ""),
+        )
 
     if not hypothesis or hypothesis.strip() == "":
         violations.append("G1: finding emitted without testable hypothesis")
 
-    if not evidence or evidence.lower().strip() in _LLM_ONLY_EVIDENCE:
+    if not is_tool_evidence(evidence):
         matched_invariants = _match_domain_model_invariants(
             hypothesis, outcome.file, domain_model,
         )

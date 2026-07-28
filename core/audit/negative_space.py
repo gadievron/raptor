@@ -231,6 +231,7 @@ def detect_framework(
     Returns framework name ("django", "flask", "express", "spring", "go", "")
     or empty string if no framework detected.
     """
+    gaps = [g for g in gaps if not g.get("dead")]
     signals: Dict[str, int] = {}
 
     framework_imports = {
@@ -269,6 +270,7 @@ def discover_conventions(
     Counts how many functions use each security pattern and emits
     conventions with ≥MIN_CONVENTION_OCCURRENCES occurrences.
     """
+    gaps = [g for g in gaps if not g.get("dead")]
     if not framework:
         framework = detect_framework(gaps)
 
@@ -411,6 +413,7 @@ def check_all_negative_space(
 
     Returns {file:function → [findings]}.
     """
+    gaps = [g for g in gaps if not g.get("dead")]
     results: Dict[str, List[NegativeSpaceFinding]] = {}
 
     for gap in gaps:
@@ -503,6 +506,7 @@ def check_sibling_negative_space(
     This catches the "one arm drifted" pattern: 3 renderers use
     html_escape, the 4th uses strip_tags.
     """
+    gaps = [g for g in gaps if not g.get("dead")]
     from core.audit.sibling_analysis import (
         SiblingGroup,
         SiblingPath,
