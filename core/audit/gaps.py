@@ -196,6 +196,126 @@ def load_checklist(out_dir: Path) -> Dict[str, Any]:
         return {}
 
 
+def gap_for_site(
+    checklist: Dict[str, Any],
+    file_path: str,
+    line: int,
+    *,
+    priority: int = 1,
+) -> Optional[Dict[str, Any]]:
+    """Build a reviewable gap for the function enclosing ``file_path:line``.
+
+    Mechanical sweeps (Mode-2 checker synthesis, rule replay) report
+    *sites* — a file and a line — not functions. The review loop needs
+    the enclosing function, in the same shape ``compute_gaps`` emits, or
+    downstream consumers that index gaps by ``name`` blow up.
+
+    Returns None when no reviewable checklist function covers the line
+    (generated code, a header, a match outside any function body). The
+    caller should drop the site: without a function there is no context
+    slice to review.
+    """
+    if not file_path or line <= 0:
+        return None
+
+    # Tolerate a malformed checklist rather than raising. This runs in
+    # the synthesis second pass, after the main review loop but before
+    # the run's state is flushed, so an exception here costs the run its
+    # results. Fewer resolved gaps is the correct degradation.
+    files = checklist.get("files") if isinstance(checklist, dict) else None
+    if not isinstance(files, list):
+        return None
+
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        if file_info.get("path") != file_path:
+            continue
+
+        raw_items = file_info.get("items")
+        if raw_items is None:
+            raw_items = file_info.get("functions")
+        if not isinstance(raw_items, list):
+            continue
+
+        items = [
+            it for it in raw_items
+            if isinstance(it, dict)
+            and it.get("kind", "") in _REVIEWABLE_KINDS
+            and it.get("name")
+            and isinstance(it.get("line_start"), int)
+            and not isinstance(it.get("line_start"), bool)
+        ]
+        if not items:
+            continue
+
+        # Same two-phase resolution as
+        # core.orchestration.understand_bridge._find_containing_function,
+        # so a site resolves the same way whichever component asks.
+        #
+        # Strict: smallest containing span wins, so a nested function or
+        # closure is attributed to the innermost match rather than to the
+        # enclosing definition.
+        best: Optional[Dict[str, Any]] = None
+        best_span = None
+        for item in items:
+            line_start = item["line_start"]
+            line_end = item.get("line_end")
+            if not isinstance(line_end, int) or isinstance(line_end, bool):
+                continue
+            if not (line_start <= line <= line_end):
+                continue
+            span = line_end - line_start
+            if best_span is None or span < best_span or (
+                span == best_span and line_start > best["line_start"]
+            ):
+                best = dict(item)
+                best_span = span
+
+        # Fallback for inventories that record only the definition line:
+        # closest preceding line_start, bounded by the NEXT definition.
+        #
+        # A trailing definition with no next start has no derivable upper
+        # bound here — inventing one either truncates the function (so
+        # review and hydration miss its tail) or over-claims lines that
+        # belong to nothing. Those sites stay unresolved and are recorded
+        # in the unresolved-hits artifact, which is honest rather than
+        # quietly wrong.
+        if best is None:
+            starts = sorted({it["line_start"] for it in items})
+            preceding = [s for s in starts if s <= line]
+            if not preceding:
+                continue
+            chosen_start = preceding[-1]
+            candidates = [
+                it for it in items
+                if it["line_start"] == chosen_start
+                and it.get("line_end") is None
+            ]
+            later = [s for s in starts if s > chosen_start]
+            if not candidates or not later:
+                continue
+            best = dict(candidates[0])
+            best["line_end"] = later[0] - 1
+            best["span_inferred"] = True
+
+        gap = {
+            "file": file_path,
+            "name": best["name"],
+            "line_start": best["line_start"],
+            "line_end": best["line_end"],
+            "priority": priority,
+            "strategies": sorted(strategies_from_item(best, file_path)),
+            "is_stale": False,
+            "sloc": best["line_end"] - best["line_start"] + 1,
+        }
+        if best.get("span_inferred"):
+            gap["span_inferred"] = True
+        return gap
+
+    return None
+
+
 def load_context_map(out_dir: Path) -> Optional[Dict[str, Any]]:
     """Load context-map.json if present."""
     path = out_dir / "context-map.json"
