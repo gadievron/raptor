@@ -143,12 +143,12 @@ def main():
         print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}", file=sys.stderr)
         print("  Mapping per-finding verdicts (vuln-type-aware)...", file=sys.stderr)
         mapped = map_findings_to_constraints(
-            [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
+            [{"id": f.get("id"), "vuln_type": f.get("vuln_type", "")} for f in group if f.get("id")],
             constraints,
         )
 
         # Update findings with feasibility data
-        by_id = {f["id"]: f for f in findings_data.get("findings", [])}
+        by_id = {f.get("id"): f for f in findings_data.get("findings", []) if f.get("id")}
         for assessment in mapped:
             finding = by_id.get(assessment.finding_id)
             if finding:

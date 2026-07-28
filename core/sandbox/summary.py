@@ -381,9 +381,12 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    denials.append(json.loads(line))
+                    record = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # skip malformed lines, keep going
+                if not isinstance(record, dict):
+                    continue
+                denials.append(record)
     except OSError:
         # WARNING (F071 W21 promote): we successfully renamed the
         # JSONL into our private tmp, then failed to read it. This

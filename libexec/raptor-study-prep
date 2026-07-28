@@ -1329,7 +1329,12 @@ def _llm_seed_concepts_from_names(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4096,
         )
-        text = resp if isinstance(resp, str) else resp.content[0].text
+        if isinstance(resp, str):
+            text = resp
+        elif getattr(resp, "content", None) and len(resp.content) > 0:
+            text = resp.content[0].text
+        else:
+            return []
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()

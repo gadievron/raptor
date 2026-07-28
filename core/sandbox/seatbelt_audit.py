@@ -281,6 +281,11 @@ class LogStreamer:
             # doesn't leak a zombie subprocess with nobody reading it.
             try:
                 self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except Exception:
+                    self._proc.kill()
+                    self._proc.wait()
             except OSError:
                 # KEEP-SILENT (F070 per-site triage W21): terminate()
                 # on an already-dead process is the only realistic

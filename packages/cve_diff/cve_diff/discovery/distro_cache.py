@@ -227,7 +227,7 @@ def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"error": f"non-dict response: {type(data).__name__}"}
     cves = data.get("cves") or []
-    match = next((c for c in cves if (c.get("id") or "").upper() == cve_id.upper()), None)
+    match = next((c for c in cves if isinstance(c, dict) and (c.get("id") or "").upper() == cve_id.upper()), None)
     if match is None:
         return {"error": "http 404"}
     refs = [r for r in (match.get("references") or [])

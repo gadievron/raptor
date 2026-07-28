@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import subprocess
 import sys
 import threading as _threading
@@ -38,7 +39,7 @@ from .constraints import (
     save_constraints,
 )
 from .context import assemble_context
-from .gaps import compute_gaps, hydrate_live_gaps_for_detectors, load_checklist, load_context_map, mark_checked, write_gaps
+from .gaps import compute_gaps, hydrate_live_gaps_for_detectors, load_checklist, load_context_map, write_gaps
 from .priority import (
     group_by_subsystem, load_flow_traces, load_fuzz_coverage as _load_fuzz_coverage_from_runs,
     load_tool_failures, score_functions,
@@ -50,7 +51,7 @@ from .topo_order import topological_sort as _topological_sort
 from .triage import TriageBucket, classify_all, format_triage_summary
 from .findings import write_findings
 from .record import (
-    append_audit_log, load_audit_log, record_review,
+    append_audit_log, load_audit_log,
     _resolve_annotations_dir as _resolve_ann_dir,
 )
 from .sweep import (
@@ -85,7 +86,6 @@ from .loaders import (
     load_fuzz_coverage as _load_fuzz_coverage,
     fuzz_coverage_for as _fuzz_coverage_for,
     load_or_build_taint_approx as _load_or_build_taint_approx_raw,
-    recreate_coverage_from_journal as _recreate_coverage_from_journal,
 )
 from .hypothesis_mapping import (
     hypothesis_to_semgrep_rule as _hypothesis_to_semgrep_rule,
@@ -1428,17 +1428,19 @@ def _run_audit_body(
         logger.debug("typestate model extraction failed", exc_info=True)
 
     coverage_records = _load_coverage_records(config.out_dir)
-    # Rebuild coverage from the project-level review-journal index
-    # when this run's per-run coverage records are missing (e.g.
-    # after ``/project clean``). Annotations are human-only under
-    # the current design, so the journal index — not annotations —
-    # is the durable record of prior LLM reviews.
-    project_dir = Path(config.out_dir).parent if config.out_dir else None
-    coverage_records = _recreate_coverage_from_journal(
-        coverage_records, project_dir, checklist,
-    )
+    # No coverage-recreation shim: ``compute_gaps`` reads the review
+    # journal directly for LLM-review existence, and the coverage
+    # store's ``import_journal`` at run completion folds journal
+    # entries into the project-durable ``coverage.json`` for
+    # mechanical-tool queries. Both paths bypass the removed
+    # ``coverage-audit.json`` + ``checked_by`` sources.
     fuzz_coverage = _load_fuzz_coverage(config.out_dir)
 
+    _project_dir = (
+        Path(config.out_dir).parent
+        if config.out_dir and (Path(config.out_dir) / ".raptor-run.json").exists()
+        else None
+    )
     gaps = compute_gaps(
         checklist,
         [] if config.force else coverage_records,
@@ -1446,6 +1448,8 @@ def _run_audit_body(
         strategy_filter=config.strategy_filter,
         scope=config.scope,
         fuzz_coverage=fuzz_coverage,
+        out_dir=None if config.force else config.out_dir,
+        project_dir=None if config.force else _project_dir,
     )
 
     # Launch Joern only when there are functions to review — the Scala
@@ -2010,26 +2014,49 @@ def _run_audit_body(
         result.terminated_by = "llm_budget_exceeded"
 
     # --- Synthesis queue second pass ---
-    if shared.synthesis_queue and not executor_stats.budget_stopped:
-        synth_hits = list(shared.synthesis_queue)
-        shared.synthesis_queue.clear()
-        logger.info(
-            "synthesis pass: %d targets from mid-loop synthesis",
-            len(synth_hits),
-        )
-        synth_graph = TaskGraph.from_workqueue(synth_hits, call_edges)
-        run_executor_sync(
-            synth_graph, review_fn, shared, config, result,
-            executor_config,
-            joern_server=joern_server,
-            audit_log=audit_log,
-            workqueue=workqueue,
-            reviewed_set=reviewed_set,
-            start_time=start_time,
-            layer_disagreements=layer_disagreements,
-            on_progress=on_progress,
-            collector=collector,
-            budget_check=lambda: _check_budget(config, start_time, result),
+    #
+    # Optional enrichment, so it must never cost the run its results.
+    # Everything here runs after the main review loop but *before* the
+    # state sync-back and the single one-shot ``collector.flush()``
+    # below, so any exception raised in resolution, graph construction
+    # or the executor would discard the run's findings and its buffered
+    # audit log. Degrade to "second pass skipped" instead: the main pass
+    # has already earned its output.
+    try:
+        if shared.synthesis_queue and not executor_stats.budget_stopped:
+            synth_hits = list(shared.synthesis_queue)
+            shared.synthesis_queue.clear()
+            synth_gaps = _synthesis_hits_to_gaps(
+                synth_hits, checklist, config.out_dir,
+            )
+            logger.info(
+                "synthesis pass: %d targets from mid-loop synthesis "
+                "(%d hits resolved to reviewable functions)",
+                len(synth_hits), len(synth_gaps),
+            )
+        else:
+            synth_gaps = []
+
+        if synth_gaps:
+            synth_graph = TaskGraph.from_workqueue(synth_gaps, call_edges)
+            run_executor_sync(
+                synth_graph, review_fn, shared, config, result,
+                executor_config,
+                joern_server=joern_server,
+                audit_log=audit_log,
+                workqueue=workqueue,
+                reviewed_set=reviewed_set,
+                start_time=start_time,
+                layer_disagreements=layer_disagreements,
+                on_progress=on_progress,
+                collector=collector,
+                budget_check=lambda: _check_budget(config, start_time, result),
+            )
+    except Exception as exc:
+        logger.warning(
+            "synthesis second pass failed (%s: %s) — keeping main-pass "
+            "results and flushing buffered state",
+            type(exc).__name__, exc, exc_info=True,
         )
 
     # --- Sync mutable state back from SharedState ---
@@ -2619,21 +2646,49 @@ def _run_audit_body(
             plf_func = plf.get("function", "")
             if plf_file and plf_func:
                 plf_status = "suspicious"
-                plf_body = plf.get("description", plf.get("detail", ""))
-                plf_cwe = plf.get("cwe", "")
+                # Emit a lightweight journal entry so post-loop
+                # mechanical findings enter the review-journal +
+                # coverage-store paths alongside LLM reviews. The
+                # rich record still lives in post-loop-findings.json;
+                # this journal entry is coverage evidence (the
+                # function was examined) with a compact reference
+                # verdict.
                 try:
-                    record_review(
+                    from .collector import append_journal_for_outcome
+                    class _PlfOutcome:
+                        pass
+                    _o = _PlfOutcome()
+                    _o.file = plf_file
+                    _o.function = plf_func
+                    _o.status = plf_status
+                    _o.body = f"[mechanical] {plf.get('description', '')}"
+                    _o.model = None
+                    _o.hypothesis = None
+                    _o.hypotheses = None
+                    _o.evidence_tool = None
+                    _o.tools_dispatched = None
+                    _o.review_result = {"cwe": plf.get("cwe", "")}
+                    _o.cost_usd = None
+                    _o.duration_s = None
+                    append_journal_for_outcome(
                         out_dir=config.out_dir,
                         target_path=config.target_path,
-                        file_path=plf_file,
-                        function_name=plf_func,
-                        status=plf_status,
-                        body=f"[mechanical] {plf_body}",
-                        cwe=plf_cwe,
+                        run_id=(
+                            config.out_dir.name if config.out_dir else ""
+                        ),
+                        outcome=_o,
+                        gap={
+                            "line_start": plf.get("line_start", 0),
+                            "line_end": plf.get("line_end"),
+                            "strategies": ["post-loop-mechanical"],
+                        },
                         checked_by=["audit:post-loop"],
                     )
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "post-loop journal append failed for %s:%s",
+                        plf_file, plf_func, exc_info=True,
+                    )
     except Exception:
         logger.debug("post-loop pattern checks failed", exc_info=True)
 
@@ -3172,30 +3227,20 @@ def _commit_outcome(
     *,
     batch: bool = False,
 ) -> None:
-    """Write the review result to coverage-audit + review-journal.jsonl."""
+    """Write the review result to review-journal.jsonl.
+
+    Journal is the sole LLM review store. ``record_review`` (which
+    wrote ``coverage-audit.json``) and ``mark_checked`` (which
+    stamped ``checked_by`` on the checklist) were removed at Phase-3
+    completion — both duplicated state the journal already carries.
+    Coverage-store LLM signal is imported from the journal at run
+    completion; consumers wanting per-function verdict/context read
+    the journal directly.
+    """
     checked_by = ["audit"]
     if outcome.model:
         checked_by.append(outcome.model)
 
-    record_review(
-        out_dir=config.out_dir,
-        target_path=config.target_path,
-        file_path=outcome.file,
-        function_name=outcome.function,
-        status=outcome.status,
-        body=outcome.body,
-        line_start=gap.get("line_start", 0),
-        line_end=gap.get("line_end"),
-        strategies=gap.get("strategies"),
-        checked_by=checked_by,
-    )
-
-    # Persist the LLM's reasoning prose + full review context via the
-    # review journal. Without this, every non-Collector path (there
-    # are eight in this file) loses the outcome body — the LLM's
-    # hypotheses, tool evidence, and reasoning silently disappear
-    # after ``record_review`` because ``record_review`` itself only
-    # stamps status/hash/strategies into coverage-audit.json.
     from .collector import append_journal_for_outcome
     # ``run_id`` derived from the run-dir basename to match Collector's
     # convention (see Collector construction ~orchestrator.py:1810).
@@ -3211,11 +3256,6 @@ def _commit_outcome(
         gap=gap,
         checked_by=checked_by,
     )
-
-    if outcome.status != "error":
-        mark_checked(
-            config.out_dir, outcome.file, outcome.function, checked_by,
-        )
 
     entry: Dict[str, Any] = {
         "action": "orchestrator_review",
@@ -3771,6 +3811,121 @@ def _batch_trivial(
             remaining.extend(items)
 
     return batches, remaining
+
+
+def _synthesis_hits_to_gaps(
+    hits: List[Dict[str, Any]],
+    checklist: Dict[str, Any],
+    out_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Resolve Mode-2 sweep hits into reviewable gaps.
+
+    Checker synthesis reports *sites* — ``{file, line, function: "",
+    snippet}`` — because a codebase-wide rule matches text, not
+    functions. The review loop is keyed on functions, so each site is
+    resolved to the checklist function that encloses it.
+
+    A site that resolves to no reviewable function (a top-level
+    initializer, a macro, generated code, a checklist entry with no
+    line span) cannot become a review task — but it is still tool
+    signal, so it is written to ``unresolved-synthesis-hits.json``
+    rather than discarded.
+
+    Functions reviewed in an earlier round or run are deliberately NOT
+    skipped: a synthesized checker encodes a pattern that was unknown
+    when they were reviewed, which is exactly when re-review pays.
+    """
+    gaps: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    unresolved: List[Dict[str, Any]] = []
+
+    for hit in hits:
+        file_path = hit.get("file", "")
+        try:
+            line = int(hit.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+
+        gap = gap_for_site(checklist, file_path, line) if line else None
+        if gap is None:
+            unresolved.append(hit)
+            continue
+
+        key = f"{gap['file']}:{gap['name']}"
+        if key in seen:
+            continue
+        # Skip the seed's own function: the rule was synthesised *from*
+        # it, so it is already a finding, not a new variant.
+        origin_file = hit.get("origin_file", "")
+        origin_function = hit.get("origin_function", "")
+        if origin_function and key == f"{origin_file}:{origin_function}":
+            continue
+        seen.add(key)
+
+        if hit.get("priority_score") is not None:
+            gap["priority_score"] = hit["priority_score"]
+        gap["from_synthesis"] = True
+        if hit.get("snippet"):
+            gap["synthesis_snippet"] = hit["snippet"]
+        gaps.append(gap)
+
+    if unresolved:
+        logger.info(
+            "synthesis pass: %d/%d hits did not resolve to a checklist "
+            "function — recorded as unresolved sites",
+            len(unresolved), len(hits),
+        )
+        if out_dir is not None:
+            _write_unresolved_synthesis_hits(unresolved, out_dir)
+
+    return gaps
+
+
+def _write_unresolved_synthesis_hits(
+    hits: List[Dict[str, Any]],
+    out_dir: Path,
+) -> None:
+    """Persist synthesis sites that have no enclosing reviewable function."""
+    path = out_dir / "unresolved-synthesis-hits.json"
+    tmp = None
+    # One non-fatal boundary around read, normalise, serialise and write.
+    # This is a diagnostic artifact: a malformed, mis-encoded or
+    # unserialisable one must never take the run down with it.
+    try:
+        existing: List[Dict[str, Any]] = []
+        if path.is_file():
+            try:
+                prior = json.loads(
+                    path.read_text(encoding="utf-8", errors="replace"),
+                )
+            except json.JSONDecodeError:
+                prior = None
+            # Tolerate any prior shape — a truncated write, a hand-edit,
+            # a bare list — and replace what can't be understood.
+            if isinstance(prior, dict) and isinstance(prior.get("hits"), list):
+                existing = prior["hits"]
+            elif isinstance(prior, list):
+                existing = prior
+            elif prior is not None:
+                logger.debug("replacing malformed %s", path.name)
+
+        existing = list(existing) + list(hits)
+        payload = json.dumps(
+            {"hits": existing, "count": len(existing)},
+            indent=2, default=str,
+        )
+
+        fd, tmp = tempfile.mkstemp(dir=str(out_dir), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, str(path))
+    except (OSError, UnicodeError, TypeError, ValueError):
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        logger.debug("could not persist unresolved synthesis hits", exc_info=True)
 
 
 def _review_items(

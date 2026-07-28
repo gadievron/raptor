@@ -391,10 +391,14 @@ def _build_go_symbol_map(
             continue
         for adv in r.advisories:
             es = adv.ecosystem_specific
-            if not es:
+            if not isinstance(es, dict):
                 continue
             imports = es.get("imports", [])
+            if not isinstance(imports, list):
+                continue
             for imp in imports:
+                if not isinstance(imp, dict):
+                    continue
                 syms = imp.get("symbols", [])
                 if syms:
                     out.setdefault(r.dep_key, []).extend(syms)

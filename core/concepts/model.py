@@ -200,7 +200,12 @@ class DomainModel:
 
     @classmethod
     def load(cls, path: Path) -> DomainModel:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return cls()
+        if not isinstance(raw, dict):
+            return cls()
         concepts = [
             Concept(**{
                 **_filter_fields(Concept, c),

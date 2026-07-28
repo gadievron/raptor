@@ -153,6 +153,8 @@ class CompositionalAnalyzer:
         """
         from core.audit.safety_contract import assert_boost_only
         assert_boost_only("bypass_loop")
+        if not assumption.enforced_by:
+            return []
         target_callers = self.transitive_callers(assumption.target)
         enforcer_callers: set[FuncKey] = set()
         for enforcer in assumption.enforced_by:

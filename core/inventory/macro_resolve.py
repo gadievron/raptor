@@ -116,9 +116,11 @@ def build_rust_macro_table(target_path: Path) -> Dict[str, str]:
     table: Dict[str, str] = {}
     try:
         for p in target_path.rglob("*"):
-            if not p.is_file() or p.suffix not in _RUST_EXTENSIONS:
+            if not p.is_file() or p.is_symlink() or p.suffix not in _RUST_EXTENSIONS:
                 continue
             try:
+                if p.stat().st_size > 1_048_576:  # 1 MB cap
+                    continue
                 text = p.read_text(errors="replace")
             except OSError:
                 continue
@@ -202,9 +204,11 @@ def build_macro_table(target_path: Path) -> Dict[str, Tuple[str, str]]:
     table: Dict[str, Tuple[str, str]] = {}
     try:
         for p in target_path.rglob("*"):
-            if not p.is_file() or p.suffix not in _C_EXTENSIONS:
+            if not p.is_file() or p.is_symlink() or p.suffix not in _C_EXTENSIONS:
                 continue
             try:
+                if p.stat().st_size > 1_048_576:  # 1 MB cap
+                    continue
                 text = p.read_text(errors="replace")
             except OSError:
                 continue

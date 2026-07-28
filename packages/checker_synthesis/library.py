@@ -190,7 +190,7 @@ class RuleLibrary:
         try:
             data = json.loads(self._manifest_path.read_text(encoding="utf-8"))
             self._entries = [LibraryEntry.from_dict(e) for e in data.get("rules", [])]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as exc:
             logger.warning("rule library manifest corrupt, starting fresh: %s", exc)
             self._entries = []
         return self._entries

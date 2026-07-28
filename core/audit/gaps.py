@@ -57,6 +57,8 @@ def compute_gaps(
     budget: Optional[int] = None,
     scope: Optional[str] = None,
     fuzz_coverage: Optional[Dict[str, Any]] = None,
+    out_dir: Optional[Path] = None,
+    project_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -77,6 +79,18 @@ def compute_gaps(
         fuzz_coverage: If provided, functions with substantial fuzz
             coverage (many iterations, zero crashes) are deprioritized
             but NOT skipped.
+        out_dir: This run's output directory. When present, the
+            per-run review journal is folded into ``covered_functions``
+            so mid-run resume works — coverage records only get the
+            journal marks at run completion, so relying solely on
+            them would re-review this run's own entries.
+        project_dir: Project-level directory (parent of ``out_dir``
+            for project runs). When present, the review-journal
+            index is folded into ``covered_functions`` so prior
+            runs' reviews suppress this run's gaps — the coverage
+            store's ``import_journal`` at run-completion is the
+            durable path but only fires at END, not at gap-
+            computation time.
 
     Returns:
         List of gap dicts sorted by priority, each containing:
@@ -84,6 +98,12 @@ def compute_gaps(
           is_stale, old_annotation (if stale)
     """
     covered_functions = _build_covered_set(coverage_records)
+    # Fold LLM review journal into covered_functions. See amendment
+    # §7: the coverage store's journal import only fires at run
+    # completion, so within a single run compute_gaps has no visibility
+    # into either this run's per-turn journal writes OR prior runs'
+    # persistent state. Read both sources directly here.
+    _fold_journal_into_covered(covered_functions, out_dir, project_dir)
     file_tool_coverage = _build_file_tool_coverage(coverage_records)
     entry_point_sinks = _build_sink_reachability(context_map)
     entry_point_set = extract_context_map_set(context_map, "entry_points")
@@ -122,8 +142,14 @@ def compute_gaps(
             if func_key in covered_functions:
                 continue
 
-            if item.get("checked_by"):
-                continue
+            # ``checked_by`` on the checklist item was removed under
+            # the annotation → journal migration. Journal-recorded
+            # LLM reviews land in ``covered_functions`` via the
+            # coverage record importer's journal path (see
+            # core/coverage/importer.py::import_journal). Reading
+            # checklist-level ``checked_by`` here would resurrect
+            # the pre-migration source-of-truth that the amendment
+            # explicitly retired.
 
             line_start = item.get("line_start", 0)
             line_end = item.get("line_end")
@@ -214,7 +240,6 @@ def load_checklist(out_dir: Path) -> Dict[str, Any]:
     except json.JSONDecodeError:
         logger.error("malformed JSON in %s", path)
         return {}
-
 
 
 def hydrate_live_gaps_for_detectors(
@@ -446,6 +471,126 @@ def _read_spans(
         return None
 
     return {s: b for s, b in done.items() if b and s not in abandoned}
+  
+  
+def gap_for_site(
+    checklist: Dict[str, Any],
+    file_path: str,
+    line: int,
+    *,
+    priority: int = 1,
+) -> Optional[Dict[str, Any]]:
+    """Build a reviewable gap for the function enclosing ``file_path:line``.
+
+    Mechanical sweeps (Mode-2 checker synthesis, rule replay) report
+    *sites* — a file and a line — not functions. The review loop needs
+    the enclosing function, in the same shape ``compute_gaps`` emits, or
+    downstream consumers that index gaps by ``name`` blow up.
+
+    Returns None when no reviewable checklist function covers the line
+    (generated code, a header, a match outside any function body). The
+    caller should drop the site: without a function there is no context
+    slice to review.
+    """
+    if not file_path or line <= 0:
+        return None
+
+    # Tolerate a malformed checklist rather than raising. This runs in
+    # the synthesis second pass, after the main review loop but before
+    # the run's state is flushed, so an exception here costs the run its
+    # results. Fewer resolved gaps is the correct degradation.
+    files = checklist.get("files") if isinstance(checklist, dict) else None
+    if not isinstance(files, list):
+        return None
+
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        if file_info.get("path") != file_path:
+            continue
+
+        raw_items = file_info.get("items")
+        if raw_items is None:
+            raw_items = file_info.get("functions")
+        if not isinstance(raw_items, list):
+            continue
+
+        items = [
+            it for it in raw_items
+            if isinstance(it, dict)
+            and it.get("kind", "") in _REVIEWABLE_KINDS
+            and it.get("name")
+            and isinstance(it.get("line_start"), int)
+            and not isinstance(it.get("line_start"), bool)
+        ]
+        if not items:
+            continue
+
+        # Same two-phase resolution as
+        # core.orchestration.understand_bridge._find_containing_function,
+        # so a site resolves the same way whichever component asks.
+        #
+        # Strict: smallest containing span wins, so a nested function or
+        # closure is attributed to the innermost match rather than to the
+        # enclosing definition.
+        best: Optional[Dict[str, Any]] = None
+        best_span = None
+        for item in items:
+            line_start = item["line_start"]
+            line_end = item.get("line_end")
+            if not isinstance(line_end, int) or isinstance(line_end, bool):
+                continue
+            if not (line_start <= line <= line_end):
+                continue
+            span = line_end - line_start
+            if best_span is None or span < best_span or (
+                span == best_span and line_start > best["line_start"]
+            ):
+                best = dict(item)
+                best_span = span
+
+        # Fallback for inventories that record only the definition line:
+        # closest preceding line_start, bounded by the NEXT definition.
+        #
+        # A trailing definition with no next start has no derivable upper
+        # bound here — inventing one either truncates the function (so
+        # review and hydration miss its tail) or over-claims lines that
+        # belong to nothing. Those sites stay unresolved and are recorded
+        # in the unresolved-hits artifact, which is honest rather than
+        # quietly wrong.
+        if best is None:
+            starts = sorted({it["line_start"] for it in items})
+            preceding = [s for s in starts if s <= line]
+            if not preceding:
+                continue
+            chosen_start = preceding[-1]
+            candidates = [
+                it for it in items
+                if it["line_start"] == chosen_start
+                and it.get("line_end") is None
+            ]
+            later = [s for s in starts if s > chosen_start]
+            if not candidates or not later:
+                continue
+            best = dict(candidates[0])
+            best["line_end"] = later[0] - 1
+            best["span_inferred"] = True
+
+        gap = {
+            "file": file_path,
+            "name": best["name"],
+            "line_start": best["line_start"],
+            "line_end": best["line_end"],
+            "priority": priority,
+            "strategies": sorted(strategies_from_item(best, file_path)),
+            "is_stale": False,
+            "sloc": best["line_end"] - best["line_start"] + 1,
+        }
+        if best.get("span_inferred"):
+            gap["span_inferred"] = True
+        return gap
+
+    return None
 
 
 def load_context_map(out_dir: Path) -> Optional[Dict[str, Any]]:
@@ -478,44 +623,12 @@ def write_gaps(gaps: List[Dict[str, Any]], out_dir: Path) -> Path:
     return path
 
 
-def mark_checked(
-    out_dir: Path,
-    file_path: str,
-    function_name: str,
-    checked_by: List[str],
-) -> None:
-    """Write checked_by into the checklist so future runs skip this function."""
-    cl_path = out_dir / "checklist.json"
-    if not cl_path.exists():
-        return
-    try:
-        with open(cl_path) as f:
-            checklist = json.load(f)
-    except json.JSONDecodeError:
-        return
-
-    for file_info in checklist.get("files", []):
-        if file_info.get("path") != file_path:
-            continue
-        for item in file_info.get("items", file_info.get("functions", [])):
-            if item.get("name") == function_name:
-                existing = item.get("checked_by", [])
-                merged = sorted(set(existing) | set(checked_by))
-                item["checked_by"] = merged
-                break
-        break
-
-    fd, tmp = tempfile.mkstemp(dir=str(cl_path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(checklist, f, indent=2)
-        os.replace(tmp, str(cl_path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+# ``mark_checked`` was removed under the annotation → journal
+# migration. The checklist is no longer mutated during audit runs;
+# it's a pure inventory snapshot. LLM review state lives exclusively
+# in ``review-journal.jsonl`` (per-run) and
+# ``review-journal-index.json`` (project). See the amendment doc
+# for the full store-by-store contract.
 
 
 def _build_covered_set(
@@ -528,6 +641,53 @@ def _build_covered_set(
             for func_name in file_data.get("functions", {}):
                 covered.add(f"{file_path}:{func_name}")
     return covered
+
+
+def _fold_journal_into_covered(
+    covered: set,
+    out_dir: Optional[Path],
+    project_dir: Optional[Path],
+) -> None:
+    """Fold review-journal entries into the covered-function set so
+    LLM-reviewed functions suppress gaps mid-run.
+
+    Two sources, both best-effort (never raise):
+
+    * Per-run journal (``out_dir/review-journal.jsonl``) — captures
+      this run's own reviews, so mid-run resume after crash or
+      context reset skips already-reviewed functions.
+    * Project index (``project_dir/review-journal-index.json``) —
+      captures every prior run's most recent review per function,
+      so a fresh run doesn't re-review project-durable state.
+
+    Deletion note: this replaces the ``checked_by`` read that was
+    removed under Phase 3 and the ``recreate_coverage_from_journal``
+    shim that was likewise removed. Without one of these bridges,
+    every audit re-reviews everything ever reviewed. The coverage
+    store's ``import_journal`` at run completion is the durable
+    persistence path — this helper is the mid-run read path.
+    """
+    if out_dir is not None:
+        try:
+            from .journal import reviewed_set
+            covered.update(reviewed_set(out_dir))
+        except Exception:
+            logger.warning(
+                "journal-fold: failed to read per-run journal at %s — "
+                "gap computation will treat this run's reviews as absent",
+                out_dir, exc_info=True,
+            )
+    if project_dir is not None:
+        try:
+            from .journal import load_index
+            for entry in load_index(project_dir).values():
+                covered.add(f"{entry.file}:{entry.function}")
+        except Exception:
+            logger.warning(
+                "journal-fold: failed to read project index at %s — "
+                "gap computation will treat all prior LLM reviews as absent",
+                project_dir, exc_info=True,
+            )
 
 
 def _build_file_tool_coverage(

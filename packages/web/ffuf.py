@@ -242,9 +242,10 @@ class FfufRunner:
         if output_file.exists():
             try:
                 parsed = json.loads(output_file.read_text(encoding="utf-8", errors="replace"))
-                raw_results = parsed.get("results") or []
-                if isinstance(raw_results, list):
-                    results = [r for r in raw_results if isinstance(r, dict)]
+                if isinstance(parsed, dict):
+                    raw_results = parsed.get("results") or []
+                    if isinstance(raw_results, list):
+                        results = [r for r in raw_results if isinstance(r, dict)]
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.warning(f"Could not parse ffuf JSON output: {exc}")
 

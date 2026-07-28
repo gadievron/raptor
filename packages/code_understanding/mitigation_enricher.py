@@ -427,6 +427,9 @@ def enrich_context_map_file(
     except (OSError, json.JSONDecodeError) as e:
         _LOG.warning("mitigation_enricher: reading %s failed: %s", path, e)
         return
+    if not isinstance(cm, dict):
+        _LOG.warning("mitigation_enricher: %s is not a JSON object", path)
+        return
 
     enrich_context_map(
         cm,

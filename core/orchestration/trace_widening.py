@@ -79,14 +79,14 @@ def _build_reverse_call_map(
             if len(chain) == 1:
                 callee = chain[0]
                 reverse.setdefault(callee, []).append({
-                    "file": fi["path"],
+                    "file": fi.get("path", ""),
                     "function": caller,
                     "line": str(line),
                 })
             elif len(chain) == 2 and chain[0] in ("self", "this"):
                 callee = chain[1]
                 reverse.setdefault(callee, []).append({
-                    "file": fi["path"],
+                    "file": fi.get("path", ""),
                     "function": caller,
                     "line": str(line),
                 })
@@ -240,7 +240,7 @@ def _build_forward_call_map(
             continue
         for call in cg.get("calls", []):
             caller = call.get("caller") or "<module>"
-            key = (fi["path"], caller)
+            key = (fi.get("path", ""), caller)
             chain = call.get("chain", [])
             if len(chain) == 1:
                 forward.setdefault(key, set()).add(chain[0])

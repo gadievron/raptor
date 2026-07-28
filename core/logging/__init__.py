@@ -9,6 +9,7 @@ and machine-parsable JSON audit trails.
 import json
 import logging
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -120,115 +121,121 @@ class RaptorLogger:
 
     _instance: Optional["RaptorLogger"] = None
     _initialized: bool = False
+    _lock: threading.Lock = threading.Lock()
 
     def __new__(cls) -> "RaptorLogger":
         """Singleton pattern to ensure one logger instance."""
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(self) -> None:
         """Initialize the logger (only once)."""
         if RaptorLogger._initialized:
             return
+        with RaptorLogger._lock:
+            if RaptorLogger._initialized:
+                return
 
-        self.logger = logging.getLogger("raptor")
-        self.logger.setLevel(logging.DEBUG)
-        self.logger.propagate = False
+            self.logger = logging.getLogger("raptor")
+            self.logger.setLevel(logging.DEBUG)
+            self.logger.propagate = False
 
-        # Ensure log directory exists
-        RaptorConfig.ensure_directories()
+            # Ensure log directory exists
+            RaptorConfig.ensure_directories()
 
-        # Console handler with standard formatting
-        console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter(RaptorConfig.LOG_FORMAT_CONSOLE)
-        console_handler.setFormatter(console_formatter)
-        self.logger.addHandler(console_handler)
+            # Console handler with standard formatting
+            console_handler = logging.StreamHandler(sys.stderr)
+            console_handler.setLevel(logging.INFO)
+            console_formatter = logging.Formatter(RaptorConfig.LOG_FORMAT_CONSOLE)
+            console_handler.setFormatter(console_formatter)
+            self.logger.addHandler(console_handler)
 
-        # File handler with JSON formatting for audit trail.
-        #
-        # Filename includes PID and a 4-digit monotonic-ns tail
-        # alongside the wall-clock second. Pre-fix the name was just
-        # `raptor_<unix_seconds>.jsonl` — two RAPTOR processes
-        # starting in the same wall-clock second computed identical
-        # filenames. `logging.FileHandler` opens with mode "a"
-        # (append), so the two processes' logs interleaved into one
-        # file with no PID separator — operators couldn't reconstruct
-        # which line came from which run.
-        #
-        # Same shape as `core/run/output.unique_run_suffix` (batch
-        # 143): wall-clock second + pid + 4-digit monotonic-ns tail.
-        import os as _os
-        ns_tail = time.monotonic_ns() % 10_000
-        log_file = (
-            RaptorConfig.LOG_DIR
-            / f"raptor_{int(time.time())}_pid{_os.getpid()}_{ns_tail:04d}.jsonl"
-        )
-        # `delay=True` defers opening the file until the first emit.
-        # Pre-fix every `RaptorLogger()` instantiation eagerly created
-        # a file in `LOG_DIR`, even for processes that:
-        #
-        # * Imported `core.logging` but never logged (CLI `--help`,
-        #   `raptor --version`, dry-run / probe modes)
-        # * Crashed before the first emit (config error, env-var
-        #   validation failure)
-        # * Spawned worker subprocesses that exited fast (process
-        #   pool warmup, sandbox probe processes)
-        #
-        # Each created an empty `raptor_*.jsonl` file that
-        # accumulated under `LOG_DIR` indefinitely. Operators saw
-        # the dir grow with hundreds of empty files per long-lived
-        # session, with no signal that any of them were empty until
-        # opening one. `delay=True` only opens the file when there's
-        # actually a record to write — empty processes leave no
-        # trace in `LOG_DIR`.
-        file_handler = logging.FileHandler(log_file, delay=True)
-        file_handler.setLevel(logging.DEBUG)
-        json_formatter = JSONFormatter()
-        file_handler.setFormatter(json_formatter)
-        self.logger.addHandler(file_handler)
+            # File handler with JSON formatting for audit trail.
+            #
+            # Filename includes PID and a 4-digit monotonic-ns tail
+            # alongside the wall-clock second. Pre-fix the name was just
+            # `raptor_<unix_seconds>.jsonl` — two RAPTOR processes
+            # starting in the same wall-clock second computed identical
+            # filenames. `logging.FileHandler` opens with mode "a"
+            # (append), so the two processes' logs interleaved into one
+            # file with no PID separator — operators couldn't reconstruct
+            # which line came from which run.
+            #
+            # Same shape as `core/run/output.unique_run_suffix` (batch
+            # 143): wall-clock second + pid + 4-digit monotonic-ns tail.
+            import os as _os
+            ns_tail = time.monotonic_ns() % 10_000
+            log_file = (
+                RaptorConfig.LOG_DIR
+                / f"raptor_{int(time.time())}_pid{_os.getpid()}_{ns_tail:04d}.jsonl"
+            )
+            # `delay=True` defers opening the file until the first emit.
+            # Pre-fix every `RaptorLogger()` instantiation eagerly created
+            # a file in `LOG_DIR`, even for processes that:
+            #
+            # * Imported `core.logging` but never logged (CLI `--help`,
+            #   `raptor --version`, dry-run / probe modes)
+            # * Crashed before the first emit (config error, env-var
+            #   validation failure)
+            # * Spawned worker subprocesses that exited fast (process
+            #   pool warmup, sandbox probe processes)
+            #
+            # Each created an empty `raptor_*.jsonl` file that
+            # accumulated under `LOG_DIR` indefinitely. Operators saw
+            # the dir grow with hundreds of empty files per long-lived
+            # session, with no signal that any of them were empty until
+            # opening one. `delay=True` only opens the file when there's
+            # actually a record to write — empty processes leave no
+            # trace in `LOG_DIR`.
+            file_handler = logging.FileHandler(log_file, delay=True)
+            file_handler.setLevel(logging.DEBUG)
+            json_formatter = JSONFormatter()
+            file_handler.setFormatter(json_formatter)
+            self.logger.addHandler(file_handler)
 
-        # Also attach the SAME console handler to the root logger so
-        # INFO-level messages from modules that use the stdlib
-        # ``logging.getLogger(__name__)`` pattern (108+ modules in
-        # this codebase, e.g. ``packages.llm_analysis.dataflow_validation``)
-        # surface in operator output. Pre-fix, RAPTOR's handlers
-        # were attached only to the "raptor" namespace; stdlib-named
-        # loggers propagated to root, found no handler, and INFO
-        # messages were silently dropped — most visible in
-        # subprocess contexts (e.g. ``agent.py`` running under
-        # ``raptor agentic``) where no other code calls basicConfig.
-        #
-        # Root level set to INFO so module-level INFO surfaces
-        # without flooding with third-party DEBUG. Third-party
-        # libraries that emit INFO (httpx request lines, openai
-        # client status, etc.) will surface too — same behaviour
-        # operators already see in scripts that call basicConfig,
-        # so no behaviour regression.
-        #
-        # ``self.logger.propagate = False`` (line above) means the
-        # "raptor" namespace doesn't double-fire to the root
-        # handler. Stdlib-named loggers do propagate, get handled
-        # at root, and their format follows the same
-        # LOG_FORMAT_CONSOLE shape as raptor's own messages.
-        root_logger = logging.getLogger()
-        # Idempotent guard: only attach once even if RaptorLogger
-        # is re-instantiated (shouldn't happen via the singleton,
-        # but the file handler's eager initialisation has been a
-        # source of bugs before — see the audit-trail filename
-        # comment above).
-        if not _raptor_root_console_handlers():
-            root_console = logging.StreamHandler(sys.stderr)
-            root_console.setLevel(logging.INFO)
-            root_console.setFormatter(console_formatter)
-            root_console._raptor_root_handler = True  # sentinel for the guard above
-            root_logger.addHandler(root_console)
-            # Ensure root accepts INFO-level records; default is WARNING.
-            if root_logger.level == logging.NOTSET or root_logger.level > logging.INFO:
-                root_logger.setLevel(logging.INFO)
+            # Also attach the SAME console handler to the root logger so
+            # INFO-level messages from modules that use the stdlib
+            # ``logging.getLogger(__name__)`` pattern (108+ modules in
+            # this codebase, e.g. ``packages.llm_analysis.dataflow_validation``)
+            # surface in operator output. Pre-fix, RAPTOR's handlers
+            # were attached only to the "raptor" namespace; stdlib-named
+            # loggers propagated to root, found no handler, and INFO
+            # messages were silently dropped — most visible in
+            # subprocess contexts (e.g. ``agent.py`` running under
+            # ``raptor agentic``) where no other code calls basicConfig.
+            #
+            # Root level set to INFO so module-level INFO surfaces
+            # without flooding with third-party DEBUG. Third-party
+            # libraries that emit INFO (httpx request lines, openai
+            # client status, etc.) will surface too — same behaviour
+            # operators already see in scripts that call basicConfig,
+            # so no behaviour regression.
+            #
+            # ``self.logger.propagate = False`` (line above) means the
+            # "raptor" namespace doesn't double-fire to the root
+            # handler. Stdlib-named loggers do propagate, get handled
+            # at root, and their format follows the same
+            # LOG_FORMAT_CONSOLE shape as raptor's own messages.
+            root_logger = logging.getLogger()
+            # Idempotent guard: only attach once even if RaptorLogger
+            # is re-instantiated (shouldn't happen via the singleton,
+            # but the file handler's eager initialisation has been a
+            # source of bugs before — see the audit-trail filename
+            # comment above).
+            if not _raptor_root_console_handlers():
+                root_console = logging.StreamHandler(sys.stderr)
+                root_console.setLevel(logging.INFO)
+                root_console.setFormatter(console_formatter)
+                root_console._raptor_root_handler = True  # sentinel for the guard above
+                root_logger.addHandler(root_console)
+                # Ensure root accepts INFO-level records; default is WARNING.
+                if root_logger.level == logging.NOTSET or root_logger.level > logging.INFO:
+                    root_logger.setLevel(logging.INFO)
 
-        RaptorLogger._initialized = True
+            RaptorLogger._initialized = True
 
         self.debug(f"RAPTOR logging initialized - audit trail: {log_file}")
 
@@ -397,4 +404,4 @@ def configure_run_logging(log_level: Optional[str], verbose: bool) -> None:
     if log_level:
         set_console_log_level(getattr(logging, log_level.upper()), include_root=True)
     elif verbose:
-        set_console_log_level(logging.DEBUG)
+        set_console_log_level(logging.DEBUG, include_root=True)

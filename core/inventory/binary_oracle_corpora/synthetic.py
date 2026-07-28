@@ -35,7 +35,7 @@ class _SyntheticDriver:
     mode: Literal["synthetic"] = "synthetic"
 
     def prepare(self, work_dir: Path) -> Dict[str, Any]:
-        subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True)
+        subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True, timeout=120)
         binary = FIXTURE_DIR / "demo"
         from core.analysis.binary_oracle import classify_binary_evidence
         probe = classify_binary_evidence(["folded_a", "folded_b"], binary)

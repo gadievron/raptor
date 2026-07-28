@@ -663,7 +663,8 @@ def _snapshot_run_coverage(output_dir: Path) -> None:
         from core.json import load_json
         from core.coverage.store import CoverageStore, coverage_store_lock
         from core.coverage.importer import (
-            _inventory_paths, import_run_dir, import_run_findings,
+            _inventory_paths, import_journal, import_run_dir,
+            import_run_findings,
         )
 
         checklist = load_json(checklist_path)
@@ -675,6 +676,14 @@ def _snapshot_run_coverage(output_dir: Path) -> None:
             store.set_content_id(checklist)
             import_run_dir(store, run_dir, checklist)
             import_run_findings(store, run_dir, _inventory_paths(checklist))
+            # Import LLM review existence from the project-level
+            # journal index. Replaces the pre-migration
+            # ``import_checked_by(store, checklist)`` path — the
+            # journal is now authoritative for LLM review state and
+            # the coverage store projects it into (file, line, tool)
+            # intervals so ``store.who_checked_function`` keeps
+            # returning ``audit`` / ``agentic`` labels unchanged.
+            import_journal(store, proj, checklist)
             store.save()
     except Exception:  # noqa: BLE001 — never fail lifecycle on a snapshot error
         log.debug("_snapshot_run_coverage failed for %s", output_dir, exc_info=True)

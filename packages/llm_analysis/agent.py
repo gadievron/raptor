@@ -1790,8 +1790,12 @@ class AutonomousSecurityAgentV2:
 
         logger.info("   ✓ Reading full file for context...")
 
-        with open(file_path) as f:
-            full_file_content = f.read()
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
+                full_file_content = f.read()
+        except OSError as e:
+            logger.error(f"   ✗ Failed to read source: {e}")
+            return False
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
         from packages.llm_analysis.source_intel_inject import (

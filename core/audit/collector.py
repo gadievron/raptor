@@ -15,12 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .gaps import mark_checked
 from .journal import (
     ReviewJournalEntry, append_entry, compute_domain_model_hash,
     flush_journal, now_iso,
 )
-from .record import record_review
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +32,7 @@ def append_journal_for_outcome(
     gap: dict[str, Any],
     checked_by: list[str],
     domain_model_hash: str | None = None,
+    producer: str | None = None,
 ) -> None:
     """Append one ``ReviewJournalEntry`` for a completed review outcome.
 
@@ -45,10 +44,18 @@ def append_journal_for_outcome(
     review journal, since the design makes the journal the LLM
     review record.
 
+    ``producer`` distinguishes /audit vs /agentic write sites so
+    ``import_journal`` doesn't have to guess from run_id string
+    prefixes (amendment §1 A2 / final review Finding #2). Default
+    ``"audit"`` matches the historical convention for `checked_by`
+    labels — /agentic call sites pass ``"agentic"`` explicitly.
+
     Best-effort: any failure logs at DEBUG and swallows so an
     unrelated review can't be lost when a hash / concept lookup
     misbehaves.
     """
+    if producer is None:
+        producer = "audit"
     source_hash = ""
     try:
         from .record import _compute_hash
@@ -142,6 +149,7 @@ def append_journal_for_outcome(
         evidence_tools=evidence_tools,
         cost_usd=getattr(outcome, "cost_usd", None) or None,
         duration_s=getattr(outcome, "duration_s", None) or None,
+        producer=producer,
     )
     try:
         append_entry(out_dir, entry)
@@ -175,24 +183,11 @@ class Collector:
         if outcome.model:
             checked_by.append(outcome.model)
 
-        record_review(
-            out_dir=self.out_dir,
-            target_path=self.target_path,
-            file_path=outcome.file,
-            function_name=outcome.function,
-            status=outcome.status,
-            body=outcome.body,
-            line_start=gap.get("line_start", 0),
-            line_end=gap.get("line_end"),
-            strategies=gap.get("strategies"),
-            checked_by=checked_by,
-        )
-
-        if outcome.status != "error":
-            mark_checked(
-                self.out_dir, outcome.file, outcome.function, checked_by,
-            )
-
+        # Journal is the sole LLM review store (see amendment §2).
+        # ``record_review``'s coverage-audit.json write and
+        # ``mark_checked``'s checklist stamp were removed at Phase-3
+        # completion; the journal captures verdict/body/context and
+        # the coverage store imports it at run completion.
         self._append_journal_entry(outcome, gap, checked_by)
 
         entry: dict[str, Any] = {

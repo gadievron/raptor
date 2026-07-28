@@ -39,6 +39,21 @@ VALID_VERDICTS = frozenset({
 })
 
 
+# Journal entry schema version.
+#
+# Version 1 (current):
+#   - Original field set defined by the amendment
+#   - Additive changes (new optional fields) preserve version=1
+#   - Breaking changes (removed fields, changed types, reinterpreted
+#     values) bump to version=2
+#   - Legacy entries without a ``schema_version`` field are treated
+#     as version=1 (they predate the field but are structurally
+#     compatible with it)
+#
+# Readers reject unknown versions loudly — do not silently skip.
+SCHEMA_VERSION = 1
+
+
 @dataclass
 class ReviewJournalEntry:
     """One LLM review decision with full context."""
@@ -70,13 +85,54 @@ class ReviewJournalEntry:
     lesson: str | None = None
     validate_verdict: str | None = None
     validate_reason: str | None = None
+    # ``source_drifted``: Reflexion correction entries set this true
+    # when the source has changed since the prior review — surfaces
+    # the drift instead of hiding it behind an inherited
+    # ``source_hash``.
+    source_drifted: bool | None = None
+    # ``producer``: which tool produced this entry — ``audit`` or
+    # ``agentic``. Enables reliable ``import_journal`` tool-label
+    # mapping without inferring from ``run_id`` string patterns.
+    producer: str | None = None
+    schema_version: int = SCHEMA_VERSION
 
     @property
     def key(self) -> str:
         return f"{self.file}:{self.function}"
 
+    @property
+    def index_key(self) -> str:
+        """Index key: (file, function, model, strategy_hash).
+
+        Amendment §1 D1 widens the compaction key from
+        ``(file, function)`` to preserve multi-model + multi-strategy
+        history — otherwise Phase-5 context-aware staleness has no
+        signal to work with.
+        """
+        strategy_hash = _canonical_strategy_hash(self.strategies)
+        model = self.model or ""
+        return f"{self.file}:{self.function}:{model}:{strategy_hash}"
+
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        d = {k: v for k, v in asdict(self).items() if v is not None}
+        # ``schema_version`` is required; keep even when default.
+        d["schema_version"] = self.schema_version
+        return d
+
+
+def _canonical_strategy_hash(strategies: list[str]) -> str:
+    """Sha1 of comma-joined sorted strategy names, first 12 chars.
+
+    Deterministic across list-order permutations. Empty list → the
+    sentinel ``"empty"``. See amendment §1 D1 rationale.
+    """
+    if not strategies:
+        return "empty"
+    import hashlib
+    canon = ",".join(sorted(s for s in strategies if s))
+    if not canon:
+        return "empty"
+    return hashlib.sha1(canon.encode()).hexdigest()[:12]
 
 
 def now_iso() -> str:
@@ -162,7 +218,18 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
 
 
 def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
-    """Construct an entry from a parsed JSON dict, tolerating missing optional fields."""
+    """Construct an entry from a parsed JSON dict, tolerating missing optional fields.
+
+    Schema-version compat: absent ``schema_version`` field defaults to
+    1 (legacy entries predate the field). Unknown versions raise a
+    loud ``ValueError`` — do not silently reinterpret unknown data.
+    """
+    version = raw.get("schema_version", 1)
+    if version != SCHEMA_VERSION:
+        raise ValueError(
+            f"unknown journal entry schema_version={version}; "
+            f"this reader supports {SCHEMA_VERSION} only"
+        )
     return ReviewJournalEntry(
         ts=raw["ts"],
         run_id=raw["run_id"],
@@ -191,6 +258,9 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         lesson=raw.get("lesson"),
         validate_verdict=raw.get("validate_verdict"),
         validate_reason=raw.get("validate_reason"),
+        source_drifted=raw.get("source_drifted"),
+        producer=raw.get("producer"),
+        schema_version=version,
     )
 
 
@@ -243,11 +313,16 @@ _flock = contextlib.contextmanager(_flock)
 def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     """Merge run journal entries into the project-level index.
 
-    Keeps the most recent entry per ``(file, function)`` by
-    timestamp. Uses strict ``>`` on ``ts`` (matches
-    :func:`latest_entries`) so re-running a merge on the same run
-    dir is a genuine no-op — no counted "merges" of unchanged
-    entries.
+    Storage key: ``(file, function, model, strategy_hash)`` via
+    ``entry.index_key`` (amendment §1 D1). This preserves multi-
+    model + multi-strategy history: a function reviewed by opus AND
+    gemini gets two rows in the index, and Phase-5 context-aware
+    staleness has real signal to work with instead of the
+    latest-per-function collapse the pre-D1 code produced.
+
+    Ties on ``ts`` resolve to strict-monotone microsecond stamps
+    (see :func:`now_iso`); re-running a merge on the same run dir
+    is a genuine no-op.
 
     Returns the number of entries merged (new or updated).
     """
@@ -261,9 +336,10 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
         index = _load_index(index_path)
         merged = 0
         for entry in run_entries:
-            existing = index.get(entry.key)
+            key = entry.index_key
+            existing = index.get(key)
             if existing is None or entry.ts > existing.get("ts", ""):
-                index[entry.key] = entry.to_dict()
+                index[key] = entry.to_dict()
                 merged += 1
 
         if merged:
@@ -273,14 +349,40 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
 
 
 def load_index(project_dir: Path) -> dict[str, ReviewJournalEntry]:
-    """Load the project-level journal index, returning entries by key."""
+    """Load the project-level journal index, collapsed to
+    latest-per-``(file, function)``.
+
+    The on-disk storage is keyed by ``index_key`` (widened for
+    multi-model / multi-strategy history — see
+    :func:`merge_into_index`). Most consumers want the collapsed
+    view ("what's the most recent verdict for F"), so this
+    function returns a dict keyed by ``file:function``. Consumers
+    that need the full history use :func:`load_index_full`.
+    """
+    result: dict[str, ReviewJournalEntry] = {}
+    for entry in load_index_full(project_dir).values():
+        existing = result.get(entry.key)
+        if existing is None or entry.ts > existing.ts:
+            result[entry.key] = entry
+    return result
+
+
+def load_index_full(project_dir: Path) -> dict[str, ReviewJournalEntry]:
+    """Load the full project-level journal index — every entry
+    keyed by ``index_key`` (``file:function:model:strategy_hash``).
+
+    Preserves the multi-model + multi-strategy history the amendment
+    §1 D1 storage layout captures. Used by consumers that need
+    context-aware queries (e.g. Phase-5 staleness gate: was F
+    reviewed under strategies containing 'aliasing'?).
+    """
     index_path = project_dir / INDEX_FILENAME
     raw = _load_index(index_path)
     result: dict[str, ReviewJournalEntry] = {}
     for key, entry_dict in raw.items():
         try:
             result[key] = _entry_from_dict(entry_dict)
-        except (TypeError, KeyError) as exc:
+        except (TypeError, KeyError, ValueError) as exc:
             logger.warning("journal index: skipping %s: %s", key, exc)
     return result
 

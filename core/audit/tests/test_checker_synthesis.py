@@ -210,13 +210,14 @@ class TestSynthesizeAndSweepDelegation:
         assert result.tool == "semgrep"
         assert result.cwe == "CWE-120"
         assert result.origin_file == "src/auth.c"
-        assert len(result.hits) == 1
-        assert result.hits[0]["file"] == "src/other.c"
+        # Both matches are emitted; the seed's own function is excluded
+        # downstream by function identity, not here by line.
+        assert [h["file"] for h in result.hits] == ["src/other.c", "src/auth.c"]
+        assert all(h["origin_function"] == "check_pw" for h in result.hits)
 
-    def test_dedup_against_seen_keys(self, tmp_path):
+    def _sweep_with_matches(self, tmp_path, matches, seen=None):
         from packages.checker_synthesis import (
             CheckerSynthesisResult,
-            Match,
             SynthesisedRule,
         )
 
@@ -226,7 +227,7 @@ class TestSynthesizeAndSweepDelegation:
                 rule=SynthesisedRule(
                     engine="semgrep", rule_id="synth.1", body="r",
                 ),
-                matches=[Match(file="src/already_seen.c", line=5)],
+                matches=list(matches),
                 positive_control=True,
             )
 
@@ -235,7 +236,6 @@ class TestSynthesizeAndSweepDelegation:
 
         o = _StubOutcome()
         c = _StubConfig(target_path=str(tmp_path), out_dir=str(tmp_path))
-        seen = {"src/already_seen.c:check_pw"}
 
         with patch(
             "core.audit.checker_synthesis._build_llm_callable",
@@ -244,10 +244,53 @@ class TestSynthesizeAndSweepDelegation:
             "packages.checker_synthesis.synthesise_with_refinement",
             side_effect=_fake_refinement,
         ):
-            result = synthesize_and_sweep(o, c, seen)
+            return synthesize_and_sweep(o, c, seen if seen is not None else set())
 
+    def test_sites_survive_a_prior_run_key(self, tmp_path):
+        """A site is not suppressed by `<file>:<seed function>`.
+
+        The old key paired the *matched* file with the *seed's* function
+        name, which identifies nothing, and `seen_keys` spans prior runs
+        — so a real variant could be dropped by coincidence. Sites are
+        function-less; dedup belongs downstream once each is resolved.
+        """
+        from packages.checker_synthesis import Match
+
+        result = self._sweep_with_matches(
+            tmp_path,
+            [Match(file="src/already_seen.c", line=5)],
+            seen={"src/already_seen.c:check_pw"},
+        )
         assert result is not None
-        assert len(result.hits) == 0
+        assert [h["file"] for h in result.hits] == ["src/already_seen.c"]
+
+    def test_same_file_sibling_is_kept(self, tmp_path):
+        """A second vulnerable function in the seed's own file counts.
+
+        `m.file != file_path` used to discard every same-file match.
+        """
+        from packages.checker_synthesis import Match
+
+        result = self._sweep_with_matches(
+            tmp_path, [Match(file="src/auth.c", line=99)],
+        )
+        assert [(h["file"], h["line"]) for h in result.hits] == [
+            ("src/auth.c", 99),
+        ]
+
+    def test_origin_is_attached_to_every_hit(self, tmp_path):
+        """Downstream excludes the seed by function identity, so each hit
+        must say which finding it came from."""
+        from packages.checker_synthesis import Match
+
+        result = self._sweep_with_matches(
+            tmp_path,
+            [Match(file="src/auth.c", line=42),
+             Match(file="src/other.c", line=99)],
+        )
+        assert [(h["origin_file"], h["origin_function"]) for h in result.hits] == [
+            ("src/auth.c", "check_pw"), ("src/auth.c", "check_pw"),
+        ]
 
     def test_synthesis_failure_returns_none(self, tmp_path):
         from packages.checker_synthesis import CheckerSynthesisResult

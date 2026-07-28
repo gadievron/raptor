@@ -136,8 +136,12 @@ def scan_public_api(
             if ext not in _HEADER_EXTENSIONS:
                 continue
 
-            fpath = os.path.join(root, fname)
+            fpath = Path(os.path.join(root, fname))
+            if fpath.is_symlink():
+                continue
             try:
+                if fpath.stat().st_size > 1_048_576:  # 1 MB cap
+                    continue
                 with open(fpath, errors="replace") as f:
                     content = f.read()
             except OSError:

@@ -161,14 +161,26 @@ def assumption_from_dict(d: dict[str, Any]) -> SafetyAssumption:
     except ValueError:
         tier = EvidenceTier.HEURISTIC
 
+    raw_enforced = d.get("enforced_by") or []
+    if isinstance(raw_enforced, str):
+        raw_enforced = [raw_enforced]
+    elif not isinstance(raw_enforced, list):
+        raw_enforced = []
+
+    raw_params = d.get("params_affected") or []
+    if isinstance(raw_params, str):
+        raw_params = [raw_params]
+    elif not isinstance(raw_params, list):
+        raw_params = []
+
     return SafetyAssumption(
         target=d.get("target", ""),
         file=d.get("file", ""),
         assumption=d.get("assumption", ""),
         category=cat,
-        enforced_by=d.get("enforced_by") or [],
+        enforced_by=raw_enforced,
         bug_class=d.get("bug_class", ""),
-        params_affected=d.get("params_affected") or [],
+        params_affected=raw_params,
         confidence=d.get("confidence", 0.5),
         evidence_tier=tier,
         source=d.get("source", ""),

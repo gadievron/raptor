@@ -409,20 +409,21 @@ def _wait_listen_port(port: int, timeout: float) -> bool:
     port_hex = f"{port:04X}"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            with open("/proc/self/net/tcp", "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) < 4:
-                        continue
-                    local = parts[1]
-                    if ":" not in local:
-                        continue
-                    _ip, p_hex = local.rsplit(":", 1)
-                    if p_hex.upper() == port_hex and parts[3] == "0A":
-                        return True
-        except OSError:
-            pass
+        for tcp_path in ("/proc/self/net/tcp", "/proc/self/net/tcp6"):
+            try:
+                with open(tcp_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) < 4:
+                            continue
+                        local = parts[1]
+                        if ":" not in local:
+                            continue
+                        _ip, p_hex = local.rsplit(":", 1)
+                        if p_hex.upper() == port_hex and parts[3] == "0A":
+                            return True
+            except OSError:
+                pass
         time.sleep(0.02)
     return False
 

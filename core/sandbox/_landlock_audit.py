@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import select
 import subprocess
 import sys
 import tempfile
@@ -493,7 +494,9 @@ def run_landlock_audit(
         # Wait for tracer to signal ready (or die).
         ready = b""
         try:
-            ready = os.read(t_ready_r, 1)
+            rlist, _, _ = select.select([t_ready_r], [], [], _TRACER_READY_TIMEOUT_S)
+            if rlist:
+                ready = os.read(t_ready_r, 1)
         finally:
             _close_safely(t_ready_r)
             t_ready_r = -1
@@ -503,9 +506,10 @@ def run_landlock_audit(
             tracer_status = None
             try:
                 _, tracer_status = os.waitpid(tracer_pid, 0)
-                tracer_pid = -1
             except (ChildProcessError, OSError):
                 pass
+            finally:
+                tracer_pid = -1
             try:
                 _kill_and_reap(target_pid)
                 target_pid = -1
@@ -558,6 +562,7 @@ def run_landlock_audit(
                 try:
                     done, status = os.waitpid(target_pid, os.WNOHANG)
                 except (ChildProcessError, OSError):
+                    target_pid = -1
                     target_rc = -1
                     break
                 if done != 0:
@@ -588,22 +593,24 @@ def run_landlock_audit(
         else:
             try:
                 _, status = os.waitpid(target_pid, 0)
-                target_pid = -1
                 if os.WIFEXITED(status):
                     target_rc = os.WEXITSTATUS(status)
                 elif os.WIFSIGNALED(status):
                     target_rc = -os.WTERMSIG(status)
             except (ChildProcessError, OSError):
                 pass
+            finally:
+                target_pid = -1
 
         # Reap the tracer (PTRACE_O_EXITKILL means it exits when
         # the target's pid leaves; should be fast).
         if tracer_pid > 0:
             try:
                 os.waitpid(tracer_pid, 0)
-                tracer_pid = -1
             except (ChildProcessError, OSError):
                 pass
+            finally:
+                tracer_pid = -1
 
         # Marshal output to the requested type.
         if text:

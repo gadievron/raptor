@@ -679,7 +679,7 @@ def validate_dataflow_claims(
             # which defeats the breakdown's purpose.
             cwe = (
                 (finding.get("cwe_id") or "").strip()
-                or (analysis or {}).get("cwe_id", "").strip()
+                or ((analysis or {}).get("cwe_id") or "").strip()
             ).upper() or "UNKNOWN"
             metrics["path_conditions_by_cwe"][cwe] = (
                 metrics["path_conditions_by_cwe"].get(cwe, 0) + 1

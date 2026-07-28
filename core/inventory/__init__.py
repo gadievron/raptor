@@ -146,7 +146,12 @@ class _checklist_lock:
         )
         fd = os.open(self._lock_path, flags, 0o600)
         self._lock_file = os.fdopen(fd, "w")
-        fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+        except OSError:
+            self._lock_file.close()
+            self._lock_file = None
+            raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

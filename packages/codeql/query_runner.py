@@ -600,6 +600,9 @@ class QueryRunner:
                     suite_name="custom",
                 )
 
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
+
         except Exception as e:
             logger.error(f"✗ Custom query execution failed: {e}")
             return QueryResult(
@@ -830,6 +833,9 @@ class QueryRunner:
                 capture_output=True, text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
             )
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
+
         except Exception as e:
             logger.warning(f"IRIS LocalFlowSource ({lang}) analyze raised: {e}")
             return QueryResult(

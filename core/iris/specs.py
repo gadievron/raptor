@@ -482,7 +482,12 @@ def _specs_from_list(items: list[dict[str, Any]]) -> list[TaintSpec]:
         except ValueError:
             tier = EvidenceTier.HEURISTIC
         tc = item.get("taint_classes", [])
-        taint_classes = [tc] if isinstance(tc, str) else tc
+        if isinstance(tc, str):
+            taint_classes = [tc]
+        elif isinstance(tc, list):
+            taint_classes = tc
+        else:
+            taint_classes = []
         pa = item.get("params_affected", [])
         if isinstance(pa, (int, float)):
             params_affected = [int(pa)]

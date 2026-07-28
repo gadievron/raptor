@@ -147,6 +147,16 @@ def _sarif_result_in_range(
     return rline >= line_start
 
 
+def _match_in_range(
+    match: Dict[str, Any], line_start: int, line_end: int,
+) -> bool:
+    """Return True if a match dict falls within the function line range."""
+    match_line = match.get("line", 0)
+    if not match_line:
+        return True
+    return line_start <= match_line <= line_end
+
+
 def _check_path_containment(
     target_path: Path, file_path: str, tool: str,
 ) -> Optional[SweepResult]:
@@ -293,6 +303,8 @@ def run_coccinelle_sweep(
     function_name: str,
     cocci_rule: str,
     defines: Optional[Dict[str, str]] = None,
+    line_start: Optional[int] = None,
+    line_end: Optional[int] = None,
 ) -> SweepResult:
     """Run a Coccinelle rule against a single C file.
 
@@ -339,13 +351,20 @@ def run_coccinelle_sweep(
             timeout=120,
         )
 
-        outcome = "confirmed" if result.matches else "refuted"
         matches = []
         for f in result.matches:
             if hasattr(f, "to_dict"):
                 matches.append(f.to_dict())
             else:
                 matches.append({"raw": str(f)})
+
+        if line_start is not None and line_end is not None:
+            matches = [
+                m for m in matches
+                if _match_in_range(m, line_start, line_end)
+            ]
+
+        outcome = "confirmed" if matches else "refuted"
         return SweepResult(
             tool="coccinelle",
             file_path=file_path,

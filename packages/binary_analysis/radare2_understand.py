@@ -1284,7 +1284,9 @@ class BinaryUnderstand:
         ]
         # Annotate the FunctionInfo objects with rationale
         rationale_by_name = {
-            p["function"]: p.get("reason", "") for p in ctx.fuzz_priorities
+            p["function"]: p.get("reason", "")
+            for p in ctx.fuzz_priorities
+            if isinstance(p.get("function"), str)
         }
         for fn in ctx.interesting_functions:
             if fn.name in rationale_by_name:

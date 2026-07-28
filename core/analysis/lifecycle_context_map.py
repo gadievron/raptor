@@ -30,6 +30,9 @@ def load_state_fields(out_dir: Path) -> List[StateField]:
     except (json.JSONDecodeError, OSError):
         return []
 
+    if not isinstance(data, dict):
+        return []
+
     raw_fields = data.get("state_fields", [])
     fields: List[StateField] = []
     for raw in raw_fields:
@@ -54,7 +57,9 @@ def save_state_fields(
     data: Dict[str, Any] = {}
     if cm_path.exists():
         try:
-            data = json.loads(cm_path.read_text())
+            loaded = json.loads(cm_path.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
         except (json.JSONDecodeError, OSError):
             pass
 

@@ -353,6 +353,8 @@ def import_project(zip_path: Path, projects_dir: Path,
                 project_name = first_part
             try:
                 embedded_meta = json.loads(zf.read(meta_path))
+                if not isinstance(embedded_meta, dict):
+                    raise ValueError("Corrupt .project.json in archive")
                 if embedded_meta.get("name"):
                     project_name = embedded_meta["name"]
             except (json.JSONDecodeError, KeyError):

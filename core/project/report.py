@@ -489,7 +489,8 @@ def generate_project_report(project) -> Dict[str, Any]:
     from core.run.provenance import format_manifest_block
     prov_lines = [f"# Provenance — {project.name}", ""]
     for d in run_dirs:
-        meta = load_run_metadata(d) or {}
+        raw_meta = load_run_metadata(d)
+        meta = raw_meta if isinstance(raw_meta, dict) else {}
         ts = (meta.get("timestamp") or "")[:19]
         prov_lines.append(f"## {d.name}")
         prov_lines.append(f"{meta.get('command', '?')} · {ts}")
