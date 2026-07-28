@@ -497,8 +497,12 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # robust against supply-chain drift (int 0x80 / x32 / AArch32
                 # syscalls arrive with arch != native and get killed rather
                 # than falling through to the native filter rules).
-                lib.seccomp_attr_set(ctx, _SCMP_FLTATR_ACT_BADARCH,
-                                     _SCMP_ACT_KILL_PROCESS)
+                ret = lib.seccomp_attr_set(ctx, _SCMP_FLTATR_ACT_BADARCH,
+                                          _SCMP_ACT_KILL_PROCESS)
+                if ret < 0:
+                    _os_write(2, b"RAPTOR: seccomp BADARCH attr_set failed -- "
+                                 b"refusing to exec without filter\n")
+                    os._exit(126)
 
                 errno_eperm = 1  # EPERM
                 # Audit mode: swap the deny action from ERRNO to TRACE.

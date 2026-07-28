@@ -132,17 +132,20 @@ class TestFormatSummary:
 
 class TestGenerateReport:
     def test_basic_report(self, tmp_path: Path):
-        (tmp_path / "coverage-audit.json").write_text(json.dumps({
-            "tool": "audit",
-            "files": {
-                "a.c": {
-                    "functions": {
-                        "f1": {"status": "clean"},
-                        "f2": {"status": "finding"},
-                    },
-                },
-            },
-        }))
+        # Post-migration: review state comes from the review journal,
+        # not coverage-audit.json. Seed two entries and verify the
+        # report reads them via ``_load_review_state``.
+        from core.coverage.journal import (
+            ReviewJournalEntry, append_entry, now_iso,
+        )
+        append_entry(tmp_path, ReviewJournalEntry(
+            ts=now_iso(), run_id="test", file="a.c", function="f1",
+            verdict="clean", source_hash="",
+        ))
+        append_entry(tmp_path, ReviewJournalEntry(
+            ts=now_iso(), run_id="test", file="a.c", function="f2",
+            verdict="finding", source_hash="",
+        ))
         (tmp_path / "findings.json").write_text(json.dumps([
             {"title": "UAF", "file": "a.c", "line": 10, "severity": "high"},
         ]))

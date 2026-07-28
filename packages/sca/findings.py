@@ -393,8 +393,12 @@ def write_findings_json(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        _json.dump(rows, fh, indent=2, default=_json_default)
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            _json.dump(rows, fh, indent=2, default=_json_default)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(path)
     return len(rows)
 

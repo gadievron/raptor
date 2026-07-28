@@ -57,11 +57,17 @@ def _run(cmd: list[str], *, verbose: bool = False) -> int:
     """Run a subprocess, streaming stderr."""
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
-    result = subprocess.run(
-        cmd, env=env,
-        stdout=None if verbose else subprocess.DEVNULL,
-        stderr=None,
-    )
+    try:
+        result = subprocess.run(
+            cmd, env=env,
+            stdout=None if verbose else subprocess.DEVNULL,
+            stderr=None,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"study-loop: subprocess timed out: {cmd[0]}",
+              file=sys.stderr)
+        return 1
     return result.returncode
 
 

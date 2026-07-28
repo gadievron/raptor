@@ -4,7 +4,9 @@ description: "Hypothesis-driven, tool-grounded security review of coverage gaps"
 user-invocable: false
 ---
 
-# /audit Skill — Systematic Code Review
+# /audit Skill — In-Session Code Review
+
+This skill is the in-session execution path for `/audit`, where Claude Code is the LLM. It is used when `--local` is passed, or when no external model is configured. For the orchestrator path (`libexec/raptor-audit run` with an external LLM), see `.claude/commands/audit.md`.
 
 ## [CONFIG]
 
@@ -14,32 +16,31 @@ user-invocable: false
 - Checklist item fields: `name`, `kind` (`"function"`/`"global"`/`"macro"`/`"class"`), `line_start`, `line_end`, `signature`, `checked_by`, `metadata` (`visibility`, `params`, `return_type`, `attributes`). The field is `kind`, not `type`. Source: `core/inventory/extractors.CodeItem`.
 - Findings format: standard `findings.json` (same as `/scan`, fed to `/validate` unchanged).
 - Annotations: markdown per source file, structured metadata in HTML comments.
-- Prerequisite: `/understand --map` must have run first. If `context-map.json` is missing from the output directory (or project siblings), auto-run it before starting the review loop.
+- Prerequisite: `/understand --map` must have run first. If `context-map.json` is missing from the output directory (or project siblings), run it before starting the review loop — load and follow `.claude/skills/code-understanding/map.md` for the execution steps.
 - Scoping: `--scope <dir>` restricts gap selection to a subdirectory (e.g. `ipc/`, `net/ipv4/`). All annotations and coverage records still write to the project-level output dir, so successive scoped runs accumulate into one audit trail.
 
-## [DOMAIN] Optional: Learn the Codebase Before Auditing
+## [DOMAIN] Study the Codebase Before Auditing
 
-For unfamiliar codebases, run `/understand --study` before the review loop. It extracts a domain model (ownership, locking, refcounting, lifetime contracts) that prevents you from rediscovering the same patterns function by function. The output (`domain-model.json`) feeds into the context slice automatically.
+**Always study before auditing.** You may recognise concepts like RCU, refcounting, or lock ordering from training data — but training data can be stale or incomplete. APIs evolve, locking contracts change between kernel versions, and ownership semantics are codebase-specific. The only way to know your priors are correct is to extract the domain model from the actual source. Without study, you will silently apply stale assumptions and miss bugs whose violation is semantic, not structural.
 
-Three entry modes:
+Before the review loop, run study then map against the target. Follow the execution steps in each skill file — do not guess CLI commands:
 
-| Mode | Command | When |
+1. **Study** (mandatory): try `raptor-study-loop` first — it uses the configured LLM model and handles multi-pass iteration automatically. If it fails (no model configured), fall back to the in-session path in `.claude/skills/code-understanding/study.md`. Produces `domain-model.json`.
+2. **Map** (mandatory): load and follow `.claude/skills/code-understanding/map.md` — produces `context-map.json` (entry points, trust boundaries, sinks)
+
+Both write output to `$OUTPUT_DIR` so the audit context slice picks them up automatically. Do not start the per-function review loop until both files exist.
+
+Study is iterative — start with a broad path-driven pass over the subsystem, then follow up with targeted concept-driven or multi-identifier passes for specific contracts and paired operations. The skill file documents both execution paths; see [RESUME] for how the right one is chosen automatically.
+
+Three study entry modes:
+
+| Mode | Example | When |
 |------|---------|------|
-| **Path-driven** | `/understand <target> --study crypto/` | Study a subsystem, discover what matters |
+| **Path-driven** | `/understand <target> --study ipc/` | Study a subsystem, discover what matters |
 | **Concept-driven** | `/understand <target> --study "rcu locking" --scope ipc/` | Study a named concept, find relevant code |
-| **Multi-identifier** | `/understand <target> --study "ipc_rcu_getref + ipc_rcu_putref"` | Study how specific identifiers relate — contracts, paired operations, invariants |
-
-Examples for a kernel IPC audit:
-```
-/understand /data/linux_kernel/linux-6.18.2/ --study ipc/
-/understand /data/linux_kernel/linux-6.18.2/ --study "sem_lock + sem_unlock" --scope ipc/
-/understand /data/linux_kernel/linux-6.18.2/ --study "page ownership" --scope mm/
-```
+| **Multi-identifier** | `/understand <target> --study "sem_lock + sem_unlock"` | Study how specific identifiers relate — contracts, paired operations, invariants |
 
 The `+` separator in multi-identifier mode triggers correlation — the LLM examines how the identifiers relate to each other (e.g. lock/unlock pairing, get/put refcount symmetry), not just what each one does individually.
-
-Not mandatory, but strongly recommended for: kernel code, lock-heavy subsystems, refcounted object models, unfamiliar frameworks. Skip for small well-documented libraries.
-
 ## [EXEC] Execution Rules
 
 0. **No env-var prefixes on commands.** NEVER write `OUTPUT_DIR=... libexec/raptor-audit ...` or `VAR=val command`. It breaks permission patterns. Capture `OUTPUT_DIR` from `raptor-run-lifecycle start` output and pass it via `--out` flags on every subsequent command.
@@ -129,3 +130,52 @@ The context is strategy-aware: a function taking `(char *buf, size_t len)` gets 
 - Coverage records accumulate across runs. The gap list shrinks each time.
 - Annotations persist in the project directory across runs. They're the audit trail.
 - After each batch, run `critique` to find gaps before moving on.
+
+## [RESUME] Scaling and Context Management
+
+### Automatic path selection
+
+For study, try `raptor-study-loop` first — it uses an API key to call an external LLM and handles multi-pass iteration automatically. If it fails (no API key configured), fall back to the in-session path in `study.md` (Claude reads the source directly). No user decision needed — try the automated path, use the fallback silently.
+
+The same principle applies to the review loop: delegate to agents where possible (see below), fall back to direct review for small targets or when agents aren't available.
+
+### In-session context management
+
+When running in-session (Claude Code as the LLM), large targets will exhaust context. Three mechanisms manage this:
+
+### 1. Scope to subsystems
+
+For large codebases, don't audit everything at once. Use `--scope` to restrict to one subsystem per audit pass:
+
+```
+/audit /data/linux_kernel/linux-6.18.2/ --scope ipc/ --local
+/audit /data/linux_kernel/linux-6.18.2/ --scope net/ipv4/ --local
+```
+
+Coverage records accumulate across scoped runs into the same project-level output directory. Each scoped pass is a manageable unit that fits within context and subagent limits.
+
+### 2. Cross-session resume
+
+On start, check for an existing run before doing study/map again:
+
+```bash
+libexec/raptor-audit gaps --out "$OUTPUT_DIR"
+```
+
+If gaps exist and `domain-model.json` + `context-map.json` are already present, skip study and map — go straight to the review loop. Coverage records, annotations, and findings from prior sessions are already on disk.
+
+### 3. Agent delegation
+
+For targets with many files, delegate function reviews to the `audit-reviewer` agent type to keep the main context slim. Each function review is independent — the context slice packages everything the agent needs.
+
+Group gaps by file (not one agent per function — subagent limits apply). For each file with remaining gaps:
+
+1. Run `libexec/raptor-audit context --target "$TARGET" --file <path> --function <name> --out "$OUTPUT_DIR" --json` for each function in the file to collect context slices
+2. Spawn one `audit-reviewer` agent per file (via `subagent_type: "audit-reviewer"`). The prompt must include:
+   - `OUTPUT_DIR` and `TARGET` paths
+   - The file path and list of function names to review
+   - Key domain-model context (invariants, contracts relevant to the file)
+   - The context slices from step 1
+3. The agent has baked-in methodology, CLI syntax, and gates — no need to repeat sweep/record instructions in the prompt
+
+The main loop stays slim: read gaps, group by file, dispatch agents, collect results. Agents can run in parallel for independent files. After each batch completes, run `critique` to catch weak reviews before continuing.

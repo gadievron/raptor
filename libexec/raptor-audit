@@ -98,6 +98,7 @@ def cmd_gaps(args: argparse.Namespace) -> int:
         budget=args.budget if not args.prioritize else None,
         scope=args.scope,
         annotations_dir=annotations_dir,
+        out_dir=out_dir,
     )
 
     if args.prioritize:
@@ -192,7 +193,8 @@ def cmd_context(args: argparse.Namespace) -> int:
 
 
 def cmd_record(args: argparse.Namespace) -> int:
-    from core.audit.record import record_review, append_audit_log, load_audit_log
+    from core.audit.record import append_audit_log, load_audit_log, _compute_hash
+    from core.audit.journal import ReviewJournalEntry, append_entry, now_iso
 
     out_dir = Path(args.out)
     target_path = Path(args.target) if args.target else _guess_target(out_dir)
@@ -389,37 +391,76 @@ def cmd_record(args: argparse.Namespace) -> int:
                         break
                 break
 
-    strategies = args.strategies.split(",") if args.strategies else None
+    strategies = args.strategies.split(",") if args.strategies else []
+    if not isinstance(strategies, list):
+        strategies = []
 
-    result = record_review(
-        out_dir=out_dir,
-        target_path=target_path,
-        file_path=args.file,
-        function_name=args.function,
-        status=args.status,
-        body=args.body or "",
-        line_start=line_start,
+    # Under the annotation → journal migration, ``record_review`` (which
+    # wrote coverage-audit.json) was removed. Manual review recording
+    # via ``raptor-audit record ...`` now appends a review-journal
+    # entry directly. The audit-log entry survives as an event log
+    # for gate/consumer tracking; verdict + context live in the
+    # journal.
+    et_normalised = args.evidence_tool
+    if et_normalised and ":" not in et_normalised:
+        et_normalised = f"{et_normalised}:cli"
+
+    source_hash = _compute_hash(
+        target_path, args.file, line_start or 0, line_end,
+    ) or ""
+
+    hypotheses_list = []
+    if args.hypothesis:
+        hypotheses_list = [{"claim": args.hypothesis, "status": args.status}]
+
+    entry = ReviewJournalEntry(
+        ts=now_iso(),
+        run_id=out_dir.name if out_dir.name else "cli-record",
+        file=args.file,
+        function=args.function,
+        verdict=args.status,
+        source_hash=source_hash,
+        line_start=line_start or 0,
         line_end=line_end,
         cwe=args.cwe,
         strategies=strategies,
+        hypotheses=hypotheses_list,
+        body=args.body or "",
+        evidence_tools=[et_normalised] if et_normalised else [],
+        producer="audit",
     )
+    try:
+        append_entry(out_dir, entry)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: journal append failed: {exc}", file=sys.stderr)
+        return 1
 
-    # Include gate metadata in the record
-    if args.evidence_tool:
-        et = args.evidence_tool
-        if ":" not in et:
-            et = f"{et}:cli"
-        result["evidence_tool"] = et
+    # Audit-log event mirrors the journal entry with the gate-flavour
+    # metadata (vuln_type, related_to, reach_via) that isn't part of
+    # the journal schema. Journal is the verdict store; audit-log is
+    # the operational event log.
+    audit_event = {
+        "action": "record",
+        "key": func_key,
+        "file": args.file,
+        "function": args.function,
+        "status": args.status,
+        "hash": source_hash,
+        "strategies": strategies,
+    }
+    if args.cwe:
+        audit_event["cwe"] = args.cwe
+    if et_normalised:
+        audit_event["evidence_tool"] = et_normalised
     if args.hypothesis:
-        result["hypothesis"] = args.hypothesis
+        audit_event["hypothesis"] = args.hypothesis
     if args.vuln_type:
-        result["vuln_type"] = args.vuln_type
+        audit_event["vuln_type"] = args.vuln_type
     if related_to:
-        result["related_to"] = related_to
+        audit_event["related_to"] = related_to
     if args.reach_via:
-        result["reach_via"] = args.reach_via
-
-    append_audit_log(out_dir, result)
+        audit_event["reach_via"] = args.reach_via
+    append_audit_log(out_dir, audit_event)
 
     if args.status == "finding":
         from core.audit.findings import emit_finding
@@ -431,7 +472,9 @@ def cmd_record(args: argparse.Namespace) -> int:
             title=f"{args.vuln_type or 'novel'}: {args.function}",
             description=args.body or "",
             cwe=args.cwe,
-            tool_evidence=[{"tool": et}] if args.evidence_tool else None,
+            tool_evidence=(
+                [{"tool": et_normalised}] if et_normalised else None
+            ),
             hypothesis=args.hypothesis,
         )
 
@@ -481,12 +524,29 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             print(f"error: rule file {rule_path} not found", file=sys.stderr)
             return 1
 
+        fn_line_start = args.line_start
+        fn_line_end = args.line_end
+        if fn_line_start is None or fn_line_end is None:
+            from core.audit.gaps import load_checklist
+            cl = load_checklist(out_dir)
+            if cl:
+                for fi in cl.get("files", []):
+                    if fi.get("path") == args.file:
+                        for item in fi.get("items", fi.get("functions", [])):
+                            if item.get("name") == args.function:
+                                fn_line_start = fn_line_start or item.get("line_start")
+                                fn_line_end = fn_line_end or item.get("line_end")
+                                break
+                        break
+
         if tool == "semgrep":
             result = run_semgrep_sweep(
                 target_path=target_path,
                 file_path=args.file,
                 function_name=args.function,
                 rule_config=str(rule_path),
+                line_start=fn_line_start or 0,
+                line_end=fn_line_end or 0,
             )
         elif tool == "codeql":
             result = run_codeql_sweep(
@@ -502,6 +562,8 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                 file_path=args.file,
                 function_name=args.function,
                 cocci_rule=str(rule_path),
+                line_start=fn_line_start,
+                line_end=fn_line_end,
             )
 
         entry = result.to_log_entry()
@@ -1001,6 +1063,39 @@ def cmd_run(args: argparse.Namespace) -> int:
             "orchestrator will search sibling runs via the bridge"
         )
 
+    # --- legacy state check ---
+    # Only run against ACTIVE-PROJECT runs. Detection: an active
+    # project has a ``raptor-project.json`` alongside its runs OR
+    # is resolved via ``ProjectManager.get_active()`` (the .active
+    # symlink lives in the projects dir, not the caller's cwd).
+    # Standalone runs under ``<repo>/out/`` skip this check —
+    # sibling runs in ``out/`` belong to unrelated tools and would
+    # false-positive.
+    project_dir = None
+    if (out_dir / ".raptor-run.json").exists():
+        candidate = out_dir.parent
+        if (candidate / "raptor-project.json").exists():
+            project_dir = candidate
+        else:
+            try:
+                from core.project.project import ProjectManager
+                pm = ProjectManager()
+                active_name = pm.get_active()
+                if active_name:
+                    active_project = pm.load(active_name)
+                    if active_project and active_project.output_dir:
+                        active_out = Path(active_project.output_dir).resolve()
+                        if active_out == candidate.resolve():
+                            project_dir = candidate
+            except Exception:  # noqa: BLE001
+                pass
+    if project_dir is not None:
+        legacy_diag = _check_legacy_state(project_dir)
+        if legacy_diag:
+            print(f"error: {legacy_diag}", file=sys.stderr)
+            _lifecycle_fail(out_dir, "legacy /audit state — migration required")
+            return 1
+
     # --- LLM client + review_fn ---
     from core.llm.client import LLMClient
     from core.audit.llm_review import make_review_fn
@@ -1125,6 +1220,85 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if result.terminated_by == "complete" else 1
 
 
+def _check_legacy_state(project_dir: Path) -> str | None:
+    """Detect pre-migration /audit state that predates the review
+    journal. Returns a diagnostic string if legacy state is present
+    without a journal (blocks startup), or ``None`` to proceed.
+
+    Legacy sources checked:
+    - coverage-audit.json in any sibling run dir
+    - source=llm annotations in <project>/annotations/
+    - checked_by=[audit|agentic] entries on checklist.json
+
+    Journal-present check: <project>/review-journal-index.json exists
+    AND has at least one entry, OR .legacy-audit-abandoned marker
+    exists.
+    """
+    if not project_dir or not project_dir.is_dir():
+        return None
+    marker = project_dir / ".legacy-audit-abandoned"
+    if marker.exists():
+        return None
+    index_path = project_dir / "review-journal-index.json"
+    has_journal = False
+    if index_path.is_file():
+        try:
+            data = json.loads(index_path.read_text())
+            if isinstance(data, dict) and data.get("entries"):
+                has_journal = True
+        except (OSError, json.JSONDecodeError):
+            pass
+    if has_journal:
+        return None
+
+    legacy_sources: list[str] = []
+    for run_dir in project_dir.iterdir():
+        if run_dir.is_dir() and (run_dir / "coverage-audit.json").is_file():
+            legacy_sources.append(f"coverage-audit.json in {run_dir.name}/")
+            break
+    ann_dir = project_dir / "annotations"
+    if ann_dir.is_dir():
+        for ann_path in ann_dir.rglob("*.md"):
+            try:
+                text = ann_path.read_text(errors="replace")
+                if "source=llm" in text:
+                    legacy_sources.append(f"source=llm annotations in {ann_dir.name}/")
+                    break
+            except OSError:
+                continue
+    cl_path = project_dir / "checklist.json"
+    if cl_path.is_file():
+        try:
+            cl = json.loads(cl_path.read_text())
+            for fe in cl.get("files", []):
+                for item in fe.get("items", fe.get("functions", [])) or []:
+                    checked = item.get("checked_by") or []
+                    if any(t in ("audit", "agentic") or t.startswith(("audit:", "agentic:"))
+                           for t in checked):
+                        legacy_sources.append("checked_by=[audit|agentic] on checklist.json")
+                        break
+                if legacy_sources and legacy_sources[-1].startswith("checked_by"):
+                    break
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if not legacy_sources:
+        return None
+
+    return (
+        "legacy /audit state detected on this project but no review "
+        "journal exists. Prior LLM reviews will be treated as "
+        "unreviewed unless migrated.\n\n"
+        "Legacy sources found:\n  - "
+        + "\n  - ".join(legacy_sources)
+        + "\n\nTo migrate: libexec/raptor-migrate-journal "
+        f"{project_dir}\n"
+        "To skip and mark inert: libexec/raptor-migrate-journal "
+        f"{project_dir} --skip-and-mark-inert\n\n"
+        "The migration is idempotent — running it twice is safe."
+    )
+
+
 def _lifecycle_fail(out_dir: Path, reason: str) -> None:
     """Call lifecycle fail, swallowing errors."""
     import subprocess
@@ -1233,6 +1407,10 @@ def main() -> int:
                          help="JSON dict of args for the SMT verb")
     p_sweep.add_argument("--codeql-db", default=None,
                          help="Path to CodeQL database (auto-detected if omitted)")
+    p_sweep.add_argument("--line-start", type=int, default=None,
+                         help="Function start line (auto-detected from checklist)")
+    p_sweep.add_argument("--line-end", type=int, default=None,
+                         help="Function end line (auto-detected from checklist)")
 
     # rules
     p_rules = sub.add_parser("rules", help="Manage synthesized checker rules")

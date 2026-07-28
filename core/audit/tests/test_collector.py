@@ -110,7 +110,13 @@ class TestCollectorSubmitAndFlush:
         assert entry["preconditions"] == ["auth required"]
         assert entry["strategies"] == ["sql_injection"]
 
-    def test_checklist_updated_by_collector(self, tmp_path: Path) -> None:
+    def test_checklist_not_mutated_by_collector(self, tmp_path: Path) -> None:
+        """Post-migration: Collector doesn't stamp ``checked_by`` on
+        the checklist. Journal is authoritative for LLM review
+        existence; checklist is a pure inventory snapshot. Any
+        pre-existing ``checked_by`` (from a prior tool run, e.g.
+        ``scan``) is preserved untouched — but no fresh
+        ``audit`` entry is added by the review path."""
         _write_checklist(tmp_path, [
             {"path": "src/auth.py", "items": [
                 {"name": "check_pw", "checked_by": ["scan"]},
@@ -123,7 +129,7 @@ class TestCollectorSubmitAndFlush:
         cl = json.loads((tmp_path / "checklist.json").read_text(encoding="utf-8"))
         by = cl["files"][0]["items"][0].get("checked_by", [])
         assert "scan" in by
-        assert "audit" in by
+        assert "audit" not in by
 
     def test_multiple_submits_produce_multiple_journal_entries(self, tmp_path: Path) -> None:
         from core.coverage.journal import load_entries

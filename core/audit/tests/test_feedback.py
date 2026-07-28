@@ -390,7 +390,12 @@ class TestImportValidationResults:
         assert result["skipped"] == 1
         assert result["updated"] == 0
 
-    def test_updates_coverage_audit(self, tmp_path: Path):
+    def test_reflexion_writes_corrected_verdict_to_journal(self, tmp_path: Path):
+        """Post-migration: Reflexion writes a fresh journal entry
+        with the corrected verdict + ``prior_review`` +
+        ``validate_verdict`` fields. ``coverage-audit.json`` is not
+        written (removed at Phase-3 completion); the journal is
+        authoritative."""
         ann_dir = tmp_path / "annotations"
         ann_dir.mkdir()
         audit_out = tmp_path / "audit-out"
@@ -398,9 +403,6 @@ class TestImportValidationResults:
 
         _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
                              "finding", "Confirmed bug")
-        _write_coverage_audit(audit_out, {
-            "src/vuln.c": {"vuln_fn": "finding"},
-        })
 
         report_path = tmp_path / "findings.json"
         report_path.write_text(json.dumps([{
@@ -415,10 +417,14 @@ class TestImportValidationResults:
             audit_out_dir=audit_out,
         )
 
-        with open(audit_out / "coverage-audit.json") as f:
-            ca = json.load(f)
-        fn_status = ca["files"]["src/vuln.c"]["functions"]["vuln_fn"]["status"]
-        assert fn_status == "clean"
+        # Journal is authoritative — the corrected verdict lives here.
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry is not None
+        assert entry.verdict == "clean"
+        assert entry.prior_review == "finding"
+
+        # coverage-audit.json is NOT written under the new design.
+        assert not (audit_out / "coverage-audit.json").exists()
 
     def test_writes_audit_log(self, tmp_path: Path):
         ann_dir = tmp_path / "annotations"

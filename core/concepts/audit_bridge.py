@@ -67,44 +67,38 @@ def _load_cached(path: str) -> dict[str, Any] | None:
 
 
 def _find_domain_model(out_dir: Path) -> dict[str, Any] | None:
-    """Search for domain-model.json in standard locations.
+    """Search for domain-model.json — amendment §3 canonical order.
 
-    Search order:
-      1. ``out_dir/domain-model.json`` (co-located with audit output)
-      2. ``out_dir.parent/concepts/domain-model.json`` (project concepts dir)
-      3. ``out_dir.parent/domain-model.json`` (project root)
-      4. Sibling run directories (same project or global ``out/``) —
-         picks the newest ``understand_*`` run that contains the file
+    Search order (project-scoped canonical first, per-run last):
+      1. ``<project>/concepts/domain-model.json`` — canonical.
+         ``domain_model_hash`` in journal entries hashes this file
+         so cross-run staleness works.
+      2. ``<project>/domain-model.json`` — legacy compat.
+      3. ``<out_dir>/domain-model.json`` — per-run fallback for
+         standalone runs. **Disables cross-run staleness** — logs
+         a WARNING so operators know.
+
+    Removed under this amendment: sibling-run scan (previously
+    ``find_sibling_run`` walked adjacent ``understand_*`` dirs). It
+    undermined the stable-hash invariant Phase-5 depends on — the
+    domain model hash could come from any random sibling.
     """
-    candidates = [
-        out_dir / "domain-model.json",
-        out_dir.parent / "domain-model.json",
-    ]
     project_concepts = out_dir.parent / "concepts" / "domain-model.json"
+    project_root = out_dir.parent / "domain-model.json"
+    per_run = out_dir / "domain-model.json"
+
     if project_concepts.is_file():
-        candidates.insert(0, project_concepts)
-
-    for c in candidates:
-        model = _load_cached(str(c.resolve()))
-        if model:
-            return model
-
-    try:
-        from core.orchestration.run_discovery import find_sibling_run
-        sibling = find_sibling_run(
-            out_dir, "domain-model.json",
-            dir_filter=lambda d: d.name.startswith("understand_"),
-            exclude=out_dir,
-            search_global=False,
+        return _load_cached(str(project_concepts.resolve()))
+    if project_root.is_file():
+        return _load_cached(str(project_root.resolve()))
+    if per_run.is_file():
+        logger.warning(
+            "domain-model.json found at per-run location %s — cross-run "
+            "staleness is disabled. Move to <project>/concepts/domain-"
+            "model.json for cross-run hash comparison.",
+            per_run,
         )
-        if sibling:
-            model = _load_cached(str((sibling / "domain-model.json").resolve()))
-            if model:
-                logger.debug("domain model found in sibling: %s", sibling)
-                return model
-    except Exception:
-        logger.debug("sibling search for domain-model.json failed", exc_info=True)
-
+        return _load_cached(str(per_run.resolve()))
     return None
 
 

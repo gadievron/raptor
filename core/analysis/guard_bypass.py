@@ -127,6 +127,7 @@ def _enumerate_paths(
             continue
 
         if len(path) >= max_depth:
+            complete = False
             continue
 
         for succ in cfg.successors(node):

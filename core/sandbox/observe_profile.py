@@ -381,6 +381,8 @@ def parse_observe_log(run_dir, *,
     seen_connect: set = set()
 
     for rec in _iter_records(log_path):
+        if not isinstance(rec, dict):
+            continue
         # Provenance: when an expected nonce is set, drop records
         # without a matching value. Records the tracer wrote carry
         # the per-run nonce; records the target binary spoofed into

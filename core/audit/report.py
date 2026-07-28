@@ -1,7 +1,11 @@
 """Final summary report generation for /audit runs.
 
-Reads the coverage-audit.json, findings.json, and annotations to
-produce a human-readable summary and structured report.
+Reads the review journal (per-run ``review-journal.jsonl`` and the
+project-level ``review-journal-index.json``), ``findings.json``, and
+annotations to produce a human-readable summary and structured
+report. ``coverage-audit.json`` was removed under the annotation →
+journal migration; the journal is the authoritative LLM review
+store.
 """
 
 from __future__ import annotations
@@ -29,8 +33,18 @@ def generate_report(
         coverage_delta: functions reviewed this run
         gaps_remaining: number of unreviewed functions
     """
-    audit_data = _load_coverage_audit(out_dir)
+    audit_data = _load_review_state(out_dir)
     findings = _load_findings(out_dir)
+    # JOIN findings with the journal for current-verdict authority.
+    # findings.json is emit-only at /audit run completion; Reflexion
+    # corrections land in the journal only. See amendment §4.
+    #
+    # Drop findings whose journal verdict is now benign
+    # (clean/dormant) — those are Reflexion-refuted and shouldn't
+    # count toward findings_count or appear in the summary list.
+    # The retained findings carry ``_verdict_source="journal"`` when
+    # the journal changed their status (e.g. finding → suspicious).
+    findings = _apply_journal_verdict_overrides(findings, audit_data)
     gaps = _load_gaps(out_dir)
 
     stats = _compute_stats(audit_data)
@@ -236,12 +250,92 @@ def _evidence_distribution(
     return dist
 
 
-def _load_coverage_audit(out_dir: Path) -> Dict[str, Any]:
-    path = out_dir / "coverage-audit.json"
-    if not path.exists():
-        return {"files": {}}
-    with open(path) as f:
-        return json.load(f)
+def _load_review_state(out_dir: Path) -> Dict[str, Any]:
+    """Load LLM review state from the review journal.
+
+    Returns a ``coverage-audit.json``-shaped dict
+    (``{"functions_analysed": [...]}``) so the downstream stats /
+    remaining-gap helpers work unchanged. Each journal entry becomes
+    one function record with ``file`` / ``function`` / ``status`` /
+    ``hash`` fields — matches the pre-migration record schema.
+    """
+    try:
+        from .journal import latest_entries
+    except Exception:  # noqa: BLE001
+        return {"functions_analysed": []}
+    try:
+        entries = latest_entries(out_dir)
+    except Exception:  # noqa: BLE001
+        return {"functions_analysed": []}
+    if not entries:
+        return {"functions_analysed": []}
+
+    functions: List[Dict[str, Any]] = []
+    files_examined: set = set()
+    for entry in entries.values():
+        functions.append({
+            "file": entry.file,
+            "function": entry.function,
+            "status": entry.verdict,
+            "hash": entry.source_hash or None,
+        })
+        if entry.file:
+            files_examined.add(entry.file)
+    return {
+        "tool": "audit",
+        "functions_analysed": functions,
+        "files_examined": sorted(files_examined),
+    }
+
+
+_BENIGN_VERDICTS = frozenset({"clean", "dormant"})
+
+
+def _apply_journal_verdict_overrides(
+    findings: List[Dict[str, Any]],
+    audit_data: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """JOIN semantics: findings.json is emit-only at /audit run end;
+    the journal is authoritative for current verdict.
+
+    Two behaviours:
+
+    - **Status override**: when the journal's latest entry for a
+      finding's ``(file, function)`` disagrees with the finding's
+      status, the finding's ``status`` field is overwritten from the
+      journal and ``_verdict_source="journal"`` is stamped for
+      audit-trail visibility.
+    - **Benign drop**: when the journal reports a benign verdict
+      (``clean``, ``dormant``) — i.e. Reflexion refuted the finding
+      after initial emission — the finding is dropped from the
+      returned list entirely. Without this, ``findings_count`` +
+      the report's Findings section still tally refuted issues,
+      defeating the JOIN's whole purpose.
+
+    Returns the filtered list (never mutates the input list's
+    length in place).
+    """
+    by_key: Dict[str, str] = {}
+    for func in audit_data.get("functions_analysed", []):
+        f = func.get("file", "")
+        fn = func.get("function", "")
+        status = func.get("status")
+        if f and fn and status:
+            by_key[f"{f}:{fn}"] = status
+
+    out: List[Dict[str, Any]] = []
+    for finding in findings:
+        key = f"{finding.get('file', '')}:{finding.get('function', '')}"
+        journal_verdict = by_key.get(key)
+        if journal_verdict and journal_verdict != finding.get("status"):
+            finding["status"] = journal_verdict
+            finding["_verdict_source"] = "journal"
+        if finding.get("status") in _BENIGN_VERDICTS:
+            # Reflexion refuted this finding — drop from active
+            # findings so counts and summaries reflect current state.
+            continue
+        out.append(finding)
+    return out
 
 
 def _load_findings(out_dir: Path) -> List[Dict[str, Any]]:

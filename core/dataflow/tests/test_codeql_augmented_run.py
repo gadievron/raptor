@@ -33,7 +33,7 @@ def _make_runner(returncode: int = 0, stderr: str = "", raise_timeout: bool = Fa
     """Build a fake subprocess runner. Records each call's args."""
     calls: List[List[str]] = []
 
-    def _runner(args, *, capture_output=True, text=True, timeout=None, check=False):
+    def _runner(args, *, capture_output=True, text=True, timeout=None, check=False, env=None):
         calls.append(list(args))
         if raise_timeout:
             raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)

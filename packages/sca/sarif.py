@@ -125,8 +125,12 @@ def write_sarif(path: Path, *, target: Path, rows: Sequence[Dict[str, Any]],
     doc = build_sarif(target=target, rows=rows, generated_at=generated_at)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        _json.dump(doc, fh, indent=2)
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            _json.dump(doc, fh, indent=2)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(path)
     return len(rows)
 
@@ -156,6 +160,8 @@ def build_sarif(
     results: List[Dict[str, Any]] = []
     suppressions: List[Dict[str, Any]] = []
     for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
         result, suppression = _row_to_result(row, target, idx)
         if result is None:
             continue
@@ -228,11 +234,13 @@ def _row_to_result(
     rule_id = row.get("vuln_type")
     if not isinstance(rule_id, str):
         return None, None
-    severity = row.get("severity") or "info"
+    severity = str(row.get("severity") or "info")
     file_path = row.get("file") or ""
     rel = _relative_uri(file_path, target)
 
     sca = row.get("sca") or {}
+    if not isinstance(sca, dict):
+        sca = {}
     advisory = sca.get("advisory") or {}
     aliases = advisory.get("aliases") if isinstance(advisory, dict) else []
 
@@ -335,7 +343,7 @@ def _relative_uri(file_path: str, target: Path) -> str:
         return ""
     try:
         return str(Path(file_path).resolve().relative_to(target.resolve()))
-    except ValueError:
+    except (ValueError, TypeError):
         return file_path
 
 

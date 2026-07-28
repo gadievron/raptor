@@ -244,10 +244,20 @@ def _file_lock(path: Path):
         os.close(fd)
 
 
+_VALID_ANNOTATION_SOURCES = frozenset({"human", "llm"})
+
+
 def _parse_meta(comment_body: str) -> Dict[str, str]:
     """Parse ``key=value`` pairs from the inside of a meta comment.
     Quoted values keep spaces; bare values are whitespace-delimited.
-    Escaped double-quotes (``\\"``) inside quoted values are unescaped."""
+    Escaped double-quotes (``\\"``) inside quoted values are unescaped.
+
+    Amendment §6 (Phase 3.5): warn when ``source=`` carries a value
+    outside the ``{human, llm}`` enum. Silent acceptance let a
+    typoed ``source=humman`` bypass the human-veto path in
+    consumers that check ``source == "human"`` — surface those now.
+    """
+    import logging as _log
     out: Dict[str, str] = {}
     for m in _META_KV_RE.finditer(comment_body):
         key = m.group(1)
@@ -255,6 +265,13 @@ def _parse_meta(comment_body: str) -> Dict[str, str]:
         if m.group(2) is not None:
             value = value.replace('\\"', '"').replace('\\\\', '\\')
         out[key] = value
+    src = out.get("source")
+    if src is not None and src not in _VALID_ANNOTATION_SOURCES:
+        _log.getLogger(__name__).warning(
+            "annotation metadata: unknown source=%r (expected one of %s) — "
+            "consumers checking source=='human' will treat as non-human",
+            src, sorted(_VALID_ANNOTATION_SOURCES),
+        )
     return out
 
 

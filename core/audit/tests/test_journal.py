@@ -207,8 +207,12 @@ class TestMergeIntoIndex:
         assert index_path.is_file()
         data = json.loads(index_path.read_text(encoding="utf-8"))
         assert data["schema_version"] == 1
-        assert "a.c:f1" in data["entries"]
-        assert "b.c:f2" in data["entries"]
+        # Storage key widened to (file, function, model, strategy_hash)
+        # per amendment D1. ``file:function`` no longer appears as
+        # a top-level key — the collapsed view is available via
+        # ``load_index`` / callers iterate ``entry.file+entry.function``.
+        assert any(k.startswith("a.c:f1:") for k in data["entries"])
+        assert any(k.startswith("b.c:f2:") for k in data["entries"])
 
     def test_merge_newer_wins(self, tmp_path: Path) -> None:
         project = tmp_path / "project"

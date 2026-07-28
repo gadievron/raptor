@@ -42,6 +42,18 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 
 ## Instructions
 
+### Step 0: Choose execution mode
+
+Run mode detection, passing through any `--local` or `--model` flags from the operator:
+
+```bash
+libexec/raptor-resolve-mode [--local] [--model <name>]
+```
+
+Output is one line:
+- `orchestrator <model>` → follow Steps 1–4 below (`libexec/raptor-audit run` with the external LLM)
+- `in-session` → load and follow `.claude/skills/audit/SKILL.md` (Claude Code is the LLM; covers study, map, review loop, cross-session resume, scoping). Skip Steps 1–4.
+
 ### Step 1: Resolve output directory
 
 If the operator passed `--out`, use that directory. Otherwise, start a lifecycle run to get one:

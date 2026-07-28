@@ -14,7 +14,6 @@ from core.audit.gaps import (
     compute_gaps,
     load_checklist,
     load_context_map,
-    mark_checked,
     write_gaps,
 )
 
@@ -177,7 +176,14 @@ class TestComputeGaps:
         gaps = compute_gaps(_sample_checklist(), records)
         assert len(gaps) == 0
 
-    def test_checked_by_excluded(self):
+    def test_checked_by_no_longer_excludes(self):
+        """Post-migration: ``checked_by`` on checklist items is no
+        longer consulted by ``compute_gaps``. LLM-review existence
+        flows via the coverage store (imported from the review
+        journal at run completion), not via checklist mutation.
+        A stale ``checked_by`` on a checklist item should NOT
+        suppress a gap — otherwise pre-migration state would ghost-
+        skip functions after the migration."""
         checklist = {
             "files": [
                 {
@@ -193,7 +199,7 @@ class TestComputeGaps:
         gaps = compute_gaps(checklist, [])
         names = {g["name"] for g in gaps}
         assert "f1" in names
-        assert "f2" not in names
+        assert "f2" in names  # not excluded by legacy checked_by
 
     def test_scope_filters_to_prefix(self):
         gaps = compute_gaps(_sample_checklist(), [], scope="src/auth")
@@ -361,89 +367,10 @@ class TestWriteGaps:
         assert len(data["gaps"]) == 1
 
 
-class TestMarkChecked:
-    def _write_checklist(self, tmp_path, checklist):
-        path = tmp_path / "checklist.json"
-        path.write_text(json.dumps(checklist))
-
-    def _read_checklist(self, tmp_path):
-        path = tmp_path / "checklist.json"
-        return json.loads(path.read_text())
-
-    def test_marks_function_checked(self, tmp_path: Path):
-        checklist = {
-            "files": [
-                {
-                    "path": "src/handler.c",
-                    "items": [
-                        {"name": "parse_request", "line_start": 10},
-                    ],
-                },
-            ],
-        }
-        self._write_checklist(tmp_path, checklist)
-        mark_checked(tmp_path, "src/handler.c", "parse_request", ["audit"])
-        result = self._read_checklist(tmp_path)
-        item = result["files"][0]["items"][0]
-        assert "audit" in item["checked_by"]
-
-    def test_merges_checked_by(self, tmp_path: Path):
-        checklist = {
-            "files": [
-                {
-                    "path": "a.c",
-                    "items": [
-                        {
-                            "name": "f1",
-                            "line_start": 1,
-                            "checked_by": ["semgrep"],
-                        },
-                    ],
-                },
-            ],
-        }
-        self._write_checklist(tmp_path, checklist)
-        mark_checked(tmp_path, "a.c", "f1", ["audit", "codeql"])
-        result = self._read_checklist(tmp_path)
-        checked = result["files"][0]["items"][0]["checked_by"]
-        assert set(checked) == {"semgrep", "audit", "codeql"}
-
-    def test_noop_when_missing_checklist(self, tmp_path: Path):
-        mark_checked(tmp_path, "a.c", "f1", ["audit"])
-
-    def test_noop_when_function_not_found(self, tmp_path: Path):
-        checklist = {
-            "files": [
-                {
-                    "path": "a.c",
-                    "items": [
-                        {"name": "f1", "line_start": 1},
-                    ],
-                },
-            ],
-        }
-        self._write_checklist(tmp_path, checklist)
-        mark_checked(tmp_path, "a.c", "nonexistent", ["audit"])
-        result = self._read_checklist(tmp_path)
-        assert "checked_by" not in result["files"][0]["items"][0]
-
-    def test_atomic_write_survives(self, tmp_path: Path):
-        checklist = {
-            "files": [
-                {
-                    "path": "a.c",
-                    "items": [
-                        {"name": "f1", "line_start": 1},
-                    ],
-                },
-            ],
-        }
-        self._write_checklist(tmp_path, checklist)
-        mark_checked(tmp_path, "a.c", "f1", ["tool1"])
-        mark_checked(tmp_path, "a.c", "f1", ["tool2"])
-        result = self._read_checklist(tmp_path)
-        checked = result["files"][0]["items"][0]["checked_by"]
-        assert set(checked) == {"tool1", "tool2"}
+# ``TestMarkChecked`` removed — ``mark_checked`` was deleted at
+# Phase-3 completion (annotation → journal migration). Checklist is
+# a pure inventory snapshot post-migration; LLM review state lives
+# exclusively in the review journal. See amendment §2.
 
 
 # ---------------------------------------------------------------------------

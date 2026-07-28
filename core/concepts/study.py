@@ -1115,8 +1115,8 @@ def _parse_batch_response(
         if source_root is not None:
             _stamp_evidence_hashes(evidence, source_root)
         concepts.append(Concept(
-            id=c["id"],
-            description=c["description"],
+            id=c.get("id", ""),
+            description=c.get("description", ""),
             evidence=evidence,
             confidence=c.get("confidence", "inferred"),
             state="proposed",
@@ -1129,7 +1129,7 @@ def _parse_batch_response(
             stmt = inv.get("statement", "")
             inv_desc = stmt.split(". ")[0] if stmt else ""
         invariants.append(Invariant(
-            id=inv["id"],
+            id=inv.get("id", ""),
             concept=inv.get("concept", ""),
             statement=inv.get("statement", ""),
             negation=inv.get("negation", ""),
@@ -1152,7 +1152,7 @@ def _parse_batch_response(
     contracts = []
     for ct in raw.get("contracts") or []:
         contracts.append(Contract(
-            function=ct["function"],
+            function=ct.get("function", ""),
             file=ct.get("file", ""),
             when=ct.get("when", ""),
             input_semantics=ct.get("input_semantics", ""),

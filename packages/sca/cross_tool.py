@@ -148,7 +148,9 @@ def _scan_sarif_file(
     try:
         with open(path, encoding="utf-8") as fh:
             sarif = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return
+    if not isinstance(sarif, dict):
         return
 
     for run in sarif.get("runs", []):

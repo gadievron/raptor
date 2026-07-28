@@ -157,7 +157,7 @@ def _get_run_model(run_dir: Path) -> str:
         if m:
             return m
     meta = load_run_metadata(run_dir)
-    if meta:
+    if isinstance(meta, dict):
         extra = meta.get("extra") or {}
         models = extra.get("analysis_models") or []
         if models:
@@ -173,7 +173,7 @@ def _get_run_types(run_dirs: List[Path]) -> Dict[str, str]:
     result = {}
     for d in run_dirs:
         meta = load_run_metadata(d)
-        result[d.name] = (meta or {}).get("command", "unknown")
+        result[d.name] = (meta if isinstance(meta, dict) else {}).get("command", "unknown")
     return result
 
 
@@ -565,7 +565,7 @@ def _build_tool_coverage(run_dirs: List[Path]) -> Dict[str, List[str]]:
 
     for d in run_dirs:
         meta = load_run_metadata(d)
-        tool = (meta or {}).get("command", "unknown")
+        tool = (meta if isinstance(meta, dict) else {}).get("command", "unknown")
         findings = load_findings_from_dir(d)
         for f in findings:
             fp = f.get("file", "")

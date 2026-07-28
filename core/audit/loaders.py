@@ -173,70 +173,10 @@ def _build_taint_approx(
     return results or None
 
 
-def recreate_coverage_from_journal(
-    coverage_records: List[Dict[str, Any]],
-    project_dir: Optional[Path],
-    checklist: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    """Re-create coverage entries from the project-level review-journal
-    index when a run's coverage records have been cleaned.
-
-    Replaces the pre-migration
-    ``recreate_coverage_from_annotations``. Under the three-way-split
-    design (see ``design/coverage-annotation-redesign.md``) LLM
-    reviews are recorded in ``review-journal.jsonl`` and merged into
-    ``<project>/review-journal-index.json`` at run completion by
-    ``core.run.metadata._snapshot_run_coverage``. The index survives
-    ``/project clean`` and is the durable record of prior LLM
-    reviews. Annotations are human-only under this design, so an
-    annotation-based fallback is neither needed nor authoritative.
-
-    When an entry exists in the journal index for a function that
-    has no live coverage record, synthesize one so ``compute_gaps``
-    doesn't re-review it.
-    """
-    if not project_dir or not Path(project_dir).is_dir():
-        return coverage_records
-
-    try:
-        from core.coverage.journal import load_index
-    except Exception:  # noqa: BLE001
-        return coverage_records
-    try:
-        entries = load_index(Path(project_dir))
-    except Exception:  # noqa: BLE001
-        return coverage_records
-    if not entries:
-        return coverage_records
-
-    covered = set()
-    for rec in coverage_records:
-        for fa in rec.get("functions_analysed", []):
-            covered.add((fa.get("file", ""), fa.get("function", "")))
-
-    synthetic = []
-    for entry in entries.values():
-        key = (entry.file, entry.function)
-        if key in covered:
-            continue
-        synthetic.append({
-            "file": entry.file,
-            "function": entry.function,
-            "status": entry.verdict,
-            "hash": entry.source_hash or None,
-        })
-        covered.add(key)
-
-    if synthetic:
-        logger.info(
-            "coverage: re-created %d records from review-journal index",
-            len(synthetic),
-        )
-        coverage_records = list(coverage_records)
-        coverage_records.append({
-            "tool": "audit",
-            "functions_analysed": synthetic,
-            "files_examined": sorted({s["file"] for s in synthetic}),
-        })
-
-    return coverage_records
+# ``recreate_coverage_from_journal`` was removed. Journal → coverage-
+# store synthesis now happens once at run completion via
+# ``core.coverage.importer.import_journal`` (called from
+# ``core.run.metadata._snapshot_run_coverage``). The store is the
+# durable, cross-run record of LLM review existence; per-run
+# ``compute_gaps`` reads coverage records that already carry the
+# imported journal marks. No in-run resynthesis needed.

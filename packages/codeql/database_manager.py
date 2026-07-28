@@ -511,7 +511,7 @@ class DatabaseManager:
                     created_at = created_at.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) - created_at > timedelta(days=max_age_days):
                     evict = True
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 # Malformed metadata can't come from an in-flight writer
                 # because save_metadata uses atomic temp-rename — readers
                 # see either the old or the new metadata, never partial.

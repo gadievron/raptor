@@ -164,7 +164,10 @@ def _lookup_bounds_by_name(
                 ls = item.get("line_start")
                 le = item.get("line_end")
                 if ls is not None and le is not None:
-                    return int(ls), int(le)
+                    try:
+                        return int(ls), int(le)
+                    except (TypeError, ValueError):
+                        return None
     return None
 
 

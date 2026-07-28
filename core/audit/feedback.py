@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -46,16 +45,24 @@ def import_validation_results(
     validation_report: Path,
     annotations_dir: Path,
     audit_out_dir: Optional[Path] = None,
+    target_path: Optional[Path] = None,
 ) -> Dict[str, int]:
-    """Import /validate results into audit annotations.
+    """Import /validate results into the review journal.
 
     Args:
         validation_report: Path to /validate output — accepts
             ``findings.json`` (flat list or ``{"findings": [...]}``)
             or ``stage-d.json`` (``{"findings": [...],"summary":...}``).
         annotations_dir: Path to the audit annotations directory.
-        audit_out_dir: If provided, updates ``coverage-audit.json``
-            and appends to ``.audit-log.jsonl``.
+            Consulted for human-source annotation vetoes only.
+        audit_out_dir: If provided, appends correction journal
+            entries + the ``feedback`` audit-log event here. When
+            omitted, the correction entries are written under
+            ``annotations_dir.parent`` as a best-effort fallback.
+        target_path: Root of the target codebase. Used to recompute
+            the source hash for correction entries so
+            ``source_drifted`` can be surfaced when the source has
+            changed since the prior review (amendment §6).
 
     Returns:
         Dict with counts: updated, downgraded, upgraded, corroborated,
@@ -64,11 +71,14 @@ def import_validation_results(
     # Prior LLM verdict lives in the review journal (design:
     # "annotations are human-only, LLMs use schemas and JSON"). The
     # human-authored annotation is still consulted so operator notes
-    # can veto Reflexion — but no annotation is ever written back.
+    # with a conclusion status can veto Reflexion — but no annotation
+    # is ever written back (see amendment §1 D3 + A5).
     from core.annotations.storage import read_annotation
     from .journal import (
-        ReviewJournalEntry, append_entry, latest_entries, now_iso,
+        ReviewJournalEntry, VALID_VERDICTS, append_entry,
+        latest_entries, now_iso,
     )
+    from .record import _compute_hash
 
     try:
         with open(validation_report) as f:
@@ -104,15 +114,23 @@ def import_validation_results(
             counts["skipped"] += 1
             continue
 
-        # Human notes veto Reflexion — the operator's judgement stands.
+        # Human notes with a conclusion-status veto Reflexion — the
+        # operator's judgement stands. Amendment A5: only annotations
+        # whose status matches the LLM's verdict vocabulary
+        # (``VALID_VERDICTS``) veto; non-conclusion statuses
+        # (``todo``, ``investigating``, free-form) don't block
+        # Reflexion because the operator hasn't asserted anything.
         human_ann = read_annotation(annotations_dir, file_path, function_name)
         if human_ann and human_ann.metadata.get("source") == "human":
-            logger.info(
-                "Skipping feedback for %s:%s — human annotation preserved",
-                file_path, function_name,
-            )
-            counts["skipped"] += 1
-            continue
+            hstatus = (human_ann.metadata.get("status") or "").strip().lower()
+            if hstatus in VALID_VERDICTS:
+                logger.info(
+                    "Skipping feedback for %s:%s — human annotation "
+                    "asserts %r",
+                    file_path, function_name, hstatus,
+                )
+                counts["skipped"] += 1
+                continue
 
         key = f"{file_path}:{function_name}"
         prior_entry = prior_by_key.get(key)
@@ -151,13 +169,33 @@ def import_validation_results(
         # ``latest_entries`` naturally returns this entry on the
         # next call — no in-place mutation, no annotation write.
         new_verdict = transition["new_status"] or audit_status
+
+        # Recompute source_hash at correction time. If it differs
+        # from the prior entry's hash, the source has drifted since
+        # the original review — surface via ``source_drifted=True``
+        # instead of silently inheriting the stale hash. Amendment
+        # §6 (Phase 3.5 belt-and-braces).
+        target_path_arg = target_path or (
+            audit_out_dir.parent if audit_out_dir else Path(".")
+        )
+        recomputed_hash = _compute_hash(
+            Path(target_path_arg), file_path,
+            (prior_entry.line_start if prior_entry else 0) or 0,
+            prior_entry.line_end if prior_entry else None,
+        ) or ""
+        prior_hash = (prior_entry.source_hash if prior_entry else "") or ""
+        source_drifted = bool(
+            recomputed_hash and prior_hash
+            and recomputed_hash != prior_hash
+        )
+
         new_entry = ReviewJournalEntry(
             ts=now_iso(),
             run_id=(prior_entry.run_id if prior_entry else "") or "",
             file=file_path,
             function=function_name,
             verdict=new_verdict,
-            source_hash=(prior_entry.source_hash if prior_entry else "") or "",
+            source_hash=recomputed_hash or prior_hash,
             line_start=prior_entry.line_start if prior_entry else 0,
             line_end=prior_entry.line_end if prior_entry else None,
             cwe=prior_entry.cwe if prior_entry else None,
@@ -168,6 +206,9 @@ def import_validation_results(
             lesson=lesson or None,
             validate_verdict=validate_verdict,
             validate_reason=reason or None,
+            source_drifted=source_drifted if source_drifted else None,
+            producer=(prior_entry.producer if prior_entry else None)
+                     or "audit",
         )
         try:
             append_entry(audit_out_dir or annotations_dir.parent, new_entry)
@@ -395,13 +436,16 @@ def _update_audit_state(
     validate_verdict: str,
     reason: str,
 ) -> None:
-    """Update coverage-audit.json and audit log with the feedback."""
-    if transition["new_status"]:
-        _update_coverage_audit_status(
-            audit_out_dir, file_path, function_name,
-            transition["new_status"],
-        )
+    """Append a ``feedback`` event to the audit log.
 
+    Under the annotation → journal migration, the corrected verdict
+    itself is persisted by the caller (a fresh journal entry with
+    ``prior_review`` + ``lesson`` + ``validate_verdict`` fields is
+    appended). This helper only records the operational event —
+    which finding triggered feedback and how the transition was
+    classified — into ``.audit-log.jsonl`` for cross-run analysis.
+    ``coverage-audit.json`` was removed; the journal is authoritative.
+    """
     from core.audit.record import append_audit_log
     append_audit_log(audit_out_dir, {
         "action": "feedback",
@@ -413,55 +457,3 @@ def _update_audit_state(
         "new_status": transition.get("new_status"),
         "reason": reason,
     })
-
-
-def _update_coverage_audit_status(
-    audit_out_dir: Path,
-    file_path: str,
-    function_name: str,
-    new_status: str,
-) -> None:
-    """Update a single function's status in coverage-audit.json."""
-    import tempfile
-
-    audit_path = audit_out_dir / "coverage-audit.json"
-    if not audit_path.exists():
-        return
-
-    try:
-        with open(audit_path) as f:
-            audit_data = json.load(f)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Cannot read %s: %s", audit_path, exc)
-        return
-
-    updated = False
-
-    files = audit_data.get("files", {})
-    file_entry = files.get(file_path, {})
-    functions = file_entry.get("functions", {})
-    if function_name in functions:
-        functions[function_name]["status"] = new_status
-        updated = True
-
-    for entry in audit_data.get("functions_analysed", []):
-        if entry.get("file") == file_path and entry.get("function") == function_name:
-            entry["status"] = new_status
-            updated = True
-            break
-
-    if updated:
-        fd, tmp = tempfile.mkstemp(
-            dir=str(audit_out_dir), suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(audit_data, f, indent=2)
-            Path(tmp).replace(audit_path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
-        logger.debug(
-            "Updated coverage-audit %s:%s -> %s",
-            file_path, function_name, new_status,
-        )

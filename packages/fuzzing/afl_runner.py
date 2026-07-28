@@ -400,85 +400,95 @@ class AFLRunner:
         log_dir = self.output_dir / "raptor-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        for job_id in range(parallel_jobs):
-            is_main = job_id == 0
-            instance_name = "main" if is_main else f"secondary{job_id}"
+        try:
+            for job_id in range(parallel_jobs):
+                is_main = job_id == 0
+                instance_name = "main" if is_main else f"secondary{job_id}"
 
-            cmd = self._build_afl_command(
-                instance_name=instance_name,
-                is_main=is_main,
-                timeout_ms=timeout_ms,
-                use_qemu=not is_instrumented,
-            )
-
-            logger.info(f"Starting AFL instance: {instance_name}")
-            logger.debug(f"Command: {' '.join(cmd)}")
-
-            # AFL refuses to run if the host's core_pattern pipes cores (apport,
-            # systemd-coredump) or the CPU governor is not 'performance'. Both
-            # are the default on modern Linux desktops, and both are outside
-            # RAPTOR's control — asking the operator to tune them for every
-            # fuzzing run is not realistic. Setting these env vars tells AFL
-            # to tolerate both: we lose a small amount of speed and the
-            # guarantee that external cores are captured (AFL still writes its
-            # own crash artefacts under crashes/).
-            # Use get_safe_env() as the base, NOT os.environ.copy().
-            # Pre-fix the AFL subprocess inherited the operator's
-            # FULL environment including any RAPTOR-internal vars
-            # (RAPTOR_*, ANTHROPIC_API_KEY, OPENAI_API_KEY,
-            # AWS_*, GH_TOKEN, etc.). AFL itself doesn't
-            # interpret most of those, but:
-            #   * The fuzzed binary inherits the same env. If the
-            #     target reads `getenv("AWS_*")` (boto SDK,
-            #     credentials chain) or shells out (passing env
-            #     to libc functions), the operator's
-            #     credentials reach attacker-controlled code in
-            #     the fuzz target.
-            #   * On crash, AFL writes the env to the crash
-            #     metadata in `crashes/`; reports / triage flows
-            #     that include those files leak credentials.
-            # `get_safe_env()` strips dangerous / sensitive
-            # variables (see core/config.py DANGEROUS_ENV_VARS,
-            # LLM_API_KEY_VARS) by default. AFL_* vars get
-            # added explicitly below.
-            from core.config import RaptorConfig
-            afl_env = RaptorConfig.get_safe_env()
-            afl_env.setdefault("AFL_SKIP_CPUFREQ", "1")
-            afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
-            afl_env.setdefault("AFL_FORKSRV_INIT_TMOUT", "10000")
-
-            stdout_path = log_dir / f"{instance_name}.stdout.log"
-            stderr_path = log_dir / f"{instance_name}.stderr.log"
-            stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
-            try:
-                stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
-            except BaseException:
-                stdout_fp.close()
-                raise
-            (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
-
-            try:
-                from core.sandbox.preexec import set_pdeathsig
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=stdout_fp,
-                    stderr=stderr_fp,
-                    text=True,
-                    env=afl_env,
-                    preexec_fn=set_pdeathsig(),
+                cmd = self._build_afl_command(
+                    instance_name=instance_name,
+                    is_main=is_main,
+                    timeout_ms=timeout_ms,
+                    use_qemu=not is_instrumented,
                 )
-            except BaseException:
-                stdout_fp.close()
-                stderr_fp.close()
-                raise
-            processes.append({
-                "name": instance_name,
-                "proc": proc,
-                "stdout_path": stdout_path,
-                "stderr_path": stderr_path,
-                "stdout_fp": stdout_fp,
-                "stderr_fp": stderr_fp,
-            })
+
+                logger.info(f"Starting AFL instance: {instance_name}")
+                logger.debug(f"Command: {' '.join(cmd)}")
+
+                # AFL refuses to run if the host's core_pattern pipes cores (apport,
+                # systemd-coredump) or the CPU governor is not 'performance'. Both
+                # are the default on modern Linux desktops, and both are outside
+                # RAPTOR's control — asking the operator to tune them for every
+                # fuzzing run is not realistic. Setting these env vars tells AFL
+                # to tolerate both: we lose a small amount of speed and the
+                # guarantee that external cores are captured (AFL still writes its
+                # own crash artefacts under crashes/).
+                # Use get_safe_env() as the base, NOT os.environ.copy().
+                # Pre-fix the AFL subprocess inherited the operator's
+                # FULL environment including any RAPTOR-internal vars
+                # (RAPTOR_*, ANTHROPIC_API_KEY, OPENAI_API_KEY,
+                # AWS_*, GH_TOKEN, etc.). AFL itself doesn't
+                # interpret most of those, but:
+                #   * The fuzzed binary inherits the same env. If the
+                #     target reads `getenv("AWS_*")` (boto SDK,
+                #     credentials chain) or shells out (passing env
+                #     to libc functions), the operator's
+                #     credentials reach attacker-controlled code in
+                #     the fuzz target.
+                #   * On crash, AFL writes the env to the crash
+                #     metadata in `crashes/`; reports / triage flows
+                #     that include those files leak credentials.
+                # `get_safe_env()` strips dangerous / sensitive
+                # variables (see core/config.py DANGEROUS_ENV_VARS,
+                # LLM_API_KEY_VARS) by default. AFL_* vars get
+                # added explicitly below.
+                from core.config import RaptorConfig
+                afl_env = RaptorConfig.get_safe_env()
+                afl_env.setdefault("AFL_SKIP_CPUFREQ", "1")
+                afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
+                afl_env.setdefault("AFL_FORKSRV_INIT_TMOUT", "10000")
+
+                stdout_path = log_dir / f"{instance_name}.stdout.log"
+                stderr_path = log_dir / f"{instance_name}.stderr.log"
+                stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
+                try:
+                    stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
+                except BaseException:
+                    stdout_fp.close()
+                    raise
+                (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
+
+                try:
+                    from core.sandbox.preexec import set_pdeathsig
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=stdout_fp,
+                        stderr=stderr_fp,
+                        text=True,
+                        env=afl_env,
+                        preexec_fn=set_pdeathsig(),
+                    )
+                except BaseException:
+                    stdout_fp.close()
+                    stderr_fp.close()
+                    raise
+                processes.append({
+                    "name": instance_name,
+                    "proc": proc,
+                    "stdout_path": stdout_path,
+                    "stderr_path": stderr_path,
+                    "stdout_fp": stdout_fp,
+                    "stderr_fp": stderr_fp,
+                })
+        except BaseException:
+            for p in processes:
+                try:
+                    p["proc"].kill()
+                except OSError:
+                    pass
+                p["stdout_fp"].close()
+                p["stderr_fp"].close()
+            raise
 
         # Monitor fuzzing
         start_time = time.time()

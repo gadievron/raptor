@@ -29,7 +29,15 @@ This mode teaches RAPTOR what the code's vocabulary means, then compiles that un
 
 ### Automated pipeline (LLM available)
 
-When an LLM is available, the full pipeline runs mechanically:
+When an LLM is available, the full pipeline runs mechanically. Prefer the multi-pass orchestrator, which drains the reading list (items the LLM flags for follow-up) automatically:
+
+```bash
+libexec/raptor-study-loop <target> "$OUTPUT_DIR" [--root <source_root>] [--identifier <names>] [--concept <names>] [--model MODEL]
+```
+
+This loops prep → study-run → reading-list drain until convergence (no pending items, or no progress between passes). Each pass overwrites `study-list.json` and `domain-model.json`, feeding reading-list items back as identifiers/concepts for the next prep run.
+
+For single-pass or manual control, the two steps individually:
 
 **Step 1: Phase 1 — Mechanical prep**
 ```bash
@@ -71,6 +79,15 @@ When running in-session (Claude IS the LLM), skip `raptor-study-run` and do the 
 | **Modes** | Do flag_checks create distinct semantic paths? |
 
 **Step 4:** Write concepts, invariants, and contracts to `domain-model.json`.
+
+**Step 5: Iterate.** During steps 2–4 you will encounter identifiers, types, or operations that you could not fully resolve — a struct referenced in a contract but not in the study list, a lock wrapper whose semantics you had to guess, a paired operation whose partner wasn't extracted. Note these as follow-ups. If any remain:
+
+1. Run `raptor-study-prep` again with the unresolved names as `--identifier` args (or `--concept` for abstract topics like "RCU grace period lifecycle")
+2. Read the new `study-list.json` items and their source
+3. Update `domain-model.json` with the new concepts, invariants, and contracts
+4. Check for further follow-ups and repeat
+
+Stop when a pass produces no new unresolved follow-ups. This is the in-session equivalent of `raptor-study-loop` draining `reading-list.json` — your own judgement drives the iteration instead of a JSON file.
 
 ## Study item fields
 

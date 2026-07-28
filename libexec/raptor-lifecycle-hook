@@ -140,6 +140,8 @@ def main():
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(meta, dict):
+                meta = {}
             if (meta.get("status") != STATUS_RUNNING
                     or meta.get("session_pid") != session_pid):
                 continue

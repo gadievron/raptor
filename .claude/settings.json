@@ -21,6 +21,7 @@
       "Bash(libexec/raptor-pick-strategies *)",
       "Bash(libexec/raptor-project-manager *)",
       "Bash(libexec/raptor-render-diagrams *)",
+      "Bash(libexec/raptor-resolve-mode *)",
       "Bash(libexec/raptor-run-feasibility *)",
       "Bash(libexec/raptor-run-lifecycle *)",
       "Bash(libexec/raptor-run-sandboxed *)",

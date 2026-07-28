@@ -49,6 +49,8 @@ def compute_gaps(
     budget: Optional[int] = None,
     scope: Optional[str] = None,
     fuzz_coverage: Optional[Dict[str, Any]] = None,
+    out_dir: Optional[Path] = None,
+    project_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -69,6 +71,18 @@ def compute_gaps(
         fuzz_coverage: If provided, functions with substantial fuzz
             coverage (many iterations, zero crashes) are deprioritized
             but NOT skipped.
+        out_dir: This run's output directory. When present, the
+            per-run review journal is folded into ``covered_functions``
+            so mid-run resume works — coverage records only get the
+            journal marks at run completion, so relying solely on
+            them would re-review this run's own entries.
+        project_dir: Project-level directory (parent of ``out_dir``
+            for project runs). When present, the review-journal
+            index is folded into ``covered_functions`` so prior
+            runs' reviews suppress this run's gaps — the coverage
+            store's ``import_journal`` at run-completion is the
+            durable path but only fires at END, not at gap-
+            computation time.
 
     Returns:
         List of gap dicts sorted by priority, each containing:
@@ -76,6 +90,12 @@ def compute_gaps(
           is_stale, old_annotation (if stale)
     """
     covered_functions = _build_covered_set(coverage_records)
+    # Fold LLM review journal into covered_functions. See amendment
+    # §7: the coverage store's journal import only fires at run
+    # completion, so within a single run compute_gaps has no visibility
+    # into either this run's per-turn journal writes OR prior runs'
+    # persistent state. Read both sources directly here.
+    _fold_journal_into_covered(covered_functions, out_dir, project_dir)
     file_tool_coverage = _build_file_tool_coverage(coverage_records)
     entry_point_sinks = _build_sink_reachability(context_map)
     entry_point_set = extract_context_map_set(context_map, "entry_points")
@@ -114,8 +134,14 @@ def compute_gaps(
             if func_key in covered_functions:
                 continue
 
-            if item.get("checked_by"):
-                continue
+            # ``checked_by`` on the checklist item was removed under
+            # the annotation → journal migration. Journal-recorded
+            # LLM reviews land in ``covered_functions`` via the
+            # coverage record importer's journal path (see
+            # core/coverage/importer.py::import_journal). Reading
+            # checklist-level ``checked_by`` here would resurrect
+            # the pre-migration source-of-truth that the amendment
+            # explicitly retired.
 
             line_start = item.get("line_start", 0)
             line_end = item.get("line_end")
@@ -358,44 +384,12 @@ def write_gaps(gaps: List[Dict[str, Any]], out_dir: Path) -> Path:
     return path
 
 
-def mark_checked(
-    out_dir: Path,
-    file_path: str,
-    function_name: str,
-    checked_by: List[str],
-) -> None:
-    """Write checked_by into the checklist so future runs skip this function."""
-    cl_path = out_dir / "checklist.json"
-    if not cl_path.exists():
-        return
-    try:
-        with open(cl_path) as f:
-            checklist = json.load(f)
-    except json.JSONDecodeError:
-        return
-
-    for file_info in checklist.get("files", []):
-        if file_info.get("path") != file_path:
-            continue
-        for item in file_info.get("items", file_info.get("functions", [])):
-            if item.get("name") == function_name:
-                existing = item.get("checked_by", [])
-                merged = sorted(set(existing) | set(checked_by))
-                item["checked_by"] = merged
-                break
-        break
-
-    fd, tmp = tempfile.mkstemp(dir=str(cl_path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(checklist, f, indent=2)
-        os.replace(tmp, str(cl_path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+# ``mark_checked`` was removed under the annotation → journal
+# migration. The checklist is no longer mutated during audit runs;
+# it's a pure inventory snapshot. LLM review state lives exclusively
+# in ``review-journal.jsonl`` (per-run) and
+# ``review-journal-index.json`` (project). See the amendment doc
+# for the full store-by-store contract.
 
 
 def _build_covered_set(
@@ -408,6 +402,53 @@ def _build_covered_set(
             for func_name in file_data.get("functions", {}):
                 covered.add(f"{file_path}:{func_name}")
     return covered
+
+
+def _fold_journal_into_covered(
+    covered: set,
+    out_dir: Optional[Path],
+    project_dir: Optional[Path],
+) -> None:
+    """Fold review-journal entries into the covered-function set so
+    LLM-reviewed functions suppress gaps mid-run.
+
+    Two sources, both best-effort (never raise):
+
+    * Per-run journal (``out_dir/review-journal.jsonl``) — captures
+      this run's own reviews, so mid-run resume after crash or
+      context reset skips already-reviewed functions.
+    * Project index (``project_dir/review-journal-index.json``) —
+      captures every prior run's most recent review per function,
+      so a fresh run doesn't re-review project-durable state.
+
+    Deletion note: this replaces the ``checked_by`` read that was
+    removed under Phase 3 and the ``recreate_coverage_from_journal``
+    shim that was likewise removed. Without one of these bridges,
+    every audit re-reviews everything ever reviewed. The coverage
+    store's ``import_journal`` at run completion is the durable
+    persistence path — this helper is the mid-run read path.
+    """
+    if out_dir is not None:
+        try:
+            from .journal import reviewed_set
+            covered.update(reviewed_set(out_dir))
+        except Exception:
+            logger.warning(
+                "journal-fold: failed to read per-run journal at %s — "
+                "gap computation will treat this run's reviews as absent",
+                out_dir, exc_info=True,
+            )
+    if project_dir is not None:
+        try:
+            from .journal import load_index
+            for entry in load_index(project_dir).values():
+                covered.add(f"{entry.file}:{entry.function}")
+        except Exception:
+            logger.warning(
+                "journal-fold: failed to read project index at %s — "
+                "gap computation will treat all prior LLM reviews as absent",
+                project_dir, exc_info=True,
+            )
 
 
 def _build_file_tool_coverage(

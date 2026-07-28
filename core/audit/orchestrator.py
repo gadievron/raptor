@@ -51,7 +51,7 @@ from .topo_order import topological_sort as _topological_sort
 from .triage import TriageBucket, classify_all, format_triage_summary
 from .findings import write_findings
 from .record import (
-    append_audit_log, load_audit_log, record_review,
+    append_audit_log, load_audit_log,
     _resolve_annotations_dir as _resolve_ann_dir,
 )
 from .sweep import (
@@ -86,7 +86,6 @@ from .loaders import (
     load_fuzz_coverage as _load_fuzz_coverage,
     fuzz_coverage_for as _fuzz_coverage_for,
     load_or_build_taint_approx as _load_or_build_taint_approx_raw,
-    recreate_coverage_from_journal as _recreate_coverage_from_journal,
 )
 from .hypothesis_mapping import (
     hypothesis_to_semgrep_rule as _hypothesis_to_semgrep_rule,
@@ -1412,17 +1411,19 @@ def _run_audit_body(
         logger.debug("typestate model extraction failed", exc_info=True)
 
     coverage_records = _load_coverage_records(config.out_dir)
-    # Rebuild coverage from the project-level review-journal index
-    # when this run's per-run coverage records are missing (e.g.
-    # after ``/project clean``). Annotations are human-only under
-    # the current design, so the journal index — not annotations —
-    # is the durable record of prior LLM reviews.
-    project_dir = Path(config.out_dir).parent if config.out_dir else None
-    coverage_records = _recreate_coverage_from_journal(
-        coverage_records, project_dir, checklist,
-    )
+    # No coverage-recreation shim: ``compute_gaps`` reads the review
+    # journal directly for LLM-review existence, and the coverage
+    # store's ``import_journal`` at run completion folds journal
+    # entries into the project-durable ``coverage.json`` for
+    # mechanical-tool queries. Both paths bypass the removed
+    # ``coverage-audit.json`` + ``checked_by`` sources.
     fuzz_coverage = _load_fuzz_coverage(config.out_dir)
 
+    _project_dir = (
+        Path(config.out_dir).parent
+        if config.out_dir and (Path(config.out_dir) / ".raptor-run.json").exists()
+        else None
+    )
     gaps = compute_gaps(
         checklist,
         [] if config.force else coverage_records,
@@ -1430,6 +1431,8 @@ def _run_audit_body(
         strategy_filter=config.strategy_filter,
         scope=config.scope,
         fuzz_coverage=fuzz_coverage,
+        out_dir=None if config.force else config.out_dir,
+        project_dir=None if config.force else _project_dir,
     )
 
     # Launch Joern only when there are functions to review — the Scala
@@ -2619,21 +2622,49 @@ def _run_audit_body(
             plf_func = plf.get("function", "")
             if plf_file and plf_func:
                 plf_status = "suspicious"
-                plf_body = plf.get("description", plf.get("detail", ""))
-                plf_cwe = plf.get("cwe", "")
+                # Emit a lightweight journal entry so post-loop
+                # mechanical findings enter the review-journal +
+                # coverage-store paths alongside LLM reviews. The
+                # rich record still lives in post-loop-findings.json;
+                # this journal entry is coverage evidence (the
+                # function was examined) with a compact reference
+                # verdict.
                 try:
-                    record_review(
+                    from .collector import append_journal_for_outcome
+                    class _PlfOutcome:
+                        pass
+                    _o = _PlfOutcome()
+                    _o.file = plf_file
+                    _o.function = plf_func
+                    _o.status = plf_status
+                    _o.body = f"[mechanical] {plf.get('description', '')}"
+                    _o.model = None
+                    _o.hypothesis = None
+                    _o.hypotheses = None
+                    _o.evidence_tool = None
+                    _o.tools_dispatched = None
+                    _o.review_result = {"cwe": plf.get("cwe", "")}
+                    _o.cost_usd = None
+                    _o.duration_s = None
+                    append_journal_for_outcome(
                         out_dir=config.out_dir,
                         target_path=config.target_path,
-                        file_path=plf_file,
-                        function_name=plf_func,
-                        status=plf_status,
-                        body=f"[mechanical] {plf_body}",
-                        cwe=plf_cwe,
+                        run_id=(
+                            config.out_dir.name if config.out_dir else ""
+                        ),
+                        outcome=_o,
+                        gap={
+                            "line_start": plf.get("line_start", 0),
+                            "line_end": plf.get("line_end"),
+                            "strategies": ["post-loop-mechanical"],
+                        },
                         checked_by=["audit:post-loop"],
                     )
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "post-loop journal append failed for %s:%s",
+                        plf_file, plf_func, exc_info=True,
+                    )
     except Exception:
         logger.debug("post-loop pattern checks failed", exc_info=True)
 
@@ -3172,30 +3203,20 @@ def _commit_outcome(
     *,
     batch: bool = False,
 ) -> None:
-    """Write the review result to coverage-audit + review-journal.jsonl."""
+    """Write the review result to review-journal.jsonl.
+
+    Journal is the sole LLM review store. ``record_review`` (which
+    wrote ``coverage-audit.json``) and ``mark_checked`` (which
+    stamped ``checked_by`` on the checklist) were removed at Phase-3
+    completion — both duplicated state the journal already carries.
+    Coverage-store LLM signal is imported from the journal at run
+    completion; consumers wanting per-function verdict/context read
+    the journal directly.
+    """
     checked_by = ["audit"]
     if outcome.model:
         checked_by.append(outcome.model)
 
-    record_review(
-        out_dir=config.out_dir,
-        target_path=config.target_path,
-        file_path=outcome.file,
-        function_name=outcome.function,
-        status=outcome.status,
-        body=outcome.body,
-        line_start=gap.get("line_start", 0),
-        line_end=gap.get("line_end"),
-        strategies=gap.get("strategies"),
-        checked_by=checked_by,
-    )
-
-    # Persist the LLM's reasoning prose + full review context via the
-    # review journal. Without this, every non-Collector path (there
-    # are eight in this file) loses the outcome body — the LLM's
-    # hypotheses, tool evidence, and reasoning silently disappear
-    # after ``record_review`` because ``record_review`` itself only
-    # stamps status/hash/strategies into coverage-audit.json.
     from .collector import append_journal_for_outcome
     # ``run_id`` derived from the run-dir basename to match Collector's
     # convention (see Collector construction ~orchestrator.py:1810).
@@ -3211,11 +3232,6 @@ def _commit_outcome(
         gap=gap,
         checked_by=checked_by,
     )
-
-    if outcome.status != "error":
-        mark_checked(
-            config.out_dir, outcome.file, outcome.function, checked_by,
-        )
 
     entry: Dict[str, Any] = {
         "action": "orchestrator_review",

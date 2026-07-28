@@ -711,6 +711,8 @@ def _extract_composer_lock_parents(blob: bytes) -> Dict[str, List[str]]:
         data = _json.loads(blob)
     except Exception:                                       # noqa: BLE001
         return {}
+    if not isinstance(data, dict):
+        return {}
     out: Dict[str, List[str]] = {}
     for group in ("packages", "packages-dev"):
         for pkg in data.get(group) or []:

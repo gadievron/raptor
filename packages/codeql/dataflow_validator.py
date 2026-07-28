@@ -8,7 +8,7 @@ if dataflow paths are truly exploitable beyond theoretical detection.
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as _dataclass_fields
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -918,8 +918,12 @@ class DataflowValidator:
                 task_type=TaskType.ANALYSE,
             )
 
-            # Parse response
-            validation = DataflowValidation(**response_dict)
+            # Parse response — filter to declared fields so extra
+            # keys returned by the LLM don't cause TypeError.
+            _valid_keys = {f.name for f in _dataclass_fields(DataflowValidation)}
+            validation = DataflowValidation(**{
+                k: v for k, v in response_dict.items() if k in _valid_keys
+            })
 
             self.logger.info(
                 f"Dataflow validation: exploitable={validation.is_exploitable}, "

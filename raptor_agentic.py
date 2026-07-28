@@ -1618,7 +1618,7 @@ Examples:
                 if result.returncode == 0:
                     add_result = sandbox_run(
                         ["git"] + git_safe + ["add", "."], block_network=True,
-                        cwd=temp_repo, capture_output=True, timeout=60,
+                        cwd=temp_repo, capture_output=True, text=True, timeout=60,
                         env=env, env_caller_filtered=True,
                     )
                     if add_result.returncode != 0:
@@ -1627,7 +1627,7 @@ Examples:
                         commit_result = sandbox_run(
                             ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
                             block_network=True,
-                            cwd=temp_repo, capture_output=True, timeout=60,
+                            cwd=temp_repo, capture_output=True, text=True, timeout=60,
                             env=env, env_caller_filtered=True,
                         )
                         if commit_result.returncode != 0:

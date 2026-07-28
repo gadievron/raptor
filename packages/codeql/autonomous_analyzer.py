@@ -1137,6 +1137,7 @@ class AutonomousCodeQLAnalyzer:
             # ``suppressions.jsonl`` /agentic emits so an operator
             # can correlate suppressions across both consumers from
             # a single per-run JSONL. Best-effort; never blocks.
+            _finding_dict = {}
             try:
                 from core.analysis.reach_chokepoint import (
                     record_suppression,
@@ -1168,7 +1169,7 @@ class AutonomousCodeQLAnalyzer:
                     ),
                 )
             except Exception:  # noqa: BLE001
-                logger.debug("record_suppression failed for %s", _finding_dict.get("id", "?"))
+                logger.debug("record_suppression failed for %s", _finding_dict.get("finding_id", "?"))
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,

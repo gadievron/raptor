@@ -98,18 +98,20 @@ def load_specs(
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
-        if target_path is not None:
-            stored_target = data.get("target_path", "")
-            if stored_target and str(Path(stored_target).resolve()) != str(target_path.resolve()):
-                logger.debug(
-                    "iris.store: skipping specs for different target (%s vs %s)",
-                    stored_target, target_path,
-                )
-                return []
-        return _specs_from_list(data.get("specs", []))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         logger.debug("iris.store: failed to load %s", path, exc_info=True)
         return []
+    if not isinstance(data, dict):
+        return []
+    if target_path is not None:
+        stored_target = data.get("target_path", "")
+        if stored_target and str(Path(stored_target).resolve()) != str(target_path.resolve()):
+            logger.debug(
+                "iris.store: skipping specs for different target (%s vs %s)",
+                stored_target, target_path,
+            )
+            return []
+    return _specs_from_list(data.get("specs", []))
 
 
 def load_assumptions(
@@ -124,14 +126,16 @@ def load_assumptions(
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
-        if target_path is not None:
-            stored_target = data.get("target_path", "")
-            if stored_target and str(Path(stored_target).resolve()) != str(target_path.resolve()):
-                return []
-        return assumptions_from_list(data.get("assumptions", []))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         logger.debug("iris.store: failed to load assumptions from %s", path, exc_info=True)
         return []
+    if not isinstance(data, dict):
+        return []
+    if target_path is not None:
+        stored_target = data.get("target_path", "")
+        if stored_target and str(Path(stored_target).resolve()) != str(target_path.resolve()):
+            return []
+    return assumptions_from_list(data.get("assumptions", []))
 
 
 def load_store_metadata(out_dir: Path) -> dict[str, Any]:
@@ -140,9 +144,12 @@ def load_store_metadata(out_dir: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 def save_specs(
