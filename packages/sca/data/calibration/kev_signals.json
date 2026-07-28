@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-21T08:07:28Z",
+    "fetched_at": "2026-07-28T08:13:48Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -5488,6 +5488,13 @@
       "ransomware_use": true,
       "vendor": "Accellion"
     },
+    "CVE-2021-27137": {
+      "date_added": "2026-07-21",
+      "kev": true,
+      "product": "DD-WRT",
+      "ransomware_use": false,
+      "vendor": "DD-WRT"
+    },
     "CVE-2021-27561": {
       "date_added": "2021-11-03",
       "kev": true,
@@ -6171,7 +6178,7 @@
       "date_added": "2021-12-01",
       "kev": true,
       "product": "Apache",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Apache"
     },
     "CVE-2021-40444": {
@@ -10829,6 +10836,13 @@
       "ransomware_use": false,
       "vendor": "Synacor"
     },
+    "CVE-2025-68686": {
+      "date_added": "2026-07-27",
+      "kev": true,
+      "product": "FortiOS",
+      "ransomware_use": false,
+      "vendor": "Fortinet"
+    },
     "CVE-2025-7775": {
       "date_added": "2025-08-26",
       "kev": true,
@@ -10882,7 +10896,7 @@
       "date_added": "2026-05-29",
       "kev": true,
       "product": "PAN-OS",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Palo Alto Networks"
     },
     "CVE-2026-0300": {
@@ -10891,6 +10905,13 @@
       "product": "PAN-OS",
       "ransomware_use": false,
       "vendor": "Palo Alto Networks"
+    },
+    "CVE-2026-0770": {
+      "date_added": "2026-07-21",
+      "kev": true,
+      "product": "Langflow",
+      "ransomware_use": false,
+      "vendor": "Langflow"
     },
     "CVE-2026-10520": {
       "date_added": "2026-06-11",
@@ -10910,7 +10931,7 @@
       "date_added": "2026-06-25",
       "kev": true,
       "product": "Windchill and FlexPLM",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "PTC"
     },
     "CVE-2026-1281": {
@@ -10947,6 +10968,20 @@
       "product": " Endpoint Manager (EPM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-16232": {
+      "date_added": "2026-07-22",
+      "kev": true,
+      "product": "SmartConsole",
+      "ransomware_use": false,
+      "vendor": "Check Point"
+    },
+    "CVE-2026-16812": {
+      "date_added": "2026-07-27",
+      "kev": true,
+      "product": "VeloCloud Orchestrator",
+      "ransomware_use": false,
+      "vendor": "Arista"
     },
     "CVE-2026-1731": {
       "date_added": "2026-02-13",
@@ -11445,6 +11480,13 @@
       "ransomware_use": false,
       "vendor": "iCagenda"
     },
+    "CVE-2026-50522": {
+      "date_added": "2026-07-22",
+      "kev": true,
+      "product": "SharePoint",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-50751": {
       "date_added": "2026-06-08",
       "kev": true,
@@ -11507,6 +11549,20 @@
       "product": "SharePoint",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-60137": {
+      "date_added": "2026-07-21",
+      "kev": true,
+      "product": "Core",
+      "ransomware_use": false,
+      "vendor": "WordPress"
+    },
+    "CVE-2026-63030": {
+      "date_added": "2026-07-21",
+      "kev": true,
+      "product": "Core",
+      "ransomware_use": false,
+      "vendor": "WordPress"
     },
     "CVE-2026-6973": {
       "date_added": "2026-05-07",
