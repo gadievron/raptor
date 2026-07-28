@@ -39,7 +39,7 @@ from .constraints import (
     save_constraints,
 )
 from .context import assemble_context
-from .gaps import compute_gaps, hydrate_live_gaps_for_detectors, load_checklist, load_context_map, write_gaps
+from .gaps import compute_gaps, gap_for_site, hydrate_live_gaps_for_detectors, load_checklist, load_context_map, write_gaps
 from .priority import (
     group_by_subsystem, load_flow_traces, load_fuzz_coverage as _load_fuzz_coverage_from_runs,
     load_tool_failures, score_functions,
