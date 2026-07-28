@@ -38,7 +38,7 @@ from .constraints import (
     save_constraints,
 )
 from .context import assemble_context
-from .gaps import compute_gaps, load_checklist, load_context_map, mark_checked, write_gaps
+from .gaps import compute_gaps, hydrate_live_gaps_for_detectors, load_checklist, load_context_map, mark_checked, write_gaps
 from .priority import (
     group_by_subsystem, load_flow_traces, load_fuzz_coverage as _load_fuzz_coverage_from_runs,
     load_tool_failures, score_functions,
@@ -710,12 +710,29 @@ def review_one_function(
         if isinstance(strategies, (list, tuple)):
             strategies = set(strategies)
         ns_findings = []
+        # check_negative_space reads gap["source"] and returns [] without
+        # it, so discovering conventions is only half the job — they have
+        # to reach the per-function check. The body is already in ctx;
+        # pass a throwaway copy rather than hydrating the shared gap,
+        # which would also switch on triage and spec_inference.
+        detector_gap = gap
+        ctx_source = ctx.get("source") or ""
+        if ctx_source and not gap.get("source"):
+            detector_gap = dict(gap)
+            detector_gap["source"] = ctx_source
         for strat in (strategies or {"general"}):
-            ns_findings.extend(check_negative_space(gap, conventions, strat))
+            ns_findings.extend(
+                check_negative_space(detector_gap, conventions, strat),
+            )
 
+        # Match on identity, not prose. NegativeSpaceFinding carries
+        # file/function, so substring-searching the function name in
+        # `evidence` only misroutes: duplicate names across files, and
+        # prefixes like handle_user / handle_user_admin.
+        gap_file, gap_name = gap.get("file", ""), gap.get("name", "")
         func_sibling_ns = [
             f for f in sibling_ns_findings
-            if gap.get("name", "") in f.evidence
+            if (f.file, f.function) == (gap_file, gap_name)
         ]
         ns_findings.extend(func_sibling_ns)
 
@@ -1581,15 +1598,22 @@ def _run_audit_body(
         discover_conventions,
         check_sibling_negative_space,
     )
-    live_gaps = [g for g in gaps if not g.get("dead")]
-    conventions = discover_conventions(live_gaps)
+    # Detectors need the function body; gaps carry line spans only.
+    # Hydrated *copies* — see hydrate_live_gaps_for_detectors: putting
+    # `source` on the shared gap dicts would also switch on triage's
+    # generated-file detection (changing which functions get reviewed)
+    # and spec_inference's LLM calls, neither of which belongs here.
+    detector_gaps = hydrate_live_gaps_for_detectors(
+        [g for g in gaps if not g.get("dead")], Path(config.target_path),
+    )
+    conventions = discover_conventions(detector_gaps)
     if conventions:
         logger.info(
             "negative-space: discovered %d security conventions",
             len(conventions),
         )
 
-    sibling_ns_findings = check_sibling_negative_space(live_gaps, conventions) if conventions else []
+    sibling_ns_findings = check_sibling_negative_space(detector_gaps, conventions) if conventions else []
     if sibling_ns_findings:
         logger.info(
             "sibling analysis: %d asymmetry findings across peer groups",

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .strategy import strategies_from_item
-from ._util import extract_context_map_set
+from ._util import extract_context_map_set, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,14 @@ _TRIVIAL_SLOC = 5
 _SMALL_ENTRY_SLOC = 20
 _LARGE_SLOC = 200
 _REVIEWABLE_KINDS = frozenset({"function", "method", ""})
+
+# Bounds for detector source hydration. These exist so a large or
+# hostile tree degrades by hydrating fewer functions rather than by
+# exhausting memory.
+_MAX_HYDRATED_SLOC = 2000            # per function, lines
+_MAX_HYDRATED_FUNCTION_BYTES = 256 * 1024
+_MAX_HYDRATED_FILE_BYTES = 8 * 1024 * 1024
+_MAX_HYDRATED_TOTAL_BYTES = 64 * 1024 * 1024
 
 
 def compute_gaps(
@@ -206,6 +214,238 @@ def load_checklist(out_dir: Path) -> Dict[str, Any]:
     except json.JSONDecodeError:
         logger.error("malformed JSON in %s", path)
         return {}
+
+
+
+def hydrate_live_gaps_for_detectors(
+    gaps: List[Dict[str, Any]],
+    target_path: Path,
+) -> List[Dict[str, Any]]:
+    """Return live gaps as **copies** carrying their function body.
+
+    The mechanical pattern detectors that run before the LLM loop —
+    negative-space convention discovery and sibling asymmetry — read
+    ``gap["source"]`` and skip any gap without it. Gaps are built from
+    the checklist, which carries line spans but no text, so without this
+    those passes see nothing and silently return empty.
+
+    Two deliberate properties:
+
+    *Copies, not in-place.* ``gap["source"]`` is a generic field with
+    seven readers across ``core/audit`` (``triage``, ``spec_inference``,
+    ``taint_specs``, ``iris_specs``, ``project_context``, the
+    orchestrator, and negative space). Populating it on the shared gap
+    dicts would switch all of them on at once — ``triage`` would begin
+    generated-file detection, changing *which functions get reviewed*,
+    and ``spec_inference`` would issue extra LLM calls. Neither is this
+    change's business. Returning copies keeps the blast radius at the
+    two detectors this is for, and means ``write_gaps`` needs no
+    knowledge of it.
+
+    *Live only.* Dead gaps are excluded, so convention discovery cannot
+    learn a baseline from code the dead-code gate already rejected, and
+    sibling asymmetry cannot read an unhydrated dead sibling as
+    non-adherent. ``negative_space`` filters on ``dead`` too; this keeps
+    the I/O from happening at all.
+
+    Gaps are grouped by file so each file is read once and released once
+    its bodies are taken — the tree is never resident at once.
+    """
+    live = [g for g in gaps if not g.get("dead")]
+    if not live:
+        return []
+
+    # Carry the validated span alongside the gap: re-indexing the dict
+    # later would re-admit exactly the malformed shapes screened here.
+    by_file: Dict[str, List[tuple]] = {}
+    for gap in live:
+        line_start = gap.get("line_start")
+        line_end = gap.get("line_end")
+        if not isinstance(line_start, int) or isinstance(line_start, bool):
+            continue
+        if not isinstance(line_end, int) or isinstance(line_end, bool):
+            continue
+        if line_start < 1 or line_end < line_start:
+            continue
+        if (line_end - line_start + 1) > _MAX_HYDRATED_SLOC:
+            continue
+        file_path = gap.get("file") or ""
+        if file_path:
+            by_file.setdefault(file_path, []).append((gap, line_start, line_end))
+
+    hydrated: List[Dict[str, Any]] = []
+    total_bytes = 0
+
+    for file_path, file_gaps in by_file.items():
+        remaining = _MAX_HYDRATED_TOTAL_BYTES - total_bytes
+        if remaining <= 0:
+            logger.info(
+                "detector hydration stopped at %d gaps (%d MiB retained)",
+                len(hydrated), _MAX_HYDRATED_TOTAL_BYTES // (1024 * 1024),
+            )
+            break
+
+        bodies = _read_spans(
+            target_path, file_path,
+            [(start, end) for _, start, end in file_gaps],
+            budget_bytes=remaining,
+        )
+        if not bodies:
+            continue
+
+        # Charge per unique span, matching what _read_spans actually
+        # retained. Several gaps can share one span (duplicate checklist
+        # entries), and they share the same string object — counting the
+        # body once per gap would overstate the total and, with enough
+        # duplicates, breach the ceiling on paper while nothing extra is
+        # held. The ceiling is re-checked here so one file cannot run
+        # past it between the per-file checks.
+        charged: set = set()
+        for gap, start, end in file_gaps:
+            body = bodies.get((start, end))
+            if not body:
+                continue
+            if (start, end) not in charged:
+                size = len(body.encode("utf-8", errors="ignore"))
+                if total_bytes + size > _MAX_HYDRATED_TOTAL_BYTES:
+                    continue
+                total_bytes += size
+                charged.add((start, end))
+            copy = dict(gap)
+            copy["source"] = body
+            hydrated.append(copy)
+
+        del bodies
+
+    if hydrated:
+        logger.debug(
+            "hydrated source for %d/%d live gaps (%d KiB)",
+            len(hydrated), len(live), total_bytes // 1024,
+        )
+    return hydrated
+
+
+def _read_spans(
+    target_path: Path,
+    file_path: str,
+    spans: List[tuple],
+    *,
+    budget_bytes: int = _MAX_HYDRATED_TOTAL_BYTES,
+) -> Optional[Dict[tuple, str]]:
+    """Extract the requested 1-indexed inclusive line spans from a file.
+
+    Streams line by line and retains only lines inside a requested span,
+    so peak memory tracks what is wanted rather than file size — a 16 MiB
+    file of millions of short lines would cost hundreds of MiB via
+    ``readlines()``.
+
+    Spans are held in a sliding active set rather than rescanned per
+    line. Testing every span against every line is O(lines x spans),
+    which is pathological on a large file carrying many functions; here
+    each span is opened once when the stream reaches its start and
+    dropped once past its end, so cost is O(lines + spans log spans)
+    plus the bytes actually retained.
+
+    ``budget_bytes`` is the caller's *remaining* total allowance and is
+    charged during accumulation, so a single file cannot build more than
+    the global ceiling before the caller gets a chance to enforce it.
+    The per-function cap is likewise applied while accumulating, so an
+    oversized body is abandoned rather than built and then discarded.
+
+    Paths come from the checklist, which is derived from the scanned
+    tree, so containment is enforced rather than assumed. Oversized files
+    are refused, as are files with a NUL in the first 8 KiB (a cheap
+    probe, not a guarantee — a NUL past that window is not caught):
+    a minified bundle can
+    satisfy a line-count bound while still being huge, and NUL-laden
+    text only feeds noise to the pattern detectors downstream.
+    """
+    resolved = safe_join(Path(target_path), file_path)
+    if resolved is None or not resolved.is_file():
+        return None
+
+    wanted = sorted({
+        (int(s), int(e)) for s, e in spans
+        if isinstance(s, int) and isinstance(e, int) and s > 0 and e >= s
+    })
+    if not wanted:
+        return None
+    last_line = max(e for _, e in wanted)
+
+    try:
+        if resolved.stat().st_size > _MAX_HYDRATED_FILE_BYTES:
+            logger.debug("skipping oversized file for hydration: %s", file_path)
+            return None
+        with open(resolved, "rb") as probe:
+            if b"\0" in probe.read(8192):
+                logger.debug("skipping binary-looking file: %s", file_path)
+                return None
+
+        parts: Dict[tuple, List[str]] = {}
+        sizes: Dict[tuple, int] = {}
+        done: Dict[tuple, str] = {}
+        abandoned: set = set()
+        active: set = set()
+        nxt = 0
+        spent = 0
+
+        with open(resolved, encoding="utf-8", errors="replace") as fh:
+            for lineno, text in enumerate(fh, start=1):
+                if lineno > last_line:
+                    break
+
+                while nxt < len(wanted) and wanted[nxt][0] <= lineno:
+                    span = wanted[nxt]
+                    if span[1] >= lineno:
+                        active.add(span)
+                        parts[span] = []
+                        sizes[span] = 0
+                    nxt += 1
+
+                if not active:
+                    continue
+
+                cost = len(text.encode("utf-8", errors="ignore"))
+                # Sorted, not set order: which span survives a tight
+                # budget must not depend on hash iteration order.
+                for span in sorted(active):
+                    over_fn = sizes[span] + cost > _MAX_HYDRATED_FUNCTION_BYTES
+                    over_total = spent + cost > budget_bytes
+                    if over_fn or over_total:
+                        # Refund what this span buffered — an abandoned
+                        # body retains nothing, so it must not go on
+                        # charging the allowance and starving later
+                        # spans in the same file.
+                        spent -= sizes.pop(span, 0)
+                        abandoned.add(span)
+                        active.discard(span)
+                        parts.pop(span, None)
+                        continue
+                    parts[span].append(text)
+                    sizes[span] += cost
+                    spent += cost
+
+                for span in sorted(active):
+                    if span[1] <= lineno:
+                        active.discard(span)
+                        chunks = parts.pop(span, None)
+                        sizes.pop(span, None)
+                        if chunks:
+                            done[span] = "".join(chunks)
+
+        # A span still open at EOF never saw its declared end line, so
+        # the body is truncated. For absence detection that is worse
+        # than nothing: the check we would report as missing may simply
+        # lie in the part we did not read. Drop it.
+        for span in tuple(active):
+            parts.pop(span, None)
+            spent -= sizes.pop(span, 0)
+            abandoned.add(span)
+    except OSError:
+        logger.debug("could not read %s for gap hydration", file_path)
+        return None
+
+    return {s: b for s, b in done.items() if b and s not in abandoned}
 
 
 def load_context_map(out_dir: Path) -> Optional[Dict[str, Any]]:
