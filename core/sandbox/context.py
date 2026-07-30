@@ -29,7 +29,12 @@ from .observe import (
     _interpret_result,
 )
 from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
-from .profiles import _SANDBOX_KWARGS, DEFAULT_PROFILE, PROFILES
+from .profiles import (
+    _SANDBOX_KWARGS,
+    DEFAULT_PROFILE,
+    PROFILES,
+    host_recon_threshold_for_profile,
+)
 
 
 # Attribute indirection so tests can patch these at the submodule level.
@@ -283,10 +288,20 @@ def _persist_proxy_events(
         _flags = _fcntl.fcntl(_log_fd, _fcntl.F_GETFL)
         _fcntl.fcntl(_log_fd, _fcntl.F_SETFL, _flags & ~os.O_NONBLOCK)
         import json as _json
+
+        from . import telemetry_mac as _tmac
         with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
             _fd_owned = False  # fdopen took ownership
             for e in events:
-                _f.write(_json.dumps(e) + "\n")
+                # Provenance stamp: triage verifies this token before
+                # letting the event drive a verdict — the target can
+                # append to this file mid-run (it holds Landlock write
+                # on `output`), and an unstampable environment (no
+                # usable key) degrades to the legacy unstamped shape
+                # triage already accepts with a caveat.
+                token = _tmac.mint(_tmac.proxy_event_fields(e))
+                line = {**e, "mac": token} if token else e
+                _f.write(_json.dumps(line) + "\n")
     except BaseException as _persist_exc:
         # os.fdopen takes ownership on success; on any pre-fdopen
         # failure we still own the fd and must close.  Post-fdopen
@@ -2200,6 +2215,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     caller_label=caller_label,
                     lane_key=(_proxy_unix_path if _use_proxy_netns
                               else _proxy_tcp_lane_port),
+                    host_recon_threshold=host_recon_threshold_for_profile(
+                        profile or DEFAULT_PROFILE,
+                        _proxy_mod.DEFAULT_HOST_RECON_THRESHOLD,
+                    ),
                 )
                 if proxy_instance is not None else None
             )
@@ -2985,6 +3004,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             ),
             lane_key=(_proxy_unix_path if _use_proxy_netns
                       else _proxy_tcp_lane_port),
+            host_recon_threshold=host_recon_threshold_for_profile(
+                profile or DEFAULT_PROFILE,
+                _proxy_mod.DEFAULT_HOST_RECON_THRESHOLD,
+            ),
         )
     if use_egress_proxy and _will_engage_audit:
         # Scope the leniency to THIS context's lane. Concurrent

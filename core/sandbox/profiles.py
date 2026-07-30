@@ -87,6 +87,30 @@ PROFILES = types.MappingProxyType({
 })
 DEFAULT_PROFILE = "full"
 
+# Optional per-profile override for the live/post-hoc host-recon
+# escalation threshold (core.sandbox.proxy.DEFAULT_HOST_RECON_THRESHOLD
+# / core.sandbox.triage.DEFAULT_HOST_RECON_THRESHOLD — both currently
+# 5). Deliberately empty: no profile has an empirical false-positive/
+# false-negative basis yet for deviating from the default distinct-
+# denied-host count that counts as recon. Add entries here (keyed by
+# profile name, int value) as real usage data justifies loosening a
+# profile that legitimately touches many hosts (e.g. a dependency-
+# fetching workflow) or tightening one that should never need more
+# than one or two. Looked up via `host_recon_threshold_for_profile()`
+# below rather than read directly, so callers get the default
+# uniformly without each needing its own `.get(..., DEFAULT)` dance.
+_HOST_RECON_THRESHOLD_OVERRIDES: "types.MappingProxyType[str, int]" = (
+    types.MappingProxyType({})
+)
+
+
+def host_recon_threshold_for_profile(profile_name: str,
+                                     default: int) -> int:
+    """Per-profile host-recon threshold, falling back to `default`
+    (callers pass their own module's DEFAULT_HOST_RECON_THRESHOLD so
+    this module doesn't need to import triage.py or proxy.py)."""
+    return _HOST_RECON_THRESHOLD_OVERRIDES.get(profile_name, default)
+
 
 # Kwargs that configure isolation. Callers must not pass these to
 # sandbox().run() or run_trusted() — isolation is set on context creation,

@@ -694,15 +694,54 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
             set_active_run_dir(None)
 
 
-# Sandbox summary is finalized BEFORE the status update in every terminal-
-# state transition. If the process crashes between the two:
-#  - finalize-then-status-update path: status stays "running", summary on
-#    disk. A later cleanup-of-stale-runs marks the status appropriately;
-#    summary is already there. No data lost.
+def _finalize_sandbox_triage(output_dir: Path) -> None:
+    """Best-effort: classify this run's sandbox telemetry
+    (sandbox-summary.json / proxy-events.jsonl) into a clean / notable /
+    suspicious verdict and write sandbox-triage.json.
+
+    Must run AFTER _finalize_sandbox_summary — triage reads
+    sandbox-summary.json, which that call just wrote. Rules-based, no LLM
+    call, no network: cheap enough to run unconditionally on every
+    terminal-state transition rather than requiring an operator to invoke
+    ``raptor-sandbox-triage`` by hand. See core/sandbox/triage.py's module
+    docstring for the signal taxonomy and known limitations.
+
+    Broad except, mirrors _finalize_sandbox_summary: lifecycle hooks must
+    never raise out of complete_run / fail_run / cancel_run on account of
+    a triage failure.
+    """
+    from core.sandbox.triage import triage_run, TRIAGE_FILE
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        result = triage_run(output_dir)
+        # Discoverability: only log when there's something to see — a
+        # clean run (the common case) shouldn't add chatter. Mirrors the
+        # "if result is not None" gate in _finalize_sandbox_summary.
+        if result is not None and result["verdict"] != "clean":
+            log.warning(
+                "sandbox triage: verdict=%s (%d signal(s)) → %s",
+                result["verdict"], len(result["signals"]),
+                output_dir / TRIAGE_FILE,
+            )
+    except Exception:  # noqa: BLE001 — never fail lifecycle on triage error
+        log.debug(
+            "_finalize_sandbox_triage: triage_run failed",
+            exc_info=True,
+        )
+
+
+# Sandbox summary + triage are finalized BEFORE the status update in every
+# terminal-state transition. If the process crashes between them:
+#  - finalize-then-status-update path: status stays "running", summary/triage
+#    on disk. A later cleanup-of-stale-runs marks the status appropriately;
+#    the artifacts are already there. No data lost.
 #  - status-update-then-finalize path (the alternative): status flips to
-#    "completed" but no summary; reader assumes "no denials" because no
-#    file. Misleading.
+#    "completed" but no summary/triage; reader assumes "no denials" because
+#    no file. Misleading.
 # Finalizing first preserves the data; status update is just the signal.
+# Triage runs strictly after summary within each finalize call — it reads
+# sandbox-summary.json, which the summary finalize step just wrote.
 
 def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
                  manifest: dict[str, Any] | None = None) -> None:
@@ -719,6 +758,7 @@ def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
     Callers still win on conflict: an explicitly-passed key is never clobbered.
     """
     _finalize_sandbox_summary(output_dir)
+    _finalize_sandbox_triage(output_dir)
     _update_status(output_dir, STATUS_COMPLETED, extra, manifest=manifest)
     # Materialise the LLM read-coverage record from the plugin's .reads-manifest
     # FIRST, so the snapshot below imports it alongside the scanner records.
@@ -838,12 +878,14 @@ def fail_run(output_dir: Path, error: str | None = None,
     if error:
         extra["error"] = error
     _finalize_sandbox_summary(output_dir)
+    _finalize_sandbox_triage(output_dir)
     _update_status(output_dir, STATUS_FAILED, extra, record_timing=record_timing)
 
 
 def cancel_run(output_dir: Path, extra: dict[str, Any] | None = None) -> None:
     """Update .raptor-run.json to status=cancelled."""
     _finalize_sandbox_summary(output_dir)
+    _finalize_sandbox_triage(output_dir)
     _update_status(output_dir, STATUS_CANCELLED, extra)
 
 

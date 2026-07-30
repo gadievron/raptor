@@ -382,3 +382,82 @@ def test_log_streamer_o_nofollow_blocks_symlink(tmp_path):
         assert e.errno in (40, 62), f"unexpected errno {e.errno}"
     # The symlink target must remain empty (no leak).
     assert target.read_text() == ""
+
+
+# --- Live stderr escalation: credential-path touches -------------------
+# _maybe_escalate_credential_path is pulled out of _read_loop precisely
+# so it's testable against a synthetic record without a real `log
+# stream` subprocess. See core.sandbox.tracer's mirror-image escalation
+# for escape-primitive syscalls (Linux-only, tested in
+# test_tracer_event_loop.py).
+
+def test_credential_path_touch_escalates_once(tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "read", "path": "/Users/x/.ssh/id_rsa",
+              "target_pid": 4242}
+
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1
+    assert writes[0][0] == 2
+    assert b".ssh/id_rsa" in writes[0][1]
+
+    # Same path again this run: no second banner.
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1, "dedup: one banner per path per run"
+
+
+def test_non_credential_path_does_not_escalate(tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "read", "path": "/tmp/ordinary-file.txt",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert writes == []
+
+
+def test_credential_path_escalation_ignores_non_read_write_types(
+        tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    # "seccomp" bucket (mach-lookup, process-*, etc.) never carries the
+    # same "did the target actually see file content" implication a
+    # read/write does — see seatbelt_audit.py's comment on why no
+    # macOS escape-primitive-syscall equivalent is fabricated.
+    record = {"type": "seccomp", "path": "/Users/x/.ssh/id_rsa",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert writes == []
+
+
+def test_credential_path_escalation_disabled_by_env_var(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "write", "path": "/Users/x/.aws/credentials",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert writes == []
+
+
+def test_credential_path_escalation_survives_stderr_write_failure(
+        tmp_path, monkeypatch):
+    def raising_write(fd, data):
+        raise OSError("stderr closed")
+    monkeypatch.setattr(seatbelt_audit.os, "write", raising_write)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "write", "path": "/Users/x/.netrc",
+              "target_pid": 4242}
+    # Must not raise — mirrors tracer.py's
+    # test_escalation_never_raises_out_of_hot_path.
+    streamer._maybe_escalate_credential_path(record)
+    assert record["path"] in streamer._escalated_paths

@@ -212,7 +212,8 @@ class TestContextWiring:
                 self.calls.append(("release_audit",))
 
             def register_sandbox(self, caller_label=None,
-                                 lane_key=None):
+                                 lane_key=None,
+                                 host_recon_threshold=None):
                 self.calls.append(("register", caller_label, lane_key))
                 return 1
 

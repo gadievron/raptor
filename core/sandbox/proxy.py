@@ -89,7 +89,9 @@ from typing import Optional
 # import has_nonprintable` inline on the hot path. Cached after the
 # first call but still a dict lookup + module attribute access per
 # request.
-from core.security.log_sanitisation import has_nonprintable
+from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
+
+from . import audit_budget, escalation_signatures
 
 # Process-unique lane ids. Labels are NOT unique (two concurrent
 # contexts may share caller_label="sandbox"), so event->buffer
@@ -123,8 +125,17 @@ class _Lane:
     allowed_hosts: "frozenset[str] | None" = None
     lane_id: int = field(default_factory=lambda: next(_LANE_IDS))
 
-
 logger = logging.getLogger(__name__)
+
+
+def _stderr_write(message: str) -> None:
+    """Best-effort immediate stderr write for live escalation banners
+    — raw os.write(2, ...) so it survives redirected/odd stdio state.
+    Mirrors core.sandbox.tracer._announce_escape_primitive."""
+    try:
+        os.write(2, message.encode("ascii", errors="replace"))
+    except OSError:
+        pass
 
 # Connection bounds — per-tunnel and aggregate. Tunable via EgressProxy
 # constructor kwargs but the defaults are deliberately conservative.
@@ -240,6 +251,35 @@ _PROXY_EVENT_RESULTS = frozenset({
     # Unhandled exception in tunnel handler
     "handler_error",
 })
+
+# Live-escalation: default distinct-denied-host threshold before the
+# proxy prints an immediate stderr recon-pattern banner. Shared with
+# triage.py's post-hoc `host_recon_pattern` signal via the leaf
+# core.sandbox.escalation_signatures module (triage.py depends on this
+# module already; importing triage back would be circular), so the
+# live notice and the post-hoc signal agree on what counts as recon
+# by construction. Re-exported here because context.py and triage.py
+# already consume it under this name.
+#
+# Recon state is LANE-SCOPED (see _live_recon in __init__), mirroring
+# _record()'s lane-scoped buffer fan-out: a distinct-host counter per
+# registered sandbox context, torn down when its last registration
+# unregisters. A process-global counter would conflate
+# concurrently-registered sandboxes AND accumulate distinct denied
+# hosts across sequential runs for the life of the proxy singleton —
+# five unrelated one-host runs would eventually trip a "recon"
+# banner no single run earned.
+DEFAULT_HOST_RECON_THRESHOLD = (
+    escalation_signatures.DEFAULT_HOST_RECON_THRESHOLD)
+
+# Distinct resolved IPs that get their own live denied_resolved_ip
+# banner before further alerts collapse into a single "suppressed"
+# notice. Bounds both operator-terminal spam and the dedup set's
+# memory: a hostile target driving DNS rebinding can mint an unbounded
+# stream of distinct resolved IPs, and each is attacker-paced. The
+# full, uncapped record remains in proxy-events.jsonl and the run-end
+# sandbox-triage.json.
+_LIVE_RESOLVED_IP_BANNER_CAP = 8
 
 # Thread-safe singleton. `get_proxy()` is the sole entry point.
 _lock = threading.Lock()
@@ -669,6 +709,23 @@ class EgressProxy:
         self._sandbox_lane_subs: dict = {}
         self._next_token = 0
         self._buffer_lock = threading.Lock()
+        # Live host-recon escalation state, LANE-SCOPED like the event
+        # buffers: bucket key is a lane_id (int) or None for run-global
+        # registrations, value is {"hosts": set, "escalated": bool,
+        # "threshold": int, "refs": int}. Created by register_sandbox
+        # (refs counts registrations sharing the bucket), torn down
+        # when the last registration on the bucket unregisters — so
+        # distinct-host counts are per sandbox context, never
+        # accumulated across sequential runs or conflated across
+        # concurrent ones. `escalated` makes the recon banner one-shot
+        # per bucket. `threshold` starts at the default and can only
+        # be tightened (never loosened) within a bucket — same
+        # "callers can tighten, never accidentally weaken a sibling's
+        # setting" pattern as update_idle_timeout's max-semantics
+        # above, scoped to the bucket.
+        self._live_recon: dict = {}
+        self._live_resolved_ip_escalated: set[str] = set()
+        self._live_resolved_ip_cap_announced = False
         # Atomic snapshot of the buffer-list refs for the hot path.
         # `_record` is called once per CONNECT and used to acquire
         # `_buffer_lock` to iterate `_sandbox_buffers.values()`. Under
@@ -1018,7 +1075,8 @@ class EgressProxy:
             return host.lower() in self._allowed_hosts
 
     def register_sandbox(self, caller_label: str | None = None,
-                         lane_key: "str | int | None" = None) -> int:
+                         lane_key: "str | int | None" = None,
+                         host_recon_threshold: int | None = None) -> int:
         """Register an active sandbox and receive a token.
 
         While registered, tunnel events the proxy records are fanned
@@ -1043,6 +1101,19 @@ class EgressProxy:
         run-global subscription (over-capture, never under-capture) —
         the caller keeps a complete event view rather than a silently
         empty one.
+
+        `host_recon_threshold` (optional): a per-profile override for
+        the live host-recon escalation threshold (see
+        DEFAULT_HOST_RECON_THRESHOLD). Scoped to this registration's
+        recon bucket (the resolved lane, or the run-global bucket for
+        lane-less registrations) and min-combined within it: a
+        registration passing a looser threshold never weakens an
+        already-tighter sibling ON THE SAME bucket — mirrors
+        update_idle_timeout's max-semantics, inverted because tighter
+        is the more-sensitive direction here. Different lanes keep
+        fully independent thresholds, so a debug-profile sandbox never
+        loosens (or tightens) a concurrent full-profile run's recon
+        sensitivity.
 
         Must be paired with `unregister_sandbox(token)` — typically via
         try/finally around the sandboxed subprocess invocation. The
@@ -1072,6 +1143,16 @@ class EgressProxy:
                 (buf, self._sandbox_lane_subs[tok])
                 for tok, buf in self._sandbox_buffers.items()
             )
+            state = self._live_recon.get(lane_sub)
+            if state is None:
+                state = {"hosts": set(), "escalated": False,
+                         "threshold": DEFAULT_HOST_RECON_THRESHOLD,
+                         "refs": 0}
+                self._live_recon[lane_sub] = state
+            state["refs"] += 1
+            if host_recon_threshold is not None:
+                state["threshold"] = min(state["threshold"],
+                                         host_recon_threshold)
             return token
 
     def unregister_sandbox(self, token: int) -> list[dict]:
@@ -1091,6 +1172,19 @@ class EgressProxy:
         finally blocks can always call this without a try/except.
         """
         with self._buffer_lock:
+            if token in self._sandbox_buffers:
+                # Tear down this registration's recon bucket when the
+                # last registration sharing it leaves — per-context
+                # distinct-host counts must not survive into the next
+                # run on the same proxy singleton. Guarded by buffer
+                # membership so the idempotent-unknown-token path
+                # never decrements a live bucket.
+                lane_sub = self._sandbox_lane_subs.get(token)
+                state = self._live_recon.get(lane_sub)
+                if state is not None:
+                    state["refs"] -= 1
+                    if state["refs"] <= 0:
+                        del self._live_recon[lane_sub]
             events = self._sandbox_buffers.pop(token, [])
             label = self._sandbox_labels.pop(token, None)
             self._sandbox_lane_subs.pop(token, None)
@@ -1174,6 +1268,100 @@ class EgressProxy:
         for buf, sub in self._sandbox_buffers_snapshot:
             if sub is None or (lane_id is not None and sub == lane_id):
                 buf.append(event)
+        self._live_escalate(event)
+
+    def _live_escalate(self, event: dict) -> None:
+        """Immediate stderr escalation for HIGH-severity proxy signals,
+        ahead of the run-end sandbox-triage.json classification —
+        mirrors core.sandbox.tracer._announce_escape_primitive /
+        seatbelt_audit._announce_credential_path_touch. Print-only, no
+        change to the CONNECT decision already made by gates 1/2 above.
+
+        Called from `_record()` on the proxy's single event-loop
+        thread — no lock taken for the dedup-state mutations below,
+        same reasoning as `_record`'s own lock-free hot path. The
+        recon buckets ARE created/torn down by register/unregister on
+        other threads (under `_buffer_lock`), but this path only
+        `.get()`s a bucket ref and mutates its contents — GIL-atomic
+        dict/set ops; the worst-case race is one host counted into a
+        bucket mid-teardown, which is discarded with the bucket.
+        """
+        if audit_budget.live_escalation_disabled():
+            return
+        result = event.get("result")
+
+        if result == "denied_resolved_ip":
+            resolved_ip = event.get("resolved_ip")
+            if (not resolved_ip
+                    or resolved_ip in self._live_resolved_ip_escalated):
+                return
+            if (len(self._live_resolved_ip_escalated)
+                    >= _LIVE_RESOLVED_IP_BANNER_CAP):
+                # Bound the dedup set AND the terminal spam — a DNS-
+                # rebinding target can mint unlimited distinct IPs.
+                if not self._live_resolved_ip_cap_announced:
+                    self._live_resolved_ip_cap_announced = True
+                    _stderr_write(
+                        f"RAPTOR sandbox ALERT: further blocked-"
+                        f"resolved-IP alerts suppressed after "
+                        f"{_LIVE_RESOLVED_IP_BANNER_CAP} distinct IPs — "
+                        f"full list in proxy-events.jsonl / sandbox-"
+                        f"triage.json at run end.\n"
+                    )
+                return
+            self._live_resolved_ip_escalated.add(resolved_ip)
+            # The hostname is attacker-controlled (the sandboxed
+            # target picked it); sanitise + bound before it reaches
+            # the operator's terminal. resolved_ip comes from our own
+            # resolver — safe to embed as-is.
+            _host = sanitise_for_terminal(str(event.get("host")))
+            _stderr_write(
+                f"RAPTOR sandbox ALERT: proxy CONNECT resolved to a "
+                f"blocked IP range: {resolved_ip} (host="
+                f"'{_host}'). Consistent with an "
+                f"SSRF/DNS-rebinding/cloud-metadata probing attempt, "
+                f"not ordinary allowlist noise. See sandbox-"
+                f"triage.json at run end for full context.\n"
+            )
+            return
+
+        if result in ("denied_host", "would_deny_host"):
+            host = event.get("host")
+            if not host:
+                return
+            # Mirror the buffer fan-out: the event counts toward its
+            # own lane's recon bucket (if one is registered) AND the
+            # run-global bucket (if a lane-less registration exists) —
+            # over-capture into the global view, never leakage into a
+            # sibling lane's view. No registered bucket → no live
+            # counting, matching the buffer semantics for events that
+            # arrive outside any register/unregister window; triage
+            # still sees them post-hoc via proxy-events.jsonl.
+            lane_id = event.get("lane_id")
+            buckets = []
+            if lane_id is not None:
+                lane_state = self._live_recon.get(lane_id)
+                if lane_state is not None:
+                    buckets.append(lane_state)
+            global_state = self._live_recon.get(None)
+            if global_state is not None:
+                buckets.append(global_state)
+            for state in buckets:
+                if state["escalated"]:
+                    continue
+                state["hosts"].add(host)
+                if len(state["hosts"]) >= state["threshold"]:
+                    state["escalated"] = True
+                    _stderr_write(
+                        f"RAPTOR sandbox ALERT: {len(state['hosts'])} "
+                        f"distinct hosts denied by the egress proxy "
+                        f"within one sandbox context "
+                        f"(threshold={state['threshold']}) — "
+                        f"consistent with a host-recon/C2-discovery "
+                        f"pattern, not a single missing allowlist entry. "
+                        f"See sandbox-triage.json at run end for full "
+                        f"context.\n"
+                    )
 
     async def _cached_getaddrinfo(self, host: str, port: int) -> list:
         """Resolve `host:port` with a TTL cache.

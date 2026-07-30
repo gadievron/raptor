@@ -128,7 +128,7 @@ def fake_helpers():
 
 
 def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
-              budget=None, run_dir=Path("/tmp")):
+              budget=None, run_dir=Path("/tmp"), escalated_syscalls=None):
     """Convenience wrapper to call _handle_waitpid_event with the
     fake helpers from the fixture.
 
@@ -136,6 +136,12 @@ def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
     (total_records, dropped_by_category, etc.). Constructs a fresh
     budget per dispatch unless one is passed in for state-carrying
     multi-event sequences.
+
+    `escalated_syscalls` defaults to None (not a fresh set()) so
+    existing callers of this helper keep exercising the same
+    escalation-disabled path `_handle_waitpid_event` used before live
+    escalation existed — only tests that explicitly pass a set opt
+    into observing the new stderr-banner behaviour.
     """
     from core.sandbox import audit_budget
     if budget is None:
@@ -149,6 +155,7 @@ def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
         read_tracee_string=helpers["read_tracee_string"],
         get_event_msg=helpers["get_event_msg"],
         write_record=helpers["write_record"],
+        escalated_syscalls=escalated_syscalls,
     )
     return budget
 
@@ -272,6 +279,125 @@ class TestSeccompTraceEvent:
         )
         assert budget.total_records == 0  # no record written
         assert calls == [(1000, 0)]  # but tracee resumed
+
+
+def _ptrace_syscall_nr(arch_info):
+    """Reverse-lookup the syscall number for 'ptrace' on the current
+    arch's syscall table — used to make fake_decode_syscall return an
+    escape-primitive syscall instead of the fixture's default openat."""
+    for nr, name in arch_info["syscall_table"].items():
+        if name == "ptrace":
+            return nr
+    raise AssertionError("ptrace not in syscall table for this arch")
+
+
+class TestLiveEscalation:
+    """Live stderr escalation banner for escape-primitive syscalls —
+    fires the moment tracer.py sees one denied, ahead of the run-end
+    sandbox-triage.json classification. See tracer.py's
+    _LIVE_ESCALATE_SYSCALLS / _announce_escape_primitive."""
+
+    def test_escape_primitive_escalates_once(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+
+        traced = {1000}
+        escalated: set = set()
+        budget = _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=escalated,
+        )
+        assert budget.total_records == 1  # record still written normally
+        assert len(writes) == 1
+        assert writes[0][0] == 2  # stderr fd
+        assert b"ptrace" in writes[0][1]
+        assert escalated == {"ptrace"}
+
+        # Second denial of the SAME syscall this run: no second banner.
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            budget=budget, escalated_syscalls=escalated,
+        )
+        assert len(writes) == 1, "dedup: one banner per syscall name per run"
+
+    def test_non_escape_primitive_syscall_does_not_escalate(
+            self, arch_info, fake_helpers, monkeypatch):
+        # Default fake_decode_syscall returns openat — not in
+        # _LIVE_ESCALATE_SYSCALLS.
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        traced = {1000}
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=set(),
+        )
+        assert writes == []
+
+    def test_escalation_disabled_by_env_var(
+            self, arch_info, fake_helpers, monkeypatch):
+        monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+        traced = {1000}
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=set(),
+        )
+        assert writes == []
+
+    def test_no_escalation_when_set_not_provided(
+            self, arch_info, fake_helpers, monkeypatch):
+        # escalated_syscalls defaults to None — callers that haven't
+        # opted in (e.g. every other test in this file, via _dispatch's
+        # own default) see no behaviour change at all.
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+        traced = {1000}
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+        )
+        assert writes == []
+
+    def test_escalation_never_raises_out_of_hot_path(
+            self, arch_info, fake_helpers, monkeypatch):
+        # os.write raising OSError (e.g. closed/redirected stderr)
+        # must not propagate — the tracer's event loop must keep
+        # running regardless of whether the banner could be printed.
+        def raising_write(fd, data):
+            raise OSError("stderr closed")
+        monkeypatch.setattr(tracer.os, "write", raising_write)
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+        traced = {1000}
+        budget = _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=set(),
+        )
+        # Record write + tracee resume still happened despite the
+        # failed banner.
+        assert budget.total_records == 1
+        assert fake_helpers["calls"]["ptrace_cont"] == [(1000, 0)]
 
 
 class TestBudgetMarkerNonce:
@@ -478,6 +604,85 @@ class TestNonStoppedStatus:
         assert traced == {1000}
         assert budget.total_records == 0
         assert fake_helpers["calls"]["ptrace_cont"] == []
+
+
+class TestHostileArgEscalation:
+    """socket()/ioctl() live escalation keys on the DECODED argument
+    (tty-hijack ioctls, AF_PACKET/SOCK_RAW) — a plain AF_UNIX denial
+    must stay silent."""
+
+    def _dispatch_syscall(self, arch_info, fake_helpers, nr, args,
+                          escalated, monkeypatch, writes):
+        monkeypatch.setattr(
+            tracer, "_announce_escape_primitive",
+            lambda name, pid: writes.append(name))
+        helpers = dict(fake_helpers)
+        helpers["decode_syscall"] = lambda regs, ai: (nr, list(args))
+        traced = {1234}
+        _dispatch(1234, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+                  traced, 1234,
+                  arch_info, helpers, escalated_syscalls=escalated)
+
+    def _nr(self, arch_info, name):
+        return next(nr for nr, n in arch_info["syscall_table"].items()
+                    if n == name)
+
+    def test_tiocsti_ioctl_escalates_with_decoded_label(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "ioctl")
+        self._dispatch_syscall(arch_info, fake_helpers, nr,
+                               [0, 0x5412, 0, 0, 0, 0],
+                               escalated, monkeypatch, writes)
+        assert writes == ["ioctl(TIOCSTI)"]
+        assert "ioctl(TIOCSTI)" in escalated
+
+    def test_raw_socket_escalates_and_dedups_per_label(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "socket")
+        for _ in range(3):
+            self._dispatch_syscall(arch_info, fake_helpers, nr,
+                                   [2, 3, 0, 0, 0, 0],
+                                   escalated, monkeypatch, writes)
+        assert writes == ["socket(SOCK_RAW)"]
+
+    def test_af_unix_socket_denial_stays_silent(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "socket")
+        self._dispatch_syscall(arch_info, fake_helpers, nr,
+                               [1, 1, 0, 0, 0, 0],
+                               escalated, monkeypatch, writes)
+        assert writes == []
+
+    def test_benign_ioctl_stays_silent(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "ioctl")
+        self._dispatch_syscall(arch_info, fake_helpers, nr,
+                               [0, 0x5413, 0, 0, 0, 0],  # TIOCGWINSZ
+                               escalated, monkeypatch, writes)
+        assert writes == []
+
+
+class TestRecordArgEnrichment:
+    def test_write_record_decodes_socket_and_ioctl(self, tmp_path):
+        import json as _json
+        tracer._write_record(tmp_path, "socket", 41,
+                             [17, 3, 768, 0, 0, 0], 4242)
+        tracer._write_record(tmp_path, "ioctl", 16,
+                             [0, 0x5412, 0, 0, 0, 0], 4242)
+        tracer._write_record(tmp_path, "ptrace", 101,
+                             [0, 0, 0, 0, 0, 0], 4242)
+        jsonl = tmp_path / ".audit" / ".sandbox-denials.jsonl"
+        records = [_json.loads(line)
+                   for line in jsonl.read_text().splitlines()]
+        by_name = {r["syscall"]: r for r in records}
+        assert by_name["socket"]["socket_family"] == "AF_PACKET"
+        assert by_name["socket"]["socket_type"] == "SOCK_RAW"
+        assert by_name["ioctl"]["ioctl_cmd"] == "TIOCSTI"
+        assert "ioctl_cmd" not in by_name["ptrace"]
 
 
 class TestOpenat2StructReadInjectable:
