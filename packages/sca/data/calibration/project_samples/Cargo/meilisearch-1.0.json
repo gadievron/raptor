@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:54:48Z",
+    "fetched_at": "2026-08-01T08:27:26Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
@@ -50,11 +50,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "meilisearch/tests/common/server.rs:6",
+          "meilisearch/tests/common/encoder.rs:3",
           "meilisearch/src/lib.rs:24",
-          "meilisearch/src/extractors/payload.rs:3",
-          "meilisearch/src/extractors/query_parameters.rs:5",
-          "meilisearch/tests/common/server.rs:5",
-          "meilisearch/tests/common/encoder.rs:2"
+          "meilisearch/src/extractors/query_parameters.rs:6",
+          "meilisearch/src/extractors/payload.rs:4"
         ],
         "verdict": "imported"
       },
@@ -178,7 +178,7 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/build.rs:18",
+          "meilisearch/build.rs:19",
           "meilisearch/src/lib.rs:30"
         ],
         "verdict": "imported"
@@ -534,7 +534,7 @@
       "dep_name": "bytes",
       "dep_version": "1.3.0",
       "ecosystem": "Cargo",
-      "epss": 0.00559,
+      "epss": 0.00552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -545,7 +545,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.3.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.3.0",
-      "raptor_risk_estimate": 14.60722599583036,
+      "raptor_risk_estimate": 14.605928516342129,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -562,15 +562,76 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402152577,
+        "epss_multiplier": 0.40211685599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.60722599583036,
+        "final": 14.605928516342129,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.9.20"
+        ],
+        "id": "RUSTSEC-2026-0204",
+        "modified": "2026-07-06T22:30:04.159269+00:00",
+        "published": "2026-07-06T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/crossbeam-epoch",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0204.html",
+          "https://github.com/crossbeam-rs/crossbeam/pull/1276"
+        ],
+        "severity": null,
+        "summary": "Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid"
+      },
+      "cvss_score": null,
+      "dep_name": "crossbeam-epoch",
+      "dep_version": "0.9.13",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:crossbeam-epoch:0.9.13:RUSTSEC-2026-0204",
+      "in_kev": false,
+      "purl": "pkg:cargo/crossbeam-epoch@0.9.13",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use crossbeam-epoch` / `extern crate crossbeam-epoch` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -1378,7 +1439,7 @@
       "dep_name": "idna",
       "dep_version": "0.3.0",
       "ecosystem": "Cargo",
-      "epss": 0.00194,
+      "epss": 0.00201,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1389,7 +1450,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.3.0:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.3.0",
-      "raptor_risk_estimate": 9.864954008316772,
+      "raptor_risk_estimate": 9.86583433517474,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1404,10 +1465,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400289982,
+        "epss_multiplier": 0.400325703,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.864954008316772,
+        "final": 9.86583433517474,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1523,8 +1584,8 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/src/extractors/authentication/mod.rs:129",
-          "meilisearch/tests/auth/tenant_token.rs:17"
+          "meilisearch/tests/auth/tenant_token.rs:17",
+          "meilisearch/src/extractors/authentication/mod.rs:129"
         ],
         "verdict": "imported"
       },
@@ -1799,7 +1860,7 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch-types/src/document_formats.rs:6"
+          "meilisearch-types/src/document_formats.rs:7"
         ],
         "verdict": "imported"
       },
@@ -2286,7 +2347,7 @@
         ],
         "id": "RUSTSEC-2026-0097",
         "informational": "unsound",
-        "modified": "2026-04-17T16:17:26.292227+00:00",
+        "modified": "2026-07-17T16:00:04.554426+00:00",
         "published": "2026-04-09T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/rand",
@@ -2383,7 +2444,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use remove-dir-all` / `extern crate remove-dir-all` found"
+          "reason": "no `use remove_dir_all` / `extern crate remove_dir_all` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -2447,7 +2508,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use remove-dir-all` / `extern crate remove-dir-all` found"
+          "reason": "no `use remove_dir_all` / `extern crate remove_dir_all` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -2499,7 +2560,7 @@
       "dep_name": "ring",
       "dep_version": "0.16.20",
       "ecosystem": "Cargo",
-      "epss": 0.00825,
+      "epss": 0.00918,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2510,7 +2571,7 @@
       "finding_id": "sca:vuln:Cargo:ring:0.16.20:GHSA-4p46-pwfr-66x6",
       "in_kev": false,
       "purl": "pkg:cargo/ring@0.16.20",
-      "raptor_risk_estimate": 3.459178496918471,
+      "raptor_risk_estimate": 3.4632469303491167,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2525,10 +2586,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40350997499999997,
+        "epss_multiplier": 0.403984554,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.459178496918471,
+        "final": 3.4632469303491167,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2806,6 +2867,65 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2026-0215",
+        "informational": "unmaintained",
+        "modified": "2026-07-23T07:30:03.466694+00:00",
+        "published": "2026-07-22T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/smallstr",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0215.html"
+        ],
+        "severity": null,
+        "summary": "smallstr is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "smallstr",
+      "dep_version": "0.3.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:smallstr:0.3.0:RUSTSEC-2026-0215",
+      "in_kev": false,
+      "purl": "pkg:cargo/smallstr@0.3.0",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use smallstr` / `extern crate smallstr` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3191,11 +3311,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch-types/src/tasks.rs:10",
-          "meilisearch-types/src/keys.rs:9",
-          "meilisearch-types/src/keys.rs:10",
-          "meilisearch-types/src/keys.rs:11",
-          "dump/src/lib.rs:12",
+          "meilisearch/tests/documents/add_documents.rs:4",
+          "meilisearch/tests/documents/add_documents.rs:5",
+          "meilisearch/tests/index/update_index.rs:2",
+          "meilisearch/tests/index/update_index.rs:3",
+          "meilisearch/tests/stats/mod.rs:2",
           "... (+42 more)"
         ],
         "verdict": "imported"
@@ -3263,11 +3383,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "meilisearch/tests/common/server.rs:16",
+          "meilisearch/tests/common/index.rs:7",
+          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "meilisearch/src/analytics/segment_analytics.rs:23",
-          "meilisearch/src/routes/tasks.rs:20",
-          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3335,11 +3455,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "meilisearch/tests/common/server.rs:16",
+          "meilisearch/tests/common/index.rs:7",
+          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "meilisearch/src/analytics/segment_analytics.rs:23",
-          "meilisearch/src/routes/tasks.rs:20",
-          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3408,11 +3528,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "meilisearch/tests/common/server.rs:16",
+          "meilisearch/tests/common/index.rs:7",
+          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "meilisearch/src/analytics/segment_analytics.rs:23",
-          "meilisearch/src/routes/tasks.rs:20",
-          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3482,11 +3602,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "meilisearch/tests/common/server.rs:16",
+          "meilisearch/tests/common/index.rs:7",
+          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "meilisearch/src/analytics/segment_analytics.rs:23",
-          "meilisearch/src/routes/tasks.rs:20",
-          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"

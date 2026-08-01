@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:51:21Z",
+    "fetched_at": "2026-08-01T08:23:11Z",
     "git_ref": "3.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of flask",
@@ -12,13 +12,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-32274"
+          "CVE-2026-32274",
+          "PYSEC-2026-2121"
         ],
         "fixed_versions": [
           "26.3.1"
         ],
         "id": "GHSA-3936-cmfr-pm3m",
-        "modified": "2026-03-16T16:44:03.077621+00:00",
+        "modified": "2026-07-13T07:26:40.139783+00:00",
         "published": "2026-03-12T18:33:10+00:00",
         "references": [
           "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
@@ -34,7 +35,7 @@
       "dep_name": "black",
       "dep_version": "23.7.0",
       "ecosystem": "PyPI",
-      "epss": 0.00572,
+      "epss": 0.00598,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -45,7 +46,7 @@
       "finding_id": "sca:vuln:PyPI:black:23.7.0:GHSA-3936-cmfr-pm3m",
       "in_kev": false,
       "purl": "pkg:pypi/black@23.7.0",
-      "raptor_risk_estimate": 4.94917706242146,
+      "raptor_risk_estimate": 4.950809623417888,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -60,10 +61,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402218916,
+        "epss_multiplier": 0.402351594,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.94917706242146,
+        "final": 4.950809623417888,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -148,13 +149,158 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-27205"
+          "CVE-2026-31900",
+          "GHSA-v53h-f6m7-xcgm"
+        ],
+        "fixed_versions": [
+          "26.3.0"
+        ],
+        "id": "PYSEC-2026-2120",
+        "modified": "2026-07-13T07:15:15.712525+00:00",
+        "published": "2026-03-11T20:16:15.960000+00:00",
+        "references": [
+          "https://github.com/psf/black/security/advisories/GHSA-v53h-f6m7-xcgm",
+          "https://github.com/psf/black/commit/0a2560b981364dde4c8cf8ce9d164c40669a8611"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 9.8,
+      "dep_name": "black",
+      "dep_version": "23.7.0",
+      "ecosystem": "PyPI",
+      "epss": 0.0046,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.7.0:PYSEC-2026-2120",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.7.0",
+      "raptor_risk_estimate": 12.108254005339486,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40164738,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.108254005339486,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-7246",
+          "GHSA-47fr-3ffg-hgmw"
+        ],
+        "fixed_versions": [
+          "8.3.3"
+        ],
+        "id": "PYSEC-2026-2132",
+        "modified": "2026-07-13T07:15:21.899333+00:00",
+        "published": "2026-04-30T14:16:36.433000+00:00",
+        "references": [
+          "https://access.redhat.com/security/cve/CVE-2026-7246",
+          "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-7246.json",
+          "https://access.redhat.com/errata/RHSA-2026:24761",
+          "https://access.redhat.com/errata/RHSA-2026:24762",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2464121"
+        ],
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:C/C:H/I:H/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 7.2,
+      "dep_name": "click",
+      "dep_version": "8.1.3",
+      "ecosystem": "PyPI",
+      "epss": 0.009,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:click:8.1.3:PYSEC-2026-2132",
+      "in_kev": false,
+      "purl": "pkg:pypi/click@8.1.3",
+      "raptor_risk_estimate": 20.957759689040728,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "examples/tutorial/flaskr/db.py:3",
+          "src/flask/app.py:14",
+          "src/flask/testing.py:12",
+          "src/flask/cli.py:15",
+          "src/flask/cli.py:16"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 72.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.4038927,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 20.957759689040728,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-27205",
+          "PYSEC-2026-2151"
         ],
         "fixed_versions": [
           "3.1.3"
         ],
         "id": "GHSA-68rp-wp8r-4726",
-        "modified": "2026-02-23T23:43:45.778179+00:00",
+        "modified": "2026-07-13T07:26:21.445447+00:00",
         "published": "2026-02-19T20:45:41+00:00",
         "references": [
           "https://github.com/pallets/flask/security/advisories/GHSA-68rp-wp8r-4726",
@@ -170,7 +316,7 @@
       "dep_name": "flask",
       "dep_version": "2.2.2",
       "ecosystem": "PyPI",
-      "epss": 0.00374,
+      "epss": 0.00344,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -181,7 +327,7 @@
       "finding_id": "sca:vuln:PyPI:flask:2.2.2:GHSA-68rp-wp8r-4726",
       "in_kev": false,
       "purl": "pkg:pypi/flask@2.2.2",
-      "raptor_risk_estimate": 7.2418138221,
+      "raptor_risk_estimate": 7.239050547599999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -193,7 +339,7 @@
           "examples/javascript/js_example/views.py:1",
           "examples/javascript/js_example/views.py:2",
           "examples/javascript/js_example/views.py:3",
-          "examples/celery/src/task_app/__init__.py:3",
+          "examples/tutorial/flaskr/auth.py:3",
           "... and 21 more"
         ],
         "verdict": "imported"
@@ -203,10 +349,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401208522,
+        "epss_multiplier": 0.401055432,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2418138221,
+        "final": 7.239050547599999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -271,7 +417,7 @@
           "examples/javascript/js_example/views.py:1",
           "examples/javascript/js_example/views.py:2",
           "examples/javascript/js_example/views.py:3",
-          "examples/celery/src/task_app/__init__.py:3",
+          "examples/tutorial/flaskr/auth.py:3",
           "... and 21 more"
         ],
         "verdict": "imported"
@@ -298,13 +444,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2025-27516"
+          "CVE-2025-27516",
+          "PYSEC-2026-1471"
         ],
         "fixed_versions": [
           "3.1.6"
         ],
         "id": "GHSA-cpwx-vrp4-4pq7",
-        "modified": "2026-02-04T04:14:58.595738+00:00",
+        "modified": "2026-07-07T17:56:16.836141+00:00",
         "published": "2025-03-05T20:40:14+00:00",
         "references": [
           "https://github.com/pallets/jinja/security/advisories/GHSA-cpwx-vrp4-4pq7",
@@ -320,7 +467,7 @@
       "dep_name": "jinja2",
       "dep_version": "3.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.00465,
+      "epss": 0.00476,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -331,7 +478,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-cpwx-vrp4-4pq7",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 7.250195754749999,
+      "raptor_risk_estimate": 7.2512089554,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -352,10 +499,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401672895,
+        "epss_multiplier": 0.401729028,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.250195754749999,
+        "final": 7.2512089554,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -369,13 +516,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-56201"
+          "CVE-2024-56201",
+          "PYSEC-2026-1472"
         ],
         "fixed_versions": [
           "3.1.5"
         ],
         "id": "GHSA-gmj6-6f8f-6699",
-        "modified": "2026-02-04T02:33:41.652230+00:00",
+        "modified": "2026-07-07T17:56:55.074166+00:00",
         "published": "2024-12-23T17:54:12+00:00",
         "references": [
           "https://github.com/pallets/jinja/security/advisories/GHSA-gmj6-6f8f-6699",
@@ -395,7 +543,7 @@
       "dep_name": "jinja2",
       "dep_version": "3.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.00301,
+      "epss": 0.00307,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -406,7 +554,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-gmj6-6f8f-6699",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 15.91719767913,
+      "raptor_risk_estimate": 15.91841351991,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -427,10 +575,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400836003,
+        "epss_multiplier": 0.400866621,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.91719767913,
+        "final": 15.91841351991,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -444,13 +592,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-22195"
+          "CVE-2024-22195",
+          "PYSEC-2026-1473"
         ],
         "fixed_versions": [
           "3.1.3"
         ],
         "id": "GHSA-h5c8-rqwp-cp95",
-        "modified": "2026-02-04T04:32:39.638919+00:00",
+        "modified": "2026-07-07T17:56:26.824570+00:00",
         "published": "2024-01-11T15:20:48+00:00",
         "references": [
           "https://github.com/pallets/jinja/security/advisories/GHSA-h5c8-rqwp-cp95",
@@ -519,13 +668,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-34064"
+          "CVE-2024-34064",
+          "PYSEC-2026-1474"
         ],
         "fixed_versions": [
           "3.1.4"
         ],
         "id": "GHSA-h75v-3vvj-5mfj",
-        "modified": "2026-02-04T03:24:55.822549+00:00",
+        "modified": "2026-07-07T17:57:30.872296+00:00",
         "published": "2024-05-06T14:20:59+00:00",
         "references": [
           "https://github.com/pallets/jinja/security/advisories/GHSA-h75v-3vvj-5mfj",
@@ -594,13 +744,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-56326"
+          "CVE-2024-56326",
+          "PYSEC-2026-1475"
         ],
         "fixed_versions": [
           "3.1.5"
         ],
         "id": "GHSA-q2x7-8rv6-6q7h",
-        "modified": "2026-02-04T03:01:31.510689+00:00",
+        "modified": "2026-07-07T17:56:44.376174+00:00",
         "published": "2024-12-23T17:56:08+00:00",
         "references": [
           "https://github.com/pallets/jinja/security/advisories/GHSA-q2x7-8rv6-6q7h",
@@ -620,7 +771,7 @@
       "dep_name": "jinja2",
       "dep_version": "3.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.005,
+      "epss": 0.00521,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -631,7 +782,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-q2x7-8rv6-6q7h",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 14.144168171249996,
+      "raptor_risk_estimate": 14.1479400409425,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -652,10 +803,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.4018515,
+        "epss_multiplier": 0.401958663,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.144168171249996,
+        "final": 14.1479400409425,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -669,13 +820,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-27199"
+          "CVE-2026-27199",
+          "PYSEC-2026-2320"
         ],
         "fixed_versions": [
           "3.1.6"
         ],
         "id": "GHSA-29vq-49wr-vm6x",
-        "modified": "2026-02-23T23:43:27.690386+00:00",
+        "modified": "2026-07-13T07:26:55.904978+00:00",
         "published": "2026-02-19T20:32:45+00:00",
         "references": [
           "https://github.com/pallets/werkzeug/security/advisories/GHSA-29vq-49wr-vm6x",
@@ -710,12 +862,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -741,13 +893,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-34069"
+          "CVE-2024-34069",
+          "PYSEC-2026-2043"
         ],
         "fixed_versions": [
           "3.0.3"
         ],
         "id": "GHSA-2g68-c3qc-8985",
-        "modified": "2026-02-04T04:19:36.666836+00:00",
+        "modified": "2026-07-07T17:56:15.006571+00:00",
         "published": "2024-05-06T14:21:27+00:00",
         "references": [
           "https://github.com/pallets/werkzeug/security/advisories/GHSA-2g68-c3qc-8985",
@@ -788,12 +941,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -819,13 +972,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-21860"
+          "CVE-2026-21860",
+          "PYSEC-2026-2044"
         ],
         "fixed_versions": [
           "3.1.5"
         ],
         "id": "GHSA-87hc-h4r5-73f7",
-        "modified": "2026-02-04T03:18:07.993642+00:00",
+        "modified": "2026-07-07T17:56:19.044748+00:00",
         "published": "2026-01-08T19:51:21+00:00",
         "references": [
           "https://github.com/pallets/werkzeug/security/advisories/GHSA-87hc-h4r5-73f7",
@@ -863,12 +1017,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -894,13 +1048,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-49766"
+          "CVE-2024-49766",
+          "PYSEC-2026-2045"
         ],
         "fixed_versions": [
           "3.0.6"
         ],
         "id": "GHSA-f9vj-2wh5-fj8j",
-        "modified": "2026-02-04T03:19:55.895802+00:00",
+        "modified": "2026-07-07T17:56:25.762524+00:00",
         "published": "2024-10-25T19:43:41+00:00",
         "references": [
           "https://github.com/pallets/werkzeug/security/advisories/GHSA-f9vj-2wh5-fj8j",
@@ -935,12 +1090,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -966,13 +1121,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2025-66221"
+          "CVE-2025-66221",
+          "PYSEC-2026-2046"
         ],
         "fixed_versions": [
           "3.1.4"
         ],
         "id": "GHSA-hgf8-39gv-g3f2",
-        "modified": "2026-02-04T02:33:10.151277+00:00",
+        "modified": "2026-07-07T17:57:36.044527+00:00",
         "published": "2025-12-02T00:27:38+00:00",
         "references": [
           "https://github.com/pallets/werkzeug/security/advisories/GHSA-hgf8-39gv-g3f2",
@@ -988,7 +1144,7 @@
       "dep_name": "werkzeug",
       "dep_version": "2.3.3",
       "ecosystem": "PyPI",
-      "epss": 0.00474,
+      "epss": 0.00518,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -999,7 +1155,7 @@
       "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-hgf8-39gv-g3f2",
       "in_kev": false,
       "purl": "pkg:pypi/werkzeug@2.3.3",
-      "raptor_risk_estimate": 7.251024737099998,
+      "raptor_risk_estimate": 7.2550775396999985,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1007,12 +1163,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -1021,10 +1177,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401718822,
+        "epss_multiplier": 0.401943354,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.251024737099998,
+        "final": 7.2550775396999985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1085,12 +1241,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -1116,14 +1272,16 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-49767"
+          "CVE-2024-49767",
+          "PYSEC-2026-1860",
+          "PYSEC-2026-3417"
         ],
         "fixed_versions": [
           "3.0.6",
           "0.20.0"
         ],
         "id": "GHSA-q34m-jh98-gwm2",
-        "modified": "2026-05-20T22:30:15.624255+00:00",
+        "modified": "2026-07-13T16:43:34.482065+00:00",
         "published": "2024-10-25T19:44:43+00:00",
         "references": [
           "https://github.com/pallets/werkzeug/security/advisories/GHSA-q34m-jh98-gwm2",
@@ -1143,7 +1301,7 @@
       "dep_name": "werkzeug",
       "dep_version": "2.3.3",
       "ecosystem": "PyPI",
-      "epss": 0.01093,
+      "epss": 0.01102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1154,7 +1312,7 @@
       "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-q34m-jh98-gwm2",
       "in_kev": false,
       "purl": "pkg:pypi/werkzeug@2.3.3",
-      "raptor_risk_estimate": 13.702575564281249,
+      "raptor_risk_estimate": 13.704129906187498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1162,12 +1320,12 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/ctx.py:9",
+          "examples/tutorial/flaskr/auth.py:11",
+          "examples/tutorial/flaskr/auth.py:12",
+          "examples/tutorial/flaskr/blog.py:8",
           "src/flask/helpers.py:11",
           "src/flask/helpers.py:12",
-          "src/flask/helpers.py:13",
-          "src/flask/helpers.py:23",
-          "... and 104 more"
+          "... and 49 more"
         ],
         "verdict": "imported"
       },
@@ -1176,10 +1334,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404877579,
+        "epss_multiplier": 0.404923506,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.702575564281249,
+        "final": 13.704129906187498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

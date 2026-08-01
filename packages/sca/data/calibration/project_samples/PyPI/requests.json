@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:51:20Z",
+    "fetched_at": "2026-08-01T08:23:10Z",
     "git_ref": "v2.31.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of requests",
@@ -12,13 +12,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-32274"
+          "CVE-2026-32274",
+          "PYSEC-2026-2121"
         ],
         "fixed_versions": [
           "26.3.1"
         ],
         "id": "GHSA-3936-cmfr-pm3m",
-        "modified": "2026-03-16T16:44:03.077621+00:00",
+        "modified": "2026-07-13T07:26:40.139783+00:00",
         "published": "2026-03-12T18:33:10+00:00",
         "references": [
           "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
@@ -34,7 +35,7 @@
       "dep_name": "black",
       "dep_version": "22.3.0",
       "ecosystem": "PyPI",
-      "epss": 0.00572,
+      "epss": 0.00598,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -45,7 +46,7 @@
       "finding_id": "sca:vuln:PyPI:black:22.3.0:GHSA-3936-cmfr-pm3m",
       "in_kev": false,
       "purl": "pkg:pypi/black@22.3.0",
-      "raptor_risk_estimate": 4.94917706242146,
+      "raptor_risk_estimate": 4.950809623417888,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -60,10 +61,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402218916,
+        "epss_multiplier": 0.402351594,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.94917706242146,
+        "final": 4.950809623417888,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -148,13 +149,81 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2023-50782"
+          "CVE-2026-31900",
+          "GHSA-v53h-f6m7-xcgm"
+        ],
+        "fixed_versions": [
+          "26.3.0"
+        ],
+        "id": "PYSEC-2026-2120",
+        "modified": "2026-07-13T07:15:15.712525+00:00",
+        "published": "2026-03-11T20:16:15.960000+00:00",
+        "references": [
+          "https://github.com/psf/black/security/advisories/GHSA-v53h-f6m7-xcgm",
+          "https://github.com/psf/black/commit/0a2560b981364dde4c8cf8ce9d164c40669a8611"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 9.8,
+      "dep_name": "black",
+      "dep_version": "22.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.0046,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:22.3.0:PYSEC-2026-2120",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@22.3.0",
+      "raptor_risk_estimate": 12.108254005339486,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==22.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40164738,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.108254005339486,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-50782",
+          "PYSEC-2026-1283"
         ],
         "fixed_versions": [
           "42.0.0"
         ],
         "id": "GHSA-3ww4-gg4f-jr7f",
-        "modified": "2026-02-28T05:12:47.573911+00:00",
+        "modified": "2026-07-07T17:56:36.206407+00:00",
         "published": "2024-02-05T21:30:31+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2023-50782",
@@ -427,13 +496,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-0727"
+          "CVE-2024-0727",
+          "PYSEC-2026-1285"
         ],
         "fixed_versions": [
           "42.0.2"
         ],
         "id": "GHSA-9v9h-cgj8-h64p",
-        "modified": "2026-05-13T15:34:03.484103+00:00",
+        "modified": "2026-07-07T17:57:32.483216+00:00",
         "published": "2024-01-26T09:30:23+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2024-0727",
@@ -453,7 +523,7 @@
       "dep_name": "cryptography",
       "dep_version": "40.0.0",
       "ecosystem": "PyPI",
-      "epss": 0.03174,
+      "epss": 0.03187,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -464,7 +534,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-9v9h-cgj8-h64p",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@40.0.0",
-      "raptor_risk_estimate": 10.3121142328875,
+      "raptor_risk_estimate": 10.31376068394375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -482,10 +552,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.415496922,
+        "epss_multiplier": 0.41556326099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.3121142328875,
+        "final": 10.31376068394375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -526,7 +596,7 @@
       "dep_name": "cryptography",
       "dep_version": "40.0.0",
       "ecosystem": "PyPI",
-      "epss": 0.00613,
+      "epss": 0.00726,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -537,7 +607,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-cf7p-gm2m-833m",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@40.0.0",
-      "raptor_risk_estimate": 27.79362849875278,
+      "raptor_risk_estimate": 27.833453969664728,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -555,10 +625,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40242813899999996,
+        "epss_multiplier": 0.403004778,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.79362849875278,
+        "final": 27.833453969664728,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -849,13 +919,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-26007"
+          "CVE-2026-26007",
+          "PYSEC-2026-2141"
         ],
         "fixed_versions": [
           "46.0.5"
         ],
         "id": "GHSA-r6ph-v2qm-q3c2",
-        "modified": "2026-05-11T00:41:25.223427+00:00",
+        "modified": "2026-07-13T07:26:47.289183+00:00",
         "published": "2026-02-10T21:27:06+00:00",
         "references": [
           "https://github.com/pyca/cryptography/security/advisories/GHSA-r6ph-v2qm-q3c2",
