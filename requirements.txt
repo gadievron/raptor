@@ -20,7 +20,7 @@ typer==0.25.1
 # raptor's install set, which is exactly what we want
 # (CVE-2025-69872 was the trigger; raptor doesn't use the cache
 # layer).
-instructor==1.15.1
+instructor==1.15.4
 
 # Optional: LLM provider SDKs (uncomment to install)
 # openai==2.30.0            # OpenAI, Gemini (via shim), Mistral, Ollama
