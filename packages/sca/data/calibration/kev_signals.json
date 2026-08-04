@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-28T08:13:48Z",
+    "fetched_at": "2026-08-04T08:19:13Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -10952,14 +10952,14 @@
       "date_added": "2026-07-14",
       "kev": true,
       "product": "SMA1000 Appliances",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "SonicWall"
     },
     "CVE-2026-15410": {
       "date_added": "2026-07-14",
       "kev": true,
       "product": "SMA1000 Appliances",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "SonicWall"
     },
     "CVE-2026-1603": {
@@ -10989,6 +10989,13 @@
       "product": "Remote Support (RS) and Privileged Remote Access (PRA)",
       "ransomware_use": true,
       "vendor": "BeyondTrust"
+    },
+    "CVE-2026-18577": {
+      "date_added": "2026-08-03",
+      "kev": true,
+      "product": "N-central",
+      "ransomware_use": false,
+      "vendor": "N-able"
     },
     "CVE-2026-20045": {
       "date_added": "2026-01-21",
@@ -11064,6 +11071,13 @@
       "date_added": "2026-06-15",
       "kev": true,
       "product": "Catalyst SD-WAN Manager",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
+    "CVE-2026-20316": {
+      "date_added": "2026-07-29",
+      "kev": true,
+      "product": "Secure Firewall Management Center (FMC)",
       "ransomware_use": false,
       "vendor": "Cisco"
     },

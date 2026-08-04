@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-07-28T08:13:49Z",
+    "fetched_at": "2026-08-04T08:19:15Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7112,
+    "modules_scanned": 7132,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -19109,6 +19109,12 @@
         "exploit_multi/http/xerte_unauthenticated_mediaupload"
       ]
     },
+    "CVE-2026-3891": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/wp_plugin_pix_unauth_rce_cve_2026_3891"
+      ]
+    },
     "CVE-2026-41264": {
       "has_msf_module": true,
       "module_paths": [
@@ -19163,10 +19169,22 @@
         "exploit_linux/http/dalfox_server_rce_cve_2026_45087"
       ]
     },
+    "CVE-2026-46300": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/local/cve_2026_46300_fragnesia"
+      ]
+    },
     "CVE-2026-46333": {
       "has_msf_module": true,
       "module_paths": [
         "post_linux/gather/cve_2026_46333_chage"
+      ]
+    },
+    "CVE-2026-48907": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/joomla_com_jce_unauth_file_upload_rce"
       ]
     },
     "CVE-2026-52806": {
