@@ -1,0 +1,23 @@
+{
+  "_comment": "Baseline kill-rate snapshots for mutation_check.py. Updated when refactor lands.",
+  "_generated": "2026-05-04",
+  "_purpose": "Phase 3/4/5 refactor must not regress mutation kill-rate for touched functions.",
+  "functions": {
+    "has_functional_smoke": {
+      "module": "cve_env.tools.verify",
+      "post_phase_3": "cve_env.tools._smoke",
+      "kill_rate_baseline": null,
+      "_note": "fill in after first mutation_check.py run during Phase 1"
+    },
+    "_compute_verify_quality_warning": {
+      "module": "cve_env.tools.verify",
+      "post_phase_3": "cve_env.tools._smoke",
+      "kill_rate_baseline": null
+    },
+    "reset_rate_limit_budget": {
+      "module": "cve_env.tools.image_resolve",
+      "post_phase_4": "cve_env.tools._image_resolve_state",
+      "kill_rate_baseline": null
+    }
+  }
+}
