@@ -167,8 +167,15 @@ def render_eligibility_summary(
            provable:             2
            outcome_not_provable: 4
            no_target:            1
+           → next: python3 raptor.py zkpox bundle <store> <hash> --out <dir>
 
-    Mirrors the cadence of
+    The "→ next" hint only renders when there is at least one
+    eligible witness — no point pointing the operator at ``bundle``
+    when nothing here qualifies. It's the discovery link from the
+    FREE Tier 0 surfacing to the ON-REQUEST ``/zkpox bundle`` step:
+    an operator who sees "2/7 eligible" but doesn't know the
+    convention shouldn't have to grep the docs to find the next
+    command. Mirrors the cadence of
     ``core.reporting.witnesses.render_witness_summary``.
     """
     s = summarize_eligibility(witnesses)
@@ -180,4 +187,9 @@ def render_eligibility_summary(
     for key in ("provable", "outcome_not_provable", "no_target"):
         if key in s["by_reason"]:
             lines.append(f"{indent}{key}: {s['by_reason'][key]}")
+    if s["eligible"] > 0:
+        lines.append(
+            f"{indent}→ next: python3 raptor.py zkpox bundle "
+            f"<store> <hash> --out <dir>"
+        )
     return "\n".join(lines)

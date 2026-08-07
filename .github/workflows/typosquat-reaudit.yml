@@ -41,7 +41,7 @@ jobs:
 
       - name: Install deps
         run: |
-          python -m pip install --upgrade pip==26.1.1
+          python -m pip install --upgrade pip==26.1.2
           # The re-audit hits registries + OSV through the SCA egress client,
           # so it needs the runtime deps (not the dev set).
           pip install -r requirements.txt

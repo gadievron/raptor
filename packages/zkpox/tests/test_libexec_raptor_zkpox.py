@@ -58,6 +58,46 @@ def test_trust_marker_rejects_clean_env():
 
 
 # ----------------------------------------------------------------------
+# eligible (Tier 0 — free pre-flight)
+# ----------------------------------------------------------------------
+
+
+def test_eligible_no_witnesses(tmp_path):
+    """Empty run dir → friendly ``(no witnesses discovered)`` line
+    and rc=0 (eligibility is a status query, not a gate)."""
+    r = _run(["eligible", "--run-dir", str(tmp_path)])
+    assert r.returncode == 0, r.stderr
+    assert "no witnesses discovered" in r.stdout
+
+
+def test_eligible_renders_block_with_next_hint(tmp_path):
+    """Run dir with an eligible witness → the surfacing block, with
+    the ``→ next: ... zkpox bundle ...`` hint at the bottom."""
+    from core.witness.store import WitnessStore
+    from core.witness.types import (
+        Witness, WitnessOutcome, WitnessSource, compute_bytes_hash,
+    )
+
+    # The dispatcher looks under <run-dir>/witnesses/ (one of the
+    # default _RUN_LOCAL_SUBPATHS in core.witness.discovery).
+    store = WitnessStore(tmp_path / "witnesses")
+    payload = b"crash-input"
+    store.put(Witness(
+        bytes_hash=compute_bytes_hash(payload), bytes_len=len(payload),
+        source=WitnessSource.FUZZ,
+        observed_outcome=WitnessOutcome.EXIT_SIGNAL,
+        outcome_detail={"finding_id": "F0"},
+        target_binary_hash="a" * 64,
+    ), payload)
+
+    r = _run(["eligible", "--run-dir", str(tmp_path)])
+    assert r.returncode == 0, r.stderr
+    assert "ZKPoX-eligible witnesses: 1 / 1" in r.stdout
+    assert "→ next:" in r.stdout
+    assert "raptor.py zkpox bundle" in r.stdout
+
+
+# ----------------------------------------------------------------------
 # reproduce error paths
 # ----------------------------------------------------------------------
 

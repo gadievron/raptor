@@ -147,7 +147,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
 # JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
 # ============================================================================
 
-RUN npm install -g yarn@1.22.22 pnpm@11.8.0
+RUN npm install -g yarn@1.22.22 pnpm@11.12.0
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

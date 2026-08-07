@@ -207,6 +207,16 @@ class TestOnRealRepo:
         )
         assert result["ci_lint"]["run"]
 
+    def test_zkpox_change_triggers_zkpox(self, repo):
+        for path in ("core/zkpox/guest/src/main.rs",
+                     "packages/zkpox/prove.py"):
+            result = compute_tier_dispatch([path], repo)
+            assert result["zkpox"]["run"], f"{path} did not trigger zkpox tier"
+
+    def test_zkpox_not_triggered_by_unrelated_change(self, repo):
+        result = compute_tier_dispatch(["README.md"], repo)
+        assert not result["zkpox"]["run"]
+
     def test_prompt_audit_trigger(self, repo):
         result = compute_tier_dispatch(
             ["packages/llm_analysis/agent.py"], repo
