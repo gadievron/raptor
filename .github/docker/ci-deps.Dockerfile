@@ -11,7 +11,7 @@
 # 4.15.4.0's manylinux_2_34 wheel (see the cap rationale in
 # requirements-dev.txt). PYTHON_VERSION here must track tests.yml's
 # env.PYTHON_VERSION (3.14).
-FROM python:3.14-slim-bookworm
+FROM python:3.14.7-slim-bookworm
 
 # OCI labels surface on the GHCR package page. `description` is the only
 # per-package text GHCR renders (it has no per-image README upload — the
