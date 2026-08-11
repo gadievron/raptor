@@ -45,7 +45,7 @@ class CompositionalAnalyzer:
         self.forward: dict[FuncKey, set[FuncKey]] = defaultdict(set)
         self.reverse: dict[FuncKey, set[FuncKey]] = defaultdict(set)
         self.all_funcs: set[FuncKey] = set()
-        self._call_lines: dict[tuple[FuncKey, str], int] = {}
+        self._call_lines: dict[tuple[FuncKey, str], list[int]] = defaultdict(list)
         self._name_to_keys: dict[str, set[FuncKey]] = defaultdict(set)
 
         func_defined_in: dict[str, set[str]] = defaultdict(set)
@@ -68,7 +68,7 @@ class CompositionalAnalyzer:
                     self.reverse[callee_key].add(caller_key)
                     self.all_funcs.add(callee_key)
                     self._name_to_keys[callee_name].add(callee_key)
-                    self._call_lines[(caller_key, callee_name)] = call.line
+                    self._call_lines[(caller_key, callee_name)].append(call.line)
 
                     for other_file in func_defined_in.get(callee_name, ()):
                         if other_file != filepath:
@@ -84,7 +84,7 @@ class CompositionalAnalyzer:
                     self.reverse[callee_key].add(caller_key)
                     self.all_funcs.add(callee_key)
                     self._name_to_keys[call.chain[1]].add(callee_key)
-                    self._call_lines[(caller_key, call.chain[1])] = call.line
+                    self._call_lines[(caller_key, call.chain[1])].append(call.line)
 
         _ROOT_CLASSES = frozenset({"object", "Object", "BaseException", "Exception"})
         self._class_methods: dict[str, set[str]] = defaultdict(set)
@@ -153,6 +153,8 @@ class CompositionalAnalyzer:
         """
         from core.audit.safety_contract import assert_boost_only
         assert_boost_only("bypass_loop")
+        if not assumption.enforced_by:
+            return []
         target_callers = self.transitive_callers(assumption.target)
         enforcer_callers: set[FuncKey] = set()
         for enforcer in assumption.enforced_by:
@@ -201,10 +203,11 @@ class CompositionalAnalyzer:
             if assumption.underminer not in callees:
                 continue
 
-            u_line = self._call_lines.get(
-                ((file, func), assumption.underminer), -1,
+            u_lines = self._call_lines.get(
+                ((file, func), assumption.underminer), [],
             )
-            if u_line <= 0:
+            u_lines = [ln for ln in u_lines if ln > 0]
+            if not u_lines:
                 continue
 
             all_undermined = True
@@ -212,14 +215,17 @@ class CompositionalAnalyzer:
             for enforcer in assumption.enforced_by:
                 if enforcer not in callees:
                     continue
-                e_line = self._call_lines.get(
-                    ((file, func), enforcer), -1,
+                e_lines = self._call_lines.get(
+                    ((file, func), enforcer), [],
                 )
-                if e_line > 0 and u_line >= e_line:
+                e_lines = [ln for ln in e_lines if ln > 0]
+                if e_lines and min(u_lines) >= min(e_lines):
                     all_undermined = False
                     break
-                if e_line > 0 and (earliest_enforcer_line < 0 or e_line < earliest_enforcer_line):
-                    earliest_enforcer_line = e_line
+                if e_lines:
+                    el = min(e_lines)
+                    if earliest_enforcer_line < 0 or el < earliest_enforcer_line:
+                        earliest_enforcer_line = el
 
             if all_undermined and earliest_enforcer_line > 0:
                 findings.append(BypassFinding(
@@ -228,7 +234,7 @@ class CompositionalAnalyzer:
                     caller_function=func,
                     ordering_violation=True,
                     line_info={
-                        "underminer_line": u_line,
+                        "underminer_line": min(u_lines),
                         "enforcer_line": earliest_enforcer_line,
                     },
                 ))

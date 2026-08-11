@@ -39,9 +39,9 @@ Static analysis scan using Semgrep (and optionally CodeQL and Coccinelle).
 | `--extra-config <path>` | Additional Semgrep config file (repeatable) |
 | `--show-suppressed` | Include suppressed findings in output |
 | `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) isolation |
-| `--audit` | Enable the systematic review layer |
-| `--audit-verbose` | Verbose audit output |
-| `--audit-budget <n>` | Maximum audit budget (finding count) |
+| `--audit` | Enable sandbox audit mode (log would-be-blocked syscalls) |
+| `--audit-verbose` | Verbose audit output (strace-style) |
+| `--audit-budget <n>` | Maximum audit event budget |
 
 See [architecture](architecture.md) for scanner configuration and rule-set
 details.
@@ -104,7 +104,7 @@ patches.
 |------|-------------|
 | `--no-exploits` | Skip exploit generation |
 | `--no-patches` | Skip patch generation |
-| `--no-annotations` | Skip per-function [annotation](#annotate) emission |
+| `--no-journal` | Skip journal updates |
 | `--no-visualizations` | Skip diagram generation |
 
 **Binary oracle** (see [binary analysis](binary-analysis.md))
@@ -172,13 +172,13 @@ patches.
 | `--sandbox <mode>` | Sandbox mode: `debug`, `frida`, `full`, `network-only`, `none`, `strict`, `target_run` |
 | `--no-sandbox` | Disable sandbox entirely |
 
-**Audit layer**
+**Audit layer** (sandbox syscall audit)
 
 | Flag | Description |
 |------|-------------|
-| `--audit` | Enable systematic code review layer |
-| `--audit-verbose` | Verbose audit output |
-| `--audit-budget <n>` | Maximum audit budget |
+| `--audit` | Enable sandbox audit mode (log would-be-blocked syscalls) |
+| `--audit-verbose` | Verbose audit output (strace-style: every traced syscall) |
+| `--audit-budget <n>` | Maximum audit event budget |
 
 ---
 
@@ -350,7 +350,7 @@ Analyse existing SARIF findings with LLM without re-scanning.
 | `--prefer <glob>` | Prioritise findings matching glob (repeatable) |
 | `--exclude-dir <glob>` | Exclude directories matching glob (repeatable) |
 | `--checklist` | Generate a review checklist |
-| `--no-annotations` | Skip annotation emission |
+| `--no-journal` | Skip journal updates |
 | `--no-checker-synthesis` | Skip checker synthesis |
 | `--no-verify-exploits` | Skip exploit verification |
 | `--no-judge-intent` | Skip intent judgement |
@@ -364,6 +364,40 @@ Analyse existing SARIF findings with LLM without re-scanning.
 | `--judge <model>` | Judge model |
 | `--aggregate <model>` | Aggregation model |
 | `--deep-validate` / `--no-deep-validate` | Enable or disable deep validation |
+
+---
+
+## Systematic Review
+
+### /audit
+
+Hypothesis-driven, tool-grounded security review of coverage gaps.  The LLM
+forms hypotheses about assumption violations; deterministic tools (Semgrep,
+Coccinelle, CodeQL, SMT, Joern) validate.  The LLM never directly classifies
+code as vulnerable -- tool output is the verdict.
+
+```
+/audit <target_path> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--strategy <name>` | Filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing |
+| `--budget <N>` | Maximum functions to review (default: all gaps) |
+| `--scope <dir>` | Restrict to a subdirectory (successive scoped runs accumulate) |
+| `--out <dir>` | Output directory |
+| `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep |
+| `--max-cost <USD>` | Stop after spending this many dollars on LLM calls |
+| `--max-time <seconds>` | Wall-clock time limit |
+| `--review-passes <N>` | Independent review passes per function for self-consistency |
+| `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
+| `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated) |
+| `--model <name>` | Model ID (repeatable for multi-model consensus) |
+| `--adversarial` | Adversarial reviewer that challenges positive verdicts |
+| `--no-validate` | Skip the /validate post-pass |
+
+See [audit](audit.md) for the full pipeline, gates, strategies, and tool
+menu.
 
 ---
 
@@ -800,7 +834,7 @@ Markdown files mirroring the source tree, with `## function_name` sections.
 
 | Flag | Description |
 |------|-------------|
-| `--status {clean,suspicious,finding,error}` | Annotation status |
+| `--status {clean,suspicious,finding,dormant,error}` | Annotation status |
 | `--cwe <CWE-XX>` | Associated CWE identifier |
 | `-m` / `--body <text>` | Annotation body text |
 | `--body-file <path>` | Read annotation body from file |
@@ -829,8 +863,9 @@ Markdown files mirroring the source tree, with `## function_name` sections.
 | `--target <repo_root>` | Repository root for re-hashing |
 
 Status values: `clean` (reviewed, no concern), `suspicious` (real bug, not
-exploitable), `finding` (exploitable), `entry_point`, `sink`,
-`trust_boundary`, `flow_step`, `unchecked_flow`, `error`.
+exploitable), `finding` (exploitable), `dormant` (unreachable / dead code),
+`entry_point`, `sink`, `trust_boundary`, `flow_step`, `unchecked_flow`,
+`error`.
 
 Annotations are emitted automatically by `/agentic` and `/understand`.
 
@@ -978,6 +1013,100 @@ knowledge layer.
 
 Requires the SAGE Docker sidecar.  Run `libexec/raptor-sage-setup` to
 install it.
+
+---
+
+### /review
+
+Unified operator CLI for reviewing audit state across all four layers:
+mechanical coverage, review journal, context-map structural roles, and
+operator annotations.
+
+```
+/review <file> [function]           # unified per-function view
+/review findings                    # all findings across runs
+/review gaps                        # what needs review, and why
+/review coverage [file]             # mechanical tool coverage
+/review note <file> <fn> -m "..."   # add operator note
+/review edit <file> <fn>            # edit note in $EDITOR
+/review stale                       # source-drifted operator notes
+/review notes                       # list all operator notes
+/review history <file> <fn>         # all reviews over time
+/review stats                       # entry counts, costs, coverage %
+/review compact                     # compact project journal index
+```
+
+| Subcommand | What it does |
+|------------|--------------|
+| `<file> [function]` | Unified per-function view (verdict, role, notes, tools) |
+| `findings` | All findings across runs |
+| `gaps` | What needs review, and why |
+| `coverage [file]` | Mechanical tool coverage |
+| `note <file> <fn> -m "..."` | Add operator note |
+| `edit <file> <fn>` | Edit operator note in `$EDITOR` |
+| `notes` | List all operator notes |
+| `history <file> <fn>` | All reviews over time for a function |
+| `stale` | Source-drifted operator notes |
+| `stats` | Entry counts, costs, coverage % |
+| `compact` | Compact project journal index |
+
+Options: `--out DIR` (explicit output directory), `--raw` (JSON output).
+
+---
+
+### /ask
+
+Send a free-form prompt to any configured LLM model and print the response.  Developer tool for cross-model diagnosis, debugging model reasoning, and comparing verdicts across providers.
+
+```
+/ask --model gemini-2.5-pro "Why did you classify this function as suspicious?"
+/ask --model claude-opus-4-7 --file context.txt "Summarise this"
+/ask --model gemini-2.5-pro --system "You are a code auditor" < prompt.txt
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model NAME` | *(required)* | Model to query (e.g. `gemini-2.5-pro`, `claude-opus-4-7`) |
+| `--system TEXT` | *(none)* | System prompt |
+| `--file PATH` | *(none)* | Prepend file contents as context (repeatable) |
+| `--max-tokens N` | `4096` | Maximum output tokens |
+| `--temperature F` | model default | Sampling temperature |
+| `--json-schema PATH` | *(none)* | Path to a JSON schema file for structured output |
+| `--debug` | off | Show model metadata, cost, provider logging, and scorecard summary |
+
+By default only the model's response text is printed — no logging, no scorecard line, no metadata.  Pass `--debug` to see the full diagnostic output.
+
+Natural-language routing: when the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, Claude routes through this tool automatically.
+
+**Implementation:** `libexec/raptor-llm-ask`
+
+---
+
+### /ask
+
+Send a prompt to any configured LLM model.  Developer tool for cross-model
+diagnosis, debugging model reasoning, or comparing verdicts.
+
+```
+/ask --model <name> "prompt text"
+/ask --model <name> --file context.c "Why is this vulnerable?"
+/ask --model <name> --system-file system.txt --file code.c "Review this"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--model <name>` | Model to query (required) |
+| `--file <path>` | Prepend file contents as context (repeatable) |
+| `--system <text>` | System prompt (inline) |
+| `--system-file <path>` | Load system prompt from a file |
+| `--json-schema <path>` | Path to a JSON schema file for structured output |
+| `--max-tokens <n>` | Maximum output tokens (default: 4096) |
+| `--temperature <f>` | Sampling temperature |
+| `--raw` | Print response text only (compact JSON for structured output) |
+| `--debug` | Show model metadata, cost, and provider logging |
+
+When no positional prompt is given and stdin is a pipe, stdin is the prompt.
+Multiple `--file` flags concatenate in order, followed by the prompt text.
 
 ---
 

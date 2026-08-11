@@ -79,9 +79,15 @@ class DispatchClient:
         cost = getattr(response, "cost", 0.0) or 0.0
         if cost and self._cost_tracker is not None:
             try:
-                self._cost_tracker.add_cost(cost)
+                model_name = (
+                    getattr(self._model, "model", None)
+                    or str(self._model)
+                )
+                self._cost_tracker.add_cost(model_name, cost)
             except Exception as e:
-                logger.debug("cost_tracker.add_cost failed: %s", e)
+                logger.debug(
+                    "cost_tracker.add_cost failed: %s", e,
+                )
 
         result = getattr(response, "result", None)
         if not isinstance(result, dict):

@@ -335,3 +335,30 @@ class TestRoundTrip:
         assert reparsed[0]["rule_id"] == "CWE-89"
         assert reparsed[0]["file"] == "src/db.py"
         assert reparsed[0]["startLine"] == 55
+
+
+class TestLineFallback:
+    """Validate finding shapes use bare ``line`` instead of ``start_line``."""
+
+    def test_bare_line_field_used(self):
+        finding = {
+            "file": "src/auth.c",
+            "line": 42,
+            "rule_id": "CWE-287",
+            "message": "auth bypass",
+        }
+        sarif = build_enriched_sarif([finding])
+        loc = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert loc["region"]["startLine"] == 42
+
+    def test_start_line_takes_precedence(self):
+        finding = {
+            "file": "src/auth.c",
+            "start_line": 10,
+            "line": 42,
+            "rule_id": "CWE-287",
+            "message": "auth bypass",
+        }
+        sarif = build_enriched_sarif([finding])
+        loc = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert loc["region"]["startLine"] == 10

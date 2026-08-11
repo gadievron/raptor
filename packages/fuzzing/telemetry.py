@@ -347,7 +347,7 @@ class FuzzingTelemetry:
                 timestamp=time.time(),
                 payload={"path": str(crash_path), "signal": signal},
             ))
-            logger.warning(f"CRASH FOUND: {crash_path} ({signal})")
+            logger.warning("CRASH FOUND: %s (%s)", crash_path, signal)
 
     def record_timeout(self, input_path: str = "") -> None:
         with self._lock:
@@ -374,7 +374,7 @@ class FuzzingTelemetry:
                 timestamp=time.time(),
                 payload={"message": message[:500]},
             ))
-            logger.error(f"Fuzzer error: {message}")
+            logger.error("Fuzzer error: %s", message)
 
     def _emit(self, event: FuzzEvent, *, force_disk: bool = True) -> None:
         """Write to JSONL and call the optional callback. Caller holds the lock."""
@@ -387,12 +387,12 @@ class FuzzingTelemetry:
                         json.dumps(event.to_dict(), default=str) + "\n"
                     )
                 except Exception as e:
-                    logger.debug(f"Telemetry write failed: {e}")
+                    logger.debug("Telemetry write failed: %s", e)
         if self.on_event:
             try:
                 self.on_event(event)
             except Exception:
-                pass
+                logger.debug("telemetry on_event callback failed", exc_info=True)
 
     def snapshot(self) -> Dict[str, Any]:
         """Return the current stats snapshot (for the UI)."""

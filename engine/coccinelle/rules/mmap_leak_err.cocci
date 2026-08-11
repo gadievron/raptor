@@ -7,6 +7,7 @@
 // address space.
 //
 // CWE-401: Missing Release of Memory after Effective Lifetime
+// @role: verification
 
 @mmap_no_munmap_assign@
 expression ADDR, LEN, PROT, FLAGS, FD, OFF;

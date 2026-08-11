@@ -9,11 +9,11 @@ Usage:
       --lines <start>-<end> --cwe <id> --reasoning <text> \
       --repo <repo_root> [--out <dir>] [--no-refine] [--json]
 """
-import os
 import sys
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -92,11 +92,17 @@ def main() -> int:
     snippet = args.snippet
     if not snippet:
         src_file = repo_root / args.file
-        if src_file.is_file():
-            lines = src_file.read_text().splitlines()
-            snippet = "\n".join(
-                lines[max(0, line_start - 1):line_end]
-            )
+        try:
+            if src_file.is_file():
+                text = src_file.read_text(
+                    encoding="utf-8", errors="replace")
+                lines = text.splitlines()
+                snippet = "\n".join(
+                    lines[max(0, line_start - 1):line_end]
+                )
+        except OSError as exc:
+            print(f"warning: cannot read {src_file}: {exc}",
+                  file=sys.stderr)
 
     from packages.checker_synthesis import SeedBug
     seed = SeedBug(

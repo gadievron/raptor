@@ -130,22 +130,50 @@ def _osv_references(cve_id: str) -> MethodResult:
     payload = _fetch_osv_raw(cve_id)
     if payload is None:
         return MethodResult("OSV references", False, detail="OSV 404 / network failure")
-    for ref in payload.get("references") or []:
-        pair = _extract_pair_from_url((ref.get("url") or "").strip())
-        if pair:
-            slug, sha = pair
-            return MethodResult("OSV references", True, slug=slug, sha=sha,
-                                detail=ref.get("url", ""))
-    for aff in payload.get("affected") or []:
-        for rng in aff.get("ranges") or []:
-            if (rng.get("type") or "").upper() != "GIT":
+    refs = payload.get("references") or []
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, dict):
                 continue
-            slug = extract_github_slug(rng.get("repo") or "") or ""
-            for ev in rng.get("events") or []:
-                sha = (ev.get("fixed") or "").lower()
-                if slug and sha and sha != "0":
-                    return MethodResult("OSV references", True, slug=slug, sha=sha,
-                                        detail=f"affected.ranges (repo={slug})")
+            pair = _extract_pair_from_url(
+                (ref.get("url") or "").strip(),
+            )
+            if pair:
+                slug, sha = pair
+                return MethodResult(
+                    "OSV references", True, slug=slug, sha=sha,
+                    detail=ref.get("url", ""),
+                )
+    affected = payload.get("affected") or []
+    if isinstance(affected, list):
+        for aff in affected:
+            if not isinstance(aff, dict):
+                continue
+            ranges = aff.get("ranges") or []
+            if not isinstance(ranges, list):
+                continue
+            for rng in ranges:
+                if not isinstance(rng, dict):
+                    continue
+                if (rng.get("type") or "").upper() != "GIT":
+                    continue
+                slug = extract_github_slug(
+                    rng.get("repo") or "",
+                ) or ""
+                events = rng.get("events") or []
+                if not isinstance(events, list):
+                    continue
+                for ev in events:
+                    if not isinstance(ev, dict):
+                        continue
+                    sha = (ev.get("fixed") or "").lower()
+                    if slug and sha and sha != "0":
+                        return MethodResult(
+                            "OSV references", True,
+                            slug=slug, sha=sha,
+                            detail=f"affected.ranges "
+                            f"(repo={slug})",
+                        )
     return MethodResult("OSV references", False, detail="no commit URLs in references / ranges")
 
 

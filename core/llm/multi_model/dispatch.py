@@ -350,6 +350,7 @@ def _dispatch_parallel(
     task: TaskFn,
     models: Sequence[ModelHandle],
     max_parallel: int,
+    timeout: float = 600.0,
 ) -> tuple[Dict[str, List[Dict[str, Any]]], List[str]]:
     """Run task in parallel across models. Returns (per_model_raw, failed).
 
@@ -363,40 +364,62 @@ def _dispatch_parallel(
     workers = max(1, min(max_parallel, len(models)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(task, m): m for m in models}
-        for future in as_completed(futures):
-            model = futures[future]
-            name = model.model_name
-            try:
-                results = future.result()
-            except Exception as exc:
-                logger.warning(f"Model {name!r} task raised: {exc}", exc_info=True)
-                per_model_raw[name] = []
-                failed.append(name)
-                continue
+        try:
+            completed = as_completed(futures, timeout=timeout)
+            for future in completed:
+                model = futures[future]
+                name = model.model_name
+                try:
+                    results = future.result(timeout=timeout)
+                except Exception as exc:
+                    logger.warning(
+                        f"Model {name!r} task raised: {exc}",
+                        exc_info=True,
+                    )
+                    per_model_raw[name] = []
+                    failed.append(name)
+                    continue
 
-            if not isinstance(results, list):
-                logger.warning(
-                    f"Model {name!r} task returned {type(results).__name__}, "
-                    f"expected list — treating as failure"
-                )
-                per_model_raw[name] = []
-                failed.append(name)
-                continue
+                if not isinstance(results, list):
+                    logger.warning(
+                        f"Model {name!r} task returned "
+                        f"{type(results).__name__}, "
+                        f"expected list — treating as failure"
+                    )
+                    per_model_raw[name] = []
+                    failed.append(name)
+                    continue
 
-            non_dict = [type(r).__name__ for r in results if not isinstance(r, dict)]
-            if non_dict:
-                logger.warning(
-                    f"Model {name!r} task returned non-dict items "
-                    f"({non_dict[:3]}{'...' if len(non_dict) > 3 else ''}) — "
-                    f"treating as failure. Item contract is List[Dict[str, Any]]."
-                )
-                per_model_raw[name] = []
-                failed.append(name)
-                continue
+                non_dict = [
+                    type(r).__name__
+                    for r in results
+                    if not isinstance(r, dict)
+                ]
+                if non_dict:
+                    logger.warning(
+                        f"Model {name!r} task returned non-dict "
+                        f"items ({non_dict[:3]}"
+                        f"{'...' if len(non_dict) > 3 else ''}"
+                        f") — treating as failure. Item contract"
+                        f" is List[Dict[str, Any]]."
+                    )
+                    per_model_raw[name] = []
+                    failed.append(name)
+                    continue
 
-            per_model_raw[name] = results
-            if results and all(_is_error(r) for r in results):
-                failed.append(name)
+                per_model_raw[name] = results
+                if results and all(_is_error(r) for r in results):
+                    failed.append(name)
+        except TimeoutError:
+            # Mark models that didn't complete as failed.
+            for fut, model in futures.items():
+                if model.model_name not in per_model_raw:
+                    logger.warning(
+                        "Model %r timed out after %.0fs",
+                        model.model_name, timeout,
+                    )
+                    per_model_raw[model.model_name] = []
+                    failed.append(model.model_name)
 
     return per_model_raw, failed
 

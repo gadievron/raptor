@@ -95,6 +95,8 @@ def _extract_versions(data: dict) -> List[str]:
     Shape:
         {"versions": ["1.0.0", "1.1.0", "1.2.0-rc.1", ...]}
     """
+    if not isinstance(data, dict):
+        return []
     raw = data.get("versions") or []
     if not isinstance(raw, list):
         return []
@@ -175,7 +177,9 @@ def _add_nuspec_methods():
         ns = ""
         if root.tag.startswith("{"):
             ns = root.tag.split("}", 1)[0] + "}"
-        meta = root.find(f"{ns}metadata") or root
+        meta = root.find(f"{ns}metadata")
+        if meta is None:
+            meta = root
         deps_root = meta.find(f"{ns}dependencies") if meta is not None else None
         groups: List[dict] = []
         if deps_root is not None:

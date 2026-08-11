@@ -145,8 +145,8 @@ class _StallMonitor:
             self._threshold = _STALL_FLOOR_S
             return
         sorted_times = sorted(self._file_times)
-        p90_idx = int(len(sorted_times) * 0.9)
-        p90 = sorted_times[min(p90_idx, len(sorted_times) - 1)]
+        p90_idx = int(len(sorted_times) * 0.9) - 1
+        p90 = sorted_times[max(0, min(p90_idx, len(sorted_times) - 1))]
         self._threshold = max(p90 * _STALL_MULTIPLIER, _STALL_FLOOR_S)
         logger.debug(
             "Joern stall threshold calibrated: p90=%.2fs, threshold=%.1fs",
@@ -191,7 +191,7 @@ def build_cpg(
     Returns a JoernCPG handle. The CPG is written to output_dir
     (default: tempdir) as a binary file.
     """
-    target = Path(target)
+    target = Path(target).resolve()
     if not target.is_dir():
         raise ValueError(f"target must be a directory: {target}")
 
@@ -226,12 +226,19 @@ def build_cpg(
             output=str(output_dir),
         )
     except TypeError:
-        proc = runner(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        try:
+            proc = runner(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("joern-parse timed out after %ds", timeout)
+            return JoernCPG(path=cpg_path, target=target)
+        except OSError as e:
+            logger.error("joern-parse failed: %s", e)
+            return JoernCPG(path=cpg_path, target=target)
     except subprocess.TimeoutExpired:
         logger.warning("joern-parse timed out after %ds", timeout)
         return JoernCPG(path=cpg_path, target=target)
@@ -273,6 +280,12 @@ def _build_cpg_with_stall_monitor(
     on_progress: Callable,
 ) -> JoernCPG:
     """Build CPG with real-time stderr monitoring and adaptive stall detection."""
+    try:
+        from core.config import RaptorConfig
+        safe_env = RaptorConfig.get_safe_env()
+    except ImportError:
+        safe_env = None
+
     start = time.monotonic()
     try:
         proc = subprocess.Popen(
@@ -280,6 +293,7 @@ def _build_cpg_with_stall_monitor(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=safe_env,
         )
     except OSError as e:
         logger.error("joern-parse failed to start: %s", e)
@@ -291,8 +305,12 @@ def _build_cpg_with_stall_monitor(
     )
     monitor_thread.start()
 
+    # Wait for the process without reading its pipes -- the monitor
+    # thread owns stderr and stdout is collected after it exits.
+    # Using proc.communicate() here would race with the monitor
+    # thread on the stderr pipe (two unsynchronised consumers).
     try:
-        stdout, _ = proc.communicate(timeout=timeout)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
@@ -300,6 +318,8 @@ def _build_cpg_with_stall_monitor(
         return JoernCPG(path=cpg_path, target=target)
 
     monitor_thread.join(timeout=5)
+
+    stdout = proc.stdout.read() if proc.stdout else ""
 
     elapsed = int((time.monotonic() - start) * 1000)
 
@@ -358,7 +378,11 @@ def run_query(
     joern = _joern_path() or "joern"
 
     query_path = Path(query)
-    if len(query) < 256 and query_path.exists() and query_path.suffix == ".sc":
+    try:
+        is_script_file = query_path.exists() and query_path.suffix == ".sc"
+    except OSError:
+        is_script_file = False
+    if is_script_file:
         cmd = [joern, "--script", str(query_path), "--import", str(cpg.path)]
     else:
         cmd = [joern, "--script-content", query, "--import", str(cpg.path)]
@@ -376,12 +400,20 @@ def run_query(
             block_network=True,
         )
     except TypeError:
-        proc = runner(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        try:
+            proc = runner(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return JoernResult(
+                query=query,
+                errors=[f"query timed out after {timeout}s"],
+            )
+        except OSError as e:
+            return JoernResult(query=query, errors=[str(e)])
     except subprocess.TimeoutExpired:
         return JoernResult(
             query=query,
@@ -417,6 +449,7 @@ def run_taint_query(
     source_param: Optional[str] = None,
     timeout: int = 300,
     subprocess_runner=None,
+    max_call_depth: int = 2,
 ) -> List[TaintFlow]:
     """Run a source-to-sink taint tracking query.
 
@@ -447,7 +480,8 @@ def run_taint_query(
     safe_source = _escape_scala_string(source_method)
     safe_sink = _escape_scala_string(sink_call)
 
-    query = _build_taint_query(safe_source, safe_sink, source_param)
+    query = _build_taint_query(safe_source, safe_sink, source_param,
+                              max_call_depth=max_call_depth)
 
     err = _validate_query(query)
     if err:
@@ -670,11 +704,12 @@ def build_cpg_cached(
 def cleanup_cpg(cpg: JoernCPG) -> None:
     """Remove the CPG binary from disk."""
     try:
-        if cpg.path.exists():
-            cpg.path.unlink()
+        cpg.path.unlink(missing_ok=True)
         parent = cpg.path.parent
-        if parent.exists() and not any(parent.iterdir()):
+        try:
             parent.rmdir()
+        except OSError:
+            pass
     except OSError as e:
         logger.warning("cleanup_cpg failed: %s", e)
 
@@ -723,7 +758,7 @@ def _parse_output(stdout: str) -> tuple:
             continue
 
         if not in_flows:
-            in_flows = True
+            continue
 
         json_str = line[marker_idx + len("JOERN_FLOW:"):]
         steps_data, parse_err = _try_parse_flow_json(json_str)

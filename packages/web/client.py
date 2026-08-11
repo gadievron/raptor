@@ -10,6 +10,8 @@ Handles HTTP requests with safety features:
 - Authentication handling
 """
 
+import ipaddress
+import socket
 import time
 from typing import Dict, Optional, Any
 from urllib.parse import urlparse, urljoin
@@ -40,13 +42,15 @@ class WebClient:
     """Secure HTTP client for web application testing."""
 
     def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5,
-                 verify_ssl: bool = True, reveal_secrets: bool = False):
+                 verify_ssl: bool = True, reveal_secrets: bool = False,
+                 block_private_ips: bool = True):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
         self.last_request_time = 0.0
         self.verify_ssl = verify_ssl
         self.reveal_secrets = reveal_secrets
+        self.block_private_ips = block_private_ips
 
         # Session for cookie management
         self.session = requests.Session()
@@ -62,7 +66,7 @@ class WebClient:
             maxlen=_MAX_REQUEST_HISTORY,
         )
 
-        logger.info(f"Web client initialized for {base_url} (verify_ssl={verify_ssl})")
+        logger.info("Web client initialized for %s (verify_ssl=%s)", base_url, verify_ssl)
 
     def _origin(self, url: str) -> tuple:
         """Return normalized (scheme, host, port) tuple for URL scope checks."""
@@ -73,6 +77,50 @@ class WebClient:
     def _is_in_scope(self, url: str) -> bool:
         """Check whether URL stays within the configured base origin."""
         return self._origin(url) == self._origin(self.base_url)
+
+    def _validate_resolved_ip(self, url: str) -> None:
+        """Resolve URL hostname and reject non-global IPs (SSRF/DNS-rebinding defence).
+
+        Called before every outgoing request so that a hostname which
+        initially resolved to a public IP but later rebinds to
+        169.254.169.254, 127.0.0.1, 10.x.x.x, etc. is caught.
+        """
+        if not self.block_private_ips:
+            return
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return
+        try:
+            ipaddress.ip_address(hostname)
+            ip_obj = ipaddress.ip_address(hostname)
+            if not ip_obj.is_global:
+                raise ValueError(
+                    f"Blocked request to non-global IP {hostname} — "
+                    f"set block_private_ips=False to scan internal targets"
+                )
+            return
+        except ValueError as exc:
+            if "non-global" in str(exc):
+                raise
+        default_port = 443 if parsed.scheme == "https" else 80
+        port = parsed.port or default_port
+        try:
+            addrs = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as exc:
+            raise ValueError(f"DNS resolution failed for {hostname}: {exc}") from exc
+        for _family, _type, _proto, _canonname, sockaddr in addrs:
+            ip_str = sockaddr[0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            if not ip_obj.is_global:
+                raise ValueError(
+                    f"DNS for {hostname} resolved to non-global IP {ip_str} — "
+                    f"blocked to prevent SSRF (set block_private_ips=False "
+                    f"to scan internal targets)"
+                )
 
     def _build_url(self, path: str) -> str:
         """Build a request URL and reject paths that leave the target origin."""
@@ -115,7 +163,7 @@ class WebClient:
             'timestamp': time.time(),
         })
 
-        logger.debug(f"{method} {log_url} -> {response.status_code} ({duration:.2f}s)")
+        logger.debug("%s %s -> %s (%.2fs)", method, log_url, response.status_code, duration)
 
     def _send_scoped_request(self, method: str, url: str, **kwargs) -> requests.Response:
         """Send a request while enforcing target scope across redirects."""
@@ -125,6 +173,7 @@ class WebClient:
         request_kwargs = dict(kwargs)
 
         for _ in range(_MAX_REDIRECTS + 1):
+            self._validate_resolved_ip(current_url)
             response = self.session.request(
                 current_method,
                 current_url,
@@ -251,10 +300,10 @@ class WebClient:
             return response
 
         except requests.exceptions.Timeout:
-            logger.warning(f"Timeout on GET {self._redact_for_logging(url)}")
+            logger.warning("Timeout on GET %s", self._redact_for_logging(url))
             raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {self._redact_for_logging(e)}")
+            logger.error("Request failed: %s", self._redact_for_logging(e))
             raise
 
     def post(self, path: str, data: Optional[Dict] = None,
@@ -281,13 +330,13 @@ class WebClient:
             return response
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"POST request failed: {self._redact_for_logging(e)}")
+            logger.error("POST request failed: %s", self._redact_for_logging(e))
             raise
 
     def set_auth(self, username: str, password: str) -> None:
         """Set basic authentication."""
         self.session.auth = (username, password)
-        logger.info(f"Authentication set for user: {username}")
+        logger.info("Authentication set for user: %s", username)
 
     def set_bearer_token(self, token: str) -> None:
         """Set bearer token authentication."""

@@ -62,14 +62,14 @@ class CorpusManager:
             )
         seed_file = self.corpus_dir / name
         seed_file.write_bytes(data)
-        logger.debug(f"Added seed: {name} ({len(data)} bytes)")
+        logger.debug("Added seed: %s (%d bytes)", name, len(data))
         return seed_file
 
     def add_seeds(self, seeds: List[bytes]) -> int:
         """Add multiple seeds to corpus."""
         for idx, seed in enumerate(seeds):
             self.add_seed(seed, f"seed{idx}")
-        logger.info(f"Added {len(seeds)} seeds to corpus")
+        logger.info("Added %d seeds to corpus", len(seeds))
         return len(seeds)
 
     # Per-file read cap for create_from_directory. Real fuzzing
@@ -123,7 +123,7 @@ class CorpusManager:
                     dest.write_bytes(fh.read(self._MAX_SEED_BYTES + 1)[:self._MAX_SEED_BYTES])
                 count += 1
 
-        logger.info(f"Copied {count} files to corpus from {source_dir}")
+        logger.info("Copied %s files to corpus from %s", count, source_dir)
         return count
 
     def list_seeds(self) -> List[Path]:

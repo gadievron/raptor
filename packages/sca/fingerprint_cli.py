@@ -188,7 +188,13 @@ def _fingerprint_image_ref(ref: str, args):
             "fingerprint_cli: OCI client construction failed: %s", e,
         )
         return None
-    binary = fetch_image_binary(ref, client=client)
+    try:
+        binary = fetch_image_binary(ref, client=client)
+    except Exception as e:                               # noqa: BLE001
+        logger.warning(
+            "fingerprint_cli: image binary fetch failed: %s", e,
+        )
+        return None
     if binary is None:
         return None
     try:

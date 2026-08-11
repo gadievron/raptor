@@ -12,19 +12,21 @@ If this file is loaded, SAGE is available — use it.
 
 ## Domains
 
-- `raptor-findings-{repo_key}` — CodeQL build reliability (repo-scoped)
+- `raptor-findings-{repo_key}` — Vulnerability findings and analysis results (repo-scoped)
 - `raptor-fuzzing` — Fuzzing strategies and crash outcomes
 - `raptor-sca-{repo_key}` — SCA findings and verdicts (repo-scoped)
 - `raptor-methodology` — Analysis methodology and expert reasoning
 - `raptor-fp-{repo_key}` — Finding verdicts for cross-run FP suppression (repo-scoped)
-- `raptor-rule-library` — Proven checker rules (engine + CWE keyed, cross-target)
-- `raptor-concepts` — Study concept recall (N1, planned)
+- `raptor-rule-library` — Proven checker rules (engine + CWE keyed, cross-target, shared by `/agentic` and `/audit`)
+- `raptor-concepts-{repo_key}` — Study/teach concept recall (repo-scoped)
+- `raptor-audit-{repo_key}` — Audit hypothesis verdicts (repo-scoped)
 
 ## Domain rationale
 
 - Use repo-scoped domains for target-specific outcomes that should not leak across projects.
-- Keep `raptor-methodology` global because build/debug/analysis heuristics often generalise across repos and languages.
+- Keep `raptor-methodology` global because build/debug/analysis heuristics often generalise across repos and languages. Audit tool-confirmed observations go here for cross-target transfer.
 - Store fuzzing strategy outcomes in `raptor-fuzzing` to preserve semantic recall across similar binaries.
+- `raptor-rule-library` is global (not repo-scoped) because a proven checker rule should transfer to any target with the same CWE class.
 
 ## Mechanical hooks (core/sage/hooks.py)
 
@@ -39,13 +41,19 @@ flag. No prompt injection (recalled text dropped into an LLM prompt).
 | `recall_context_for_codeql_build` / `store_codeql_build_reliability` / `infer_codeql_build_from_sage_recall_row` | Recall prior CodeQL build outcomes; mechanically infer build command from successful priors | `raptor-methodology` |
 | `recall_prior_finding_verdict` / `store_finding_verdict` | Cross-run FP suppression: skip LLM for findings with a prior false_positive/not_exploitable verdict and unchanged source | `raptor-fp-{key}` |
 | `compute_finding_source_hash` | Hash source lines around a finding line for staleness detection | (utility) |
-| `recall_proven_rules` / `store_proven_rule_metadata` | Accumulate proven checker rules; recall by engine+CWE for replay | `raptor-rule-library` |
-| `parse_rule_metadata` / `should_replay_rule` | Parse structured fields from recall rows; gate replay on TP rate, dual control, target count | (utility) |
+| `recall_proven_rules` / `store_proven_rule_metadata` | **Deprecated — no production callers.** Rule metadata is tracked by the disk `RuleLibrary` manifest. Kept for backward compat | `raptor-rule-library` |
+| `parse_rule_metadata` / `should_replay_rule` | **Deprecated — no production callers.** Parse/gate utilities for proven rule recall rows | (utility) |
+| `store_audit_hypothesis_verdict` / `recall_audit_hypothesis_verdict` | Store/recall per-function hypothesis verdicts with source hash. Only `clean`/`dormant` trigger skip on recall | `raptor-audit-{key}` |
+| `store_audit_observation` / `recall_audit_observations` | Store tool-confirmed/refuted observations for cross-target transfer | `raptor-methodology` |
+| `store_study_concepts` / `recall_concepts_for_study` | Cross-project concept skip: skip LLM when per-evidence hashes match current source | `raptor-concepts-{key}` |
+| `store_teach_concepts` / `recall_concepts_for_teach` | Teach caching: store structured concepts from teach, recall for TEACH-0 skip gate | `raptor-concepts-{key}` |
 
 ## When to use
 
 - **When scanning (SCA):** `recall_context_for_sca` fires pre-analysis; `store_sca_outcomes` fires post-analysis.
 - **When fuzzing:** `recall_context_for_fuzzing_strategy` recalls prior strategies; `infer_afl_fuzz_flags_from_sage_recall_row` derives AFL flags mechanically.
+- **When auditing:** hypothesis verdicts stored at commit time; tool-confirmed observations stored to methodology domain. Proven rules are tracked by the disk `RuleLibrary` manifest, not SAGE.
+- **When studying/teaching:** concepts stored with per-evidence hashes; recalled and verified before LLM dispatch.
 - **Before destructive actions:** call `sage_recall` with `raptor-methodology` for known pitfalls.
 
 ## Mechanical AFL priors (fuzzing)

@@ -216,11 +216,15 @@ class WitnessStore:
             )
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            return Witness.from_dict(data)
         except json.JSONDecodeError as exc:
             raise WitnessStoreError(
                 f"manifest at {manifest_path} is malformed JSON: {exc}"
             ) from exc
-        return Witness.from_dict(data)
+        except (KeyError, ValueError) as exc:
+            raise WitnessStoreError(
+                f"manifest at {manifest_path} has invalid structure: {exc}"
+            ) from exc
 
     def list_witnesses(self) -> Iterator[Witness]:
         """Iterate every Witness in the store.

@@ -82,14 +82,13 @@ raptor/
 │   ├── raptor-threat-model        # Threat model management
 │   ├── raptor-tune                # LLM tuning helpers
 │   ├── raptor-understand          # Code understanding workflow
-│   ├── raptor-understand-annotate # Understanding annotation synthesis
 │   ├── raptor-validate-schema     # Schema validation
 │   ├── raptor-validation-helper   # Validation pipeline helper
 │   ├── raptor-verified-outcomes   # Verified outcome tracking
 │   └── raptor-zkpox               # Zero-knowledge proof of exploitation
 ├── core/                  # Shared infrastructure
 │   ├── analysis/          # Reasoning about code (reachability, CFG, taint, binary oracle)
-│   ├── annotations/       # Per-function prose annotations (manual + LLM-emitted)
+│   ├── annotations/       # Per-function prose annotations (human-only)
 │   ├── archive/           # Archive extraction and handling
 │   ├── ast/               # AST enrichment helpers
 │   ├── atomic_fs/         # Atomic filesystem operations (tempfile + rename)

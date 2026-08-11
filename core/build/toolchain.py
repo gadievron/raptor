@@ -289,5 +289,5 @@ def apply_toolchain_env(env: Dict[str, str],
             )
             continue
         env[name] = value
-        logger.debug(f"build toolchain: {name}={value}")
+        logger.debug("build toolchain: %s=%s", name, value)
     return env

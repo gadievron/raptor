@@ -263,5 +263,120 @@ class TestRunSandboxedSmokeTest(unittest.TestCase):
         )
 
 
+class TestDeathPipeOrphanTeardown(unittest.TestCase):
+    """Death-pipe mechanism: intermediate child exits 137 when the
+    parent's write end closes (simulating orchestrator SIGKILL/OOM).
+
+    Tests the core select-loop mechanism without needing mount-ns;
+    the loop logic is architecture-independent.
+    """
+
+    def test_death_pipe_eof_exits_child(self):
+        """Fork a child that watches death_r while waiting on a
+        long-running grandchild. Close death_w → child must SIGKILL
+        the grandchild and exit 137."""
+        import signal as _signal
+        import time
+        import warnings
+        death_r, death_w = os.pipe()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            pid = os.fork()
+        if pid == 0:
+            os.close(death_w)
+            grand = os.fork()
+            if grand == 0:
+                os.close(death_r)
+                time.sleep(300)
+                os._exit(0)
+            import select as _sel
+            while True:
+                try:
+                    p, _st = os.waitpid(grand, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if p != 0:
+                    break
+                try:
+                    ready, _, _ = _sel.select([death_r], [], [], 0.05)
+                except (OSError, ValueError):
+                    time.sleep(0.05)
+                    continue
+                if ready:
+                    try:
+                        os.kill(grand, _signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        os.waitpid(grand, 0)
+                    except ChildProcessError:
+                        pass
+                    os._exit(137)
+            os._exit(0)
+
+        os.close(death_r)
+        import time
+        time.sleep(0.3)
+        os.close(death_w)
+        _, status = os.waitpid(pid, 0)
+        self.assertTrue(os.WIFEXITED(status))
+        self.assertEqual(os.WEXITSTATUS(status), 137)
+
+    def test_normal_exit_no_death_pipe(self):
+        """When the grandchild exits normally, the intermediate child
+        mirrors the exit code and death_r stays open (no false trigger)."""
+        import warnings
+        death_r, death_w = os.pipe()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            pid = os.fork()
+        if pid == 0:
+            os.close(death_w)
+            grand = os.fork()
+            if grand == 0:
+                os.close(death_r)
+                os._exit(42)
+            import select as _sel
+            import time
+            st = 9
+            while True:
+                try:
+                    p, st = os.waitpid(grand, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if p != 0:
+                    break
+                try:
+                    ready, _, _ = _sel.select([death_r], [], [], 0.05)
+                except (OSError, ValueError):
+                    time.sleep(0.05)
+                    continue
+                if ready:
+                    try:
+                        os.kill(grand, 9)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        os.waitpid(grand, 0)
+                    except ChildProcessError:
+                        pass
+                    os._exit(137)
+            if os.WIFEXITED(st):
+                os._exit(os.WEXITSTATUS(st))
+            os._exit(255)
+
+        os.close(death_r)
+        _, status = os.waitpid(pid, 0)
+        os.close(death_w)
+        self.assertTrue(os.WIFEXITED(status))
+        self.assertEqual(os.WEXITSTATUS(status), 42)
+
+
 if __name__ == "__main__":
     unittest.main()

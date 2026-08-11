@@ -1093,10 +1093,12 @@ class RetryTask(AnalysisTask):
         # context the primary saw.
         extra_blocks = extra_blocks + evidence_blocks_for_finding(finding)
 
+        budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile,
             extra_blocks=tuple(extra_blocks),
             allow_unreachable=self.allow_unreachable,
+            budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)

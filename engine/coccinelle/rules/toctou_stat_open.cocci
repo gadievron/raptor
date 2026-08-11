@@ -8,6 +8,7 @@
 // CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition
 // 0xdea has insecure-api-access-stat (flags access/stat as
 // dangerous functions). We go deeper: match the actual TOCTOU pair.
+// @role: verification
 
 @stat_then_open@
 expression PATH;

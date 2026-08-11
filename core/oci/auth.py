@@ -89,7 +89,7 @@ def lookup_credentials(registry: str) -> Optional[BasicCredentials]:
         return creds
     creds = _from_docker_config(registry)
     if creds is not None:
-        logger.info(
+        logger.debug(
             "core.oci.auth: using ~/.docker/config.json inline auth "
             "for %s", registry,
         )
@@ -202,7 +202,7 @@ def _entry_to_credentials(entry: dict) -> Optional[BasicCredentials]:
         if ":" not in decoded:
             return None
         user, _, password = decoded.partition(":")
-        if user and password:
+        if user:
             return BasicCredentials(user, password)
     user = entry.get("username")
     password = entry.get("password")

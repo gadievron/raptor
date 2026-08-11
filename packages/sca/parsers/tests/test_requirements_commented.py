@@ -124,6 +124,28 @@ django==4.2.7
     assert names == ["django", "pytest"]
 
 
+def test_commented_inline_comment_stripped(tmp_path: Path) -> None:
+    """``# z3-solver==4.15.4.0  # see requirements-dev.txt`` — the
+    inline comment after the version must be stripped before PEP 508
+    parse, otherwise the line is silently dropped."""
+    req_parser.set_include_commented(True)
+    p = _write(tmp_path, "# z3-solver==4.15.4.0  # see requirements-dev.txt\n")
+    deps = parse(p)
+    assert deps and deps[0].name == "z3-solver"
+    assert deps[0].version == "4.15.4.0"
+    assert deps[0].commented_out is True
+    assert deps[0].inline_comment == "see requirements-dev.txt"
+
+
+def test_commented_no_inline_comment_preserved_as_none(tmp_path: Path) -> None:
+    """When there's no inline comment, inline_comment stays None."""
+    req_parser.set_include_commented(True)
+    p = _write(tmp_path, "# requests==2.34.2\n")
+    deps = parse(p)
+    assert deps and deps[0].name == "requests"
+    assert deps[0].inline_comment is None
+
+
 def test_commented_bare_url_skipped(tmp_path: Path) -> None:
     """`# https://ollama.ai` is documentation, not a dep — skip it.
 

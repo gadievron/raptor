@@ -47,6 +47,16 @@ class KnownFP:
     justification: str
 
 
+@dataclass(frozen=True)
+class SanitizerFP:
+    """A rule + sanitiser function: any flow passing through the sanitiser is FP."""
+
+    rule_id: str
+    sanitizer_file: str
+    sanitizer_function: str
+    justification: str
+
+
 # Each entry is reviewed and signed off by the security team. The
 # justification is what appears in the GitHub Code Scanning UI.
 #
@@ -74,6 +84,23 @@ KNOWN_FP_RULES: tuple[KnownFP, ...] = (
         ),
     ),
     KnownFP(
+        rule_id="py/clear-text-logging-sensitive-data",
+        sink_file_prefixes=(
+            "libexec/raptor-audit",
+        ),
+        justification=(
+            "Output at raptor-audit:174 is explicitly guarded by "
+            "core.security.redaction.redact_secrets() which strips "
+            "vendor credential patterns, auth headers, URL-embedded "
+            "secrets, and JWTs before sys.stdout.write(). CodeQL "
+            "does not model redact_secrets as a sanitiser barrier "
+            "and its codeFlows intermittently omit steps inside the "
+            "sanitiser function, preventing flow-based matching. "
+            "Source is a heuristically-named variable "
+            "(core/threat_model/__init__.py:732). Triaged FP."
+        ),
+    ),
+    KnownFP(
         rule_id="py/clear-text-storage-of-sensitive-information",
         sink_file_prefixes=(
             "core/sandbox/summary.py",
@@ -90,6 +117,44 @@ KNOWN_FP_RULES: tuple[KnownFP, ...] = (
     ),
 )
 
+# Sanitiser-aware suppressions: any flow whose codeFlows pass through the
+# named function is false-positive because the sanitiser strips sensitive
+# material before the sink. Covers all current AND future call sites.
+SANITIZER_FP_RULES: tuple[SanitizerFP, ...] = (
+    SanitizerFP(
+        rule_id="py/clear-text-logging-sensitive-data",
+        sanitizer_file="core/security/redaction.py",
+        sanitizer_function="redact_secrets",
+        justification=(
+            "Output passes through core.security.redaction.redact_secrets() "
+            "which strips vendor credential patterns, auth headers, "
+            "URL-embedded secrets, and JWTs before the value reaches "
+            "the sink. CodeQL does not model redact_secrets as a "
+            "sanitiser barrier. Triaged FP."
+        ),
+    ),
+)
+
+
+def _validate_tables() -> None:
+    """Reject overly broad suppression entries at import time."""
+    for entry in KNOWN_FP_RULES:
+        for prefix in entry.sink_file_prefixes:
+            if "/" not in prefix:
+                raise ValueError(
+                    f"KnownFP sink_file_prefix {prefix!r} is too broad — "
+                    f"must contain at least one '/' (e.g. 'core/sandbox/context.py')"
+                )
+    for entry in SANITIZER_FP_RULES:
+        if "/" not in entry.sanitizer_file:
+            raise ValueError(
+                f"SanitizerFP sanitizer_file {entry.sanitizer_file!r} is too broad — "
+                f"must contain at least one '/' (e.g. 'core/security/redaction.py')"
+            )
+
+
+_validate_tables()
+
 
 def _result_sink_uri(result: dict) -> str | None:
     """Return the sink file URI, or None if the result has no location."""
@@ -102,19 +167,60 @@ def _result_sink_uri(result: dict) -> str | None:
     return uri if isinstance(uri, str) else None
 
 
-def _matches_known_fp(result: dict) -> KnownFP | None:
-    """Return the matching KnownFP entry, or None."""
+def _flow_passes_through(result: dict, file_substr: str, func_name: str) -> bool:
+    """True if any codeFlow or relatedLocations step references the sanitiser.
+
+    Matching is on file URI alone: CodeQL flow steps inside a function
+    body reference interior lines whose message/snippet text rarely
+    contains the function name (e.g. ``result = _redact_with_patterns(...)``
+    inside ``redact_secrets()``).  The ``SanitizerFP`` entry already
+    constrains to a specific ``(rule_id, file, function)`` tuple, so a
+    flow step through the sanitiser file is specific enough.  The
+    ``func_name`` is recorded for audit/documentation but not required
+    in the step's text.
+    """
+    for cf in result.get("codeFlows") or []:
+        for tf in cf.get("threadFlows") or []:
+            for loc_wrapper in tf.get("locations") or []:
+                loc = loc_wrapper.get("location") or {}
+                if _loc_file_matches(loc, file_substr):
+                    return True
+    for rl in result.get("relatedLocations") or []:
+        if _loc_file_matches(rl, file_substr):
+            return True
+    return False
+
+
+def _loc_file_matches(loc: dict, file_substr: str) -> bool:
+    """True if the location's URI contains the file substring."""
+    phys = loc.get("physicalLocation") or {}
+    artifact = phys.get("artifactLocation") or {}
+    uri = artifact.get("uri") or ""
+    return file_substr in uri
+
+
+def _matches_known_fp(result: dict) -> KnownFP | SanitizerFP | None:
+    """Return the matching KnownFP or SanitizerFP entry, or None."""
     rule_id = result.get("ruleId")
     if not isinstance(rule_id, str):
         return None
+
+    # Check file-prefix-based suppressions.
     uri = _result_sink_uri(result)
-    if uri is None:
-        return None
-    for entry in KNOWN_FP_RULES:
+    if uri is not None:
+        for entry in KNOWN_FP_RULES:
+            if entry.rule_id != rule_id:
+                continue
+            if any(uri.startswith(p) for p in entry.sink_file_prefixes):
+                return entry
+
+    # Check sanitiser-based suppressions (code flow must pass through).
+    for entry in SANITIZER_FP_RULES:
         if entry.rule_id != rule_id:
             continue
-        if any(uri.startswith(p) for p in entry.sink_file_prefixes):
+        if _flow_passes_through(result, entry.sanitizer_file, entry.sanitizer_function):
             return entry
+
     return None
 
 
@@ -175,7 +281,8 @@ def main(argv: list[str]) -> int:
     )
     print(
         f"Known-FP triage: matched={matched} newly_suppressed={newly} "
-        f"(rules: {len(KNOWN_FP_RULES)})"
+        f"(rules: {len(KNOWN_FP_RULES)} file-prefix + "
+        f"{len(SANITIZER_FP_RULES)} sanitiser)"
     )
     return 0
 

@@ -819,7 +819,7 @@ def run_single_semgrep(
     stderr_log = out_dir / f"semgrep_{suffix}.stderr.log"
     exit_file = out_dir / f"semgrep_{suffix}.exit"
 
-    logger.debug(f"Starting Semgrep scan: {name}")
+    logger.debug("Starting Semgrep scan: %s", name)
 
     if progress_callback:
         progress_callback(f"Scanning with {name}")
@@ -934,7 +934,7 @@ def run_single_semgrep(
 
         # Validate output
         if not so or not so.strip():
-            logger.warning(f"Semgrep scan '{name}' produced empty output")
+            logger.warning("Semgrep scan '%s' produced empty output", name)
             so = '{"runs": []}'
 
         # Explicit `encoding="utf-8"` on all three writes. Pre-fix
@@ -961,15 +961,16 @@ def run_single_semgrep(
         # already strict enough to catch malformed semgrep output.
         is_valid = validate_sarif(sarif)
         if is_valid is False:
-            logger.warning(f"Semgrep scan '{name}' produced invalid SARIF")
+            logger.warning("Semgrep scan '%s' produced invalid SARIF", name)
         elif is_valid is None:
             logger.debug(
-                f"Semgrep scan '{name}': SARIF basic shape OK but full "
-                "schema validation skipped (jsonschema or schema file unavailable)"
+                "Semgrep scan '%s': SARIF basic shape OK but full "
+                "schema validation skipped (jsonschema or schema file unavailable)",
+                name
             )
 
         success = rc in (0, 1) and is_valid is not False
-        logger.debug(f"Completed Semgrep scan: {name} (exit={rc}, valid={is_valid})")
+        logger.debug("Completed Semgrep scan: %s (exit=%s, valid=%s)", name, rc, is_valid)
 
         return str(sarif), success
 
@@ -982,7 +983,7 @@ def run_single_semgrep(
         # condition, so failing on the first is correct.
         raise
     except Exception as e:
-        logger.error(f"Semgrep scan '{name}' failed: {e}")
+        logger.error("Semgrep scan '%s' failed: %s", name, e)
         # Write empty SARIF on error. Same encoding posture as the
         # success path above — explicit UTF-8 so the downstream
         # parser sees a consistent byte shape regardless of host
@@ -1054,9 +1055,9 @@ def semgrep_scan_parallel(
                     resolved = RaptorConfig.get_semgrep_config(pack_id)
                     configs.append((pack_name, resolved))
                     added_packs.add(pack_id)
-                    logger.debug(f"Added standard pack for {category_name}: {resolved}")
+                    logger.debug("Added standard pack for %s: %s", category_name, resolved)
         else:
-            logger.warning(f"Rule directory not found: {rd_path}")
+            logger.warning("Rule directory not found: %s", rd_path)
 
     # Add baseline packs (unless already added). ``baseline_packs``
     # was resolved by the caller (target-type catalog → tuned
@@ -1082,9 +1083,7 @@ def semgrep_scan_parallel(
     _used_names: set = {n for n, _ in configs}
     for _idx, extra in enumerate(extra_configs or []):
         if extra in _seen_extra:
-            logger.warning(
-                f"--extra-config: duplicate path dropped: {extra}"
-            )
+            logger.warning("--extra-config: duplicate path dropped: %s", extra)
             continue
         _seen_extra.add(extra)
         base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
@@ -1098,9 +1097,18 @@ def semgrep_scan_parallel(
 
     configs = _drop_unreachable_registry_packs(configs)
 
-    logger.info(f"Starting {len(configs)} Semgrep scans in parallel (max {RaptorConfig.MAX_SEMGREP_WORKERS} workers)")
-    logger.info(f"  - Local rule directories: {len([c for c in configs if c[0].startswith('category_')])}")
-    logger.info(f"  - Standard/baseline packs: {len([c for c in configs if not c[0].startswith('category_')])}")
+    logger.info(
+        "Starting %d Semgrep scans in parallel (max %s workers)",
+        len(configs),
+        RaptorConfig.MAX_SEMGREP_WORKERS
+    )
+    logger.info(
+        "  - Local rule directories: %d", len([c for c in configs if c[0].startswith('category_')])
+    )
+    logger.info(
+        "  - Standard/baseline packs: %d",
+        len([c for c in configs if not c[0].startswith('category_')])
+    )
 
     # Run scans in parallel
     sarif_paths: List[str] = []
@@ -1145,7 +1153,7 @@ def semgrep_scan_parallel(
                 # Propagate so the whole scan fails loud.
                 raise
             except Exception as exc:
-                logger.error(f"Semgrep scan '{name}' raised exception: {exc}")
+                logger.error("Semgrep scan '%s' raised exception: %s", name, exc)
                 failed_scans.append(name)
 
     # Detect the missing-SARIF case (worker returned success + a
@@ -1167,14 +1175,13 @@ def semgrep_scan_parallel(
                 failed_scans.append(name)
     if silently_dropped:
         logger.warning(
-            f"Silently-dropped packs (submitted, no SARIF on disk): "
-            f"{', '.join(silently_dropped)}"
+            "Silently-dropped packs (submitted, no SARIF on disk): %s", ', '.join(silently_dropped)
         )
 
     if failed_scans:
-        logger.warning(f"Failed scans: {', '.join(failed_scans)}")
+        logger.warning("Failed scans: %s", ', '.join(failed_scans))
 
-    logger.info(f"Completed {len(sarif_paths)} scans ({len(failed_scans)} failed)")
+    logger.info("Completed %d scans (%d failed)", len(sarif_paths), len(failed_scans))
     return sarif_paths, failed_scans
 
 
@@ -1239,9 +1246,7 @@ def semgrep_scan_sequential(
     _used_names: set = {n for n, _ in configs}
     for extra in (extra_configs or []):
         if extra in _seen_extra:
-            logger.warning(
-                f"--extra-config: duplicate path dropped: {extra}"
-            )
+            logger.warning("--extra-config: duplicate path dropped: %s", extra)
             continue
         _seen_extra.add(extra)
         base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
@@ -1256,7 +1261,7 @@ def semgrep_scan_sequential(
     configs = _drop_unreachable_registry_packs(configs)
 
     for idx, (name, config) in enumerate(configs, 1):
-        logger.info(f"Running scan {idx}/{len(configs)}: {name}")
+        logger.info("Running scan %s/%d: %s", idx, len(configs), name)
         sarif_path, success = run_single_semgrep(
             name, config, repo_path, out_dir, timeout,
             extra_config_readable_paths=list(extra_configs or []),
@@ -1279,8 +1284,7 @@ def semgrep_scan_sequential(
                 failed_scans.append(name)
     if silently_dropped:
         logger.warning(
-            f"Silently-dropped packs (submitted, no SARIF on disk): "
-            f"{', '.join(silently_dropped)}"
+            "Silently-dropped packs (submitted, no SARIF on disk): %s", ', '.join(silently_dropped)
         )
 
     return sarif_paths, failed_scans
@@ -1337,9 +1341,7 @@ def run_codeql(
     script_root = Path(__file__).resolve().parents[2]
     agent_script = script_root / "packages" / "codeql" / "agent.py"
     if not agent_script.exists():
-        logger.warning(
-            f"codeql agent script missing at {agent_script}; skipping CodeQL stage"
-        )
+        logger.warning("codeql agent script missing at %s; skipping CodeQL stage", agent_script)
         return []
 
     cmd = [
@@ -1353,7 +1355,7 @@ def run_codeql(
     if build_command:
         cmd.extend(["--build-command", build_command])
 
-    logger.info(f"Delegating CodeQL stage to {agent_script.name}")
+    logger.info("Delegating CodeQL stage to %s", agent_script.name)
     # subprocess.run + timeout SIGKILLs the immediate child only,
     # leaving the agent's codeql grandchildren as orphans holding
     # cache locks + gigabytes of memory until they finish. This
@@ -1387,7 +1389,7 @@ def run_codeql(
             logger.warning("codeql agent timed out after 3600s; skipping")
             return []
     except OSError as e:
-        logger.warning(f"failed to invoke codeql agent: {e}")
+        logger.warning("failed to invoke codeql agent: %s", e)
         return []
 
     if returncode == SANDBOX_ENGAGE_EXIT_CODE:
@@ -1411,8 +1413,7 @@ def run_codeql(
         if len(stderr_tail) > 2000:
             stderr_tail = "..." + stderr_tail[-2000:]
         logger.warning(
-            f"codeql agent exited rc={returncode}. "
-            f"Last stderr: {stderr_tail or '<empty>'}"
+            "codeql agent exited rc=%s. Last stderr: %s", returncode, stderr_tail or '<empty>'
         )
         # Don't return early — the agent may have produced partial
         # SARIFs (one language succeeded, another failed). Glob and
@@ -1515,8 +1516,7 @@ def run_cocci(
         return []
 
     logger.info(
-        f"cocci: running {effective_rules_dir} against {repo_path} "
-        f"(timeout {timeout}s/rule)",
+        "cocci: running %s against %s (timeout %ss/rule)", effective_rules_dir, repo_path, timeout
     )
     results = spatch_run_rules(
         target=repo_path,
@@ -1545,8 +1545,11 @@ def run_cocci(
     n_results = sum(len(r.matches) for r in results)
     n_errors = sum(len(r.errors or []) for r in results)
     logger.info(
-        f"cocci: {n_results} matches across {len(results)} rules "
-        f"({n_errors} rule-level errors); SARIF at {sarif_path}",
+        "cocci: %s matches across %d rules (%s rule-level errors); SARIF at %s",
+        n_results,
+        len(results),
+        n_errors,
+        sarif_path
     )
     return [str(sarif_path)]
 
@@ -1624,7 +1627,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
             except FileNotFoundError:
                 pass
             except OSError as e:
-                logger.debug(f"cleanup: could not remove {victim}: {e}")
+                logger.debug("cleanup: could not remove %s: %s", victim, e)
 
         # Empty stderr — always delete
         try:
@@ -1635,7 +1638,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
         except FileNotFoundError:
             pass
         except OSError as e:
-            logger.debug(f"cleanup: could not stat/remove {stderr_file}: {e}")
+            logger.debug("cleanup: could not stat/remove %s: %s", stderr_file, e)
 
         if success:
             # On success, .exit and .sarif are both redundant (combined.sarif
@@ -1648,7 +1651,7 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
                 except FileNotFoundError:
                     pass
                 except OSError as e:
-                    logger.debug(f"cleanup: could not remove {victim}: {e}")
+                    logger.debug("cleanup: could not remove %s: %s", victim, e)
         else:
             # Failed pack: keep .exit. Keep .sarif only if it has findings;
             # otherwise it is redundant noise (an empty {"runs":[]} stub).
@@ -1658,14 +1661,10 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
                         os.unlink(sarif_file)
                         removed += 1
                     except OSError as e:
-                        logger.debug(
-                            f"cleanup: could not remove {sarif_file}: {e}"
-                        )
+                        logger.debug("cleanup: could not remove %s: %s", sarif_file, e)
 
     if removed:
-        logger.info(
-            f"Cleaned up {removed} redundant per-pack scan files in {out_dir}"
-        )
+        logger.info("Cleaned up %s redundant per-pack scan files in %s", removed, out_dir)
     return removed
 
 
@@ -1921,9 +1920,9 @@ def main():
     repo_path = None
 
     logger.info("Starting automated code security scan")
-    logger.info(f"Repository: {args.repo}")
-    logger.info(f"Policy version: {args.policy_version}")
-    logger.info(f"Policy groups: {args.policy_groups}")
+    logger.info("Repository: %s", args.repo)
+    logger.info("Policy version: %s", args.policy_version)
+    logger.info("Policy groups: %s", args.policy_groups)
 
     try:
         # Acquire repository
@@ -1949,16 +1948,18 @@ def main():
             for g in groups:
                 p = rules_base / g
                 if g in _EXCLUDED_RULE_DIRS:
-                    logger.warning(f"Policy group '{g}' is reserved and cannot be used directly")
+                    logger.warning("Policy group '%s' is reserved and cannot be used directly", g)
                 elif p.is_dir():
                     valid.append(str(p))
                 else:
                     unknown.append(g)
             if unknown:
-                logger.warning(f"Unknown policy groups (no rule directory found): {', '.join(unknown)}")
+                logger.warning(
+                    "Unknown policy groups (no rule directory found): %s", ', '.join(unknown)
+                )
             rules_dirs = valid
 
-        logger.info(f"Using {len(rules_dirs)} rule directories")
+        logger.info("Using %d rule directories", len(rules_dirs))
 
         # Output directory: use --out if provided (lifecycle), otherwise generate
         if args.out:
@@ -2013,10 +2014,7 @@ def main():
             except Exception:  # noqa: BLE001
                 _tt_name = "unknown"
             _names = [n for n, _ in resolved_baseline]
-            logger.info(
-                f"Semgrep baseline packs for target type "
-                f"'{_tt_name}': {_names}"
-            )
+            logger.info("Semgrep baseline packs for target type '%s': %s", _tt_name, _names)
         # Per-pack language applicability (QoL #16a). Tells the
         # operator how many rules in each baseline pack actually
         # match the target's language(s) — without this they read
@@ -2132,7 +2130,7 @@ def main():
         excluded_count = 0
         nosemgrep_count = 0
         if sarif_inputs:
-            logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
+            logger.info("Merging %d SARIF files...", len(sarif_inputs))
             try:
                 merged_data = merge_sarif([str(p) for p in sarif_inputs])
                 # Operator --exclude-dir: post-merge filter so
@@ -2144,8 +2142,9 @@ def main():
                 )
                 if excluded_count:
                     logger.info(
-                        f"--exclude-dir dropped {excluded_count} results "
-                        f"from combined.sarif ({exclude_globs})"
+                        "--exclude-dir dropped %s results from combined.sarif (%s)",
+                        excluded_count,
+                        exclude_globs
                     )
                 # Annotate SARIF results whose source lines carry
                 # nosemgrep inline-suppression comments.  The annotation
@@ -2156,9 +2155,9 @@ def main():
                     merged_data, str(repo_path),
                 )
                 save_json(merged, merged_data)
-                logger.info(f"Merged SARIF created: {merged}")
+                logger.info("Merged SARIF created: %s", merged)
             except Exception as e:
-                logger.warning(f"SARIF merge failed, using individual files: {e}")
+                logger.warning("SARIF merge failed, using individual files: %s", e)
                 (out_dir / "sarif_merge.stderr.log").write_text(str(e), encoding="utf-8")
 
         # Generate metrics. When --exclude-dir filtered the combined
@@ -2219,19 +2218,21 @@ def main():
                 metrics["total_files_scanned"] = len(all_covered)
                 save_json(out_dir / "scan_metrics.json", metrics)
         except Exception as e:
-            logger.debug(f"Coverage record write failed (non-fatal): {e}")
+            logger.debug("Coverage record write failed (non-fatal): %s", e)
 
         if nosemgrep_count:
             _active = metrics['total_findings'] - nosemgrep_count
             logger.info(
-                f"Scan complete: {_active} findings + "
-                f"{nosemgrep_count} developer-suppressed "
-                f"in {metrics['total_files_scanned']} files"
+                "Scan complete: %s findings + %s developer-suppressed in %s files",
+                _active,
+                nosemgrep_count,
+                metrics['total_files_scanned']
             )
         else:
             logger.info(
-                f"Scan complete: {metrics['total_findings']} findings "
-                f"in {metrics['total_files_scanned']} files"
+                "Scan complete: %s findings in %s files",
+                metrics['total_findings'],
+                metrics['total_files_scanned']
             )
 
         # Provenance manifest. MUST be composed BEFORE cleanup runs,
@@ -2241,7 +2242,7 @@ def main():
                 sarif_inputs, merged, out_dir,
             )
         except Exception as e:
-            logger.debug(f"verification manifest compose failed (non-fatal): {e}")
+            logger.debug("verification manifest compose failed (non-fatal): %s", e)
             verification = {
                 "schema_version": 1,
                 "combined_sarif": {"path": merged.name, "sha256": "", "size_bytes": 0},
@@ -2256,12 +2257,12 @@ def main():
         try:
             cleanup_per_pack_artifacts(out_dir)
         except Exception as e:
-            logger.debug(f"Per-pack cleanup failed (non-fatal): {e}")
+            logger.debug("Per-pack cleanup failed (non-fatal): %s", e)
 
         save_json(out_dir / "verification.json", verification)
 
         duration = time.time() - start_time
-        logger.info(f"Total scan duration: {duration:.2f}s")
+        logger.info("Total scan duration: %.2fs", duration)
 
         # Tool-execution coverage block — reads coverage-<tool>.json
         # records the scanners emit; renders an aligned per-tool
@@ -2278,7 +2279,7 @@ def main():
                 print()
                 print(tool_cov)
         except Exception as e:
-            logger.debug(f"Tool-coverage render failed (non-fatal): {e}")
+            logger.debug("Tool-coverage render failed (non-fatal): %s", e)
 
         # Print coverage summary (unified store-backed report; file-level tier
         # when there's no function inventory, e.g. a bare /scan).

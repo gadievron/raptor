@@ -25,6 +25,7 @@
 //
 // Covers CWE-120 (Buffer Copy without Checking Size of Input) /
 // CWE-787 (Out-of-bounds Write).
+// @role: detection
 
 // Declaration form: T n = snprintf(buf, remaining, ...);
 

@@ -10,6 +10,7 @@
 // Zero-FP: POSIX and Linux man pages explicitly require the mode
 // argument when O_CREAT is set. Two-arg open with O_CREAT is
 // always a bug.
+// @role: verification
 
 @open_creat_no_mode@
 expression PATH, FLAGS;

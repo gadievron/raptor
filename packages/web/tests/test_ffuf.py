@@ -161,7 +161,10 @@ def test_run_redacts_authenticated_ffuf_options_from_logs(
     cookie = "session=" + "b" * 32
 
     messages: list[str] = []
-    monkeypatch.setattr("packages.web.ffuf.logger.info", messages.append)
+    monkeypatch.setattr(
+        "packages.web.ffuf.logger.info",
+        lambda fmt, *args: messages.append(fmt % args if args else fmt),
+    )
 
     runner = FfufRunner("https://example.test", tmp_path)
     runner.run(FfufConfig(wordlist=wordlist, headers=(bearer,), cookies=(cookie,)))

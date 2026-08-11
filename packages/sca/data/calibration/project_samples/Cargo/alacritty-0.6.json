@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:54:21Z",
+    "fetched_at": "2026-08-01T08:26:59Z",
     "git_ref": "v0.6.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.6",
@@ -45,7 +45,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use ansi-term` / `extern crate ansi-term` found"
+          "reason": "no `use ansi_term` / `extern crate ansi_term` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -426,7 +426,7 @@
       "dep_name": "crossbeam-utils",
       "dep_version": "0.7.2",
       "ecosystem": "Cargo",
-      "epss": 0.0122,
+      "epss": 0.01239,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -437,7 +437,7 @@
       "finding_id": "sca:vuln:Cargo:crossbeam-utils:0.7.2:GHSA-qc84-gqf4-9926",
       "in_kev": false,
       "purl": "pkg:cargo/crossbeam-utils@0.7.2",
-      "raptor_risk_estimate": 10.136648718425274,
+      "raptor_risk_estimate": 10.139072286516607,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -452,10 +452,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40552566,
+        "epss_multiplier": 0.40562261699999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.136648718425274,
+        "final": 10.139072286516607,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -711,7 +711,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use lock-api` / `extern crate lock-api` found"
+          "reason": "no `use lock_api` / `extern crate lock_api` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -1297,7 +1297,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.30",
       "ecosystem": "Cargo",
-      "epss": 0.00294,
+      "epss": 0.00251,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1308,7 +1308,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-8c75-8mhr-p7r9",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.435949054427364,
+      "raptor_risk_estimate": 3.4340679507981404,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1323,10 +1323,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400800282,
+        "epss_multiplier": 0.400580853,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.435949054427364,
+        "final": 3.4340679507981404,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1425,7 +1425,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.30",
       "ecosystem": "Cargo",
-      "epss": 0.00412,
+      "epss": 0.0028,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1436,7 +1436,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-hppc-g8h3-xhp3",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.4411111527587206,
+      "raptor_risk_estimate": 3.435336602082966,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1451,10 +1451,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401402436,
+        "epss_multiplier": 0.40072884,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4411111527587206,
+        "final": 3.435336602082966,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1490,7 +1490,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.30",
       "ecosystem": "Cargo",
-      "epss": 0.00298,
+      "epss": 0.00285,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1501,7 +1501,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-pqf5-4pqq-29f5",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.436124040811478,
+      "raptor_risk_estimate": 3.435555335063108,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1516,10 +1516,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400820694,
+        "epss_multiplier": 0.400754355,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.436124040811478,
+        "final": 3.435555335063108,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1625,7 +1625,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.30",
       "ecosystem": "Cargo",
-      "epss": 0.00623,
+      "epss": 0.00656,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1636,7 +1636,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-rpmj-rpgj-qmpm",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.450341684520724,
+      "raptor_risk_estimate": 3.451785322189663,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1651,10 +1651,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40247916899999997,
+        "epss_multiplier": 0.402647568,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.450341684520724,
+        "final": 3.451785322189663,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1695,7 +1695,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.30",
       "ecosystem": "Cargo",
-      "epss": 0.00329,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1706,7 +1706,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.30:GHSA-xcf7-rvmh-g6q4",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.30",
-      "raptor_risk_estimate": 3.867165208449405,
+      "raptor_risk_estimate": 3.8672636382904693,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1721,10 +1721,10 @@
         "cvss_base": 45.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400978887,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.867165208449405,
+        "final": 3.8672636382904693,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2383,7 +2383,7 @@
         ],
         "id": "RUSTSEC-2026-0097",
         "informational": "unsound",
-        "modified": "2026-04-17T16:17:26.292227+00:00",
+        "modified": "2026-07-17T16:00:04.554426+00:00",
         "published": "2026-04-09T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/rand",
@@ -2547,7 +2547,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use remove-dir-all` / `extern crate remove-dir-all` found"
+          "reason": "no `use remove_dir_all` / `extern crate remove_dir_all` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -2611,7 +2611,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use remove-dir-all` / `extern crate remove-dir-all` found"
+          "reason": "no `use remove_dir_all` / `extern crate remove_dir_all` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -3008,7 +3008,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use thread-local` / `extern crate thread-local` found"
+          "reason": "no `use thread_local` / `extern crate thread_local` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -3071,7 +3071,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use thread-local` / `extern crate thread-local` found"
+          "reason": "no `use thread_local` / `extern crate thread_local` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -3125,7 +3125,7 @@
       "dep_name": "time",
       "dep_version": "0.1.44",
       "ecosystem": "Cargo",
-      "epss": 0.01881,
+      "epss": 0.01622,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3136,7 +3136,7 @@
       "finding_id": "sca:vuln:Cargo:time:0.1.44:GHSA-wcg3-cvx6-7396",
       "in_kev": false,
       "purl": "pkg:cargo/time@0.1.44",
-      "raptor_risk_estimate": 5.433331098602998,
+      "raptor_risk_estimate": 5.415769027627376,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3151,10 +3151,10 @@
         "cvss_base": 62.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408898743,
+        "epss_multiplier": 0.407577066,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.433331098602998,
+        "final": 5.415769027627376,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

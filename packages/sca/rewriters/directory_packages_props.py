@@ -35,6 +35,8 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+
+from core.atomic_fs import write_text_atomically as _atomic_write
 from typing import List, Tuple
 
 from . import RewriteEdit, RewriteResult, register
@@ -168,12 +170,5 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
     )
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    """Atomic tempfile + rename via the shared primitive in
-    :mod:`core.atomic_fs`. See that module for the guarantees
-    (concurrent-reader safety, mode preservation, PID-suffix
-    isolation, BaseException catch)."""
-    from core.atomic_fs import write_text_atomically
-    write_text_atomically(path, content)
 
 __all__ = ["rewrite_directory_packages_props"]

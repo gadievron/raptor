@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: '3.12'
+  PYTHON_VERSION: '3.14'
   VENV_PATH: .venv
   # CI-only hang net: dump every worker's Python stack if any single
   # test runs >120s, then let it continue (the dump is the signal, not
@@ -179,7 +179,7 @@ jobs:
       sca_files: ${{ steps.scope.outputs.sca_files }}
       source_intel_files: ${{ steps.scope.outputs.source_intel_files }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -272,7 +272,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -282,7 +282,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
@@ -335,7 +335,7 @@ jobs:
         include: ${{ fromJSON(needs.changes.outputs.python_matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -388,7 +388,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -462,7 +462,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -515,7 +515,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -553,7 +553,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -606,7 +606,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -645,7 +645,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -655,7 +655,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
@@ -701,7 +701,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -754,7 +754,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -816,7 +816,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -846,7 +846,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # was v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 

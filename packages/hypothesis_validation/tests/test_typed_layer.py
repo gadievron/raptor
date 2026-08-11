@@ -32,6 +32,7 @@ from packages.hypothesis_validation import (
     SinkLocation,
     SourceLocation,
     UNIFORM_PRIOR,
+    ValidationResult,
     aggregate,
     ensure_same_provenance,
     hash_hypothesis,
@@ -338,6 +339,32 @@ class TestEnsureSameProvenance:
         e1 = Evidence(tool="t", rule="r", summary="s")
         e2 = Evidence(tool="u", rule="r", summary="s")
         assert ensure_same_provenance([e1, e2]) == ""
+
+
+class TestValidationResultProvenanceCheck:
+    """ValidationResult.__post_init__ calls ensure_same_provenance."""
+
+    def test_mixed_provenance_raises(self):
+        e1 = Evidence(tool="t", rule="r", summary="s", refers_to="abc")
+        e2 = Evidence(tool="u", rule="r", summary="s", refers_to="xyz")
+        with pytest.raises(ProvenanceMismatch):
+            ValidationResult(verdict="confirmed", evidence=[e1, e2])
+
+    def test_same_provenance_passes(self):
+        e1 = Evidence(tool="t", rule="r", summary="s", refers_to="abc")
+        e2 = Evidence(tool="u", rule="r", summary="s", refers_to="abc")
+        vr = ValidationResult(verdict="confirmed", evidence=[e1, e2])
+        assert vr.verdict == "confirmed"
+
+    def test_empty_evidence_passes(self):
+        vr = ValidationResult(verdict="inconclusive")
+        assert vr.verdict == "inconclusive"
+
+    def test_unset_refers_to_ignored(self):
+        e1 = Evidence(tool="t", rule="r", summary="s")
+        e2 = Evidence(tool="u", rule="r", summary="s", refers_to="abc")
+        vr = ValidationResult(verdict="confirmed", evidence=[e1, e2])
+        assert vr.confirmed
 
 
 # 3. Verdict ladder -----------------------------------------------------------

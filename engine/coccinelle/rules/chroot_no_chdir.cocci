@@ -7,6 +7,7 @@
 //
 // CWE-243: Creation of chroot Jail Without Changing Working Directory
 // Zero-FP confidence: very high — always a misconfiguration.
+// @role: verification
 
 @chroot_without_chdir@
 position p;

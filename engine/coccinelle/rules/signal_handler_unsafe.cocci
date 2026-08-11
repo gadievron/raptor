@@ -10,6 +10,7 @@
 // CWE-364: Signal Handler Race Condition
 // Zero-FP: a direct call to these functions inside a handler body
 // registered via signal() or sigaction() is always wrong per POSIX.
+// @role: verification
 
 // --- signal() registration ---
 
@@ -21,6 +22,7 @@ signal(..., handler)
 
 @unsafe_in_signal depends on handler_signal@
 identifier handler_signal.handler;
+// @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
 @@
@@ -56,6 +58,7 @@ SA.sa_handler = handler;
 
 @unsafe_sa_handler depends on handler_sa_handler@
 identifier handler_sa_handler.handler;
+// @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
 @@
@@ -91,6 +94,7 @@ SA.sa_sigaction = handler;
 
 @unsafe_sa_sigaction depends on handler_sa_sigaction@
 identifier handler_sa_sigaction.handler;
+// @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
 @@

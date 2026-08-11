@@ -29,9 +29,7 @@ from core.audit.safety_contract import (
     ToolSource,
     assert_boost_only,
     record_boost,
-    validate_no_suppress,
 )
-
 
 # ── Core contract enforcement ────────────────────────────────────────
 
@@ -149,29 +147,6 @@ class TestContractEnforcement:
                 description="trying to sneak a suppress",
             )
 
-    def test_validate_no_suppress_catches_mixed(self):
-        """validate_no_suppress catches SuppressEvidence in a list."""
-        results = [
-            BoostEvidence(
-                source=ToolSource.BYPASS_LOOP.value,
-                action="add_finding",
-                description="bypass detected",
-            ),
-        ]
-        validate_no_suppress(results)
-
-        # Can't even construct a SuppressEvidence from bypass_loop,
-        # so we test with an allowlisted source that shouldn't be
-        # in a non-suppress tool's output.
-        suppress = SuppressEvidence(
-            source=ToolSource.BINARY_ORACLE.value,
-            verdict="absent",
-            reason="test",
-        )
-        results_with_suppress = [results[0], suppress]
-        with pytest.raises(ContractViolation, match="not allowed to suppress"):
-            validate_no_suppress(results_with_suppress)
-
     def test_assert_boost_only_for_non_suppress_tools(self):
         """assert_boost_only succeeds for tools not on allowlist."""
         assert_boost_only(ToolSource.BYPASS_LOOP.value)
@@ -202,7 +177,6 @@ class TestBypassLoopContract:
         The consumer must not interpret [] as "function is safe."
         """
         results: list[BoostEvidence] = []
-        validate_no_suppress(results)
         assert len(results) == 0
 
     def test_bypass_detected_produces_add_finding(self):
@@ -361,7 +335,7 @@ class TestTaintApproxContract:
             description="zero parameters, zero sink callees, zero "
                         "return consumers — pure computation",
         )
-        validate_no_suppress([ev])
+        assert ev.action == "narrow_scope"
 
 
 # ── Constant resolution ──────────────────────────────────────────────
@@ -576,7 +550,7 @@ class TestAllowlistIntegrity:
 
     def test_suppress_sources_is_tool_may_suppress(self):
         """SUPPRESS_SOURCES must be derived from _TOOL_MAY_SUPPRESS — no divergence."""
-        from core.audit.safety_contract import SUPPRESS_SOURCES, _TOOL_MAY_SUPPRESS
+        from core.audit.safety_contract import _TOOL_MAY_SUPPRESS, SUPPRESS_SOURCES
         assert SUPPRESS_SOURCES is _TOOL_MAY_SUPPRESS
 
     def test_non_suppress_tools_outnumber_suppress_tools(self):

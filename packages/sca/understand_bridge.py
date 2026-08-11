@@ -167,8 +167,10 @@ def _parse(path: Path) -> ContextMap:
 
 
 def _extract_files(items: Iterable) -> Set[str]:
+    if not isinstance(items, list):
+        return set()
     out: Set[str] = set()
-    for item in items or []:
+    for item in items:
         if isinstance(item, dict):
             f = item.get("file") or item.get("path")
             if isinstance(f, str):

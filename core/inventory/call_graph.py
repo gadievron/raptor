@@ -3617,6 +3617,9 @@ class _CSharpCallGraph:
                 if alias is None:
                     alias = c
         if target is None:
+            if alias is not None:
+                name = alias.text.decode()
+                self.graph.imports[name] = name
             return
         parts = self._qualified_parts(target)
         if not parts:
@@ -3943,6 +3946,15 @@ class _PhpCallGraph:
                 self.walk(c)
             return
 
+        if node.type in (
+            "include_expression", "include_once_expression",
+            "require_expression", "require_once_expression",
+        ):
+            self.graph.indirection.add(INDIRECTION_DYNAMIC_IMPORT)
+            for c in node.children:
+                self.walk(c)
+            return
+
         for c in node.children:
             self.walk(c)
 
@@ -3957,8 +3969,11 @@ class _PhpCallGraph:
         for c in node.children:
             if c.type in (self._QUALIFIED, self._NAMESPACE_NAME):
                 target_parts = self._namespace_parts(c)
-            elif c.type == self._NAME and target_parts:
-                alias_name = c.text.decode()
+            elif c.type == self._NAME:
+                if target_parts:
+                    alias_name = c.text.decode()
+                else:
+                    target_parts = [c.text.decode()]
         if not target_parts:
             return
         full = "\\".join(target_parts)

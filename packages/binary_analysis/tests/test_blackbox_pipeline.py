@@ -757,34 +757,6 @@ def test_load_investigation_summary_truncates_ranked(tmp_path):
     assert result["hypotheses"] == [{"h": 1}]
 
 
-# -------------------------------------------------------------------
-# _synthesise_annotations skips nameless entries
-# -------------------------------------------------------------------
-
-def test_synthesise_annotations_skips_nameless(tmp_path):
-    """Entries without a name should be silently skipped, not crash."""
-    from packages.binary_analysis.pipeline import _synthesise_annotations
-
-    binary = tmp_path / "sample"
-    binary.write_bytes(b"\x7fELF" + b"\x00" * 100)
-    manifest = build_manifest(binary)
-    ctx = BinaryContextMap(binary_path=str(binary), arch="x86", bits=64, binary_format="elf")
-    ctx_dict = ctx.to_dict()
-    ctx_dict["entry_points"] = [{"name": ""}, {"name": "main", "evidence_note": "entry"}]
-    ctx_dict["sink_details"] = [{"evidence_note": "no name"}]
-
-    result = type("R", (), {
-        "manifest": manifest,
-        "context_map": ctx_dict,
-    })()
-    _synthesise_annotations(result, tmp_path)
-    ann_dir = tmp_path / "annotations"
-    if ann_dir.exists():
-        files = list(ann_dir.rglob("*.md"))
-        for f in files:
-            content = f.read_text()
-            assert "main" in content or "entry" in content
-
 
 # -------------------------------------------------------------------
 # _c_string edge cases

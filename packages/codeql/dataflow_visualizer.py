@@ -69,27 +69,27 @@ class DataflowVisualizer:
         # Generate each format
         try:
             outputs['html'] = self.generate_html(dataflow, finding_id, repo_path)
-            self.logger.info(f"Generated HTML visualization: {outputs['html']}")
+            self.logger.info("Generated HTML visualization: %s", outputs['html'])
         except Exception as e:
-            self.logger.warning(f"Failed to generate HTML: {e}")
+            self.logger.warning("Failed to generate HTML: %s", e)
 
         try:
             outputs['mermaid'] = self.generate_mermaid(dataflow, finding_id)
-            self.logger.info(f"Generated Mermaid diagram: {outputs['mermaid']}")
+            self.logger.info("Generated Mermaid diagram: %s", outputs['mermaid'])
         except Exception as e:
-            self.logger.warning(f"Failed to generate Mermaid: {e}")
+            self.logger.warning("Failed to generate Mermaid: %s", e)
 
         try:
             outputs['ascii'] = self.generate_ascii(dataflow, finding_id)
-            self.logger.info(f"Generated ASCII visualization: {outputs['ascii']}")
+            self.logger.info("Generated ASCII visualization: %s", outputs['ascii'])
         except Exception as e:
-            self.logger.warning(f"Failed to generate ASCII: {e}")
+            self.logger.warning("Failed to generate ASCII: %s", e)
 
         try:
             outputs['dot'] = self.generate_dot(dataflow, finding_id)
-            self.logger.info(f"Generated DOT file: {outputs['dot']}")
+            self.logger.info("Generated DOT file: %s", outputs['dot'])
         except Exception as e:
-            self.logger.warning(f"Failed to generate DOT: {e}")
+            self.logger.warning("Failed to generate DOT: %s", e)
 
         return outputs
 
@@ -178,12 +178,14 @@ class DataflowVisualizer:
                         marker = ">>>" if i == node['line'] - 1 else "   "
                         context.append(f"{marker} {i + 1:4d} | {lines[i].rstrip()}")
 
-                    # HTML-escape to prevent injection using code_context
-                    node['code_context'] = escape('\n'.join(context))
+                    # D3's .text() handles escaping on the client side;
+                    # pre-escaping here causes double encoding of angle
+                    # brackets and ampersands in source snippets.
+                    node['code_context'] = '\n'.join(context)
                 else:
-                    node['code_context'] = escape(f"File not found: {node['file']}")
+                    node['code_context'] = f"File not found: {node['file']}"
             except Exception as e:
-                node['code_context'] = escape(f"Error reading file: {e}")
+                node['code_context'] = f"Error reading file: {e}"
 
         # Generate HTML
         html_content = self._create_html_template(
@@ -785,7 +787,7 @@ class DataflowVisualizer:
         for line in lines[:30]:  # Print first 30 lines to log
             self.logger.info(line)
         if len(lines) > 30:
-            self.logger.info(f"... ({len(lines) - 30} more lines in {output_file})")
+            self.logger.info("... (%s more lines in %s)", len(lines) - 30, output_file)
 
         return output_file
 

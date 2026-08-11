@@ -6,6 +6,7 @@
 //  - copy_from_user(&local, src, sizeof(src)) — sizeof(pointer) not struct
 //
 // CWE-805: Buffer Access with Incorrect Length Value
+// @role: verification
 
 @copy_to_sizeof_star_dst@
 expression USR_DST, LOCAL;

@@ -106,6 +106,10 @@ _HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V9\n"
 # (linux kernel 6.x reachability index lands at ~12 MiB compressed).
 _MAX_INDEX_BYTES = 64 * 1024 * 1024
 
+# Maximum number of cache entries on disk. When exceeded after a save,
+# the oldest entries (by mtime) are evicted.
+_MAX_CACHE_ENTRIES = 32
+
 
 def compute_fingerprint(inventory: Dict[str, Any]) -> Optional[str]:
     """Return a stable content fingerprint for ``inventory``, or
@@ -339,6 +343,29 @@ def save_index(
         )
     except OSError as exc:
         logger.debug("reach_cache: write failed for %s: %s", path, exc)
+        return
+    _evict_oldest()
+
+
+def _evict_oldest() -> None:
+    """Remove oldest cache entries (by mtime) when count exceeds cap."""
+    try:
+        entries = list(_CACHE_DIR.glob("*.pickle"))
+    except OSError:
+        return
+    if len(entries) <= _MAX_CACHE_ENTRIES:
+        return
+    # Sort by mtime ascending (oldest first).
+    try:
+        entries.sort(key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return
+    to_remove = len(entries) - _MAX_CACHE_ENTRIES
+    for p in entries[:to_remove]:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def clear_cache() -> int:

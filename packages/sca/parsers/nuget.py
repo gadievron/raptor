@@ -371,23 +371,33 @@ def _resolve_cpm_chain(start_dir: Path):
     merged: dict = {}
     globals_by_name: dict = {}
 
-    # Apply outer-to-inner; within a directory, Directory.Build.props
-    # is applied FIRST, then Directory.Packages.props overrides
-    # (matching MSBuild's import order — CPM is the more recent
-    # and more authoritative system).
-    for build_file in reversed(build_files):
-        for pkg in build_file.packages:
-            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
-    # Directory.Build.targets is auto-imported AFTER the project (and after
-    # Directory.Build.props), so it wins over .props for the same package.
-    for targets_file in reversed(targets_files):
-        for pkg in targets_file.packages:
-            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
-
+    # Interleave all file types by directory depth so that innermost
+    # directory always wins regardless of file type (MSBuild's
+    # import model). Within the same directory the precedence is:
+    #   Directory.Build.props < Directory.Build.targets < CPM
+    # Assign a sub-priority: 0 = build_props, 1 = build_targets,
+    # 2 = cpm.  Sort outer-to-inner (deepest last = last-write-wins).
+    all_entries: list = []
+    for bf in build_files:
+        depth = len(bf.path.parent.parts)
+        all_entries.append((depth, 0, bf, False))
+    for tf in targets_files:
+        depth = len(tf.path.parent.parts)
+        all_entries.append((depth, 1, tf, False))
     if cpm_active:
-        for cpm_file in reversed(cpm_files):
-            for pkg in cpm_file.packages:
-                merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
+        for cf in cpm_files:
+            depth = len(cf.path.parent.parts)
+            all_entries.append((depth, 2, cf, True))
+
+    # Sort: shallowest first (outer-to-inner), then by sub-priority
+    # within the same directory. Last-write-wins gives innermost +
+    # highest sub-priority the final say.
+    all_entries.sort(key=lambda e: (e[0], e[1]))
+
+    for _depth, _prio, parsed_file, is_cpm in all_entries:
+        for pkg in parsed_file.packages:
+            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
+            if is_cpm:
                 if pkg.is_global:
                     globals_by_name[pkg.name.lower()] = pkg
                 elif pkg.name.lower() in globals_by_name:
@@ -545,6 +555,8 @@ def parse_lockfile(path: Path) -> List[Dependency]:
         logger.warning("sca.parsers.nuget: cannot read %s: %s", path, e)
         return []
 
+    if not isinstance(data, dict):
+        return []
     out: List[Dependency] = []
     seen_keys: set = set()
     deps_block = data.get("dependencies") or {}

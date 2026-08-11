@@ -48,7 +48,10 @@ def _fake_target():
 def test_scanner_threads_crawl_limits_to_fake_target(tmp_path: Path):
     """A scanner-level fake target should honor operator crawl limits."""
     with _fake_target() as (base_url, handler):
-        scanner = WebScanner(base_url, llm=None, out_dir=tmp_path, max_depth=0, max_pages=1)
+        scanner = WebScanner(
+            base_url, llm=None, out_dir=tmp_path, max_depth=0, max_pages=1,
+            block_private_ips=False,
+        )
 
         result = scanner.scan()
 

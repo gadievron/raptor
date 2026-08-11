@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:53:42Z",
+    "fetched_at": "2026-08-01T08:26:07Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of powershell-6.2",
@@ -18,7 +18,7 @@
           "13.0.1"
         ],
         "id": "GHSA-5crp-9r3c-p9vr",
-        "modified": "2026-02-04T04:31:41.201349+00:00",
+        "modified": "2026-07-08T06:53:11.583483+00:00",
         "published": "2022-06-22T15:08:47+00:00",
         "references": [
           "https://github.com/JamesNK/Newtonsoft.Json/issues/2457",
@@ -57,11 +57,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/TestJsonCommand.cs:8",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:10",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:8",
           "src/System.Management.Automation/engine/PSConfiguration.cs:9",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/TestJsonCommand.cs:8",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:10",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:8",
           "... (+5 more)"
         ],
         "verdict": "imported"
@@ -190,7 +190,7 @@
       "dep_name": "System.Data.SqlClient",
       "dep_version": "4.6.0",
       "ecosystem": "NuGet",
-      "epss": 0.0118,
+      "epss": 0.0117,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -201,7 +201,7 @@
       "finding_id": "sca:vuln:NuGet:System.Data.SqlClient:4.6.0:GHSA-98g6-xh36-x2p7",
       "in_kev": false,
       "purl": "pkg:nuget/System.Data.SqlClient@4.6.0",
-      "raptor_risk_estimate": 10.796415816080199,
+      "raptor_risk_estimate": 10.79505654684646,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -216,10 +216,10 @@
         "cvss_base": 86.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40532154,
+        "epss_multiplier": 0.40527051,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.796415816080199,
+        "final": 10.79505654684646,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

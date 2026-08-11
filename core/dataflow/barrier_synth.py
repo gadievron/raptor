@@ -1135,6 +1135,10 @@ def _extract_ql(reply: str) -> str:
         block = text.split("```", 2)[1]
         if "\n" in block:  # drop an optional language tag on the fence line
             block = block.split("\n", 1)[1]
+        else:
+            # single-line block with no newline — strip leading language tag
+            import re as _re
+            block = _re.sub(r"^[A-Za-z]+\s*", "", block)
         text = block.strip()
     return text
 

@@ -149,7 +149,7 @@ def _get_available_ollama_models() -> List[str]:
             return _cached_ollama_models
     except Exception as e:
         ollama_display = RaptorConfig.OLLAMA_HOST if _host_is_local(RaptorConfig.OLLAMA_HOST) else '[REMOTE-OLLAMA]'
-        logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
+        logger.debug("Could not connect to Ollama at %s: %s", ollama_display, e)
     _cached_ollama_models = []
     _ollama_checked = True
     return []
@@ -355,7 +355,7 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
         return True
 
     except Exception as e:
-        logger.debug(f"Auto-migration failed: {e}")
+        logger.debug("Auto-migration failed: %s", e)
         return False
 
 
@@ -467,7 +467,7 @@ def _read_config_models() -> list:
 
         return _apply_anthropic_resolution(model_list)
     except Exception as e:
-        logger.debug(f"detection: model list parse failed, returning []: {e}")
+        logger.debug("detection: model list parse failed, returning []: %s", e)
         return []
 
 

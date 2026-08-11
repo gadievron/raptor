@@ -81,8 +81,18 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
                 slug = slug[:-4]
             return slug, m.group(2)
     # Fallback: the repo field + the first fixed event.
-    for aff in data.get("affected") or []:
-        for rng in aff.get("ranges") or []:
+    affected = data.get("affected") or []
+    if not isinstance(affected, list):
+        return "", ""
+    for aff in affected:
+        if not isinstance(aff, dict):
+            continue
+        ranges = aff.get("ranges") or []
+        if not isinstance(ranges, list):
+            continue
+        for rng in ranges:
+            if not isinstance(rng, dict):
+                continue
             repo = rng.get("repo") or ""
             # Cap the slug capture at GitHub's own per-segment limit
             # (39 chars for owner per docs, 100 chars for repo). Pre-fix
@@ -102,7 +112,12 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
                 slug = m.group(1)
                 if slug.endswith(".git"):
                     slug = slug[:-4]
-            for ev in rng.get("events") or []:
+            events = rng.get("events") or []
+            if not isinstance(events, list):
+                continue
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
                 sha = ev.get("fixed") or ""
                 if slug and sha:
                     return slug, sha

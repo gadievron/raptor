@@ -5,6 +5,7 @@
 // it. Classic error-path resource leak.
 //
 // Covers CWE-401: missing free on error path.
+// @role: detection
 
 @alloc@
 identifier ptr;
@@ -12,6 +13,8 @@ expression sz, flags;
 position p_alloc;
 @@
 
+// @vocab: allocators
+// @vocab-tmpl: ptr =@p_alloc %s(...)
 (
   ptr =@p_alloc kmalloc(sz, flags)
 |
@@ -35,6 +38,7 @@ position p_ret;
 ptr = E2
 ...
 if (...) {
+  // @vocab: deallocators
   ... when != kfree(ptr)
       when != kvfree(ptr)
       when != vfree(ptr)

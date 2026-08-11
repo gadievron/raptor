@@ -255,10 +255,11 @@ def _setup_namespaces() -> str:
 class _ChildResult:
     __slots__ = (
         "returncode", "stdout", "stderr", "wallclock_s",
-        "sandbox_info", "error",
+        "sandbox_info", "error", "_lock",
     )
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self.returncode: Optional[int] = None
         self.stdout: bytes = b""
         self.stderr: bytes = b""
@@ -273,14 +274,15 @@ class _ChildResult:
         self.error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "returncode": self.returncode,
-            "stdout_b64": base64.b64encode(self.stdout).decode("ascii"),
-            "stderr_b64": base64.b64encode(self.stderr).decode("ascii"),
-            "wallclock_s": self.wallclock_s,
-            "sandbox_info": self.sandbox_info,
-            "error": self.error,
-        }
+        with self._lock:
+            return {
+                "returncode": self.returncode,
+                "stdout_b64": base64.b64encode(self.stdout).decode("ascii"),
+                "stderr_b64": base64.b64encode(self.stderr).decode("ascii"),
+                "wallclock_s": self.wallclock_s,
+                "sandbox_info": self.sandbox_info,
+                "error": self.error,
+            }
 
 
 def _run_child(role: str, spec: Dict[str, Any], result: _ChildResult) -> None:
@@ -377,23 +379,26 @@ def _run_child(role: str, spec: Dict[str, Any], result: _ChildResult) -> None:
         if observe is not None:
             kwargs["observe"] = bool(observe)
         r = sandbox_run(cmd, **kwargs)
-        result.returncode = r.returncode
-        result.stdout = r.stdout or b""
-        result.stderr = r.stderr or b""
-        # sandbox_info is attached to the CompletedProcess by
-        # core.sandbox.observe._interpret_result. Coerce to a plain dict
-        # so json.dumps can serialise it — observe attaches a mapping
-        # which may or may not be a plain dict depending on path.
-        info = getattr(r, "sandbox_info", None)
-        if info is not None:
-            try:
-                result.sandbox_info = dict(info)
-            except (TypeError, ValueError):
-                result.sandbox_info = None
+        with result._lock:
+            result.returncode = r.returncode
+            result.stdout = r.stdout or b""
+            result.stderr = r.stderr or b""
+            # sandbox_info is attached to the CompletedProcess by
+            # core.sandbox.observe._interpret_result. Coerce to a plain dict
+            # so json.dumps can serialise it — observe attaches a mapping
+            # which may or may not be a plain dict depending on path.
+            info = getattr(r, "sandbox_info", None)
+            if info is not None:
+                try:
+                    result.sandbox_info = dict(info)
+                except (TypeError, ValueError):
+                    result.sandbox_info = None
     except Exception as exc:  # noqa: BLE001
-        result.error = f"{type(exc).__name__}: {exc}"
+        with result._lock:
+            result.error = f"{type(exc).__name__}: {exc}"
     finally:
-        result.wallclock_s = time.monotonic() - t0
+        with result._lock:
+            result.wallclock_s = time.monotonic() - t0
 
 
 def _wait_listen_port(port: int, timeout: float) -> bool:
@@ -404,20 +409,21 @@ def _wait_listen_port(port: int, timeout: float) -> bool:
     port_hex = f"{port:04X}"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            with open("/proc/self/net/tcp", "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) < 4:
-                        continue
-                    local = parts[1]
-                    if ":" not in local:
-                        continue
-                    _ip, p_hex = local.rsplit(":", 1)
-                    if p_hex.upper() == port_hex and parts[3] == "0A":
-                        return True
-        except OSError:
-            pass
+        for tcp_path in ("/proc/self/net/tcp", "/proc/self/net/tcp6"):
+            try:
+                with open(tcp_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) < 4:
+                            continue
+                        local = parts[1]
+                        if ":" not in local:
+                            continue
+                        _ip, p_hex = local.rsplit(":", 1)
+                        if p_hex.upper() == port_hex and parts[3] == "0A":
+                            return True
+            except OSError:
+                pass
         time.sleep(0.02)
     return False
 

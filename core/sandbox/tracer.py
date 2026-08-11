@@ -456,7 +456,7 @@ def _ptrace_seize(pid: int) -> bool:
                      ctypes.c_void_p(options))
     err = ctypes.get_errno()
     if rc != 0:
-        logger.error(f"tracer: PTRACE_SEIZE({pid}) failed errno={err}")
+        logger.error("tracer: PTRACE_SEIZE(%d) failed errno=%d", pid, err)
         return False
     return True
 
@@ -818,7 +818,7 @@ def _ptrace_get_event_msg(pid: int) -> Optional[int]:
     ctypes.set_errno(0)
     rc = libc.ptrace(_PTRACE_GETEVENTMSG, pid, None, ctypes.byref(msg))
     if rc != 0:
-        logger.debug(f"tracer: PTRACE_GETEVENTMSG({pid}) failed")
+        logger.debug("tracer: PTRACE_GETEVENTMSG(%d) failed", pid)
         return None
     return msg.value
 
@@ -849,7 +849,7 @@ def _read_regs(pid: int, arch_info: dict) -> Optional[bytes]:
                      ctypes.byref(iov))
     err = ctypes.get_errno()
     if rc != 0:
-        logger.debug(f"tracer: PTRACE_GETREGSET({pid}) failed errno={err}")
+        logger.debug("tracer: PTRACE_GETREGSET(%d) failed errno=%d", pid, err)
         return None
     # The kernel updates iov.iov_len to the actual bytes written. If
     # smaller than expected, decoding via fixed offsets would read
@@ -899,8 +899,8 @@ def _ptrace_cont(pid: int, signal_num: int = 0) -> bool:
                      ctypes.c_void_p(signal_num))
     if rc != 0:
         err = ctypes.get_errno()
-        logger.debug(f"tracer: PTRACE_CONT({pid}, sig={signal_num}) "
-                     f"failed errno={err}")
+        logger.debug("tracer: PTRACE_CONT(%d, sig=%d) "
+                     "failed errno=%d", pid, signal_num, err)
         return False
     return True
 
@@ -1073,7 +1073,7 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
             f.write(line)
         return True
     except OSError as e:
-        logger.debug(f"tracer: write_record failed: {e}")
+        logger.debug("tracer: write_record failed: %s", e)
         return False
 
 
@@ -1102,7 +1102,7 @@ def _write_record_dict(run_dir: Path, record: dict,
             f.write(line)
         return True
     except OSError as e:
-        logger.debug(f"tracer: write_record_dict failed: {e}")
+        logger.debug("tracer: write_record_dict failed: %s", e)
         return False
 
 
@@ -1126,7 +1126,7 @@ def _signal_ready(sync_fd: Optional[int]) -> None:
         try:
             os.write(sync_fd, b"\x01")
         except OSError as e:
-            logger.debug(f"tracer: sync write failed: {e}")
+            logger.debug("tracer: sync write failed: %s", e)
     finally:
         try:
             os.close(sync_fd)
@@ -1266,7 +1266,7 @@ def trace(target_pid: int, run_dir: Path,
             # All tracees gone — clean exit.
             return 0
         except OSError as e:
-            logger.error(f"tracer: waitpid failed: {e}")
+            logger.error("tracer: waitpid failed: %s", e)
             return 4
 
         if wpid == 0:

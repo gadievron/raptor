@@ -86,21 +86,20 @@ def joern_session(
         yield None
         return
 
+    cpg = None
     try:
         if cache_dir is not None:
             cpg = build_cpg_cached(
                 target_path, cache_dir,
                 timeout=tunables.cpg_timeout_s,
-                heap_mb=tunables.heap_mb,
             )
         else:
             cpg = build_cpg(
                 target_path,
                 timeout=tunables.cpg_timeout_s,
-                heap_mb=tunables.heap_mb,
             )
         if cpg.exists():
-            srv.import_cpg(cpg.path, timeout=tunables.cpg_timeout_s)
+            srv.import_cpg(cpg.path, timeout=tunables.import_timeout_s)
 
         if register_reach_audit:
             try:
@@ -118,5 +117,5 @@ def joern_session(
             except ImportError:
                 pass
         srv.stop()
-        if cache_dir is None and cpg.exists():
+        if cache_dir is None and cpg is not None and cpg.exists():
             cleanup_cpg(cpg)

@@ -15,6 +15,7 @@
 // CWE-253: Incorrect Check of Function Return Value
 // Zero-FP: returning IS_ERR() instead of PTR_ERR() always returns
 // 1 instead of the error code.
+// @role: verification
 
 @is_err_return@
 expression P;

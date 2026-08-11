@@ -6,6 +6,7 @@
 // dereferenced pointer is last used.
 //
 // Covers CWE-416: use-after-free via RCU grace period violation.
+// @role: verification
 
 // Case 1: rcu_dereference without any preceding rcu_read_lock
 @no_lock@

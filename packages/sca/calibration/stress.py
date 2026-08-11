@@ -250,10 +250,8 @@ def _scan_one(
     # ``git clone`` refuses to write into an existing directory.
     # The previous run's ``sca_out`` is also cleaned so a stale
     # findings.json from a different ref doesn't get mixed in.
-    if clone_root.exists():
-        _rmtree(clone_root)
-    if sca_out.exists():
-        _rmtree(sca_out)
+    _rmtree(clone_root)
+    _rmtree(sca_out)
 
     try:
         from core.config import RaptorConfig
@@ -486,9 +484,9 @@ def _diff_one(
 
     # Eco-breakdown drift — flag NEW eco categories appearing
     # (interesting but not failure-worthy unless huge).
-    base_ecos = set((baseline.get("eco_breakdown") or {}).keys())
-    new_ecos = set(current.eco_breakdown.keys()) - base_ecos
-    missing_ecos = base_ecos - set(current.eco_breakdown.keys())
+    base_ecos = set(baseline.get("eco_breakdown") or {})
+    new_ecos = set(current.eco_breakdown) - base_ecos
+    missing_ecos = base_ecos - set(current.eco_breakdown)
     if new_ecos:
         if severity == "ok":
             severity = "warn"

@@ -33,6 +33,9 @@ def derive_max_workers(model: str) -> int:
     that value is used (still clamped to [1, 32]).  Otherwise
     returns ``rpm // 2`` (headroom for retries) clamped to [1, 32].
     Falls back to 1 when RPM is unknown.
+
+    ``"default"`` is resolved to the actual primary model inside
+    ``rpm_for`` so callers need not resolve it themselves.
     """
     override = read_tuning_max_llm_workers()
     if override is not None:
@@ -157,6 +160,8 @@ def run_parallel(
                                 thread_name_prefix=label) as pool:
             result = list(pool.map(_do, enumerate(items)))
     finally:
+        final_effective = throttle.effective_workers
+        final_signals = throttle.signal_count
         throttle.close()
 
     logger.info(
@@ -164,8 +169,8 @@ def run_parallel(
         label,
         sum(1 for r in result if r is not None),
         len(items),
-        throttle.signal_count,
+        final_signals,
         throttle.max_workers,
-        throttle.effective_workers,
+        final_effective,
     )
     return result

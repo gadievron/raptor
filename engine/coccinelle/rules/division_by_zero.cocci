@@ -7,6 +7,7 @@
 //
 // CWE-369: Divide By Zero
 // Guards: any relational/equality check on the divisor before use.
+// @role: verification
 
 @div_param_unchecked@
 typedef uint32_t, uint64_t, int32_t, int64_t;

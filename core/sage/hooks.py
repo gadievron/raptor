@@ -32,6 +32,7 @@ _client: Optional[SageClient] = None
 _client_initialised: bool = False
 _client_none_decided_at: float = 0.0
 _CLIENT_NONE_TTL_S: float = 300.0
+_metrics_lock = threading.Lock()
 _sage_metrics: Dict[str, int] = {
     "propose_attempted": 0,
     "propose_succeeded": 0,
@@ -39,6 +40,47 @@ _sage_metrics: Dict[str, int] = {
     "recall_attempted": 0,
     "recall_hits": 0,
 }
+
+
+def _metric_inc(key: str, n: int = 1) -> None:
+    with _metrics_lock:
+        _sage_metrics[key] += n
+
+_ollama_has_gpu: Optional[bool] = None
+
+
+def _ollama_gpu_available() -> bool:
+    """Detect GPU by checking size_vram on Ollama's loaded models.
+
+    Cached for the process lifetime. Falls back to False on any error.
+    """
+    global _ollama_has_gpu
+    if _ollama_has_gpu is not None:
+        return _ollama_has_gpu
+    try:
+        import httpx
+
+        resp = httpx.get("http://localhost:11435/api/ps", timeout=5)
+        if resp.status_code == 200:
+            for model in resp.json().get("models", []):
+                if model.get("size_vram", 0) > 0:
+                    _ollama_has_gpu = True
+                    return True
+        _ollama_has_gpu = False
+    except Exception:
+        _ollama_has_gpu = False
+    return _ollama_has_gpu
+
+
+def _recall_workers() -> int:
+    """SAGE recall concurrency: 4 with GPU, 2 without. Override: SAGE_RECALL_WORKERS."""
+    env = os.getenv("SAGE_RECALL_WORKERS")
+    if env:
+        try:
+            return max(1, min(int(env), 8))
+        except (TypeError, ValueError):
+            pass
+    return 4 if _ollama_gpu_available() else 2
 
 
 def _throttle() -> None:
@@ -99,6 +141,16 @@ def _get_client() -> Optional[SageClient]:
         ):
             needs_init = True
         if needs_init:
+            if not _ollama_gpu_available() and not os.getenv("SAGE_FORCE_CPU"):
+                logger.debug(
+                    "SAGE pipeline hooks disabled on CPU — too slow for "
+                    "automated use. Set SAGE_FORCE_CPU=1 to override. "
+                    "MCP tools (sage_recall etc.) still work for manual use."
+                )
+                _client = None
+                _client_none_decided_at = time.time()
+                _client_initialised = True
+                return _client
             try:
                 config = SageConfig.from_env()
                 candidate = SageClient(config)
@@ -139,7 +191,7 @@ def _propose_redacted(
     confidence: float,
     tags: Optional[List[str]] = None,
 ) -> bool:
-    _sage_metrics["propose_attempted"] += 1
+    _metric_inc("propose_attempted")
     redacted_content = redact_secrets(content)
     ok = client.propose(
         content=redacted_content,
@@ -149,9 +201,9 @@ def _propose_redacted(
         tags=tags,
     )
     if ok:
-        _sage_metrics["propose_succeeded"] += 1
+        _metric_inc("propose_succeeded")
     else:
-        _sage_metrics["propose_failed"] += 1
+        _metric_inc("propose_failed")
     return ok
 
 
@@ -299,7 +351,7 @@ def recall_context_for_codeql_build(
     if client is None:
         return []
     try:
-        _sage_metrics["recall_attempted"] += 1
+        _metric_inc("recall_attempted")
         lang_str = ", ".join(languages or []) or "unknown"
         findings = client.query(
             text=(
@@ -320,10 +372,10 @@ def recall_context_for_codeql_build(
             min_confidence=0.5,
         )
         merged = _merge_recall_rows(findings, methodology, top_k=8)
-        _sage_metrics["recall_hits"] += len(merged)
+        _metric_inc("recall_hits", len(merged))
         return merged
     except Exception as e:
-        logger.debug(f"SAGE codeql recall failed: {e}")
+        logger.debug("SAGE codeql recall failed: %s", e)
         return []
 
 
@@ -357,7 +409,7 @@ def store_codeql_build_reliability(
             tags=["codeql", "build", auto_detect_outcome],
         )
     except Exception as e:
-        logger.debug(f"SAGE codeql reliability store failed: {e}")
+        logger.debug("SAGE codeql reliability store failed: %s", e)
 
 
 def infer_codeql_build_from_sage_recall_row(
@@ -412,7 +464,7 @@ def recall_context_for_fuzzing_strategy(
     if client is None:
         return []
     try:
-        _sage_metrics["recall_attempted"] += 1
+        _metric_inc("recall_attempted")
         query = (
             "What fuzzing strategies produced crashes for this binary "
             f"or similar binaries ({binary_fingerprint})?"
@@ -435,10 +487,10 @@ def recall_context_for_fuzzing_strategy(
             min_confidence=0.5,
         )
         merged = _merge_recall_rows(results, methodology, top_k=8)
-        _sage_metrics["recall_hits"] += len(merged)
+        _metric_inc("recall_hits", len(merged))
         return merged
     except Exception as e:
-        logger.debug(f"SAGE fuzzing recall failed: {e}")
+        logger.debug("SAGE fuzzing recall failed: %s", e)
         return []
 
 
@@ -472,7 +524,7 @@ def store_fuzzing_strategy_outcome(
             tags=["fuzzing", "strategy", strategy_id],
         )
     except Exception as e:
-        logger.debug(f"SAGE fuzzing strategy store failed: {e}")
+        logger.debug("SAGE fuzzing strategy store failed: %s", e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -534,7 +586,7 @@ def recall_prior_finding_verdict(
     if client is None:
         return None
     try:
-        _sage_metrics["recall_attempted"] += 1
+        _metric_inc("recall_attempted")
         results = client.query(
             text=(
                 f"Finding verdict: rule={rule_id} "
@@ -550,7 +602,7 @@ def recall_prior_finding_verdict(
                 continue
             for v in _SUPPRESS_VERDICTS:
                 if f"||verdict={v}||" in content:
-                    _sage_metrics["recall_hits"] += 1
+                    _metric_inc("recall_hits")
                     return {
                         "verdict": v,
                         "source_hash": source_hash,
@@ -583,12 +635,13 @@ def store_finding_verdict(
         return False
     try:
         fp = _finding_fingerprint(rule_id, file_path, function)
+        _s = _sanitise_delim
         return _propose_redacted(
             client=client,
             content=(
-                f"Finding verdict: fp={fp} rule={rule_id} "
-                f"file={file_path} fn={function} "
-                f"||src={source_hash}|| ||verdict={verdict}||"
+                f"Finding verdict: fp={fp} rule={_s(rule_id)} "
+                f"file={_s(file_path)} fn={_s(function)} "
+                f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}||"
             ),
             memory_type="fact",
             domain_tag=_fp_domain(repo_path),
@@ -673,7 +726,7 @@ def recall_proven_rules(
     if client is None:
         return []
     try:
-        _sage_metrics["recall_attempted"] += 1
+        _metric_inc("recall_attempted")
         results = client.query(
             text=f"Proven checker rule engine={engine} cwe={cwe}",
             domain_tag=_RULE_LIBRARY_DOMAIN,
@@ -681,7 +734,7 @@ def recall_proven_rules(
             min_confidence=0.7,
         )
         if results:
-            _sage_metrics["recall_hits"] += len(results)
+            _metric_inc("recall_hits", len(results))
         return results
     except Exception as e:
         logger.debug("SAGE rule library recall failed: %s", e)
@@ -736,6 +789,187 @@ def should_replay_rule(meta: Dict[str, Any]) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Audit — hypothesis verdict recall + observation transfer
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AUDIT_DOMAIN = "raptor-audit"
+
+_AUDIT_SKIP_STATUSES = frozenset({"clean", "dormant"})
+
+
+def _audit_domain(repo_path: str) -> str:
+    return f"{_AUDIT_DOMAIN}-{_repo_key(repo_path)}"
+
+
+def store_audit_hypothesis_verdict(
+    repo_path: str,
+    file_path: str,
+    function: str,
+    hypothesis: str,
+    status: str,
+    evidence_tool: str,
+    source_hash: str,
+) -> bool:
+    """Store an audit hypothesis verdict to SAGE.
+
+    Keyed on file + function + hypothesis hash + source hash so the
+    same hypothesis on unchanged source is recalled and skipped on
+    re-audit.
+    """
+    if not source_hash or not hypothesis:
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        hyp_hash = sha256_string(hypothesis)[:16]
+        _s = _sanitise_delim
+        confidence = 0.90 if evidence_tool else 0.75
+        return _propose_redacted(
+            client=client,
+            content=(
+                f"Audit hypothesis verdict: "
+                f"||file={_s(file_path)}|| ||fn={_s(function)}|| "
+                f"||hyp={_s(hyp_hash)}|| ||src={_s(source_hash)}|| "
+                f"||status={_s(status)}|| ||tool={_s(evidence_tool)}|| "
+                f"hypothesis: {hypothesis[:300]}"
+            ),
+            memory_type="fact",
+            domain_tag=_audit_domain(repo_path),
+            confidence=confidence,
+            tags=["audit", "hypothesis", status],
+        )
+    except Exception as e:
+        logger.debug("SAGE audit hypothesis store failed: %s", e)
+        return False
+
+
+def recall_audit_hypothesis_verdict(
+    repo_path: str,
+    file_path: str,
+    function: str,
+    hypothesis: str = "",
+    source_hash: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Recall a prior audit hypothesis verdict from SAGE.
+
+    Returns ``{status, tool, source_hash}`` if a prior verdict exists
+    with matching source hash.  Returns ``None`` otherwise.
+    Only ``clean`` and ``dormant`` verdicts trigger skip on recall —
+    findings and suspicious results are always re-tested.
+
+    When *hypothesis* is empty the query matches by file+function only
+    and skips the hypothesis-hash check — used for pre-review skip
+    where the LLM hypothesis is not yet known.
+    """
+    if not source_hash:
+        return None
+    client = _get_client()
+    if client is None:
+        return None
+    try:
+        hyp_hash = sha256_string(hypothesis)[:16] if hypothesis else ""
+        _metric_inc("recall_attempted")
+        query_text = (
+            f"Audit hypothesis verdict: "
+            f"file={file_path} fn={function}"
+        )
+        if hyp_hash:
+            query_text += f" hyp={hyp_hash}"
+        results = client.query(
+            text=query_text,
+            domain_tag=_audit_domain(repo_path),
+            top_k=3,
+            min_confidence=0.7,
+        )
+        for row in results:
+            content = str(row.get("content") or "")
+            if f"||src={source_hash}||" not in content:
+                continue
+            if hyp_hash and f"||hyp={hyp_hash}||" not in content:
+                continue
+            for s in _AUDIT_SKIP_STATUSES:
+                if f"||status={s}||" in content:
+                    tool = ""
+                    tool_match = re.search(r"\|\|tool=([^|]*)\|\|", content)
+                    if tool_match:
+                        tool = tool_match.group(1)
+                    _metric_inc("recall_hits")
+                    return {
+                        "status": s,
+                        "tool": tool,
+                        "source_hash": source_hash,
+                    }
+        return None
+    except Exception as e:
+        logger.debug("SAGE audit hypothesis recall failed: %s", e)
+        return None
+
+
+def store_audit_observation(
+    repo_path: str,
+    observation: str,
+    kind: str,
+    source_function: str,
+) -> bool:
+    """Store a tool-confirmed audit observation to SAGE for cross-target transfer.
+
+    Only stores ``tool_confirmation`` and ``tool_refutation`` kinds —
+    these are mechanical verdicts, not LLM opinions.
+    """
+    if kind not in ("tool_confirmation", "tool_refutation"):
+        return False
+    if not observation or len(observation) < 20:
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        return _propose_redacted(
+            client=client,
+            content=(
+                f"Audit observation ({kind}): {observation}\n"
+                f"  Source: {source_function}"
+            ),
+            memory_type="observation",
+            domain_tag="raptor-methodology",
+            confidence=0.85 if kind == "tool_confirmation" else 0.75,
+            tags=["audit", "observation", kind],
+        )
+    except Exception as e:
+        logger.debug("SAGE audit observation store failed: %s", e)
+        return False
+
+
+def recall_audit_observations(
+    subject: str,
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
+    """Recall prior audit observations from the methodology domain.
+
+    Returns tool-confirmed patterns and refutations relevant to a
+    subject (e.g. "unchecked return value", "integer overflow").
+    """
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _metric_inc("recall_attempted")
+        results = client.query(
+            text=f"Audit observation: {subject}",
+            domain_tag="raptor-methodology",
+            top_k=top_k,
+            min_confidence=0.7,
+        )
+        out = [r for r in results if "Audit observation" in str(r.get("content", ""))]
+        _metric_inc("recall_hits", len(out))
+        return out
+    except Exception as e:
+        logger.debug("SAGE audit observation recall failed: %s", e)
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SCA (Software Composition Analysis) — mechanical short-circuit
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -761,7 +995,7 @@ def recall_context_for_sca(
     if client is None:
         return []
     try:
-        _sage_metrics["recall_attempted"] += 1
+        _metric_inc("recall_attempted")
         query_parts = [
             "Prior SCA findings: confirmed malicious packages,"
             " false-positive rulings, supply-chain attack patterns"
@@ -790,14 +1024,14 @@ def recall_context_for_sca(
             min_confidence=0.5,
         )
         merged = _merge_recall_rows(results, methodology, top_k=10)
-        _sage_metrics["recall_hits"] += len(merged)
+        _metric_inc("recall_hits", len(merged))
         if merged:
             logger.info(
-                f"SAGE: Recalled {len(merged)} SCA memories for context"
+                "SAGE: Recalled %d SCA memories for context", len(merged)
             )
         return merged
     except Exception as e:
-        logger.debug(f"SAGE SCA recall failed: {e}")
+        logger.debug("SAGE SCA recall failed: %s", e)
         return []
 
 
@@ -882,9 +1116,451 @@ def store_sca_outcomes(
             _throttle()
         except Exception as e:
             logger.debug(
-                f"SAGE SCA store failed for {outcome.get('package_name', '?')}: {e}"
+                "SAGE SCA store failed for %s: %s", outcome.get('package_name', '?'), e
             )
 
     if stored:
-        logger.info(f"SAGE: stored {stored} SCA outcomes for {repo_name}")
+        logger.info("SAGE: stored %d SCA outcomes for %s", stored, repo_name)
     return stored
+
+
+# ------------------------------------------------------------------
+# Study / Teach — concept memory (N1)
+# ------------------------------------------------------------------
+
+def _concepts_domain(repo_path: str) -> str:
+    return f"raptor-concepts-{_repo_key(repo_path)}"
+
+
+_CONFIDENCE_TO_SAGE: Dict[str, float] = {
+    "inferred": 0.55,
+    "traced": 0.80,
+    "corroborated": 0.90,
+    "documented": 0.88,
+    "tested": 0.95,
+}
+
+
+def store_study_concepts(
+    repo_path: str,
+    domain_model: Any,
+    *,
+    study_scope: str = "",
+) -> int:
+    """Store concepts, invariants, and contracts from a domain model to SAGE.
+
+    Each concept is stored as a separate memory keyed by its identifier,
+    with invariants and contracts inlined. This enables per-identifier
+    recall for teach and cross-project reuse.
+
+    Args:
+        repo_path: Target repository path (for domain scoping).
+        domain_model: A DomainModel instance.
+        study_scope: The study target scope (e.g. "/usr/src/linux" vs
+            "crypto/af_alg"). Stored in content for relevance gating.
+
+    Returns:
+        Number of concepts stored.
+    """
+    client = _get_client()
+    if client is None:
+        return 0
+
+    stored = 0
+    repo_name = Path(repo_path).name
+    scope_label = study_scope or repo_name
+
+    concept_invariants: Dict[str, list] = {}
+    for inv in domain_model.invariants:
+        concept_invariants.setdefault(inv.concept, []).append(inv)
+
+    concept_contracts: Dict[str, list] = {}
+    for contract in domain_model.contracts:
+        for concept in domain_model.concepts:
+            if any(
+                contract.function in (ev.item or "")
+                or contract.function in concept.id
+                or contract.file in concept.id
+                for ev in concept.evidence
+            ):
+                concept_contracts.setdefault(concept.id, []).append(contract)
+                break
+
+    for concept in domain_model.concepts:
+        if concept.confidence == "inferred":
+            continue
+
+        try:
+            parts = [
+                f"Concept [{concept.id}] in {scope_label}: "
+                f"{concept.description}"
+            ]
+
+            evidence_files = set()
+            evidence_hashes = []
+            for ev in concept.evidence:
+                loc = f"{ev.file}:{ev.line}" if ev.line else ev.file
+                h_tag = f" [h={ev.hash}]" if getattr(ev, "hash", None) else ""
+                parts.append(f"  Evidence ({ev.type}): {loc}{h_tag} — {ev.observation}")
+                if ev.file:
+                    evidence_files.add(ev.file)
+                if getattr(ev, "hash", None):
+                    evidence_hashes.append(ev.hash)
+
+            invs = concept_invariants.get(concept.id, [])
+            for inv in invs:
+                parts.append(
+                    f"  Invariant [{inv.id}]: {inv.statement} "
+                    f"(negation: {inv.negation})"
+                )
+                if inv.relevant_cwes:
+                    parts.append(f"    CWEs: {', '.join(inv.relevant_cwes)}")
+
+            contracts = concept_contracts.get(concept.id, [])
+            for ct in contracts:
+                ct_parts = [f"  Contract [{ct.function}]"]
+                if ct.when:
+                    ct_parts.append(f"when: {ct.when}")
+                if ct.ownership_transfer:
+                    ct_parts.append(f"ownership: {ct.ownership_transfer}")
+                parts.append(" ".join(ct_parts))
+
+            parts.append(f"  Study scope: {scope_label}")
+            parts.append(f"  Confidence: {concept.confidence}")
+            if evidence_files:
+                parts.append(
+                    f"  Evidence files: {', '.join(sorted(evidence_files))}"
+                )
+            if evidence_hashes:
+                composite = sha256_string(
+                    "|".join(sorted(evidence_hashes))
+                )[:12]
+                parts.append(f"  Source hash: {composite}")
+
+            content = "\n".join(parts)
+
+            confidence = _CONFIDENCE_TO_SAGE.get(concept.confidence, 0.70)
+
+            tags = ["study", "concept", concept.id]
+            if invs:
+                tags.append("has_invariants")
+            for inv in invs:
+                tags.extend(inv.mechanism_tags[:3])
+
+            if _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="fact",
+                domain_tag=_concepts_domain(repo_path),
+                confidence=confidence,
+                tags=tags,
+            ):
+                stored += 1
+            _throttle()
+        except Exception as e:
+            logger.debug("SAGE concept store failed for %s: %s", concept.id, e)
+
+    if stored:
+        logger.info(
+            "SAGE: stored %d concepts from study of %s", stored, scope_label
+        )
+    return stored
+
+
+def store_teach_concepts(
+    repo_path: str,
+    teach_json: dict,
+) -> int:
+    """Store structured concepts from a teach session to SAGE.
+
+    Accepts the JSON blob emitted by TEACH-4 and builds a DomainModel
+    from it, stamps evidence hashes, then delegates to
+    ``store_study_concepts`` for SAGE storage.
+
+    Args:
+        repo_path: Target repository path.
+        teach_json: Dict with ``concepts``, ``invariants``, ``contracts``
+            lists, plus ``subject`` and ``source_root``.
+
+    Returns:
+        Number of concepts stored.
+    """
+    from core.concepts.model import (
+        Concept,
+        Contract,
+        DomainModel,
+        Evidence,
+        Invariant,
+    )
+    from core.concepts.study import _stamp_evidence_hashes
+
+    source_root = Path(teach_json.get("source_root", repo_path))
+    subject = teach_json.get("subject", "")
+
+    concepts = []
+    for c in teach_json.get("concepts", []):
+        evidence = [
+            Evidence(
+                type=e.get("type", "code_path"),
+                file=e.get("file", ""),
+                observation=e.get("observation", ""),
+                line=e.get("line"),
+                item=e.get("item"),
+            )
+            for e in c.get("evidence", [])
+        ]
+        concepts.append(Concept(
+            id=c.get("id", ""),
+            description=c.get("description", ""),
+            evidence=evidence,
+            confidence=c.get("confidence", "traced"),
+        ))
+
+    invariants = [
+        Invariant(
+            id=i.get("id", ""),
+            concept=i.get("concept", ""),
+            statement=i.get("statement", ""),
+            negation=i.get("negation", ""),
+            relevant_cwes=i.get("relevant_cwes", []),
+            mechanism_tags=i.get("mechanism_tags", []),
+        )
+        for i in teach_json.get("invariants", [])
+    ]
+
+    contracts = [
+        Contract(
+            function=ct.get("function", ""),
+            file=ct.get("file", ""),
+            when=ct.get("when", ""),
+            input_semantics=ct.get("input_semantics", ""),
+            output_semantics=ct.get("output_semantics", ""),
+            ownership_transfer=ct.get("ownership_transfer", ""),
+        )
+        for ct in teach_json.get("contracts", [])
+    ]
+
+    all_evidence = [e for c in concepts for e in c.evidence]
+    _stamp_evidence_hashes(all_evidence, source_root)
+
+    dm = DomainModel(
+        target=str(source_root),
+        source_root=str(source_root),
+        concepts=concepts,
+        invariants=invariants,
+        contracts=contracts,
+    )
+
+    return store_study_concepts(
+        repo_path,
+        dm,
+        study_scope=subject or Path(repo_path).name,
+    )
+
+
+def recall_concepts_for_teach(
+    repo_path: str,
+    subject: str,
+    *,
+    evidence_files: Optional[List[str]] = None,
+    inventory_functions: Optional[List[str]] = None,
+    min_confidence: float = 0.65,
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
+    """Recall prior study concepts relevant to a teach query.
+
+    Implements the N1 relevance gate: semantic match from SAGE, then
+    filtered by file overlap, caller/callee overlap, and confidence
+    floor.
+
+    Args:
+        repo_path: Target repository path (queries repo-scoped domain
+            first, then cross-project via methodology domain).
+        subject: The teach subject (e.g. "scatterlists", "struct page").
+        evidence_files: Files in the current target — used for file
+            overlap check.
+        inventory_functions: Functions in the current target — used for
+            caller/callee overlap check.
+        min_confidence: Minimum SAGE confidence score.
+        top_k: Maximum results to return.
+
+    Returns:
+        List of recall rows, each with content, confidence, domain,
+        and a relevance_score field (0.0–1.0).
+    """
+    client = _get_client()
+    if client is None:
+        return []
+
+    try:
+        _metric_inc("recall_attempted")
+
+        query = (
+            f"Semantic concept for {subject}: ownership, lifetime, "
+            f"aliasing, invariants, contracts"
+        )
+
+        results = client.query(
+            text=query,
+            domain_tag=_concepts_domain(repo_path),
+            top_k=top_k * 2,
+            min_confidence=min_confidence,
+        )
+
+        cross_project = client.query(
+            text=query,
+            domain_tag="raptor-methodology",
+            top_k=3,
+            min_confidence=0.70,
+        )
+
+        all_rows = _merge_recall_rows(results, cross_project, top_k=top_k * 2)
+
+        scored = _apply_relevance_gate(
+            all_rows,
+            evidence_files=evidence_files,
+            inventory_functions=inventory_functions,
+        )
+
+        scored.sort(key=lambda r: r.get("relevance_score", 0), reverse=True)
+        out = scored[:top_k]
+
+        _metric_inc("recall_hits", len(out))
+        return out
+    except Exception as e:
+        logger.debug("SAGE teach recall failed: %s", e)
+        return []
+
+
+def recall_concepts_for_study(
+    repo_path: str,
+    identifiers: List[str],
+    *,
+    min_confidence: float = 0.65,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Recall prior concepts for study identifiers (skip/seed/cross-pollinate).
+
+    Returns a dict keyed by identifier name, each value a list of
+    matching recall rows. Empty list means no prior knowledge — study
+    from scratch.
+
+    Args:
+        repo_path: Target repository path.
+        identifiers: Identifier names from study-list.json.
+        min_confidence: Minimum SAGE confidence score.
+
+    Returns:
+        {identifier_name: [recall_rows]}.
+    """
+    client = _get_client()
+    if client is None:
+        return {}
+
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    domain = _concepts_domain(repo_path)
+
+    def _recall_one(name: str) -> tuple:
+        try:
+            rows = client.query(
+                text=f"Concept [{name}]: ownership, lifetime, contracts",
+                domain_tag=domain,
+                top_k=3,
+                min_confidence=min_confidence,
+            )
+            return (name, rows)
+        except Exception as e:
+            logger.debug("SAGE study recall failed for %s: %s", name, e)
+            return (name, None)
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    total = len(identifiers)
+    workers = _recall_workers()
+    logger.info("SAGE: recalling prior concepts for %d identifiers (%d workers)", total, workers)
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_recall_one, n): n for n in identifiers}
+        for fut in as_completed(futures):
+            name, rows = fut.result()
+            done += 1
+            _metric_inc("recall_attempted")
+            if rows:
+                _metric_inc("recall_hits", len(rows))
+                result[name] = rows
+            if done % 20 == 0 or done == total:
+                logger.info("SAGE: recall %d/%d (%d hits)", done, total, len(result))
+
+    if result:
+        logger.info(
+            "SAGE: recalled prior concepts for %d/%d identifiers",
+            len(result), total
+        )
+    return result
+
+
+def _apply_relevance_gate(
+    rows: List[Dict[str, Any]],
+    *,
+    evidence_files: Optional[List[str]] = None,
+    inventory_functions: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Score recall rows by relevance to the current context.
+
+    Relevance signals:
+    - File overlap: concept evidence cites files in the current target.
+    - Function overlap: concept mentions functions in the current inventory.
+    - Confidence: higher SAGE confidence → higher relevance.
+    - Scope breadth: broader study scopes score slightly higher for
+      universal applicability.
+
+    Each row gets a relevance_score field (0.0–1.0). Rows below 0.3
+    are dropped entirely.
+    """
+    evidence_set = set(evidence_files or [])
+    fn_set = set(inventory_functions or [])
+
+    scored: List[Dict[str, Any]] = []
+    for row in rows:
+        content = row.get("content", "")
+        sage_confidence = row.get("confidence", 0.5)
+
+        score = 0.0
+
+        score += min(sage_confidence, 1.0) * 0.3
+
+        if evidence_set:
+            file_hits = sum(
+                1 for f in evidence_set
+                if f in content
+            )
+            if file_hits:
+                score += min(file_hits / max(len(evidence_set), 1), 1.0) * 0.35
+
+        if fn_set:
+            fn_hits = sum(
+                1 for fn in fn_set
+                if fn in content
+            )
+            if fn_hits:
+                score += min(fn_hits / max(len(fn_set), 1), 1.0) * 0.25
+
+        if not evidence_set and not fn_set:
+            score += 0.2
+
+        if "Study scope:" in content:
+            scope_line = [
+                ln for ln in content.split("\n")
+                if ln.strip().startswith("Study scope:")
+            ]
+            if scope_line:
+                scope = scope_line[0].split(":", 1)[1].strip()
+                if "/" not in scope or scope.count("/") <= 1:
+                    score += 0.1
+
+        if score >= 0.3:
+            row_copy = dict(row)
+            row_copy["relevance_score"] = round(score, 3)
+            scored.append(row_copy)
+
+    return scored

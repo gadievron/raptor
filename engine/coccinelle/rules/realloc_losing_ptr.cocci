@@ -9,6 +9,7 @@
 // CWE-401: Missing Release of Memory after Effective Lifetime
 // CWE-131: Incorrect Calculation of Buffer Size (undersized on failure)
 // Zero-FP confidence: very high — always a latent bug.
+// @role: verification
 
 @realloc_self@
 expression P;

@@ -18,7 +18,6 @@ Usage:
   raptor-sage help             Show this help
 """
 import faulthandler
-import os
 import signal
 import sys
 from pathlib import Path
@@ -28,6 +27,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -219,7 +219,7 @@ def cmd_recall(client, args):
     kwargs: Dict[str, Any] = {}
     if args.domain:
         kwargs["domain_tag"] = args.domain
-    top_k = args.top or 5
+    top_k = args.top if args.top is not None else 5
 
     try:
         embedding = client.embed(query_text)
@@ -250,7 +250,8 @@ def cmd_recall(client, args):
 
 
 def cmd_list(client, args):
-    kwargs: Dict[str, Any] = dict(limit=args.limit or 25)
+    kwargs: Dict[str, Any] = dict(
+        limit=args.limit if args.limit is not None else 25)
     if args.domain:
         kwargs["domain"] = args.domain
     if args.tag:
@@ -295,9 +296,10 @@ def cmd_remember(client, args):
               file=sys.stderr)
         return 1
 
-    domain = args.domain or "general"
-    memory_type = args.type or "observation"
-    confidence = args.confidence or 0.8
+    domain = args.domain if args.domain is not None else "general"
+    memory_type = args.type if args.type is not None else "observation"
+    confidence = (args.confidence if args.confidence is not None
+                  else 0.8)
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
 
     try:

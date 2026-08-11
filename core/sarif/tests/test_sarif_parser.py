@@ -214,5 +214,59 @@ class TestSarifHelpers(unittest.TestCase):
         self.assertIn("valid", rules)
 
 
+class TestNullPhysicalLocation(unittest.TestCase):
+    """SARIF allows explicit null values for location fields."""
+
+    def test_null_physical_location_does_not_crash(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        sarif = {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "test", "rules": []}},
+                "results": [{
+                    "ruleId": "test-rule",
+                    "message": {"text": "finding"},
+                    "locations": [{
+                        "physicalLocation": None,
+                    }],
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "null-loc.sarif"
+            path.write_text(json.dumps(sarif))
+            findings = parse_sarif_findings(path)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["rule_id"], "test-rule")
+        self.assertIsNone(findings[0]["file"])
+
+    def test_null_artifact_location_does_not_crash(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        sarif = {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "test", "rules": []}},
+                "results": [{
+                    "ruleId": "test-rule",
+                    "message": {"text": "finding"},
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": None,
+                            "region": None,
+                        },
+                    }],
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "null-artifact.sarif"
+            path.write_text(json.dumps(sarif))
+            findings = parse_sarif_findings(path)
+        self.assertEqual(len(findings), 1)
+        self.assertIsNone(findings[0]["file"])
+
+
 if __name__ == "__main__":
     unittest.main()

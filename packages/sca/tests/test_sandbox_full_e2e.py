@@ -83,6 +83,7 @@ def test_sandbox_none_completes(tmp_path: Path) -> None:
     assert (out / "findings.json").is_file()
 
 
+@pytest.mark.slow
 @linux_only
 def test_sandbox_network_only_completes(tmp_path: Path) -> None:
     """``--sandbox=network-only`` — Landlock + egress proxy.

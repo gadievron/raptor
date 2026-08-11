@@ -293,7 +293,7 @@ def probe() -> CapabilityReport:
             "On Linux: 'sudo apt install rr' (Intel CPUs only)."
         )
 
-    logger.info(f"Capability probe: {report.summary().splitlines()[0]}")
+    logger.info("Capability probe: %s", report.summary().splitlines()[0])
     return report
 
 

@@ -11,6 +11,7 @@
 // Zero-FP: cross-domain flag is always a bug — FD_CLOEXEC is 1, so
 // F_SETFL with FD_CLOEXEC sets an undefined file-status bit;
 // O_NONBLOCK to F_SETFD sets random fd-flag bits.
+// @role: verification
 
 @setfl_fdflags@
 expression FD;

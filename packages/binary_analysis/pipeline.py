@@ -1200,94 +1200,6 @@ def _ingest_graph(result: BinaryAnalysisResult, out_dir: Path) -> None:
         _ingest_graph_body(store, result, out_dir)
 
 
-_STATUS_MAP = {
-    "binary_entry_point_candidate": "entry_point",
-    "binary_sink_candidate": "sink",
-    "binary_surface_candidate": "flow_step",
-}
-
-
-def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None:
-    try:
-        from core.annotations.models import Annotation
-        from core.annotations.storage import write_annotation
-    except ImportError:
-        return
-    ann_dir = out_dir / "annotations"
-    binary_file = Path(result.manifest.binary_path).name
-    count = 0
-
-    for ep in (result.context_map.get("entry_points") or []):
-        if not ep.get("name"):
-            continue
-        ann = Annotation(
-            file=binary_file,
-            function=ep["name"],
-            body=ep.get("evidence_note", ""),
-            metadata={
-                "status": "entry_point",
-                "source": "llm",
-                "evidence_tier": ep.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    for sink in (result.context_map.get("sink_details") or []):
-        if not sink.get("name"):
-            continue
-        status = _STATUS_MAP.get(sink.get("type", ""), "flow_step")
-        ann = Annotation(
-            file=binary_file,
-            function=sink["name"],
-            body=sink.get("evidence_note", ""),
-            metadata={
-                "status": status,
-                "source": "llm",
-                "category": sink.get("category", ""),
-                "evidence_tier": sink.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    for boundary in (result.context_map.get("boundary_details") or []):
-        boundary_name = boundary.get("name") or boundary.get("id", "")
-        if not boundary_name:
-            continue
-        ann = Annotation(
-            file=binary_file,
-            function=boundary_name,
-            body=boundary.get("description", ""),
-            metadata={
-                "status": "trust_boundary",
-                "source": "llm",
-                "evidence_tier": boundary.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    for ingress in (result.context_map.get("external_ingress_candidates") or []):
-        if not ingress.get("name"):
-            continue
-        ann = Annotation(
-            file=binary_file,
-            function=ingress["name"],
-            body=ingress.get("evidence_note", ""),
-            metadata={
-                "status": "entry_point",
-                "source": "llm",
-                "kind": ingress.get("kind", ""),
-                "evidence_tier": ingress.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    if count:
-        logger.info("synthesised %d annotations in %s", count, ann_dir)
-
 
 def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, out_dir: Path) -> None:
     manifest = result.manifest
@@ -2063,7 +1975,6 @@ def analyse_blackbox_binary(
         _ingest_graph(result, out_dir)
     except Exception:
         logger.warning("graph ingest failed; JSON artifacts are intact", exc_info=True)
-    _synthesise_annotations(result, out_dir)
     return result
 
 
@@ -2114,6 +2025,7 @@ def append_fuzz_evidence_to_run(
     for record in bundle.evidence:
         if record.id not in seen:
             existing.append(record.to_dict())
+            seen.add(record.id)
     context_map["evidence"] = existing
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)

@@ -9,6 +9,7 @@
 //
 // CWE-244: Improper Clearing of Heap Data Before Release
 // Matching heuristic: variable or field name contains key/pass/secret/token/cred.
+// @role: detection
 
 @sensitive_free@
 identifier V =~ "key\|pass\|secret\|token\|cred\|priv\|master";

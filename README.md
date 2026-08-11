@@ -27,7 +27,6 @@
 
 ```
 
-<a href="https://smithery.ai/skills?ns=gadievron&utm_source=github&utm_medium=badge"><img src="https://smithery.ai/badge/skills/gadievron"></a>
 <a href="https://github.com/gadievron/raptor/actions/workflows/github-code-scanning/codeql"><img src="https://github.com/gadievron/raptor/actions/workflows/github-code-scanning/codeql/badge.svg"></a>
 
 **Authors:** Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright
@@ -143,6 +142,8 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/scan` | Static analysis with Semgrep and CodeQL | Stable |
 | `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
 | `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
+| `/audit` | Hypothesis-driven, tool-grounded systematic code review | Beta |
+| `/review` | Query audit state: findings, gaps, coverage, operator notes | Stable |
 | `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
 | `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
@@ -474,6 +475,7 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/architecture.md` | Codebase structure and directory tree |
 | `docs/llm.md` | LLM provider configuration, Bedrock, multi-model workflows |
 | `docs/sandbox.md` | Process isolation: profiles, Landlock, namespaces |
+| `docs/audit.md` | Systematic code review: hypotheses, tools, strategies, gates |
 | `docs/validation.md` | Exploitability validation pipeline (stages 0--1) |
 | `docs/static-analysis.md` | Semgrep and Coccinelle rules |
 | `docs/codeql.md` | CodeQL integration and autonomous analysis |

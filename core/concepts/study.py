@@ -11,6 +11,7 @@ domain-model.json.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import re
@@ -18,6 +19,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .model import (
+    CONFIDENCE_GRADES,
+    BugPattern,
     Concept,
     Contract,
     DomainModel,
@@ -29,11 +32,110 @@ from .model import (
 
 logger = logging.getLogger(__name__)
 
+
+# ------------------------------------------------------------------
+# Multi-pass merge
+# ------------------------------------------------------------------
+
+def _merge_domain_models(prior: DomainModel, new: DomainModel) -> DomainModel:
+    """Merge *new* pass output into *prior*, keyed by ID. New wins on collision."""
+    concept_map: dict[str, Concept] = {c.id: c for c in prior.concepts}
+    for c in new.concepts:
+        concept_map[c.id] = c
+
+    inv_map: dict[str, Invariant] = {i.id: i for i in prior.invariants}
+    for i in new.invariants:
+        inv_map[i.id] = i
+
+    ct_map: dict[str, Contract] = {}
+    for ct in prior.contracts:
+        ct_map[ct.function] = ct
+    for ct in new.contracts:
+        ct_map[ct.function] = ct
+
+    bp_map: dict[str, BugPattern] = {bp.id: bp for bp in prior.bug_patterns}
+    for bp in new.bug_patterns:
+        bp_map[bp.id] = bp
+
+    return DomainModel(
+        version=new.version,
+        target=new.target or prior.target,
+        source_root=new.source_root or prior.source_root,
+        concepts=list(concept_map.values()),
+        invariants=list(inv_map.values()),
+        contracts=list(ct_map.values()),
+        bug_patterns=list(bp_map.values()),
+        security_context=new.security_context or prior.security_context,
+    )
+
+
+# ------------------------------------------------------------------
+# Project-level promotion
+# ------------------------------------------------------------------
+
+def _promote_to_project(per_run_path: Path, output_dir: Path) -> None:
+    """Copy per-run domain-model.json to the project-level canonical location.
+
+    Target: ``<project>/concepts/domain-model.json``.  Only promotes when
+    the run directory's parent looks like a project directory (has the
+    ``project.json`` marker that ProjectManager writes, or lives under
+    ``out/projects/``).
+    """
+    import os
+    import shutil
+    import tempfile
+
+    project_dir = output_dir.parent
+    if not (
+        (project_dir / "project.json").is_file()
+        or _is_under_projects_base(project_dir)
+    ):
+        return
+
+    concepts_dir = project_dir / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    canonical = concepts_dir / "domain-model.json"
+
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(
+            dir=str(concepts_dir), suffix=".tmp", prefix="domain-model-",
+        )
+        os.close(fd)
+        shutil.copy2(str(per_run_path), tmp)
+        Path(tmp).rename(canonical)
+        logger.info("promoted domain-model.json to %s", canonical)
+    except OSError:
+        logger.debug("domain-model promotion failed", exc_info=True)
+        if tmp:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _is_under_projects_base(directory: Path) -> bool:
+    """Check if directory is under the default projects output base."""
+    try:
+        from core.project.project import DEFAULT_OUTPUT_BASE
+
+        directory.resolve().relative_to(DEFAULT_OUTPUT_BASE.resolve())
+        return True
+    except (ValueError, Exception):
+        return False
+
+
 # ------------------------------------------------------------------
 # Documentation context loading (with injection defence)
 # ------------------------------------------------------------------
 
 _DOC_MAX_BYTES = 8192
+_BATCH_WALL_TIMEOUT = 300  # seconds — abandon a hung API call
+_CONSECUTIVE_FAIL_LIMIT = 3  # abort run after N consecutive batch failures
+
+
+class _BatchLLMError(Exception):
+    """LLM call failed for a batch — lets callers distinguish from empty-but-ok."""
 _INJECTION_RE = re.compile(
     r"(?:ignore|disregard|forget)\s+(?:all\s+)?(?:previous|above|prior)"
     r"|you\s+are\s+now"
@@ -62,8 +164,10 @@ def _load_doc_context(related_docs: list[dict]) -> str:
         filepath = entry.get("file", "")
         if not filepath:
             continue
-        # Defence: reject path traversal
+        # Defence: reject path traversal and absolute paths
         if ".." in Path(filepath).parts:
+            continue
+        if Path(filepath).is_absolute():
             continue
         try:
             content = Path(filepath).read_text(
@@ -158,7 +262,7 @@ not just what it does structurally.
 
 You will receive study items in two groups:
 - **FOCUS items**: from the target subsystem. These are what you're studying. \
-  Produce concepts, invariants, and contracts for these.
+  Produce concepts, invariants, contracts, and bug patterns for these.
 - **CONTEXT items**: dependencies from other parts of the codebase, included \
   so you understand the types and APIs the focus items use. Do NOT produce \
   standalone concepts for context items — use them only to understand \
@@ -166,25 +270,103 @@ You will receive study items in two groups:
 
 ## What to produce
 
-**Concepts**: named semantic ideas that describe what the code means. \
-Examples: "semaphore undo tracking" (processes' modifications are \
-automatically reversed on exit), "message queue pipelining" (direct \
-sender-to-receiver transfer bypassing the queue). Each concept must \
-have at least 2 evidence citations.
+**Concepts**: named semantic ideas that describe how the subsystem works. \
+Each concept must be UNIQUE — do not restate or paraphrase an idea \
+already covered by another concept. A good concept set has 5-15 \
+distinct ideas, each describing a different aspect of the subsystem. \
+Bad: five concepts all saying "fields are encoded in the low bits". \
+Good: one concept about the encoding, one about traversal, one about \
+the ownership model.
+
+Examples: "page_link low-bit stealing" (pointer and flags share one \
+field), "scatter_walk state machine" (map-process-unmap lifecycle). \
+Each concept must have at least 2 evidence citations.
 
 **Invariants**: conditions that must hold for correct operation. Each \
 invariant references a concept and has both a positive statement \
-("refcount > 0 while in use") and a negation ("use-after-free if \
-violated"). Focus on invariants that are non-obvious — not just \
-"pointer must be non-NULL".
+("refcount > 0 while in use") and a negation that describes the \
+concrete failure mode ("use-after-free: freed object accessed via \
+stale pointer"). Focus on invariants that are non-obvious and \
+actionable for auditing.
 
-**Contracts**: per-function semantic guarantees. What the caller must \
-provide, what the function guarantees in return, and whether ownership \
-transfers. Focus on functions where the contract is interesting: \
-locking requirements, ownership transfer, mode-dependent behaviour.
+PREFER ARCHITECTURAL INVARIANTS that span the whole API over \
+per-function parameter checks. An invariant like "the API trusts \
+its callers completely — no input validation anywhere" is worth \
+five invariants about individual unchecked parameters. Think about \
+what a security auditor examining this subsystem for the first time \
+needs to know.
+
+Include invariants about:
+- **Type confusion / dual interpretation**: fields that encode \
+  different pointer types in the same word, distinguished only \
+  by flag bits. Describe what happens when the wrong accessor \
+  is used.
+- **Config-dependent safety**: guards that only exist under debug \
+  builds or specific CONFIG_ options. If a safety check is compiled \
+  out in production, that IS an invariant — "in production, there is \
+  no runtime check for X". List which checks disappear.
+- **Trust boundaries**: which side validates, which side trusts \
+  blindly. If the API blindly trusts its callers (no validation of \
+  offset+length, no bounds check on count parameters), say so as \
+  ONE architectural invariant, not per-function.
+- **Missing validation**: when offset+length, index+count, or \
+  pointer+size are NOT checked against PAGE_SIZE, allocation size, \
+  or similar bounds, that is an invariant. Frame as "The API does \
+  NOT validate X — callers must ensure Y."
+- **Integer overflow**: unsigned arithmetic on sizes, offsets, or \
+  counts that can wrap. If the code uses the sum without checking \
+  for overflow, that is an invariant.
+- **Lifetime/ownership gaps**: when a data structure holds a \
+  pointer but does NOT hold a reference count — the pointed-to \
+  object must outlive the holder. Note exceptions where allocation \
+  and deallocation are paired.
+- **Corrupted input escalation**: what an attacker gains if they \
+  can corrupt the data structure (e.g. via DMA overwrite). Can they \
+  achieve arbitrary read/write?
+
+Do NOT produce trivial invariants ("pointer must not be NULL") or \
+formulaic restatements of state machine transitions ("X is serialised \
+by lock Y"). Do NOT repeat the same invariant for multiple functions \
+— one cross-cutting invariant beats three per-function variants.
+
+**Bug patterns**: common classes of mistakes that callers, \
+maintainers, or the code itself makes. NOT specific bug instances — \
+describe the pattern. Think about: API misuse (wrong accessor, \
+confusing two similar counts, forgetting init/cleanup), resource \
+handling (missing close/free on error paths, double-free after \
+transfer), data validation (unchecked sizes from wire/file, \
+signedness mismatches in comparisons), concurrency (unprotected \
+shared state, lock ordering). \
+Keep descriptions terse (under 15 words): \
+"Manual sg++ instead of sg_next() — skips chain detection", \
+"Using sg->length after dma_map_sg() — field may be overwritten".
+
+**State machines**: when the code implements a protocol or lifecycle, \
+extract states, transitions, and guards. Keep it to genuine state \
+machines, not trivial init→use→destroy sequences.
+
+**Contracts**: per-function semantic guarantees. Focus on functions \
+where the contract is interesting: ownership transfer, mode-dependent \
+behaviour, unchecked caller obligations. For each contract, include \
+a security_note if the function does NOT validate something its \
+callers might assume (no bounds check, no NULL check in production, \
+loops forever on bad input, dereferences NULL on exhaustion).
+
+**Struct annotations**: cover EVERY struct in the focus items — \
+1-3 fields per struct, breadth first. Do not annotate 4 fields on \
+one struct while ignoring others. Skip trivial fields — only \
+annotate fields where the meaning is non-obvious or has security \
+implications. Examples: a field that steals low bits for flags, a \
+size field that is never validated, a pointer that is only valid \
+during a specific lifecycle phase, a count field that may differ \
+from a related count after a transform (e.g. nents vs orig_nents).
 
 ## Quality rules
 
+- **No duplication**: each concept, invariant, and bug pattern must \
+  describe something not already covered by another entry. Before \
+  emitting a concept, mentally check: "did I already say this?" If \
+  yes, skip it.
 - **Evidence required**: every concept needs at least 2 citations \
   (file:line). One evidence item = "inferred", skip it unless you're \
   genuinely confident.
@@ -196,67 +378,13 @@ locking requirements, ownership transfer, mode-dependent behaviour.
   concepts beat many hollow ones.
 - **Contradictions**: if two items imply conflicting semantics, \
   describe both sides and say which is more likely correct.
-- **No security speculation**: you are building understanding, not \
-  finding bugs. Describe what IS, not what could go wrong.
-- **Unresolved references**: if you need to understand a type, \
-  function, or concept that isn't in the items provided, add it to \
-  the `unresolved_references` array. This queues it for a future \
-  study pass. Example: a struct holds a `struct page *` but page \
-  semantics aren't in scope — add `{"name": "page", "kind": "type", \
-  "question": "What are the ownership semantics of struct page?"}`.
-
-## State machines
-
-When the code implements a protocol, socket, device, or file abstraction, \
-extract the state machine:
-
-- **States**: named states with descriptions (e.g. "unbound", "bound", \
-  "keyed", "active")
-- **Transitions**: which function moves between states, what guard \
-  condition must hold, whether the transition is one-shot (irreversible)
-- **Gate functions**: functions that check state before allowing an \
-  operation (e.g. check_key, check_perms)
-- **Serialisation**: which lock protects state transitions (lock_sock, \
-  mutex_lock, spin_lock)
-
-From the state machine, derive GUARD invariants — invariants whose role \
-is to suppress false hypotheses about unreachable states. Use \
-role="guard".
-
-Guard invariants answer: "What CANNOT happen because the state machine \
-prevents it?" For example:
-- "pask->private cannot be NULL during data operations because accept() \
-  requires bind(), and bind() sets pask->private"
-- "Concurrent bind() calls are serialised by lock_sock — no TOCTOU"
-
-A guard invariant has the same structure as a boost invariant (statement, \
-negation, evidence, mechanical_rule) but with role="guard". Its negation \
-describes the false hypothesis it refutes.
-
-## Value constraints
-
-When the code narrows the range of a variable through validation, \
-allocation checks, or computation structure, extract value constraints:
-
-- **NULL guards**: `if (!ptr) return -ERR` — after this check, ptr is \
-  guaranteed non-NULL on the success path. The constraint is: \
-  "ptr is non-NULL past line N".
-- **Validation bounds**: `if (val > max) return -EINVAL` — val is \
-  bounded by max on the success path. The constraint is: \
-  "val <= max past line N".
-- **Counter minimums**: functions like sg_nents() that iterate and \
-  count produce values ≥ 1 for valid inputs.
-- **Allocation-then-check**: `ptr = alloc(); if (!ptr) return -ENOMEM` \
-  — ptr is non-NULL past the check.
-
-From value constraints, derive GUARD invariants with role="guard". \
-For example:
-- "walk->page is non-NULL after skcipher_walk_alloc succeeds" \
-  (negation: "walk->page is NULL after successful allocation")
-- "authsize <= crypto_aead_maxauthsize() after alg_setsockopt" \
-  (negation: "authsize exceeds maximum authentication tag size")
-- "sg_nents() returns >= 1 for any valid scatterlist" \
-  (negation: "sg_nents returns 0 causing underflow")
+- **Unresolved references**: if you need to understand the *semantics* \
+  of something not in the provided items, add it to \
+  `unresolved_references`. Only add items where you need genuine \
+  comprehension — ownership, lifetime, protocol, or contract questions. \
+  Do NOT add items where you just need a struct definition, macro \
+  expansion, or function signature — those are mechanical lookups, \
+  not study questions.
 
 ## Confidence calibration
 
@@ -389,34 +517,12 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                             "documented", "tested",
                         ],
                     },
-                    "role": {
-                        "type": "string",
-                        "enum": ["boost", "guard"],
-                    },
                     "relevant_cwes": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
                             "CWE IDs relevant when this invariant "
                             "is violated. E.g. ['CWE-787', 'CWE-416']."
-                        ),
-                    },
-                    "mechanism_tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Short tags for the vulnerability mechanism "
-                            "this invariant guards against. E.g. "
-                            "['sgl_lifecycle', 'page_aliasing']."
-                        ),
-                    },
-                    "mechanism_keywords": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Domain-specific keywords for matching "
-                            "this invariant to findings. E.g. "
-                            "['page', 'scatterlist', 'refcount']."
                         ),
                     },
                 },
@@ -526,28 +632,151 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                     "output_semantics": {"type": "string"},
                     "ownership_transfer": {"type": "string"},
                     "implication": {"type": "string"},
+                    "security_note": {
+                        "type": "string",
+                        "description": (
+                            "What is NOT checked or validated by "
+                            "this function. E.g. 'no bounds check "
+                            "on nents', 'loops forever on corrupted "
+                            "list', 'dereferences NULL if exhausted'."
+                        ),
+                    },
                 },
                 "required": ["function", "file"],
             },
         },
-        "unresolved_references": {
+        "bug_patterns": {
             "type": "array",
+            "minItems": 3,
+            "description": (
+                "Common mistake patterns in this code or its callers. "
+                "NOT specific bugs — describe the PATTERN. Include: "
+                "unchecked sizes from wire/file, missing free on error "
+                "paths, signedness mismatches, unprotected shared state, "
+                "use-after-transfer. MUST produce at least 3."
+            ),
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
+                    "id": {"type": "string"},
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "Short phrase: what the mistake is and "
+                            "its consequence. Under 15 words. E.g. "
+                            "'Manual sg++ instead of sg_next() — "
+                            "skips chain detection, causes type "
+                            "confusion'."
+                        ),
+                    },
+                    "what_to_grep": {
+                        "type": "string",
+                        "description": (
+                            "A short hint for what to search for in "
+                            "code to find instances of this pattern. "
+                            "E.g. 'sg++ without sg_next', "
+                            "'sg->length after dma_map_sg'."
+                        ),
+                    },
+                    "relevant_cwes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["id", "description"],
+            },
+        },
+        "struct_annotations": {
+            "type": "array",
+            "description": (
+                "One entry per struct. Cover EVERY struct "
+                "listed in '# Struct annotation targets'."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "struct_name": {
+                        "type": "string",
+                        "description": (
+                            "Name without 'struct ' prefix."
+                        ),
+                    },
+                    "fields": {
+                        "type": "array",
+                        "description": (
+                            "1-3 security-relevant fields. "
+                            "Annotate: dual-use encoding, "
+                            "unchecked sizes, counts that "
+                            "diverge after a transform, "
+                            "lifetime constraints, pointer "
+                            "validity windows."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {
+                                    "type": "string",
+                                },
+                                "annotation": {
+                                    "type": "string",
+                                    "description": (
+                                        "Security commentary."
+                                    ),
+                                },
+                            },
+                            "required": [
+                                "field_name", "annotation",
+                            ],
+                        },
+                    },
+                },
+                "required": ["struct_name", "fields"],
+            },
+        },
+        "unresolved_references": {
+            "type": "array",
+            "description": (
+                "Concepts whose semantics you need to understand but "
+                "that were not in the provided items. Only add items "
+                "requiring genuine comprehension (ownership, lifetime, "
+                "protocol, contract). Do NOT add struct definitions, "
+                "macro expansions, or function signatures — those are "
+                "mechanical lookups."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "The identifier that keys this concept "
+                            "(e.g. 'page', 'cred', 'rcu_read_lock')."
+                        ),
+                    },
                     "kind": {
                         "type": "string",
-                        "enum": ["type", "function", "concept"],
+                        "enum": ["identifier", "concept"],
+                        "description": (
+                            "identifier = keyed by a specific type or "
+                            "function but asking about its semantics. "
+                            "concept = a broader domain concept spanning "
+                            "multiple identifiers."
+                        ),
                     },
-                    "question": {"type": "string"},
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "A conceptual question about semantics, not "
+                            "a request for a definition."
+                        ),
+                    },
                     "file_hint": {"type": "string"},
                 },
                 "required": ["name", "question"],
             },
         },
     },
-    "required": ["concepts", "invariants", "contracts"],
+    "required": ["concepts", "invariants", "contracts", "bug_patterns"],
 }
 
 
@@ -622,6 +851,17 @@ def _build_batch_prompt(
         for item in context:
             parts.append(_format_item(item, role="context"))
             parts.append("\n---\n")
+
+    struct_names = sorted({
+        it.name for it in focus + context
+        if it.kind == "struct"
+    })
+    if struct_names:
+        names = ", ".join(struct_names)
+        parts.append(
+            f"\n# Struct annotation targets\n"
+            f"Annotate fields on ALL of these structs: {names}\n"
+        )
 
     return "\n".join(parts)
 
@@ -746,7 +986,7 @@ def _cluster_items(
     in_scope: list[StudyItem],
     deps: list[StudyItem],
     max_context: int = 20,
-    batch_target: int = 15,
+    batch_target: int = 80,
 ) -> list[tuple[list[StudyItem], list[StudyItem]]]:
     """Group in-scope items into batches with relevant context.
 
@@ -754,6 +994,10 @@ def _cluster_items(
     per-file groups are merged into batches of ~batch_target items
     to reduce the number of LLM calls. Files with more items than
     batch_target stay as their own batch.
+
+    batch_target=80 means most subsystems (<80 in-scope items) go
+    in a single LLM call (~20k tokens input).  The LLM sees all
+    items at once, enabling cross-item connections.
 
     ``max_context`` caps context items per batch (default 20). When
     the dep pool is large (e.g. tier-based split), this ensures each
@@ -827,14 +1071,7 @@ def _derive_guard_invariants(
                 ),
                 description=f"{via}() is a one-shot transition from {src} to {dst}",
                 confidence=concept.confidence,
-                role="guard",
-                concept_class="state_machine",
                 relevant_cwes=["CWE-362", "CWE-367"],
-                mechanism_tags=["state_machine", "one_shot_transition"],
-                mechanism_keywords=[
-                    "race", "toctou", "concurrent", "revert",
-                    "one_shot", "irreversible", via,
-                ],
             ))
 
         serialised = t.get("serialised_by")
@@ -849,14 +1086,7 @@ def _derive_guard_invariants(
                 negation=f"TOCTOU race in {via}",
                 description=f"{via}() serialised by {serialised}",
                 confidence=concept.confidence,
-                role="guard",
-                concept_class="state_machine",
                 relevant_cwes=["CWE-362", "CWE-367"],
-                mechanism_tags=["state_machine", "serialisation"],
-                mechanism_keywords=[
-                    "race", "toctou", "concurrent", "lock",
-                    "serialise", serialised, via,
-                ],
             ))
 
         gate = t.get("guard")
@@ -875,13 +1105,7 @@ def _derive_guard_invariants(
                 ),
                 description=f"{gate} gates entry to state {dst}",
                 confidence=concept.confidence,
-                role="guard",
-                concept_class="state_machine",
                 relevant_cwes=["CWE-362", "CWE-863"],
-                mechanism_tags=["state_machine", "gate_check"],
-                mechanism_keywords=[
-                    "gate", "precondition", "state", gate, dst,
-                ],
             ))
 
     return guards
@@ -895,8 +1119,8 @@ def _parse_state_machines(
     concepts: list[Concept] = []
     invariants: list[Invariant] = []
 
-    for sm in raw.get("state_machines", []):
-        sm_id = sm.get("id", "")
+    for sm in raw.get("state_machines") or []:
+        sm_id = sm.get("id") or ""
         if not sm_id:
             continue
 
@@ -904,12 +1128,12 @@ def _parse_state_machines(
             sm_id = f"state_machine.{sm_id}"
 
         evidence = []
-        for e in sm.get("evidence", []):
+        for e in sm.get("evidence") or []:
             if isinstance(e, dict):
                 evidence.append(Evidence(
-                    type=e.get("type", "code_path"),
-                    file=e.get("file", ""),
-                    observation=e.get("observation", ""),
+                    type=e.get("type") or "code_path",
+                    file=e.get("file") or "",
+                    observation=e.get("observation") or "",
                     line=e.get("line"),
                     item=e.get("item"),
                 ))
@@ -917,10 +1141,10 @@ def _parse_state_machines(
         if source_root is not None:
             _stamp_evidence_hashes(evidence, source_root)
 
-        transitions = sm.get("transitions", [])
+        transitions = sm.get("transitions") or []
         concept = Concept(
             id=sm_id,
-            description=sm.get("description", ""),
+            description=sm.get("description") or "",
             evidence=evidence,
             confidence="traced",
             state="proposed",
@@ -928,20 +1152,7 @@ def _parse_state_machines(
         )
         concepts.append(concept)
 
-        # Derive file scope from evidence + transition functions
-        scope_files: set[str] = set()
-        for ev in evidence:
-            if ev.file:
-                scope_files.add(PurePosixPath(ev.file).name)
-
-        # Mechanically derive guard invariants from transitions
         guards = _derive_guard_invariants(concept, transitions)
-        for g in guards:
-            if scope_files:
-                g.scope = {
-                    "files": sorted(scope_files),
-                    "concept_ref": sm_id,
-                }
         invariants.extend(guards)
 
     return concepts, invariants
@@ -952,13 +1163,6 @@ _VC_CWE_MAP: dict[str, list[str]] = {
     "upper_bound": ["CWE-190", "CWE-787", "CWE-125"],
     "lower_bound": ["CWE-191", "CWE-787"],
     "range": ["CWE-190", "CWE-191", "CWE-787", "CWE-125"],
-}
-
-_VC_TAG_MAP: dict[str, list[str]] = {
-    "non_null": ["null_check", "allocation_guard"],
-    "upper_bound": ["bounds_validation", "overflow_guard"],
-    "lower_bound": ["bounds_validation", "underflow_guard"],
-    "range": ["bounds_validation", "range_guard"],
 }
 
 
@@ -1002,13 +1206,6 @@ def _derive_value_constraint_guard(
         negation = f"{variable} violates constraint from {enforced_by}"
 
     cwes = _VC_CWE_MAP.get(constraint_type, [])
-    tags = ["value_constraint"] + _VC_TAG_MAP.get(constraint_type, [])
-    keywords = ["constraint", "validation", variable]
-    if enforced_by:
-        keywords.append(enforced_by)
-    if bound:
-        keywords.append(str(bound))
-
     inv_desc = f"{variable} {constraint_type} enforced by {enforced_by}"
 
     return Invariant(
@@ -1018,11 +1215,7 @@ def _derive_value_constraint_guard(
         negation=negation,
         description=inv_desc,
         confidence=concept.confidence,
-        role="guard",
-        concept_class="value_constraint",
         relevant_cwes=cwes,
-        mechanism_tags=tags,
-        mechanism_keywords=keywords,
     )
 
 
@@ -1034,7 +1227,7 @@ def _parse_value_constraints(
     concepts: list[Concept] = []
     invariants: list[Invariant] = []
 
-    for vc in raw.get("value_constraints", []):
+    for vc in raw.get("value_constraints") or []:
         vc_id = vc.get("id", "")
         if not vc_id:
             continue
@@ -1043,7 +1236,7 @@ def _parse_value_constraints(
             vc_id = f"value_constraint.{vc_id}"
 
         evidence = []
-        for e in vc.get("evidence", []):
+        for e in vc.get("evidence") or []:
             if isinstance(e, dict):
                 evidence.append(Evidence(
                     type=e.get("type", "code_path"),
@@ -1064,17 +1257,7 @@ def _parse_value_constraints(
         )
         concepts.append(concept)
 
-        scope_files: set[str] = set()
-        for ev in evidence:
-            if ev.file:
-                scope_files.add(PurePosixPath(ev.file).name)
-
         guard = _derive_value_constraint_guard(concept, vc)
-        if scope_files:
-            guard.scope = {
-                "files": sorted(scope_files),
-                "concept_ref": vc_id,
-            }
         invariants.append(guard)
 
     return concepts, invariants
@@ -1084,18 +1267,23 @@ def _parse_batch_response(
     raw: dict[str, Any],
     source_root: Path | None = None,
     focus_items: list[StudyItem] | None = None,
-) -> tuple[list[Concept], list[Invariant], list[Contract]]:
+) -> tuple[
+    list[Concept], list[Invariant], list[Contract],
+    list[BugPattern], list[dict[str, str]],
+]:
     """Parse a structured LLM response into domain model objects.
 
     When *source_root* is provided, evidence items with file+line get
     a SHA-256[:12] hash of their source span via ``core.staleness``.
     When *focus_items* is also provided, contract hashes are stamped
     by looking up the function's line range in the study items.
+
+    Returns (concepts, invariants, contracts, bug_patterns, struct_annotations).
     """
     concepts = []
-    for c in raw.get("concepts", []):
+    for c in raw.get("concepts", []) or []:
         evidence = []
-        for e in c.get("evidence", []):
+        for e in c.get("evidence") or []:
             if isinstance(e, str):
                 evidence.append(Evidence(
                     type="code_path", file="", observation=e,
@@ -1104,39 +1292,36 @@ def _parse_batch_response(
             if not isinstance(e, dict):
                 continue
             evidence.append(Evidence(
-                type=e.get("type", "code_path"),
-                file=e.get("file", ""),
-                observation=e.get("observation", ""),
+                type=e.get("type") or "code_path",
+                file=e.get("file") or "",
+                observation=e.get("observation") or "",
                 line=e.get("line"),
                 item=e.get("item"),
             ))
         if source_root is not None:
             _stamp_evidence_hashes(evidence, source_root)
         concepts.append(Concept(
-            id=c["id"],
-            description=c["description"],
+            id=c.get("id") or "",
+            description=c.get("description") or "",
             evidence=evidence,
-            confidence=c.get("confidence", "inferred"),
+            confidence=c.get("confidence") or "inferred",
             state="proposed",
         ))
 
     invariants = []
-    for inv in raw.get("invariants", []):
-        inv_desc = inv.get("description", "")
+    for inv in raw.get("invariants") or []:
+        inv_desc = inv.get("description") or ""
         if not inv_desc:
-            stmt = inv.get("statement", "")
+            stmt = inv.get("statement") or ""
             inv_desc = stmt.split(". ")[0] if stmt else ""
         invariants.append(Invariant(
-            id=inv["id"],
-            concept=inv.get("concept", ""),
-            statement=inv.get("statement", ""),
-            negation=inv.get("negation", ""),
+            id=inv.get("id") or "",
+            concept=inv.get("concept") or "",
+            statement=inv.get("statement") or "",
+            negation=inv.get("negation") or "",
             description=inv_desc,
-            confidence=inv.get("confidence", "inferred"),
-            role=inv.get("role", "boost"),
-            relevant_cwes=inv.get("relevant_cwes", []),
-            mechanism_tags=inv.get("mechanism_tags", []),
-            mechanism_keywords=inv.get("mechanism_keywords", []),
+            confidence=inv.get("confidence") or "inferred",
+            relevant_cwes=inv.get("relevant_cwes") or [],
         ))
 
     sm_concepts, sm_invariants = _parse_state_machines(raw, source_root)
@@ -1148,20 +1333,50 @@ def _parse_batch_response(
     invariants.extend(vc_invariants)
 
     contracts = []
-    for ct in raw.get("contracts", []):
+    for ct in raw.get("contracts") or []:
         contracts.append(Contract(
-            function=ct["function"],
-            file=ct.get("file", ""),
-            when=ct.get("when", ""),
-            input_semantics=ct.get("input_semantics", ""),
-            output_semantics=ct.get("output_semantics", ""),
-            ownership_transfer=ct.get("ownership_transfer", ""),
-            implication=ct.get("implication", ""),
+            function=ct.get("function") or "",
+            file=ct.get("file") or "",
+            when=ct.get("when") or "",
+            input_semantics=ct.get("input_semantics") or "",
+            output_semantics=ct.get("output_semantics") or "",
+            ownership_transfer=ct.get("ownership_transfer") or "",
+            implication=ct.get("implication") or "",
+            security_note=ct.get("security_note") or "",
         ))
     if source_root is not None and focus_items:
         _stamp_contract_hashes(contracts, focus_items, source_root)
 
-    return concepts, invariants, contracts
+    bug_patterns = []
+    for bp in raw.get("bug_patterns") or []:
+        bug_patterns.append(BugPattern(
+            id=bp.get("id") or "",
+            description=bp.get("description") or "",
+            what_to_grep=bp.get("what_to_grep") or "",
+            relevant_cwes=bp.get("relevant_cwes") or [],
+        ))
+
+    struct_annotations = []
+    for sa in raw.get("struct_annotations") or []:
+        if not isinstance(sa, dict) or not sa.get("struct_name"):
+            continue
+        sname = sa["struct_name"]
+        if "fields" in sa and isinstance(sa["fields"], list):
+            for fld in sa["fields"]:
+                if isinstance(fld, dict) and fld.get("field_name"):
+                    struct_annotations.append({
+                        "struct_name": sname,
+                        "field_name": fld["field_name"],
+                        "annotation": fld.get("annotation", ""),
+                    })
+        elif sa.get("field_name"):
+            struct_annotations.append({
+                "struct_name": sname,
+                "field_name": sa["field_name"],
+                "annotation": sa.get("annotation", ""),
+            })
+
+    return concepts, invariants, contracts, bug_patterns, struct_annotations
 
 
 def _stamp_evidence_hashes(
@@ -1218,11 +1433,10 @@ def _queue_unresolved(
 ) -> int:
     """Queue unresolved references from an LLM batch response.
 
-    Sources:
-    1. Explicit unresolved_references from the LLM response.
-    2. Context items referenced but not grounded (heuristic: if the
-       LLM's response mentions a context item by name in a concept
-       description, that item probably needs its own study pass).
+    Only queues explicit unresolved_references from the LLM — items
+    where the LLM identified a genuine semantic gap (ownership,
+    lifetime, contract questions).  Mechanical lookups (struct
+    definitions, macro expansions) are filtered by the prompt.
 
     Returns the number of items queued.
     """
@@ -1233,7 +1447,7 @@ def _queue_unresolved(
 
     queued = 0
 
-    for ref in result.get("unresolved_references", []):
+    for ref in result.get("unresolved_references") or []:
         name = ref.get("name", "")
         question = ref.get("question", "")
         if not name or not question:
@@ -1250,27 +1464,6 @@ def _queue_unresolved(
         ))
         queued += 1
 
-    concept_descs = " ".join(
-        c.get("description", "") for c in result.get("concepts", [])
-    )
-    for ctx_item in context_items:
-        if len(ctx_item.name) > 4 and re.search(
-            r"\b" + re.escape(ctx_item.name) + r"\b", concept_descs
-        ):
-            reading_list.queue(ReadingListItem(
-                id=f"study_dep_{_normalise_id(ctx_item.name)}",
-                question=(
-                    f"What are the semantics of {ctx_item.kind} "
-                    f"{ctx_item.name}? Referenced by in-scope concepts "
-                    f"but only available as context."
-                ),
-                source_command="/understand --study",
-                source_file=ctx_item.file,
-                priority=Priority.LOW,
-                context=f"Dependency {ctx_item.kind} from {ctx_item.file}",
-            ))
-            queued += 1
-
     return queued
 
 
@@ -1286,7 +1479,10 @@ def _run_one_batch(
     on_batch: Any,
     doc_context: str = "",
     correlate: list[str] | None = None,
-) -> tuple[list[Concept], list[Invariant], list[Contract]]:
+) -> tuple[
+    list[Concept], list[Invariant], list[Contract],
+    list[BugPattern], list[dict[str, str]],
+]:
     """Execute a single Phase 2 batch (blocking). Thread-safe."""
     if on_batch:
         on_batch(idx, total, focus)
@@ -1296,42 +1492,76 @@ def _run_one_batch(
         doc_context=doc_context, correlate=correlate,
     )
 
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(
+        llm_client.generate_structured,
+        prompt, _RESPONSE_SCHEMA,
+        system_prompt=_SYSTEM_PROMPT, task_type="study",
+    )
     try:
-        response = llm_client.generate_structured(
-            prompt,
-            _RESPONSE_SCHEMA,
-            system_prompt=_SYSTEM_PROMPT,
-            task_type="study",
-        )
+        response = future.result(timeout=_BATCH_WALL_TIMEOUT)
         result = (
             response.result if hasattr(response, "result")
             else response[0]
         )
-    except Exception:
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        ex.shutdown(wait=False, cancel_futures=True)
+        logger.warning(
+            "Phase 2 batch %d/%d wall-timeout (%ds)",
+            idx + 1, total, _BATCH_WALL_TIMEOUT,
+        )
+        raise _BatchLLMError(f"batch {idx + 1}/{total} wall-timeout")
+    except Exception as exc:
+        ex.shutdown(wait=False)
         logger.warning(
             "Phase 2 batch %d/%d failed", idx + 1, total,
             exc_info=True,
         )
-        return [], [], []
+        raise _BatchLLMError(f"batch {idx + 1}/{total}: {exc}") from exc
+    else:
+        ex.shutdown(wait=False)
 
     if not isinstance(result, dict):
         logger.warning("Phase 2 batch %d: non-dict response", idx + 1)
-        return [], [], []
+        return [], [], [], [], []
+
+    n_c = len(result.get("concepts") or [])
+    n_i = len(result.get("invariants") or [])
+    n_ct = len(result.get("contracts") or [])
+    n_sm = len(result.get("state_machines") or [])
+    logger.info(
+        "Phase 2 batch %d/%d raw: keys=%s, concepts=%d, invariants=%d, "
+        "contracts=%d, state_machines=%d",
+        idx + 1, total,
+        sorted(result.keys()), n_c, n_i, n_ct, n_sm,
+    )
+    if n_c == 0 and n_i == 0 and n_ct == 0:
+        import json as _json
+        logger.warning(
+            "Phase 2 batch %d/%d: LLM returned empty result. "
+            "Raw (first 2000 chars): %s",
+            idx + 1, total,
+            _json.dumps(result, indent=None)[:2000],
+        )
 
     src_root = Path(source_root) if source_root else None
-    concepts, invariants, contracts = _parse_batch_response(
-        result, source_root=src_root, focus_items=focus,
+    concepts, invariants, contracts, bug_patterns, struct_annots = (
+        _parse_batch_response(
+            result, source_root=src_root, focus_items=focus,
+        )
     )
 
     if reading_list is not None:
         _queue_unresolved(reading_list, result, context)
 
     logger.info(
-        "Phase 2 batch %d/%d: %d concepts, %d invariants, %d contracts",
+        "Phase 2 batch %d/%d: %d concepts, %d invariants, %d contracts, "
+        "%d bug_patterns",
         idx + 1, total,
-        len(concepts), len(invariants), len(contracts),
+        len(concepts), len(invariants), len(contracts), len(bug_patterns),
     )
-    return concepts, invariants, contracts
+    return concepts, invariants, contracts, bug_patterns, struct_annots
 
 
 def run_phase2(
@@ -1344,26 +1574,18 @@ def run_phase2(
     reading_list: Any = None,
     doc_context: str = "",
     correlate: list[str] | None = None,
-) -> tuple[list[Concept], list[Invariant], list[Contract]]:
+) -> tuple[
+    list[Concept], list[Invariant], list[Contract],
+    list[BugPattern], list[dict[str, str]],
+]:
     """Run Phase 2: dispatch study items to LLM in batches.
 
     When the model's RPM allows it, batches run in parallel using
     ``derive_max_workers`` from the audit executor to cap concurrency.
 
-    Args:
-        items: Study items from Phase 1.
-        target: Target path (for prompt context and scope classification).
-        llm_client: An ``LLMClient`` instance with ``generate_structured``.
-        source_root: Source root path for scope classification.
-        on_batch: Optional callback(batch_idx, total, batch_items) for progress.
-        reading_list: Optional ReadingList to queue unresolved references.
-        doc_context: Relevant documentation content to include in prompts.
-        correlate: Identifier names to correlate. When set, the LLM is
-            asked to examine the relationship between these identifiers
-            in addition to producing individual concepts.
-
     Returns:
-        (concepts, invariants, contracts) aggregated across all batches.
+        (concepts, invariants, contracts, bug_patterns, struct_annotations)
+        aggregated across all batches.
     """
     in_scope, deps = _classify_scope(items, target, source_root)
 
@@ -1413,23 +1635,46 @@ def _run_phase2_serial(
     reading_list: Any,
     doc_context: str = "",
     correlate: list[str] | None = None,
-) -> tuple[list[Concept], list[Invariant], list[Contract]]:
+) -> tuple[
+    list[Concept], list[Invariant], list[Contract],
+    list[BugPattern], list[dict[str, str]],
+]:
     all_concepts: list[Concept] = []
     all_invariants: list[Invariant] = []
     all_contracts: list[Contract] = []
+    all_bug_patterns: list[BugPattern] = []
+    all_struct_annots: list[dict[str, str]] = []
     total = len(batches)
+    consecutive_failures = 0
 
     for idx, (focus, context) in enumerate(batches):
-        concepts, invariants, contracts = _run_one_batch(
-            idx, total, focus, context, target, source_root,
-            llm_client, reading_list, on_batch, doc_context=doc_context,
-            correlate=correlate,
-        )
+        try:
+            concepts, invariants, contracts, bug_patterns, struct_annots = (
+                _run_one_batch(
+                    idx, total, focus, context, target, source_root,
+                    llm_client, reading_list, on_batch, doc_context=doc_context,
+                    correlate=correlate,
+                )
+            )
+        except _BatchLLMError:
+            consecutive_failures += 1
+            if consecutive_failures >= _CONSECUTIVE_FAIL_LIMIT:
+                logger.error(
+                    "Phase 2: %d consecutive batch failures — aborting "
+                    "(provider may be down or budget exceeded)",
+                    consecutive_failures,
+                )
+                break
+            continue
+        consecutive_failures = 0
         all_concepts.extend(concepts)
         all_invariants.extend(invariants)
         all_contracts.extend(contracts)
+        all_bug_patterns.extend(bug_patterns)
+        all_struct_annots.extend(struct_annots)
 
-    return all_concepts, all_invariants, all_contracts
+    return (all_concepts, all_invariants, all_contracts,
+            all_bug_patterns, all_struct_annots)
 
 
 def _run_phase2_parallel(
@@ -1442,36 +1687,72 @@ def _run_phase2_parallel(
     max_workers: int,
     doc_context: str = "",
     correlate: list[str] | None = None,
-) -> tuple[list[Concept], list[Invariant], list[Contract]]:
+) -> tuple[
+    list[Concept], list[Invariant], list[Contract],
+    list[BugPattern], list[dict[str, str]],
+]:
+    import threading as _threading
+
     from core.llm.concurrency import run_parallel
 
     total = len(batches)
+    _abort = _threading.Event()
+    _fail_lock = _threading.Lock()
+    _consecutive_failures = [0]
 
-    def _do_batch(args: tuple[int, list[StudyItem], list[StudyItem]]) -> tuple[list[Concept], list[Invariant], list[Contract]]:
+    def _do_batch(args: tuple[int, list[StudyItem], list[StudyItem]]) -> tuple:
+        if _abort.is_set():
+            return ([], [], [], [], [])
         idx, focus, ctx = args
-        return _run_one_batch(
+        result = _run_one_batch(
             idx, total, focus, ctx, target, source_root,
             llm_client, reading_list, on_batch,
             doc_context=doc_context, correlate=correlate,
         )
+        with _fail_lock:
+            _consecutive_failures[0] = 0
+        return result
 
     items = [(i, focus, ctx) for i, (focus, ctx) in enumerate(batches)]
+
+    def _on_batch_error(item: Any, exc: Exception) -> tuple:
+        with _fail_lock:
+            _consecutive_failures[0] += 1
+            if _consecutive_failures[0] >= _CONSECUTIVE_FAIL_LIMIT:
+                logger.error(
+                    "Phase 2: %d consecutive batch failures — aborting "
+                    "(provider may be down or budget exceeded)",
+                    _consecutive_failures[0],
+                )
+                _abort.set()
+        if not isinstance(exc, _BatchLLMError):
+            logger.warning(
+                "Phase 2 batch %d/%d crashed: %s: %s",
+                item[0] + 1, total, type(exc).__name__, exc,
+            )
+        return ([], [], [], [], [])
+
     results = run_parallel(
         items, _do_batch,
         max_workers=max_workers,
         label="study-p2",
-        on_error=lambda _item, _exc: ([], [], []),
+        on_error=_on_batch_error,
     )
 
     all_concepts: list[Concept] = []
     all_invariants: list[Invariant] = []
     all_contracts: list[Contract] = []
-    for concepts, invariants, contracts in results:
+    all_bug_patterns: list[BugPattern] = []
+    all_struct_annots: list[dict[str, str]] = []
+    for concepts, invariants, contracts, bug_patterns, struct_annots in results:
         all_concepts.extend(concepts)
         all_invariants.extend(invariants)
         all_contracts.extend(contracts)
+        all_bug_patterns.extend(bug_patterns)
+        all_struct_annots.extend(struct_annots)
 
-    return all_concepts, all_invariants, all_contracts
+    return (all_concepts, all_invariants, all_contracts,
+            all_bug_patterns, all_struct_annots)
 
 
 # ------------------------------------------------------------------
@@ -1500,11 +1781,14 @@ def _dedup_concepts(concepts: list[Concept]) -> list[Concept]:
             if (
                 c.confidence in CONFIDENCE_GRADES
                 and existing.confidence in CONFIDENCE_GRADES
-                and CONFIDENCE_GRADES.index(c.confidence)
-                > CONFIDENCE_GRADES.index(existing.confidence)
             ):
-                existing.confidence = c.confidence
-                if len(c.description) > len(existing.description):
+                c_idx = CONFIDENCE_GRADES.index(c.confidence)
+                e_idx = CONFIDENCE_GRADES.index(existing.confidence)
+                if c_idx > e_idx:
+                    existing.confidence = c.confidence
+                    if len(c.description) > len(existing.description):
+                        existing.description = c.description
+                elif c_idx == e_idx and len(c.description) > len(existing.description):
                     existing.description = c.description
         else:
             c.id = norm
@@ -1543,7 +1827,7 @@ def _dedup_contracts(contracts: list[Contract]) -> list[Contract]:
             seen[key] = ct
         else:
             existing = seen[key]
-            if len(ct.input_semantics) > len(existing.input_semantics):
+            if len(ct.input_semantics or "") > len(existing.input_semantics or ""):
                 seen[key] = ct
     return list(seen.values())
 
@@ -1559,11 +1843,222 @@ def _filter_thin_concepts(concepts: list[Concept]) -> list[Concept]:
     return kept
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+    "should", "may", "might", "must", "can", "could", "of", "in", "to",
+    "for", "with", "on", "at", "from", "by", "as", "into", "through",
+    "during", "before", "after", "above", "below", "between", "but",
+    "and", "or", "not", "no", "nor", "so", "if", "then", "than",
+    "that", "this", "these", "those", "it", "its", "they", "them",
+    "their", "which", "what", "when", "where", "who", "whom", "how",
+    "each", "every", "all", "both", "few", "more", "most", "other",
+    "some", "such", "only", "own", "same", "also", "used", "using",
+    "use", "uses", "one", "two", "e", "g",
+})
+
+
+def _extract_keywords(text: str) -> set[str]:
+    """Extract significant lowercase words from text.
+
+    Also splits underscore_compound tokens into their parts so
+    'scatterwalk_done' and 'done' overlap.
+    """
+    words = re.findall(r"[a-z_][a-z0-9_]*", text.lower())
+    result: set[str] = set()
+    for w in words:
+        if w in _STOP_WORDS or len(w) <= 2:
+            continue
+        result.add(w)
+        if "_" in w:
+            for part in w.split("_"):
+                if part not in _STOP_WORDS and len(part) > 2:
+                    result.add(part)
+    return result
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _semantic_dedup_concepts(concepts: list[Concept]) -> list[Concept]:
+    """Merge semantically similar concepts (high keyword overlap).
+
+    After ID-based dedup, different LLM batches often produce concepts
+    with different IDs but nearly identical descriptions. This pass
+    groups by Jaccard similarity on description keywords and merges
+    each group into the concept with the most evidence.
+    """
+    if len(concepts) <= 1:
+        return concepts
+
+    keywords = [_extract_keywords(c.description) for c in concepts]
+    parent = list(range(len(concepts)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    id_keywords = [_extract_keywords(c.id.replace("_", " ")) for c in concepts]
+    threshold = 0.45
+    id_boost_threshold = 0.15
+    for i in range(len(concepts)):
+        for j in range(i + 1, len(concepts)):
+            sim = _jaccard(keywords[i], keywords[j])
+            if sim >= threshold:
+                union(i, j)
+            elif sim >= id_boost_threshold and _jaccard(
+                id_keywords[i], id_keywords[j],
+            ) >= 0.4:
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(len(concepts)):
+        groups.setdefault(find(i), []).append(i)
+
+    merged: list[Concept] = []
+    for indices in groups.values():
+        best_idx = max(
+            indices,
+            key=lambda i: (
+                len(concepts[i].evidence),
+                CONFIDENCE_GRADES.index(concepts[i].confidence)
+                if concepts[i].confidence in CONFIDENCE_GRADES else 0,
+                len(concepts[i].description),
+            ),
+        )
+        winner = concepts[best_idx]
+        for idx in indices:
+            if idx == best_idx:
+                continue
+            donor = concepts[idx]
+            for ev in donor.evidence:
+                if not any(
+                    e.file == ev.file and e.observation == ev.observation
+                    for e in winner.evidence
+                ):
+                    winner.evidence.append(ev)
+            logger.debug(
+                "Semantic dedup: merged %s into %s", donor.id, winner.id,
+            )
+        merged.append(winner)
+
+    if len(merged) < len(concepts):
+        logger.info(
+            "Semantic dedup: %d → %d concepts",
+            len(concepts), len(merged),
+        )
+    return merged
+
+
+def _semantic_dedup_invariants(
+    invariants: list[Invariant],
+    valid_concepts: set[str],
+) -> list[Invariant]:
+    """Merge semantically similar invariants (high keyword overlap on statement)."""
+    if len(invariants) <= 1:
+        return invariants
+
+    keywords = [_extract_keywords(inv.statement) for inv in invariants]
+    parent = list(range(len(invariants)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    threshold = 0.50
+    for i in range(len(invariants)):
+        for j in range(i + 1, len(invariants)):
+            if _jaccard(keywords[i], keywords[j]) >= threshold:
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(len(invariants)):
+        groups.setdefault(find(i), []).append(i)
+
+    merged: list[Invariant] = []
+    for indices in groups.values():
+        best_idx = max(
+            indices,
+            key=lambda i: (
+                len(invariants[i].statement),
+                len(invariants[i].negation),
+                len(invariants[i].relevant_cwes),
+            ),
+        )
+        winner = invariants[best_idx]
+        for idx in indices:
+            if idx == best_idx:
+                continue
+            donor = invariants[idx]
+            for cwe in donor.relevant_cwes:
+                if cwe not in winner.relevant_cwes:
+                    winner.relevant_cwes.append(cwe)
+        if winner.concept in valid_concepts:
+            merged.append(winner)
+
+    if len(merged) < len(invariants):
+        logger.info(
+            "Semantic dedup: %d → %d invariants",
+            len(invariants), len(merged),
+        )
+    return merged
+
+
+def _filter_guard_invariants(invariants: list[Invariant]) -> list[Invariant]:
+    """Remove formulaic guard invariants generated from state machines.
+
+    These have IDs like guard.X_serialised, guard.X_gates_Y and are
+    mechanical noise — not useful for audit.
+    """
+    kept = []
+    for inv in invariants:
+        if inv.id.startswith("guard.") and (
+            inv.id.endswith("_serialised")
+            or "_gates_" in inv.id
+            or inv.id.endswith("_is_oneshot")
+        ):
+            logger.debug("Filtering guard invariant: %s", inv.id)
+            continue
+        kept.append(inv)
+    return kept
+
+
+def _dedup_bug_patterns(patterns: list[BugPattern]) -> list[BugPattern]:
+    """Deduplicate bug patterns by normalised ID."""
+    by_id: dict[str, BugPattern] = {}
+    for bp in patterns:
+        norm = _normalise_id(bp.id)
+        bp.id = norm
+        if norm not in by_id:
+            by_id[norm] = bp
+        elif len(bp.description) > len(by_id[norm].description):
+            by_id[norm] = bp
+    return list(by_id.values())
+
+
 _KERNEL_MARKERS = frozenset({
-    "#include <linux/", "MODULE_LICENSE", "MODULE_AUTHOR",
+    "MODULE_LICENSE", "MODULE_AUTHOR",
     "module_init(", "module_exit(", "EXPORT_SYMBOL",
-    "#include <asm/", "printk(", "kmalloc(", "kfree(",
-    "spin_lock(", "mutex_lock(", "rcu_read_lock(",
+    "#include <linux/module.h>",
+    "printk(", "kmalloc(", "kfree(",
+    "\nmutex_lock(", "rcu_read_lock(",
     "copy_from_user(", "copy_to_user(",
 })
 
@@ -1607,9 +2102,6 @@ def infer_security_context(
     network_hits = [m for m in _NETWORK_MARKERS if m in all_text]
     local_hits = [m for m in _LOCAL_SOCKET_MARKERS if m in all_text]
 
-    if not kernel_hits and not root_hits and not sandbox_hits:
-        return None
-
     evidence: list[str] = []
 
     if len(kernel_hits) >= 2:
@@ -1618,8 +2110,11 @@ def infer_security_context(
     elif root_hits:
         privilege = "root_daemon"
         evidence.extend(f"privilege marker: {m}" for m in root_hits[:5])
-    else:
+    elif network_hits or local_hits:
         privilege = "user_service"
+        evidence.append("no privilege escalation markers found")
+    else:
+        return None
 
     if sandbox_hits:
         isolation = "sandbox"
@@ -1648,6 +2143,7 @@ def run_phase3(
     concepts: list[Concept],
     invariants: list[Invariant],
     contracts: list[Contract],
+    bug_patterns: list[BugPattern] | None = None,
     *,
     target: str = "",
     source_root: str = "",
@@ -1655,26 +2151,120 @@ def run_phase3(
 ) -> DomainModel:
     """Run Phase 3: deduplicate, filter, resolve, assemble domain model."""
     deduped_concepts = _dedup_concepts(concepts)
-    filtered_concepts = _filter_thin_concepts(deduped_concepts)
+    sem_deduped_concepts = _semantic_dedup_concepts(deduped_concepts)
+    filtered_concepts = _filter_thin_concepts(sem_deduped_concepts)
     valid_ids = {c.id for c in filtered_concepts}
+
     deduped_invariants = _dedup_invariants(invariants, valid_ids)
+    filtered_invariants = _filter_guard_invariants(deduped_invariants)
+    sem_deduped_invariants = _semantic_dedup_invariants(
+        filtered_invariants, valid_ids,
+    )
+
     deduped_contracts = _dedup_contracts(contracts)
 
+    bp = _dedup_bug_patterns(bug_patterns or [])
+
     logger.info(
-        "Phase 3: %d→%d→%d concepts, %d→%d invariants, %d→%d contracts",
-        len(concepts), len(deduped_concepts), len(filtered_concepts),
+        "Phase 3: %d→%d→%d→%d concepts, %d→%d→%d→%d invariants, "
+        "%d→%d contracts, %d→%d bug patterns",
+        len(concepts), len(deduped_concepts),
+        len(sem_deduped_concepts), len(filtered_concepts),
         len(invariants), len(deduped_invariants),
+        len(filtered_invariants), len(sem_deduped_invariants),
         len(contracts), len(deduped_contracts),
+        len(bug_patterns or []), len(bp),
     )
 
     return DomainModel(
         target=target,
         source_root=source_root,
         concepts=filtered_concepts,
-        invariants=deduped_invariants,
+        invariants=sem_deduped_invariants,
         contracts=deduped_contracts,
+        bug_patterns=bp,
         security_context=security_context,
     )
+
+
+# ------------------------------------------------------------------
+# Reading-list scoping
+# ------------------------------------------------------------------
+
+def _scope_items_for_reading_list(
+    items: list[StudyItem],
+    pending: list,
+) -> list[StudyItem]:
+    """Filter study items to those needed to resolve pending reading-list questions.
+
+    Extracts target identifiers from reading-list entries, finds matching
+    StudyItems, and expands one hop in the call graph so the LLM has
+    enough context to answer the question.
+    """
+    target_names: set[str] = set()
+    target_files: set[str] = set()
+
+    for entry in pending:
+        sf = getattr(entry, "source_function", "") or ""
+        if sf:
+            target_names.add(sf)
+        src_file = getattr(entry, "source_file", "") or ""
+        if src_file:
+            target_files.add(src_file)
+        entry_id = getattr(entry, "id", "") or ""
+        for prefix in ("study_unresolved_", "audit_"):
+            if entry_id.startswith(prefix):
+                entry_id = entry_id[len(prefix):]
+                break
+        if entry_id:
+            target_names.add(entry_id)
+        ctx = getattr(entry, "context", "") or ""
+        question = getattr(entry, "question", "") or ""
+        for text in (ctx, question):
+            for m in re.finditer(r"`([A-Za-z_]\w+)`", text):
+                target_names.add(m.group(1))
+            for m in re.finditer(
+                r"\b(struct\s+\w+|[A-Za-z_]\w{3,}_[A-Za-z_]\w*)\b", text,
+            ):
+                candidate = m.group(1)
+                if candidate.startswith("struct"):
+                    bare = candidate.split(None, 1)[1]
+                    target_names.add(candidate)
+                    target_names.add(bare)
+                else:
+                    candidate = candidate.strip()
+                    if len(candidate) >= 4:
+                        target_names.add(candidate)
+
+    if not target_names and not target_files:
+        return items
+
+    by_name: dict[str, StudyItem] = {}
+    for it in items:
+        by_name.setdefault(it.name, it)
+
+    selected: dict[str, StudyItem] = {}
+    for name in target_names:
+        if name in by_name:
+            selected[name] = by_name[name]
+
+    for it in items:
+        if it.file in target_files:
+            selected[it.name] = it
+
+    expanded: dict[str, StudyItem] = dict(selected)
+    for it in selected.values():
+        for call in it.calls:
+            if call in by_name:
+                expanded[call] = by_name[call]
+        for caller in it.callers:
+            if caller in by_name:
+                expanded[caller] = by_name[caller]
+        for owned in it.owned_types:
+            if owned in by_name:
+                expanded[owned] = by_name[owned]
+
+    return list(expanded.values())
 
 
 # ------------------------------------------------------------------
@@ -1778,7 +2368,25 @@ def run_study(
     rl_path = output_dir / "reading-list.json"
     reading_list = ReadingList.load(rl_path)
 
-    concepts, invariants, contracts = run_phase2(
+    pending = reading_list.pending()
+    if pending:
+        before = len(items)
+        items = _scope_items_for_reading_list(items, pending)
+        logger.info(
+            "Reading-list scoping: %d pending questions, "
+            "%d → %d items (%.0f%% reduction)",
+            len(pending), before, len(items),
+            100 * (1 - len(items) / max(before, 1)),
+        )
+        if on_progress:
+            on_progress(
+                "scope",
+                f"Scoped to {len(items)} items for "
+                f"{len(pending)} reading-list questions "
+                f"(was {before})",
+            )
+
+    concepts, invariants, contracts, bug_patterns, struct_annots = run_phase2(
         items, target, llm_client,
         source_root=source_root,
         on_batch=batch_cb,
@@ -1796,7 +2404,8 @@ def run_study(
         on_progress(
             "phase3",
             f"Synthesising: {len(concepts)} concepts, "
-            f"{len(invariants)} invariants, {len(contracts)} contracts",
+            f"{len(invariants)} invariants, {len(contracts)} contracts, "
+            f"{len(bug_patterns)} bug patterns",
         )
 
     sc = None
@@ -1804,11 +2413,10 @@ def run_study(
         src_root = Path(source_root) if source_root else None
         if src_root and src_root.is_dir():
             source_texts = {}
-            for item in items:
-                fp = src_root / item.file if item.file else None
-                if fp and fp.is_file():
+            for fp in src_root.iterdir():
+                if fp.is_file() and fp.suffix in (".c", ".h"):
                     try:
-                        source_texts[item.file] = fp.read_text(
+                        source_texts[fp.name] = fp.read_text(
                             encoding="utf-8", errors="replace",
                         )
                     except OSError:
@@ -1826,27 +2434,42 @@ def run_study(
         logger.debug("security context inference failed", exc_info=True)
 
     model = run_phase3(
-        concepts, invariants, contracts,
+        concepts, invariants, contracts, bug_patterns,
         target=target,
         source_root=source_root,
         security_context=sc,
     )
 
     out_path = output_dir / "domain-model.json"
+    if out_path.is_file():
+        prior = DomainModel.load(out_path)
+        model = _merge_domain_models(prior, model)
     model.save(out_path)
 
-    # SAGE: store concepts for cross-session recall (N1)
-    try:
-        from core.sage.hooks import store_study_concepts
-        stored = store_study_concepts(
-            repo_path=source_root or target,
-            domain_model=model,
-            study_scope=target,
+    if struct_annots:
+        annots_path = output_dir / "struct-annotations.json"
+        annots_path.write_text(
+            json.dumps(struct_annots, indent=2) + "\n",
+            encoding="utf-8",
         )
-        if stored and on_progress:
-            on_progress("sage", f"Stored {stored} concepts to SAGE")
-    except Exception:
-        logger.debug("SAGE concept store skipped", exc_info=True)
+
+    _promote_to_project(out_path, output_dir)
+
+    # SAGE: store concepts for cross-session recall (N1)
+    # Skip store when everything came from SAGE (nothing new learned).
+    has_new_llm_output = len(items) > 0
+    if has_new_llm_output:
+        try:
+            from core.sage.hooks import store_study_concepts
+            stored = store_study_concepts(
+                repo_path=source_root or target,
+                domain_model=model,
+                study_scope=target,
+            )
+            if stored and on_progress:
+                on_progress("sage", f"Stored {stored} concepts to SAGE")
+        except Exception:
+            logger.debug("SAGE concept store skipped", exc_info=True)
 
     pending = reading_list.pending()
     if pending:
@@ -1873,37 +2496,154 @@ def run_study(
 # ------------------------------------------------------------------
 
 
+_EVIDENCE_HASH_RE = re.compile(r"\[h=([a-f0-9]+)\]")
+
+
+def _extract_evidence_hashes(content: str) -> set[str]:
+    """Extract per-evidence [h=...] hashes from SAGE content."""
+    return set(_EVIDENCE_HASH_RE.findall(content))
+
+
 def _extract_source_hash(content: str) -> str:
-    """Extract the 'Source hash: ...' line from SAGE content."""
+    """Extract the composite 'Source hash: ...' line from SAGE content."""
     for ln in content.split("\n"):
         if ln.strip().startswith("Source hash:"):
             return ln.split(":", 1)[1].strip()
     return ""
 
 
-def _compute_item_source_hash(
-    item: StudyItem,
-    source_root: Path | None,
-) -> str:
-    """Compute a composite hash for a study item's source span.
+def _verify_evidence_hashes(
+    content: str,
+    source_root: Path,
+) -> bool:
+    """Recompute evidence hashes from SAGE content and check all still match.
 
-    Must match the format stored by ``store_study_concepts``:
-    ``sha256_string("|".join(sorted(evidence_hashes)))[:12]``.
-    For a single-evidence item this is ``sha256_string(span_hash)[:12]``.
+    Each ``Evidence (...): file:line [h=xxxx]`` line records the hash of
+    that source line at store time.  Re-hash the same locations now; if
+    ALL still match, the concept is fresh.  Returns False when any
+    evidence line has changed or when the content has no hashes at all.
     """
-    if source_root is None or not item.file or not item.line:
-        return ""
-    try:
-        from core.hash import sha256_string
-        from core.staleness import hash_span
-        defn_lines = len(item.definition.splitlines()) if item.definition else 1
-        end_line = item.line + max(defn_lines - 1, 0)
-        h = hash_span(source_root / item.file, item.line, end_line)
-        if not h:
-            return ""
-        return sha256_string(h)[:12]
-    except Exception:
-        return ""
+    from core.staleness import hash_span
+
+    checked = 0
+    for m in _SAGE_EVIDENCE_RE.finditer(content):
+        file_str = m.group(2).strip()
+        line_str = m.group(3)
+        stored_hash = m.group(4)
+        if not stored_hash or not line_str:
+            continue
+        line_num = int(line_str)
+        full_path = source_root / file_str
+        if not full_path.is_file():
+            return False
+        current = hash_span(full_path, line_num, line_num)
+        if current != stored_hash:
+            return False
+        checked += 1
+    return checked > 0
+
+
+_SAGE_EVIDENCE_RE = re.compile(
+    r"Evidence\s+\((\w+)\):\s+(.+?)(?::(\d+))?"
+    r"(?:\s+\[h=([a-f0-9]+)\])?\s+[-–—]\s+(.*)"
+)
+_SAGE_INVARIANT_RE = re.compile(
+    r"Invariant\s+\[([^\]]+)\]:\s+(.*?)\s*\(negation:\s*(.*)\)"
+)
+_SAGE_CONTRACT_RE = re.compile(r"Contract\s+\[([^\]]+)\]")
+_SAGE_CWE_RE = re.compile(r"CWEs:\s+(.*)")
+
+
+def _reconstruct_from_sage(
+    item: StudyItem,
+    content: str,
+) -> tuple[list[Concept], list[Invariant], list[Contract]] | None:
+    """Parse structured SAGE recall text back into domain-model objects.
+
+    Returns None if the content doesn't parse into at least one concept.
+    """
+    lines = content.split("\n")
+    if not lines:
+        return None
+
+    # First line is "Concept [id] in scope: description"
+    first = lines[0]
+    m = re.match(r"Concept\s+\[([^\]]+)\]\s+in\s+.+?:\s+(.*)", first)
+    if not m:
+        return None
+
+    concept_id = m.group(1)
+    description = m.group(2).strip()
+
+    evidence: list[Evidence] = []
+    invariants: list[Invariant] = []
+    contracts: list[Contract] = []
+    pending_inv_cwes: Invariant | None = None
+
+    for ln in lines[1:]:
+        stripped = ln.strip()
+
+        ev_m = _SAGE_EVIDENCE_RE.match(stripped)
+        if ev_m:
+            evidence.append(Evidence(
+                type=ev_m.group(1),
+                file=ev_m.group(2).strip(),
+                line=int(ev_m.group(3)) if ev_m.group(3) else None,
+                observation=ev_m.group(5).strip(),
+                hash=ev_m.group(4),
+            ))
+            pending_inv_cwes = None
+            continue
+
+        inv_m = _SAGE_INVARIANT_RE.match(stripped)
+        if inv_m:
+            invariants.append(Invariant(
+                id=inv_m.group(1),
+                concept=concept_id,
+                statement=inv_m.group(2).strip(),
+                negation=inv_m.group(3).strip(),
+                confidence="traced",
+            ))
+            pending_inv_cwes = invariants[-1]
+            continue
+
+        cwe_m = _SAGE_CWE_RE.match(stripped)
+        if cwe_m and pending_inv_cwes is not None:
+            cwes = [c.strip() for c in cwe_m.group(1).split(",") if c.strip()]
+            pending_inv_cwes.relevant_cwes = cwes
+            continue
+
+        ct_m = _SAGE_CONTRACT_RE.match(stripped)
+        if ct_m:
+            ct_fn = ct_m.group(1)
+            when = ""
+            ownership = ""
+            rest = stripped[ct_m.end():]
+            if "when:" in rest:
+                when = rest.split("when:", 1)[1].split("ownership:", 1)[0].strip()
+            if "ownership:" in rest:
+                ownership = rest.split("ownership:", 1)[1].strip()
+            contracts.append(Contract(
+                function=ct_fn,
+                file=item.file,
+                when=when,
+                ownership_transfer=ownership,
+            ))
+            pending_inv_cwes = None
+            continue
+
+    if not evidence:
+        return None
+
+    concept = Concept(
+        id=concept_id,
+        description=description,
+        evidence=evidence,
+        confidence="traced",
+        state="proposed",
+    )
+
+    return [concept], invariants, contracts
 
 
 def _apply_sage_prior(
@@ -1947,35 +2687,53 @@ def _apply_sage_prior(
             remaining.append(item)
             continue
 
-        best_row = max(rows, key=lambda r: r.get("confidence", 0))
-        content = best_row.get("content", "")
-        stored_hash = _extract_source_hash(content)
+        hash_matches = False
+        content = ""
+        if source_root:
+            for row in rows:
+                rc = row.get("content", "")
+                if _extract_evidence_hashes(rc) and _verify_evidence_hashes(rc, source_root):
+                    content = rc
+                    hash_matches = True
+                    break
+        if not content:
+            best_row = max(rows, key=lambda r: r.get("confidence", 0))
+            content = best_row.get("content", "")
 
-        if stored_hash and source_root:
-            current_hash = _compute_item_source_hash(item, source_root)
-            hash_matches = current_hash and current_hash == stored_hash
-        else:
-            hash_matches = False
-
-        if hash_matches and local_model:
-            # Skip: hash matches + local model has the concept
-            concept = local_model.get_concept(item.name)
-            if concept is None:
-                # Try normalised lookup
-                norm = re.sub(r"[^a-z0-9]+", "_", item.name.lower()).strip("_")
-                for c in local_model.concepts:
-                    c_norm = re.sub(r"[^a-z0-9]+", "_", c.id.lower()).strip("_")
-                    if c_norm == norm or norm in c_norm:
-                        concept = c
-                        break
-            if concept is not None:
-                skipped_concepts.append(concept)
-                for inv in local_model.invariants:
-                    if inv.concept == concept.id:
-                        skipped_invariants.append(inv)
-                for ct in local_model.contracts:
-                    if ct.function == item.name or ct.file == item.file:
-                        skipped_contracts.append(ct)
+        if hash_matches:
+            skipped = False
+            # Fast path: local domain model has structured objects
+            if local_model:
+                concept = local_model.get_concept(item.name)
+                if concept is None:
+                    norm = re.sub(r"[^a-z0-9]+", "_", item.name.lower()).strip("_")
+                    for c in local_model.concepts:
+                        c_norm = re.sub(r"[^a-z0-9]+", "_", c.id.lower()).strip("_")
+                        if c_norm == norm or norm in c_norm:
+                            concept = c
+                            break
+                if concept is not None:
+                    skipped_concepts.append(concept)
+                    concept_fns = {item.name} | {
+                        ev.item for ev in concept.evidence if ev.item
+                    }
+                    for inv in local_model.invariants:
+                        if inv.concept == concept.id:
+                            skipped_invariants.append(inv)
+                    for ct in local_model.contracts:
+                        if ct.function in concept_fns:
+                            skipped_contracts.append(ct)
+                    skipped = True
+            # Slow path: reconstruct from SAGE text content
+            if not skipped:
+                reconstructed = _reconstruct_from_sage(item, content)
+                if reconstructed:
+                    r_concepts, r_invariants, r_contracts = reconstructed
+                    skipped_concepts.extend(r_concepts)
+                    skipped_invariants.extend(r_invariants)
+                    skipped_contracts.extend(r_contracts)
+                    skipped = True
+            if skipped:
                 skip_count += 1
                 continue
 

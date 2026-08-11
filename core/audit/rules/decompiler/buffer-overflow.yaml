@@ -1,0 +1,40 @@
+rules:
+  - id: decompiler-strcpy
+    pattern: strcpy($DST, $SRC)
+    message: "strcpy with no bounds check"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-120"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-strcat
+    pattern: strcat($DST, $SRC)
+    message: "strcat with no bounds check"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-120"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-gets
+    pattern: gets($BUF)
+    message: "gets is always unsafe"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-120"
+      confidence: HIGH
+      source: decompiler
+
+  - id: decompiler-sprintf-no-limit
+    pattern: sprintf($BUF, ...)
+    message: "sprintf with no size limit"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-120"
+      confidence: MEDIUM
+      source: decompiler

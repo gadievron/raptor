@@ -8,6 +8,7 @@
 //
 // CWE-762: Mismatched Memory Management Routines
 // Zero-FP: free() on an mmap'd pointer is always wrong.
+// @role: verification
 
 @mmap_free_assign@
 expression ADDR, LEN, PROT, FLAGS, FD, OFF;

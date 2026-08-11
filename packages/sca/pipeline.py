@@ -1081,8 +1081,8 @@ def _run_llm_stages(
     # Cost accounting from the client.
     try:
         cost = client.total_cost
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("cost tracking failed: %s", e)
 
     # SAGE: store supply-chain outcomes for cross-run learning
     try:
@@ -1167,7 +1167,8 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
                 meta = npm.get_metadata(dep.name) or {}
             else:
                 continue
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.debug("registry metadata fetch failed for %s: %s", dep.name, e)
             continue
 
         verdict = assess_maintainer_trust(client, dep, meta)
@@ -1272,7 +1273,8 @@ def _run_slopsquat_review(
                 # wired today — skip the LLM call rather than
                 # invoke without registry context.
                 continue
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.debug("registry metadata fetch failed for %s: %s", dep.name, e)
             continue
 
         reasons = list(f.evidence.get("reasons") or [])
@@ -1471,8 +1473,8 @@ def _run_triage(
     cost = 0.0
     try:
         cost = client.total_cost
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("cost tracking failed: %s", e)
 
     return (True, cost)
 
@@ -1593,8 +1595,8 @@ def _run_upgrade_impact(
     cost = 0.0
     try:
         cost = client.total_cost
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("cost tracking failed: %s", e)
     return cost
 
 

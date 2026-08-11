@@ -126,7 +126,7 @@ def default_trace_dispatch(
     try:
         result = loop.run(user_message)
     except CostBudgetExceeded as e:
-        logger.warning(f"trace: model {model.model_name} hit cost cap: {e}")
+        logger.warning("trace: model %s hit cost cap: %s", model.model_name, e)
         if cost_collector is not None:
             cost_collector(max_cost_usd)
         persist_partial_from_exception(

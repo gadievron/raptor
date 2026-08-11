@@ -7,6 +7,7 @@
 //
 // CWE-675: Multiple Operations on Resource in Single-Operation Context
 // Guards: fd reassignment between closes (fd = open(...)) is safe.
+// @role: verification
 
 @double_close_fd@
 expression FD;

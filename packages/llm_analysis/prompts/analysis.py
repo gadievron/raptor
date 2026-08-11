@@ -41,6 +41,7 @@ _ANALYSIS_BLOCK_PRIORITIES: dict[str, int] = {
     "surrounding-context": 1,
     "source-intel-evidence": 1,
     "verified-exemplars": 2,
+    "sage-historical-context": 3,
 }
 
 _ANALYSIS_BLOCK_PRIORITY_PREFIXES: list[tuple[str, int]] = [
@@ -449,7 +450,7 @@ def _build_strategy_block(
     except Exception as e:
         # Best-effort — analysis must continue even if strategy
         # rendering fails for an exotic input.
-        logger.debug(f"strategy block render failed: {e}", exc_info=True)
+        logger.debug("strategy block render failed: %s", e, exc_info=True)
         return ""
 
     return (
@@ -491,7 +492,7 @@ def _build_verified_exemplar_block(
         finding = {"id": rule_id, "cwe_id": cwe_id, "file": file_path}
         return render_verified_exemplars(finding, outcomes)
     except Exception as e:
-        logger.debug(f"verified-exemplar block render failed: {e}", exc_info=True)
+        logger.debug("verified-exemplar block render failed: %s", e, exc_info=True)
         return ""
 
 
@@ -525,7 +526,7 @@ def build_analysis_prompt_bundle(
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
     Untrusted target content (code, scanner messages, dataflow snippets,
-    function-context metadata) is wrapped in
+    function-context metadata, SAGE historical context) is wrapped in
     envelope tags inside the user message. Identifiers (rule_id, file_path,
     line range, dataflow labels) are passed through named slots. Static
     instructions stay in the system message.

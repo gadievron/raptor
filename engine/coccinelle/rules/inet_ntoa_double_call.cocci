@@ -10,6 +10,7 @@
 // CWE-676: Use of Potentially Dangerous Function
 // Zero-FP: two inet_ntoa() in the same argument list always share
 // the same static buffer — the first result is always lost.
+// @role: verification
 
 @double_inet_ntoa@
 expression E1, E2;

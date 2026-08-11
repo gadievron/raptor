@@ -47,6 +47,10 @@ class CCDispatchConfig:
     # False only if a caller genuinely needs MCP servers available
     # inside the sub-agent (no current consumer does). (gh #549)
     strict_mcp: bool = True
+    model: Optional[str] = None
+    session_id: Optional[str] = None
+    persist_session: bool = False
+    stream_json: bool = False
 
 
 def build_cc_command(config: CCDispatchConfig) -> list[str]:
@@ -55,12 +59,15 @@ def build_cc_command(config: CCDispatchConfig) -> list[str]:
     Does not include the prompt (passed via stdin) or sandbox wrapping
     (caller decides sandbox posture).
     """
-    cmd = [
-        config.claude_bin, "-p",
-        "--no-session-persistence",
-        "--allowed-tools", config.tools,
-        "--max-budget-usd", config.budget_usd,
-    ]
+    cmd = [config.claude_bin, "-p"]
+    if config.session_id:
+        cmd.extend(["--resume", config.session_id])
+    if not config.persist_session:
+        cmd.append("--no-session-persistence")
+    cmd.extend(["--allowed-tools", config.tools])
+    cmd.extend(["--max-budget-usd", config.budget_usd])
+    if config.model:
+        cmd.extend(["--model", config.model])
     if config.system_prompt is not None and config.system_prompt.strip():
         # `--system-prompt` keeps the system prompt in its own
         # role-channel rather than concatenated to the user
@@ -69,7 +76,9 @@ def build_cc_command(config: CCDispatchConfig) -> list[str]:
         cmd.extend(["--system-prompt", config.system_prompt])
     for d in config.add_dirs:
         cmd.extend(["--add-dir", str(d)])
-    if config.capture_json_envelope:
+    if config.stream_json:
+        cmd.extend(["--output-format", "stream-json", "--verbose"])
+    elif config.capture_json_envelope:
         cmd.extend(["--output-format", "json"])
     if config.json_schema is not None:
         cmd.extend(["--json-schema", json.dumps(config.json_schema)])
@@ -150,7 +159,7 @@ def extract_envelope_metadata(envelope: dict, into: dict) -> None:
         # tracking when multiple models are summed under one name.
         # Sort for deterministic output (envelope dict ordering is
         # CC's choice, may vary across CC versions).
-        into["analysed_by"] = ",".join(sorted(model_usage.keys()))
+        into["analysed_by"] = ",".join(sorted(model_usage))
     elif "analysed_by" not in into:
         # Pre-fix this branch unconditionally set
         # `into["analysed_by"] = "claude-code"`, clobbering any
@@ -311,3 +320,156 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
         pass
 
     return {"content": content}
+
+
+def extract_session_id(stdout: str) -> Optional[str]:
+    """Extract ``session_id`` from a ``claude -p --output-format json`` envelope."""
+    try:
+        envelope = json.loads(stdout.strip())
+        if isinstance(envelope, dict):
+            sid = envelope.get("session_id")
+            if isinstance(sid, str) and sid:
+                return sid
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return None
+
+
+@dataclass
+class StreamJsonResult:
+    """Parsed result from ``--output-format stream-json --verbose``."""
+    content: str = ""
+    structured_output: Optional[dict[str, Any]] = None
+    session_id: Optional[str] = None
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    model: Optional[str] = None
+    error: Optional[str] = None
+
+
+def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
+    """Parse JSON lines from ``--output-format stream-json --verbose``.
+
+    Each line is a JSON object with a ``type`` field:
+    - ``assistant``: contains the model response in ``message.content``
+    - ``result``: final metadata — session_id, cost, usage
+    - ``system``: hook events (ignored)
+    """
+    result = StreamJsonResult()
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+
+        msg_type = obj.get("type")
+        if msg_type == "assistant":
+            message = obj.get("message", {})
+            content_blocks = message.get("content", [])
+            texts = []
+            for block in content_blocks:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(block.get("text", ""))
+            result.content = "\n".join(texts)
+            usage = message.get("usage", {})
+            result.input_tokens = usage.get("input_tokens", 0) or 0
+            result.output_tokens = usage.get("output_tokens", 0) or 0
+            cache_read = usage.get("cache_read_input_tokens", 0)
+            cache_create = usage.get("cache_creation_input_tokens", 0)
+            if cache_read:
+                result.cache_read_tokens = cache_read
+            if cache_create:
+                result.cache_creation_tokens = cache_create
+            result.model = message.get("model")
+
+        elif msg_type == "result":
+            result.session_id = obj.get("session_id")
+            cost = obj.get("total_cost_usd")
+            if isinstance(cost, (int, float)):
+                result.cost_usd = cost
+            usage = obj.get("usage", {})
+            if usage.get("input_tokens"):
+                result.input_tokens = usage["input_tokens"]
+            if usage.get("output_tokens"):
+                result.output_tokens = usage["output_tokens"]
+            if obj.get("is_error"):
+                result.error = obj.get("result", "stream-json reported is_error")
+
+    return result
+
+
+def run_cc_streaming(
+    cmd: list[str],
+    prompt: str,
+    env: dict[str, str],
+    timeout_s: Optional[int],
+) -> StreamJsonResult:
+    """Run ``claude -p --output-format stream-json`` via Popen, reading
+    JSON lines as they arrive.
+
+    Returns as soon as the process exits. The assistant message content
+    is available from the first ``assistant`` JSON line — typically
+    seconds before the process finishes its cleanup.
+    """
+    import subprocess
+    import select
+    import time as _time
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    if proc.stdin:
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+
+    collected: list[str] = []
+    start = _time.monotonic()
+    deadline = start + timeout_s if timeout_s else None
+
+    while proc.poll() is None:
+        remaining = None
+        if deadline is not None:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                proc.wait()
+                raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
+        ready, _, _ = select.select(
+            [proc.stdout], [], [], min(remaining or 1.0, 1.0),
+        )
+        if ready and proc.stdout:
+            line = proc.stdout.readline()
+            if line:
+                collected.append(line)
+
+    if proc.stdout:
+        for line in proc.stdout:
+            collected.append(line)
+
+    if proc.returncode != 0:
+        stderr_text = proc.stderr.read() if proc.stderr else ""
+        from core.security.prompt_output_sanitise import escape_nonprintable
+        err = StreamJsonResult()
+        err.error = (
+            f"claude -p exited {proc.returncode}: "
+            f"{escape_nonprintable(redact_secrets((stderr_text or '')[:500]))}"
+        )
+        partial = parse_stream_json_lines(collected)
+        err.session_id = partial.session_id
+        return err
+
+    return parse_stream_json_lines(collected)

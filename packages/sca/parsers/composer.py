@@ -44,6 +44,8 @@ def parse_manifest(path: Path) -> List[Dependency]:
         logger.warning("sca.parsers.composer: %s: %s", path, e)
         return []
 
+    if not isinstance(data, dict):
+        return []
     out: List[Dependency] = []
     seen_keys: set = set()
     # ``replace``: this package CLAIMS to provide the listed

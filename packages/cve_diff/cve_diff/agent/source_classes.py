@@ -55,18 +55,24 @@ VERIFICATION_TOOLS: frozenset[str] = frozenset({
 # walker pattern (5 of 7) at the cost floor where real work has been
 # done but no candidate verified. Verified empirically: catches all 5
 # v7 walkers, harms 0 source-PASSes.
-SURRENDER_COST_FLOOR_USD: float = float(
-    os.environ.get("CVE_DIFF_SURRENDER_COST_FLOOR_USD") or 0.80
-)
+try:
+    SURRENDER_COST_FLOOR_USD: float = float(
+        os.environ.get("CVE_DIFF_SURRENDER_COST_FLOOR_USD") or 0.80
+    )
+except (ValueError, TypeError):
+    SURRENDER_COST_FLOOR_USD = 0.80
 
 # Number of distinct source classes that must be tried before the
 # loop force-surrenders no_evidence. Calibrated on v7 walker data:
 # walkers reach 5-6 classes with zero verification; legit PASSes
 # almost always reach a verification call (gh_commit_detail / forge
 # verifier) before touching 5 classes.
-MIN_CLASSES_FOR_SURRENDER: int = int(
-    os.environ.get("CVE_DIFF_MIN_CLASSES_FOR_SURRENDER") or 5
-)
+try:
+    MIN_CLASSES_FOR_SURRENDER: int = int(
+        os.environ.get("CVE_DIFF_MIN_CLASSES_FOR_SURRENDER") or 5
+    )
+except (ValueError, TypeError):
+    MIN_CLASSES_FOR_SURRENDER = 5
 
 
 def tried_classes(tool_call_log: list[str]) -> frozenset[str]:

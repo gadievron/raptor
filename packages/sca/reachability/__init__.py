@@ -391,10 +391,14 @@ def _build_go_symbol_map(
             continue
         for adv in r.advisories:
             es = adv.ecosystem_specific
-            if not es:
+            if not isinstance(es, dict):
                 continue
             imports = es.get("imports", [])
+            if not isinstance(imports, list):
+                continue
             for imp in imports:
+                if not isinstance(imp, dict):
+                    continue
                 syms = imp.get("symbols", [])
                 if syms:
                     out.setdefault(r.dep_key, []).extend(syms)
@@ -430,7 +434,7 @@ def _escalate_pypi_not_reachable(
     difference (``not_reachable high → 0.335×`` vs ``not_evaluated
     → 0.85×``) makes the verdict materially affect ranking.
     """
-    seen: dict[str, Reachability] = {}
+    seen: dict[tuple, Reachability] = {}
     for d in deps:
         if d.ecosystem != "PyPI":
             continue
@@ -441,8 +445,8 @@ def _escalate_pypi_not_reachable(
         current = out.get(d.key())
         if current is None or current.verdict != "not_reachable":
             continue
-        if d.name in seen:
-            out[d.key()] = seen[d.name]
+        if (d.name, d.version) in seen:
+            out[d.key()] = seen[(d.name, d.version)]
             continue
         logger.info(
             "sca.reachability: tier-3 escalation for %s==%s "
@@ -466,7 +470,7 @@ def _escalate_pypi_not_reachable(
                 # find a module mapping that matches the scan.
                 # Downgrade verdict honestly.
                 new_verdict = _not_evaluated_after_tier3(d)
-        seen[d.name] = new_verdict
+        seen[(d.name, d.version)] = new_verdict
         out[d.key()] = new_verdict
 
 
@@ -485,4 +489,6 @@ def _not_evaluated_after_tier3(d: Dependency) -> Reachability:
     )
 
 
-__all__ = ["scan"]
+from .guard_quality import analyze_call_site_guards  # noqa: F401,E402
+
+__all__ = ["scan", "analyze_call_site_guards"]

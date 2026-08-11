@@ -165,6 +165,10 @@ def run_rule(
             extra_args=extra_args,
         )
 
+        if env is None:
+            from core.config import RaptorConfig
+            env = RaptorConfig.get_safe_env()
+
         runner = subprocess_runner or subprocess.run
 
         start = time.monotonic()

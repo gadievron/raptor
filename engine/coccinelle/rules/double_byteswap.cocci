@@ -10,6 +10,7 @@
 //
 // CWE-683: Function Call With Incorrect Order of Arguments
 // Zero-FP: double swap is a mathematical identity, never intentional.
+// @role: verification
 
 // POSIX/BSD network byte-order functions
 @double_swap_net@

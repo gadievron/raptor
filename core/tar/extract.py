@@ -130,7 +130,7 @@ def extract_files_from_tar(
     expected_count: Optional[int] = None,
     unique_keys: bool = False,
     max_total_bytes: Optional[int] = None,
-    max_entry_count: Optional[int] = None,
+    max_entry_count: Optional[int] = 50_000,
 ) -> Dict[str, bytes]:
     """Walk ``source`` (a tar archive) and return selected members
     as a ``{key: bytes}`` dict.

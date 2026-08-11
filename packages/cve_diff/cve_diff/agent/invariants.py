@@ -42,7 +42,7 @@ _resolver = CommitResolver()
 def discover_validator(payload: dict, ctx: AgentContext) -> AgentResult:
     """Validate the agent's ``submit_result`` payload and return an
     ``AgentOutput(PatchTuple)`` or ``AgentSurrender(reason)``."""
-    outcome = (payload.get("outcome") or "").strip()
+    outcome = (payload.get("outcome") or "").strip().lower()
     rationale = (payload.get("rationale") or "")[:500]
 
     if outcome == "unsupported":

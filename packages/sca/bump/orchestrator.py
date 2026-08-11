@@ -1131,7 +1131,7 @@ def _enumerate_git_submodule_candidates(
                 # without a current anchor.
                 continue
             repo = dep.name      # ``owner/repo`` for GitHub URLs
-            cache_key = ("gha_uses", repo)
+            cache_key = ("git_submodule", repo)
             if cache_key in sub_cache:
                 target_tag = sub_cache[cache_key]
             else:

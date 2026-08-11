@@ -212,7 +212,7 @@ def parse_taint_lines(raw: str) -> List[TaintRule]:
                 hop_count=data.get("hop_count", 0),
                 evidence_tier=_parse_evidence_tier(data),
             ))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, AttributeError):
             logger.debug("failed to parse taint line: %s", line[:200])
     return rules
 
@@ -232,7 +232,7 @@ def parse_guard_lines(raw: str) -> List[Precondition]:
                 conditions=data.get("conditions", []),
                 evidence_tier=_parse_evidence_tier(data),
             ))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, AttributeError):
             logger.debug("failed to parse guard line: %s", line[:200])
     return guards
 
@@ -252,7 +252,7 @@ def parse_return_lines(raw: str) -> List[ReturnCondition]:
                 conditions=data.get("conditions", []),
                 evidence_tier=_parse_evidence_tier(data),
             ))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, AttributeError):
             logger.debug("failed to parse return line: %s", line[:200])
     return returns
 
@@ -267,7 +267,7 @@ def parse_error_lines(raw: str) -> List[str]:
         try:
             data = json.loads(line[len("SUMMARY_ERROR:"):].strip())
             errors.append(data.get("code", ""))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, AttributeError):
             logger.debug("failed to parse error line: %s", line[:200])
     return errors
 
@@ -318,7 +318,7 @@ def summary_from_review_result(
         return None
 
     preconditions = []
-    for pc in review_result.get("preconditions", []):
+    for pc in review_result.get("preconditions") or []:
         param = pc.get("parameter", pc.get("param", ""))
         assumption = pc.get("assumption", "")
         if param and assumption:

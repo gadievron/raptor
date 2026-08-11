@@ -232,10 +232,13 @@ class CredentialStore:
     def __init__(self) -> None:
         # Read each provider's key into private state. Store is
         # mutable so tests can inject fakes without touching env.
+        # Pre-read GOOGLE_API_KEY so it's always erased even when
+        # GEMINI_API_KEY is set (short-circuit would skip erasure).
+        _google_api_key = _read_env("GOOGLE_API_KEY")
         self._keys: dict[str, str | None] = {
             "anthropic":  _read_env("ANTHROPIC_API_KEY"),
             "openai":     _read_env("OPENAI_API_KEY"),
-            "gemini":     _read_env("GEMINI_API_KEY") or _read_env("GOOGLE_API_KEY"),
+            "gemini":     _read_env("GEMINI_API_KEY") or _google_api_key,
             # OpenAI-compatible aggregators + ecosystem providers.
             # Same Bearer-auth shape; different upstream URLs.
             "mistral":    _read_env("MISTRAL_API_KEY"),

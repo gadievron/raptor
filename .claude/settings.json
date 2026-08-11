@@ -8,6 +8,8 @@
     "allow": [
       "Bash(libexec/raptor-agentic *)",
       "Bash(libexec/raptor-annotate *)",
+      "Bash(libexec/raptor-audit *)",
+      "Bash(libexec/raptor-build-cpg-cache *)",
       "Bash(libexec/raptor-build-checklist *)",
       "Bash(libexec/raptor-coverage-summary *)",
       "Bash(libexec/raptor-enrich-context-map-ast-view *)",
@@ -19,6 +21,7 @@
       "Bash(libexec/raptor-pick-strategies *)",
       "Bash(libexec/raptor-project-manager *)",
       "Bash(libexec/raptor-render-diagrams *)",
+      "Bash(libexec/raptor-resolve-mode *)",
       "Bash(libexec/raptor-run-feasibility *)",
       "Bash(libexec/raptor-run-lifecycle *)",
       "Bash(libexec/raptor-run-sandboxed *)",
@@ -30,8 +33,8 @@
       "Bash(libexec/raptor-verified-outcomes *)",
       "Bash(libexec/raptor-threat-model)",
       "Bash(libexec/raptor-threat-model *)",
+      "Bash(libexec/raptor-llm-ask *)",
       "Bash(libexec/raptor-understand *)",
-      "Bash(libexec/raptor-understand-annotate *)",
       "Bash(libexec/raptor-validate-schema *)",
       "Bash(libexec/raptor-validation-helper *)",
       "Edit(/out/**)"

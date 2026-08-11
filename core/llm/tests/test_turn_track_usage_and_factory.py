@@ -154,11 +154,11 @@ def test_gemini_turn_tracks_via_delegated_generate() -> None:
 def test_claudecode_turn_tracks_via_delegated_generate(monkeypatch) -> None:
     """``ClaudeCodeLLMProvider.turn`` delegates to ``generate`` (no tools)
     or ``generate_structured`` (with tools); both call ``track_usage``."""
-    import subprocess
+    import core.llm.cc_adapter as _cc_adapter
     from core.llm.providers import ClaudeCodeLLMProvider
     from core.llm.tool_use import Message, TextBlock, ToolDef
     from core.llm.tests.test_claude_code_llm_provider import (
-        _FakeCompleted, _envelope, _structured_envelope,
+        _stream_freeform, _stream_result,
     )
 
     # Path 1: tools=[] → generate() → track_usage
@@ -167,8 +167,8 @@ def test_claudecode_turn_tracks_via_delegated_generate(monkeypatch) -> None:
         api_key=None, timeout=10,
     ))
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_envelope(cost_usd=0.05)),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(cost_usd=0.05),
     )
     p1.turn(
         messages=[Message(role="user", content=[TextBlock(text="x")])],
@@ -185,10 +185,10 @@ def test_claudecode_turn_tracks_via_delegated_generate(monkeypatch) -> None:
     tool = ToolDef("echo", "echo back",
                    {"type": "object"}, lambda i: "r")
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result(
             {"type": "complete", "final_text": "done"}, cost_usd=0.07,
-        )),
+        ),
     )
     p2.turn(
         messages=[Message(role="user", content=[TextBlock(text="x")])],

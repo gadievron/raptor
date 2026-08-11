@@ -23,9 +23,12 @@ class SpatchMatch:
         return cls(
             file=d.get("file", ""),
             line=int(d.get("line") or 0),
-            column=int(d.get("col") or d.get("column") or 0),
+            column=int(d["col"] if d.get("col") is not None else d.get("column") or 0),
             line_end=int(d.get("line_end") or 0),
-            column_end=int(d.get("col_end") or d.get("column_end") or 0),
+            column_end=int(
+                d["col_end"] if d.get("col_end") is not None
+                else d.get("column_end") or 0
+            ),
             rule=d.get("rule", ""),
             message=d.get("message", ""),
         )

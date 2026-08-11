@@ -79,7 +79,7 @@ class TestDictSchemaToPydanticSimple:
             "metadata": "dict",
         }
         model = _dict_schema_to_pydantic(schema)
-        instance = model(name="x", active=True, count=1, items=[1], metadata={"a": 1})
+        instance = model(name="x", active=True, count=1, items=["a"], metadata={"a": 1})
         assert instance.name == "x"
         assert instance.active is True
 
@@ -152,6 +152,127 @@ class TestDictSchemaToPydanticJsonSchema:
         assert instance.name == "test"
         assert instance.notes is None
 
+    def test_string_enum_becomes_literal(self):
+        """JSON Schema enum on a string field produces Literal type."""
+        schema = {
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["clean", "suspicious", "finding"],
+                },
+                "notes": {"type": "string"},
+            },
+            "required": ["status"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(status="clean")
+        assert instance.status == "clean"
+        instance2 = model(status="finding")
+        assert instance2.status == "finding"
+        # Wrong case must be rejected
+        with pytest.raises(Exception):
+            model(status="CLEAN")
+        # Value not in enum must be rejected
+        with pytest.raises(Exception):
+            model(status="banana")
+        # Enum must appear in the generated JSON schema
+        json_schema = model.model_json_schema()
+        assert json_schema["properties"]["status"]["enum"] == [
+            "clean", "suspicious", "finding",
+        ]
+
+    def test_nested_object_properties_enforced(self):
+        """Nested object with properties creates a real nested Pydantic model."""
+        schema = {
+            "properties": {
+                "name": {"type": "string"},
+                "location": {
+                    "type": "object",
+                    "properties": {
+                        "file": {"type": "string"},
+                        "line": {"type": "integer"},
+                    },
+                    "required": ["file"],
+                },
+            },
+            "required": ["name", "location"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(name="test", location={"file": "a.py", "line": 10})
+        assert instance.location.file == "a.py"
+        assert instance.location.line == 10
+
+    def test_array_of_objects_enforced(self):
+        """Array with items schema creates List[NestedModel]."""
+        schema = {
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "severity": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"],
+                            },
+                        },
+                        "required": ["title", "severity"],
+                    },
+                },
+            },
+            "required": ["findings"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(findings=[
+            {"title": "bug1", "severity": "high"},
+            {"title": "bug2", "severity": "low"},
+        ])
+        assert instance.findings[0].title == "bug1"
+        assert instance.findings[0].severity == "high"
+        # Nested enum must be enforced
+        with pytest.raises(Exception):
+            model(findings=[{"title": "bug", "severity": "CRITICAL"}])
+
+    def test_nested_enum_enforced(self):
+        """Enum inside a nested object is enforced, not dropped."""
+        schema = {
+            "properties": {
+                "hypotheses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "mechanism": {"type": "string"},
+                            "confidence": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low", "refuted"],
+                            },
+                        },
+                        "required": ["mechanism", "confidence"],
+                    },
+                },
+            },
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(hypotheses=[
+            {"mechanism": "overflow", "confidence": "high"},
+        ])
+        assert instance.hypotheses[0].confidence == "high"
+        with pytest.raises(Exception):
+            model(hypotheses=[{"mechanism": "overflow", "confidence": "WRONG"}])
+
+    def test_array_of_strings(self):
+        """Array of simple type becomes List[str]."""
+        schema = {
+            "properties": {
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(tags=["a", "b"])
+        assert instance.tags == ["a", "b"]
+
     def test_invalid_schema_type_raises(self):
         """Non-dict, non-Pydantic schema raises ValueError."""
         with pytest.raises(ValueError, match="must be dict or Pydantic"):
@@ -207,6 +328,24 @@ class TestCoerceToSchema:
 
     def test_empty_schema_noop(self):
         assert _coerce_to_schema({"anything": "here"}, {}) == {"anything": "here"}
+
+    def test_coerce_recurses_into_nested_objects(self):
+        """_coerce_to_schema should recurse into nested object fields."""
+        schema = {
+            "properties": {
+                "impact": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "number"},
+                        "critical": {"type": "boolean"},
+                    },
+                },
+            },
+        }
+        data = {"impact": {"score": "0.9", "critical": "true"}}
+        coerced = _coerce_to_schema(data, schema)
+        assert coerced["impact"]["score"] == 0.9
+        assert coerced["impact"]["critical"] is True
 
 
 class TestStructuredFallback:

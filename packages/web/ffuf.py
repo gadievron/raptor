@@ -222,7 +222,7 @@ class FfufRunner:
         output_file = self.out_dir / "ffuf_results.json"
         cmd = self.build_command(config, output_file)
         redacted_cmd = self._redact_command(cmd)
-        logger.info(f"Running sandboxed ffuf: {' '.join(redacted_cmd)}")
+        logger.info("Running sandboxed ffuf: %s", ' '.join(redacted_cmd))
 
         completed = run_untrusted_networked(
             cmd,
@@ -242,11 +242,12 @@ class FfufRunner:
         if output_file.exists():
             try:
                 parsed = json.loads(output_file.read_text(encoding="utf-8", errors="replace"))
-                raw_results = parsed.get("results") or []
-                if isinstance(raw_results, list):
-                    results = [r for r in raw_results if isinstance(r, dict)]
+                if isinstance(parsed, dict):
+                    raw_results = parsed.get("results") or []
+                    if isinstance(raw_results, list):
+                        results = [r for r in raw_results if isinstance(r, dict)]
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                logger.warning(f"Could not parse ffuf JSON output: {exc}")
+                logger.warning("Could not parse ffuf JSON output: %s", exc)
 
         summarized_results = [self._summarize_result(r) for r in results[: config.report_limit]]
         return {

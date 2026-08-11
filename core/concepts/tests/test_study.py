@@ -28,7 +28,10 @@ from core.concepts.study import (
     _normalise_id,
     _parse_batch_response,
     _prioritise_items,
+    _promote_to_project,
     _queue_unresolved,
+    _scope_items_for_reading_list,
+    _CONSECUTIVE_FAIL_LIMIT,
     check_evidence_staleness,
     run_phase2,
     run_phase3,
@@ -406,7 +409,7 @@ class TestParseResponse:
                 "ownership_transfer": "borrow",
             }],
         }
-        concepts, invariants, contracts = _parse_batch_response(raw)
+        concepts, invariants, contracts, bug_patterns, _ = _parse_batch_response(raw)
         assert len(concepts) == 1
         assert concepts[0].id == "page_ownership"
         assert concepts[0].confidence == "corroborated"
@@ -420,11 +423,14 @@ class TestParseResponse:
         assert contracts[0].function == "get_page"
         assert contracts[0].ownership_transfer == "borrow"
 
+        assert bug_patterns == []
+
     def test_empty_response(self) -> None:
-        concepts, invariants, contracts = _parse_batch_response({})
+        concepts, invariants, contracts, bug_patterns, _ = _parse_batch_response({})
         assert concepts == []
         assert invariants == []
         assert contracts == []
+        assert bug_patterns == []
 
     def test_missing_optional_fields(self) -> None:
         raw = {
@@ -438,7 +444,7 @@ class TestParseResponse:
             "invariants": [],
             "contracts": [{"function": "foo", "file": "b.c"}],
         }
-        concepts, _, contracts = _parse_batch_response(raw)
+        concepts, _, contracts, _, _ = _parse_batch_response(raw)
         assert concepts[0].evidence[0].line is None
         assert contracts[0].input_semantics == ""
 
@@ -587,7 +593,7 @@ class TestRunPhase2:
         mock_client = MagicMock()
         mock_client.generate_structured.return_value = mock_response
 
-        concepts, invariants, contracts = run_phase2(
+        concepts, invariants, contracts, _, _ = run_phase2(
             items, "test/", mock_client,
         )
         assert len(concepts) >= 1
@@ -601,12 +607,29 @@ class TestRunPhase2:
         mock_client = MagicMock()
         mock_client.generate_structured.side_effect = RuntimeError("API down")
 
-        concepts, invariants, contracts = run_phase2(
+        concepts, invariants, contracts, _, _ = run_phase2(
             items, "t/", mock_client,
         )
         assert concepts == []
         assert invariants == []
         assert contracts == []
+
+    def test_circuit_breaker_aborts_after_consecutive_failures(self) -> None:
+        items = [
+            StudyItem(
+                id=f"f{i}", kind="function", name=f"fn{i}",
+                file=f"dir{i}/f.c",
+            )
+            for i in range(10)
+        ]
+        mock_client = MagicMock()
+        mock_client.generate_structured.side_effect = RuntimeError(
+            "budget exceeded",
+        )
+        run_phase2(items, "t/", mock_client)
+        assert mock_client.generate_structured.call_count <= (
+            _CONSECUTIVE_FAIL_LIMIT + 1
+        )
 
     def test_parallel_dispatch(self, monkeypatch) -> None:
         items = [
@@ -638,7 +661,7 @@ class TestRunPhase2:
             lambda _model: 4,
         )
 
-        concepts, invariants, contracts = run_phase2(
+        concepts, invariants, contracts, _, _ = run_phase2(
             items, "test/", mock_client,
         )
         assert len(concepts) >= 1
@@ -667,7 +690,7 @@ class TestRunPhase2:
         mock_client = MagicMock()
         mock_client.generate_structured.return_value = mock_response
 
-        concepts, _, _ = run_phase2(
+        concepts, _, _, _, _ = run_phase2(
             items, "/data/linux/ipc", mock_client,
             source_root="/data/linux",
         )
@@ -893,7 +916,8 @@ class TestQueueUnresolved:
         assert len(rl.pending()) == 1
         assert "task_struct" in rl.pending()[0].question
 
-    def test_context_item_heuristic(self) -> None:
+    def test_context_items_not_auto_promoted(self) -> None:
+        """Context items mentioned by the LLM are not auto-promoted."""
         from core.concepts.reading_list import ReadingList
         rl = ReadingList()
         result = {
@@ -909,8 +933,7 @@ class TestQueueUnresolved:
                       file="include/linux/ipc.h"),
         ]
         queued = _queue_unresolved(rl, result, context)
-        assert queued == 1
-        assert "ipc_perm" in rl.pending()[0].question
+        assert queued == 0
 
     def test_short_names_skipped(self) -> None:
         from core.concepts.reading_list import ReadingList
@@ -961,7 +984,7 @@ class TestEvidenceStaleHashing:
             "invariants": [],
             "contracts": [],
         }
-        concepts, _, _ = _parse_batch_response(
+        concepts, _, _, _, _ = _parse_batch_response(
             raw, source_root=tmp_path,
         )
         assert concepts[0].evidence[0].hash is not None
@@ -981,7 +1004,7 @@ class TestEvidenceStaleHashing:
             "invariants": [],
             "contracts": [],
         }
-        concepts, _, _ = _parse_batch_response(raw)
+        concepts, _, _, _, _ = _parse_batch_response(raw)
         assert concepts[0].evidence[0].hash is None
 
     def test_evidence_no_line_skipped(self, tmp_path: Path) -> None:
@@ -999,7 +1022,7 @@ class TestEvidenceStaleHashing:
             "invariants": [],
             "contracts": [],
         }
-        concepts, _, _ = _parse_batch_response(
+        concepts, _, _, _, _ = _parse_batch_response(
             raw, source_root=tmp_path,
         )
         assert concepts[0].evidence[0].hash is None
@@ -1023,7 +1046,7 @@ class TestEvidenceStaleHashing:
                 "output_semantics": "refcount++",
             }],
         }
-        _, _, contracts = _parse_batch_response(
+        _, _, contracts, _, _ = _parse_batch_response(
             raw, source_root=tmp_path, focus_items=focus,
         )
         assert contracts[0].hash is not None
@@ -1040,10 +1063,83 @@ class TestEvidenceStaleHashing:
             "invariants": [],
             "contracts": [{"function": "unrelated", "file": "a.c"}],
         }
-        _, _, contracts = _parse_batch_response(
+        _, _, contracts, _, _ = _parse_batch_response(
             raw, source_root=tmp_path, focus_items=focus,
         )
         assert contracts[0].hash is None
+
+
+# ------------------------------------------------------------------
+# Struct annotation parsing
+# ------------------------------------------------------------------
+
+class TestStructAnnotationParsing:
+    def test_nested_format(self) -> None:
+        raw = {
+            "concepts": [],
+            "invariants": [],
+            "contracts": [],
+            "bug_patterns": [],
+            "struct_annotations": [
+                {
+                    "struct_name": "scatterlist",
+                    "fields": [
+                        {"field_name": "page_link", "annotation": "encodes page + offset + chain bit"},
+                        {"field_name": "length", "annotation": "byte count, unchecked"},
+                    ],
+                },
+                {
+                    "struct_name": "scatter_walk",
+                    "fields": [
+                        {"field_name": "offset", "annotation": "advances past sg boundary"},
+                    ],
+                },
+            ],
+        }
+        _, _, _, _, sa = _parse_batch_response(raw)
+        assert len(sa) == 3
+        assert sa[0] == {"struct_name": "scatterlist", "field_name": "page_link",
+                         "annotation": "encodes page + offset + chain bit"}
+        assert sa[1] == {"struct_name": "scatterlist", "field_name": "length",
+                         "annotation": "byte count, unchecked"}
+        assert sa[2] == {"struct_name": "scatter_walk", "field_name": "offset",
+                         "annotation": "advances past sg boundary"}
+
+    def test_flat_format_backward_compat(self) -> None:
+        raw = {
+            "concepts": [],
+            "invariants": [],
+            "contracts": [],
+            "bug_patterns": [],
+            "struct_annotations": [
+                {"struct_name": "scatterlist", "field_name": "page_link",
+                 "annotation": "encodes page"},
+            ],
+        }
+        _, _, _, _, sa = _parse_batch_response(raw)
+        assert len(sa) == 1
+        assert sa[0]["struct_name"] == "scatterlist"
+        assert sa[0]["field_name"] == "page_link"
+
+    def test_skips_invalid_entries(self) -> None:
+        raw = {
+            "concepts": [],
+            "invariants": [],
+            "contracts": [],
+            "bug_patterns": [],
+            "struct_annotations": [
+                {"struct_name": ""},
+                {"no_name": True},
+                "garbage",
+                {"struct_name": "ok", "fields": [
+                    {"field_name": "", "annotation": "x"},
+                    {"field_name": "valid", "annotation": "y"},
+                ]},
+            ],
+        }
+        _, _, _, _, sa = _parse_batch_response(raw)
+        assert len(sa) == 1
+        assert sa[0]["field_name"] == "valid"
 
 
 # ------------------------------------------------------------------
@@ -1271,8 +1367,11 @@ class TestApplySagePrior:
                           definition="int page_alloc(void) { return 0; }")]
         sage_prior = {
             "page": [{
-                "content": f"Concept [page]: ownership\n"
-                           f"  Source hash: {composite}",
+                "content": (
+                    f"Concept [page]: ownership\n"
+                    f"  Evidence (code_path): mm.c:1 [h={h}] — alloc\n"
+                    f"  Source hash: {composite}"
+                ),
                 "confidence": 0.85,
             }],
         }
@@ -1304,3 +1403,213 @@ class TestApplySagePrior:
         assert len(remaining) == 3
         assert "page" in seed
         assert "get_page" in seed
+
+
+# ------------------------------------------------------------------
+# Project-level domain-model promotion
+# ------------------------------------------------------------------
+
+
+class TestPromoteToProject:
+    def test_promotes_when_project_json_present(self, tmp_path: Path) -> None:
+        """Promotes domain-model.json when project.json marker exists."""
+        project_dir = tmp_path / "myproject"
+        run_dir = project_dir / "audit-20260731-120000"
+        run_dir.mkdir(parents=True)
+        (project_dir / "project.json").write_text("{}", encoding="utf-8")
+
+        per_run = run_dir / "domain-model.json"
+        per_run.write_text('{"version": "1"}', encoding="utf-8")
+
+        _promote_to_project(per_run, run_dir)
+
+        canonical = project_dir / "concepts" / "domain-model.json"
+        assert canonical.is_file()
+        assert json.loads(canonical.read_text(encoding="utf-8")) == {"version": "1"}
+
+    def test_no_promotion_without_project_marker(self, tmp_path: Path) -> None:
+        """Does not promote when no project.json exists."""
+        run_dir = tmp_path / "standalone-run"
+        run_dir.mkdir(parents=True)
+
+        per_run = run_dir / "domain-model.json"
+        per_run.write_text('{"version": "1"}', encoding="utf-8")
+
+        _promote_to_project(per_run, run_dir)
+
+        canonical = tmp_path / "concepts" / "domain-model.json"
+        assert not canonical.exists()
+
+    def test_promotion_overwrites_stale(self, tmp_path: Path) -> None:
+        """Promotion replaces an existing stale project-level file."""
+        project_dir = tmp_path / "proj"
+        run_dir = project_dir / "run-1"
+        run_dir.mkdir(parents=True)
+        (project_dir / "project.json").write_text("{}", encoding="utf-8")
+
+        concepts_dir = project_dir / "concepts"
+        concepts_dir.mkdir()
+        stale = concepts_dir / "domain-model.json"
+        stale.write_text('{"version": "0", "stale": true}', encoding="utf-8")
+
+        per_run = run_dir / "domain-model.json"
+        per_run.write_text('{"version": "1", "fresh": true}', encoding="utf-8")
+
+        _promote_to_project(per_run, run_dir)
+
+        result = json.loads(stale.read_text(encoding="utf-8"))
+        assert result == {"version": "1", "fresh": True}
+
+    def test_promotion_is_atomic(self, tmp_path: Path) -> None:
+        """Promotion uses atomic rename — no partial writes."""
+        project_dir = tmp_path / "proj"
+        run_dir = project_dir / "run-1"
+        run_dir.mkdir(parents=True)
+        (project_dir / "project.json").write_text("{}", encoding="utf-8")
+
+        per_run = run_dir / "domain-model.json"
+        per_run.write_text('{"complete": true}', encoding="utf-8")
+
+        _promote_to_project(per_run, run_dir)
+
+        canonical = project_dir / "concepts" / "domain-model.json"
+        assert canonical.is_file()
+        tmps = list((project_dir / "concepts").glob("*.tmp"))
+        assert len(tmps) == 0
+
+
+# ------------------------------------------------------------------
+# Reading-list-driven study scoping
+# ------------------------------------------------------------------
+
+class TestScopeItemsForReadingList:
+    """Tests for _scope_items_for_reading_list."""
+
+    @staticmethod
+    def _items() -> list[StudyItem]:
+        return [
+            StudyItem(id="s1", kind="struct", name="task_struct",
+                      file="include/linux/sched.h",
+                      calls=[], callers=[], owned_types=["cred"]),
+            StudyItem(id="s2", kind="struct", name="cred",
+                      file="include/linux/cred.h",
+                      calls=[], callers=["task_struct"], owned_types=[]),
+            StudyItem(id="f1", kind="function", name="prepare_creds",
+                      file="kernel/cred.c",
+                      calls=["kmem_cache_alloc"], callers=["commit_creds"],
+                      owned_types=[]),
+            StudyItem(id="f2", kind="function", name="commit_creds",
+                      file="kernel/cred.c",
+                      calls=["prepare_creds"], callers=[], owned_types=[]),
+            StudyItem(id="f3", kind="function", name="kmem_cache_alloc",
+                      file="mm/slab.c",
+                      calls=[], callers=["prepare_creds"], owned_types=[]),
+            StudyItem(id="f4", kind="function", name="do_fork",
+                      file="kernel/fork.c",
+                      calls=[], callers=[], owned_types=[]),
+        ]
+
+    @staticmethod
+    def _rl_item(**kw):
+        from core.concepts.reading_list import ReadingListItem
+        defaults = dict(id="q1", question="?", source_command="/audit")
+        defaults.update(kw)
+        return ReadingListItem(**defaults)
+
+    def test_empty_pending_returns_all(self) -> None:
+        items = self._items()
+        result = _scope_items_for_reading_list(items, [])
+        assert len(result) == len(items)
+
+    def test_source_function_match(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(source_function="prepare_creds")]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "prepare_creds" in names
+        assert "kmem_cache_alloc" in names  # callee
+        assert "commit_creds" in names      # caller
+
+    def test_source_file_match(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(source_file="kernel/cred.c")]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "prepare_creds" in names
+        assert "commit_creds" in names
+        assert "do_fork" not in names
+
+    def test_id_prefix_stripping(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(id="study_unresolved_task_struct")]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "task_struct" in names
+        assert "cred" in names  # owned_type expansion
+
+    def test_audit_prefix_stripping(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(id="audit_do_fork")]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "do_fork" in names
+
+    def test_backtick_extraction(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(
+            question="What is the lifecycle of `task_struct`?",
+        )]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "task_struct" in names
+        assert "cred" in names  # owned_type
+
+    def test_struct_pattern_in_context(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(context="Check struct task_struct fields")]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "task_struct" in names
+
+    def test_compound_id_pattern_in_question(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(
+            question="How does kmem_cache_alloc handle failures?",
+        )]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "kmem_cache_alloc" in names
+        assert "prepare_creds" in names  # caller expansion
+
+    def test_owned_types_expanded(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(source_function="task_struct")]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "task_struct" in names
+        assert "cred" in names  # owned_type of task_struct
+
+    def test_scoped_is_strict_subset(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(source_function="do_fork")]
+        result = _scope_items_for_reading_list(items, pending)
+        result_names = {it.name for it in result}
+        all_names = {it.name for it in items}
+        assert result_names < all_names  # strict subset
+
+    def test_no_matching_names_returns_empty(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(source_function="nonexistent_fn")]
+        result = _scope_items_for_reading_list(items, pending)
+        assert len(result) == 0
+
+    def test_none_context_and_question_handled(self) -> None:
+        items = self._items()
+        pending = [self._rl_item(
+            source_function="do_fork",
+            context=None,
+            question=None,
+        )]
+        result = _scope_items_for_reading_list(items, pending)
+        names = {it.name for it in result}
+        assert "do_fork" in names

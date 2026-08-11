@@ -1,18 +1,20 @@
 """Tests for core.concepts.audit_bridge."""
 
 import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from core.concepts.audit_bridge import (
     _extract_cwe_id,
     _find_domain_model,
+    _infer_repo_path,
     _match_pass_cwe,
-    _match_pass_mechanism,
     _relevance_score,
+    _sage_recall_for_context,
     domain_model_context,
-    guard_contradicts_finding,
     invariant_violations_for_hypothesis,
+    invariants_contradicting_finding,
     queue_reading_list_item,
 )
 
@@ -194,13 +196,7 @@ def enriched_model():
                 "statement": "Pages in SGL must have balanced get_page/put_page",
                 "negation": "Missing put_page causes page leak; double put_page causes UAF",
                 "confidence": "traced",
-                "role": "boost",
                 "relevant_cwes": ["CWE-416", "CWE-787"],
-                "mechanism_tags": ["sgl_page_lifecycle", "page_refcount"],
-                "mechanism_keywords": [
-                    "page", "scatterlist", "get_page", "put_page",
-                    "sgl", "aliasing", "page_cache",
-                ],
             },
             {
                 "id": "guard_bind_oneshot",
@@ -208,14 +204,7 @@ def enriched_model():
                 "statement": "After alg_bind() succeeds, BOUND is irreversible",
                 "negation": "State reverts from BOUND to UNBOUND",
                 "confidence": "traced",
-                "role": "guard",
-                "scope": {"files": ["af_alg.c"]},
                 "relevant_cwes": ["CWE-362", "CWE-367"],
-                "mechanism_tags": ["state_machine", "one_shot_transition"],
-                "mechanism_keywords": [
-                    "race", "toctou", "concurrent", "revert",
-                    "one_shot", "alg_bind",
-                ],
             },
             {
                 "id": "guard_iv_size",
@@ -223,13 +212,7 @@ def enriched_model():
                 "statement": "ivlen <= ivsize after validation",
                 "negation": "ivlen exceeds ivsize",
                 "confidence": "traced",
-                "role": "guard",
-                "scope": {"files": ["af_alg.c"]},
                 "relevant_cwes": ["CWE-190", "CWE-787", "CWE-125"],
-                "mechanism_tags": ["value_constraint", "bounds_validation"],
-                "mechanism_keywords": [
-                    "constraint", "validation", "ivlen", "ivsize",
-                ],
             },
             {
                 "id": "legacy_no_enrichment",
@@ -237,7 +220,6 @@ def enriched_model():
                 "statement": "Some legacy invariant without enrichment fields",
                 "negation": "integer overflow in length calculation causes buffer overrun",
                 "confidence": "inferred",
-                "role": "boost",
             },
         ],
         "contracts": [],
@@ -249,6 +231,38 @@ def enriched_dir(enriched_model, tmp_path):
     dm_path = tmp_path / "domain-model.json"
     dm_path.write_text(json.dumps(enriched_model), encoding="utf-8")
     return tmp_path
+
+
+class TestDomainModelContextWithSage:
+    def test_sage_only_when_no_local_match(self, tmp_path):
+        """SAGE provides standalone value even when local model is empty."""
+        dm = {
+            "version": "1",
+            "target": "/src",
+            "source_root": "/src",
+            "concepts": [],
+            "invariants": [],
+            "contracts": [],
+        }
+        (tmp_path / "domain-model.json").write_text(
+            json.dumps(dm), encoding="utf-8")
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"confidence": 0.85, "content": "validate_token must check expiry"},
+        ]
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "test-domain"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            block = domain_model_context(
+                tmp_path, "auth/token.c", "validate_token")
+            assert block is not None
+            assert "Cross-Session Knowledge" in block
+            assert "validate_token must check expiry" in block
 
 
 class TestExtractCweId:
@@ -287,30 +301,6 @@ class TestMatchPassCwe:
         assert _match_pass_cwe(inv, "190") is True
 
 
-class TestMatchPassMechanism:
-    def test_keyword_match(self):
-        inv = {"mechanism_keywords": ["page", "scatterlist", "aliasing"]}
-        assert _match_pass_mechanism(
-            inv, "page-cache corruption via scatterlist aliasing") is True
-
-    def test_insufficient_keywords(self):
-        inv = {"mechanism_keywords": ["page", "scatterlist", "aliasing"]}
-        assert _match_pass_mechanism(
-            inv, "integer overflow in size") is False
-
-    def test_one_keyword_not_enough(self):
-        inv = {"mechanism_keywords": ["page", "scatterlist", "aliasing"]}
-        assert _match_pass_mechanism(inv, "page fault handler") is False
-
-    def test_empty_keywords(self):
-        inv = {"mechanism_keywords": []}
-        assert _match_pass_mechanism(inv, "anything") is False
-
-    def test_case_insensitive(self):
-        inv = {"mechanism_keywords": ["Page", "SGL"]}
-        assert _match_pass_mechanism(inv, "page in sgl entry") is True
-
-
 class TestInvariantViolations:
     def test_finds_matching_violation(self, dm_dir):
         results = invariant_violations_for_hypothesis(
@@ -332,12 +322,11 @@ class TestInvariantViolations:
 
 
 class TestEnrichedMatching:
-    def test_cwe_match_boost_crossfile(self, enriched_dir):
-        """Boost matched by CWE is scope-free — works cross-file."""
+    def test_cwe_match_crossfile(self, enriched_dir):
+        """Invariant matched by CWE works cross-file."""
         results = invariant_violations_for_hypothesis(
             enriched_dir,
             "page-cache corruption via write to shared page",
-            role="boost",
             finding_file="algif_aead.c",
             finding_cwe="CWE-787",
         )
@@ -346,40 +335,18 @@ class TestEnrichedMatching:
         cwe_match = next(r for r in results if r["invariant_id"] == "page_refcounting")
         assert cwe_match["match_pass"] == "cwe"
 
-    def test_mechanism_match_boost_crossfile(self, enriched_dir):
-        """Boost matched by mechanism keywords, no CWE needed."""
+    def test_keyword_match_crossfile(self, enriched_dir):
+        """Invariant matched by keyword overlap, no CWE needed."""
         results = invariant_violations_for_hypothesis(
             enriched_dir,
-            "scatterlist aliasing causes page cache corruption",
-            role="boost",
+            "double put_page on error path leads to use-after-free",
             finding_file="algif_aead.c",
             finding_cwe="",
         )
         ids = [r["invariant_id"] for r in results]
         assert "page_refcounting" in ids
-        mech_match = next(r for r in results if r["invariant_id"] == "page_refcounting")
-        assert mech_match["match_pass"] == "mechanism"
-
-    def test_guard_scoped_to_file(self, enriched_dir):
-        """Guard invariant only matches findings in its scoped files."""
-        results_scoped = invariant_violations_for_hypothesis(
-            enriched_dir,
-            "TOCTOU race in concurrent alg_bind call",
-            role="guard",
-            finding_file="af_alg.c",
-            finding_cwe="CWE-362",
-        )
-        results_wrong_file = invariant_violations_for_hypothesis(
-            enriched_dir,
-            "TOCTOU race in concurrent alg_bind call",
-            role="guard",
-            finding_file="algif_aead.c",
-            finding_cwe="CWE-362",
-        )
-        scoped_ids = [r["invariant_id"] for r in results_scoped]
-        wrong_file_ids = [r["invariant_id"] for r in results_wrong_file]
-        assert "guard_bind_oneshot" in scoped_ids
-        assert "guard_bind_oneshot" not in wrong_file_ids
+        kw_match = next(r for r in results if r["invariant_id"] == "page_refcounting")
+        assert kw_match["match_pass"] == "keyword"
 
     def test_legacy_fallback(self, enriched_dir):
         """Invariants without enrichment fall back to keyword matching."""
@@ -390,7 +357,7 @@ class TestEnrichedMatching:
         ids = [r["invariant_id"] for r in results]
         assert "legacy_no_enrichment" in ids
         legacy = next(r for r in results if r["invariant_id"] == "legacy_no_enrichment")
-        assert legacy["match_pass"] == "legacy"
+        assert legacy["match_pass"] == "keyword"
 
     def test_no_false_positive_module_vs_page_refcount(self, enriched_dir):
         """Module reference counting should NOT match page refcounting."""
@@ -398,7 +365,6 @@ class TestEnrichedMatching:
             enriched_dir,
             "missing try_module_get on algorithm owner module "
             "allows premature module unloading and use-after-free",
-            role="boost",
             finding_cwe="CWE-416",
         )
         ids = [r["invariant_id"] for r in results]
@@ -411,12 +377,11 @@ class TestEnrichedMatching:
             pr = next(r for r in results if r["invariant_id"] == "page_refcounting")
             assert pr["match_pass"] == "cwe"
 
-    def test_cwe_preferred_over_mechanism(self, enriched_dir):
-        """When both CWE and mechanism would match, CWE pass wins."""
+    def test_cwe_preferred_over_keyword(self, enriched_dir):
+        """When both CWE and keyword would match, CWE pass wins."""
         results = invariant_violations_for_hypothesis(
             enriched_dir,
-            "page corruption via scatterlist aliasing of shared pages",
-            role="boost",
+            "double put_page causes use-after-free on shared pages",
             finding_cwe="CWE-787",
         )
         pr = next(
@@ -426,9 +391,9 @@ class TestEnrichedMatching:
         assert pr is not None
         assert pr["match_pass"] == "cwe"
 
-    def test_guard_contradicts_with_cwe(self, enriched_dir):
-        """guard_contradicts_finding passes CWE through."""
-        results = guard_contradicts_finding(
+    def test_invariants_contradicting_with_cwe(self, enriched_dir):
+        """invariants_contradicting_finding passes CWE through."""
+        results = invariants_contradicting_finding(
             enriched_dir,
             "integer overflow in ivlen causes out-of-bounds write",
             [],
@@ -468,3 +433,164 @@ class TestQueueReadingListItem:
         data = json.loads(
             (tmp_path / "reading-list.json").read_text(encoding="utf-8"))
         assert data["items"][0]["priority"] == "critical"
+
+
+class TestInferRepoPath:
+    def test_from_study_list_in_out_dir(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/home/user/myrepo"}), encoding="utf-8")
+        assert _infer_repo_path(tmp_path) == "/home/user/myrepo"
+
+    def test_from_study_list_in_parent(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/linux"}), encoding="utf-8")
+        child = tmp_path / "sub"
+        child.mkdir()
+        assert _infer_repo_path(child) == "/repos/linux"
+
+    def test_returns_none_when_missing(self, tmp_path):
+        child = tmp_path / "run001"
+        child.mkdir()
+        assert _infer_repo_path(child) is None
+
+    def test_returns_none_on_empty_target(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": ""}), encoding="utf-8")
+        assert _infer_repo_path(tmp_path) is None
+
+    def test_returns_none_on_invalid_json(self, tmp_path):
+        (tmp_path / "study-list.json").write_text("not json", encoding="utf-8")
+        assert _infer_repo_path(tmp_path) is None
+
+
+class TestSageRecallForContext:
+    def test_returns_none_when_sage_not_installed(self, tmp_path):
+        with patch.dict("sys.modules", {"core.sage.hooks": None}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is None
+
+    def test_returns_none_when_client_unavailable(self, tmp_path):
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = None
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is None
+
+    def test_returns_formatted_block(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"confidence": 0.85, "content": "mutex_lock must pair with mutex_unlock"},
+            {"confidence": 0.72, "content": "refcount_inc requires matching refcount_dec"},
+        ]
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "raptor-concepts-myproj"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "kernel/locking.c", "do_lock")
+
+        assert result is not None
+        assert "Cross-Session Knowledge" in result
+        assert "85%" in result
+        assert "mutex_lock" in result
+        assert "72%" in result
+
+    def test_returns_none_on_empty_results(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.query.return_value = []
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "test-domain"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is None
+
+    def test_returns_none_on_query_exception(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.query.side_effect = ConnectionError("SAGE down")
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "test-domain"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is None
+
+    def test_truncates_long_content(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        long_content = "x" * 500 + "\nsecond line"
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"confidence": 0.9, "content": long_content},
+        ]
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "test-domain"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is not None
+            assert "second line" not in result
+            assert len(result.split("\n")[-1]) <= 210
+
+    def test_handles_none_confidence_and_content(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"confidence": None, "content": None},
+            {"confidence": 0.8, "content": "valid result"},
+        ]
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "test-domain"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is not None
+            assert "valid result" in result
+
+    def test_returns_none_when_no_repo_path(self, tmp_path):
+        """When _infer_repo_path returns None, SAGE is skipped."""
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = MagicMock()
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            result = _sage_recall_for_context(tmp_path, "foo.c", "bar")
+            assert result is None
+
+    def test_respects_max_results(self, tmp_path):
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"target": "/repos/myproj"}), encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"confidence": 0.9, "content": "result 1"},
+        ]
+        mock_hooks = MagicMock()
+        mock_hooks._get_client.return_value = mock_client
+        mock_hooks._concepts_domain.return_value = "test-domain"
+
+        with patch.dict("sys.modules", {"core.sage.hooks": mock_hooks}):
+            _sage_recall_for_context(
+                tmp_path, "foo.c", "bar",
+                max_results=5, min_confidence=0.5,
+            )
+            mock_client.query.assert_called_once_with(
+                "bar foo.c",
+                domain_tag="test-domain",
+                top_k=5,
+                min_confidence=0.5,
+            )

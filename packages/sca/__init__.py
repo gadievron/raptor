@@ -194,8 +194,11 @@ def compose_proxy_hosts(target: "Optional[Path]" = None) -> list:
             if h not in seen:
                 hosts.append(h)
                 seen.add(h)
-    except Exception:                               # noqa: BLE001
-        pass
+    except Exception as e:                           # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).debug(
+            "LLM egress allowlist derivation failed: %s", e,
+        )
 
     # Operator-supplied private-registry overrides (Artifactory /
     # Nexus / GHE / etc.) — env-var-driven. Always consulted, with

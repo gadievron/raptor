@@ -47,7 +47,6 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import logging
-import os
 import shlex
 import signal
 import subprocess
@@ -62,6 +61,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -164,7 +164,10 @@ def _lookup_bounds_by_name(
                 ls = item.get("line_start")
                 le = item.get("line_end")
                 if ls is not None and le is not None:
-                    return int(ls), int(le)
+                    try:
+                        return int(ls), int(le)
+                    except (TypeError, ValueError):
+                        return None
     return None
 
 
@@ -176,7 +179,11 @@ def _read_body(opts: argparse.Namespace) -> str:
     if opts.body_file:
         if opts.body_file == "-":
             return sys.stdin.read()
-        return Path(opts.body_file).read_text(encoding="utf-8")
+        try:
+            return Path(opts.body_file).read_text(encoding="utf-8")
+        except (FileNotFoundError, IOError) as exc:
+            print(f"error: cannot read body file: {exc}", file=sys.stderr)
+            sys.exit(1)
     return ""
 
 

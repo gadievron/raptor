@@ -194,11 +194,11 @@ class CodeQLAgent:
         self.database_manager = DatabaseManager(codeql_cli=codeql_cli)
         self.query_runner = QueryRunner(codeql_cli=codeql_cli)
 
-        logger.info(f"{'=' * 70}")
+        logger.info("%s", '=' * 70)
         logger.info("RAPTOR CODEQL AGENT")
-        logger.info(f"{'=' * 70}")
-        logger.info(f"Repository: {self.repo_path}")
-        logger.info(f"Output: {self.out_dir}")
+        logger.info("%s", '=' * 70)
+        logger.info("Repository: %s", self.repo_path)
+        logger.info("Output: %s", self.out_dir)
 
     def run_autonomous_analysis(
         self,
@@ -248,9 +248,9 @@ class CodeQLAgent:
 
         try:
             # PHASE 1: Language Detection
-            logger.info(f"\n{'=' * 70}")
+            logger.info("\n%s", '=' * 70)
             logger.info("PHASE 1: LANGUAGE DETECTION")
-            logger.info(f"{'=' * 70}")
+            logger.info("%s", '=' * 70)
 
             if languages:
                 # Normalise operator-friendly aliases (c→cpp, js→
@@ -263,11 +263,12 @@ class CodeQLAgent:
                 normalised = [_normalise_language(lang) for lang in languages]
                 if normalised != [lang.strip().lower() for lang in languages]:
                     logger.info(
-                        f"Using specified languages: {', '.join(languages)} "
-                        f"(canonical: {', '.join(normalised)})"
+                        "Using specified languages: %s (canonical: %s)",
+                        ', '.join(languages),
+                        ', '.join(normalised)
                     )
                 else:
-                    logger.info(f"Using specified languages: {', '.join(normalised)}")
+                    logger.info("Using specified languages: %s", ', '.join(normalised))
                 detected = {}
                 for lang in normalised:
                     # Create minimal LanguageInfo for specified languages
@@ -293,9 +294,8 @@ class CodeQLAgent:
                 # the operator knows we widened the criterion.
                 if not detected and min_files > 1:
                     logger.warning(
-                        f"No languages met min_files={min_files} threshold; "
-                        f"retrying with min_files=1 (small target — single-file "
-                        f"fixtures and minimal repros land here)"
+                        "No languages met min_files=%s threshold; retrying with min_files=1 (small target — single-file fixtures and minimal repros land here)",
+                        min_files
                     )
                     detected = self.language_detector.detect_languages(min_files=1)
                     detected = self.language_detector.filter_codeql_supported(detected)
@@ -336,20 +336,22 @@ class CodeQLAgent:
                     errors=[error],
                 )
 
-            logger.info(f"\n✓ Detected {len(detected)} language(s):")
+            logger.info("\n✓ Detected %d language(s):", len(detected))
             for lang, info in detected.items():
-                logger.info(f"  - {lang}: {info.file_count} files (confidence: {info.confidence:.2f})")
+                logger.info(
+                    "  - %s: %s files (confidence: %.2f)", lang, info.file_count, info.confidence
+                )
 
             # PHASE 2: Build System Detection
-            logger.info(f"\n{'=' * 70}")
+            logger.info("\n%s", '=' * 70)
             logger.info("PHASE 2: BUILD SYSTEM DETECTION")
-            logger.info(f"{'=' * 70}")
+            logger.info("%s", '=' * 70)
 
             language_build_map = {}
             for lang in detected:
                 if build_commands and lang in build_commands:
                     # Use custom build command
-                    logger.info(f"{lang}: Using custom build command")
+                    logger.info("%s: Using custom build command", lang)
                     language_build_map[lang] = BuildSystem(
                         type="custom",
                         command=build_commands[lang],
@@ -365,7 +367,9 @@ class CodeQLAgent:
                         # Validate build system
                         valid = self.build_detector.validate_build_command(build_system)
                         if not valid:
-                            logger.warning(f"Build system validation failed for {lang}, using no-build mode")
+                            logger.warning(
+                                "Build system validation failed for %s, using no-build mode", lang
+                            )
                             build_system = self.build_detector.generate_no_build_config(lang)
                     else:
                         # Try to synthesise a build command for compiled languages
@@ -396,9 +400,9 @@ class CodeQLAgent:
                     language_build_map[lang] = build_system
 
             # PHASE 3: Database Creation
-            logger.info(f"\n{'=' * 70}")
+            logger.info("\n%s", '=' * 70)
             logger.info("PHASE 3: DATABASE CREATION")
-            logger.info(f"{'=' * 70}")
+            logger.info("%s", '=' * 70)
 
             db_results = self.database_manager.create_databases_parallel(
                 self.repo_path,
@@ -447,9 +451,9 @@ class CodeQLAgent:
             }
 
             if failed_dbs:
-                logger.warning(f"\n⚠ {len(failed_dbs)} database(s) failed to create:")
+                logger.warning("\n⚠ %d database(s) failed to create:", len(failed_dbs))
                 for lang, result in failed_dbs.items():
-                    logger.warning(f"  - {lang}: {', '.join(result.errors[:2])}")
+                    logger.warning("  - %s: %s", lang, ', '.join(result.errors[:2]))
                     errors.extend(result.errors)
 
             if not successful_dbs:
@@ -468,15 +472,15 @@ class CodeQLAgent:
                     errors=[error] + errors,
                 )
 
-            logger.info(f"\n✓ Created {len(successful_dbs)} database(s):")
+            logger.info("\n✓ Created %d database(s):", len(successful_dbs))
             for lang in successful_dbs:
                 cached = " (cached)" if db_results[lang].cached else ""
-                logger.info(f"  - {lang}{cached}")
+                logger.info("  - %s%s", lang, cached)
 
             # PHASE 4: Security Analysis
-            logger.info(f"\n{'=' * 70}")
+            logger.info("\n%s", '=' * 70)
             logger.info("PHASE 4: SECURITY ANALYSIS")
-            logger.info(f"{'=' * 70}")
+            logger.info("%s", '=' * 70)
 
             analysis_results = self.query_runner.analyze_all_databases(
                 successful_dbs,
@@ -502,9 +506,9 @@ class CodeQLAgent:
                 if result.success and result.sarif_path:
                     sarif_files.append(str(result.sarif_path))
                     total_findings += result.findings_count
-                    logger.info(f"  - {lang}: {result.findings_count} findings")
+                    logger.info("  - %s: %s findings", lang, result.findings_count)
                 else:
-                    logger.error(f"  - {lang}: Analysis failed")
+                    logger.error("  - %s: Analysis failed", lang)
                     errors.extend(result.errors)
 
             for lang, result in iris_results.items():
@@ -513,14 +517,15 @@ class CodeQLAgent:
                     total_findings += result.findings_count
                     if result.findings_count:
                         logger.info(
-                            f"  - {lang} IRIS LocalFlowSource: "
-                            f"{result.findings_count} extra findings"
+                            "  - %s IRIS LocalFlowSource: %s extra findings",
+                            lang,
+                            result.findings_count
                         )
 
             # PHASE 5: Generate Report
-            logger.info(f"\n{'=' * 70}")
+            logger.info("\n%s", '=' * 70)
             logger.info("PHASE 5: REPORT GENERATION")
-            logger.info(f"{'=' * 70}")
+            logger.info("%s", '=' * 70)
 
             workflow_result = CodeQLWorkflowResult(
                 success=len(sarif_files) > 0,
@@ -541,7 +546,7 @@ class CodeQLAgent:
             return workflow_result
 
         except Exception as e:
-            logger.error(f"Workflow failed with exception: {e}", exc_info=True)
+            logger.error("Workflow failed with exception: %s", e, exc_info=True)
             return CodeQLWorkflowResult(
                 success=False,
                 repo_path=str(self.repo_path),
@@ -578,10 +583,10 @@ class CodeQLAgent:
 
         try:
             save_json(report_path, result.to_dict())
-            logger.info(f"✓ Report saved: {report_path}")
+            logger.info("✓ Report saved: %s", report_path)
             return
         except Exception as e:
-            logger.error(f"Failed to save full report: {e}")
+            logger.error("Failed to save full report: %s", e)
         # Fallback: minimal report with stats we know are JSON-safe.
         try:
             minimal = {
@@ -594,9 +599,9 @@ class CodeQLAgent:
                 "error": "to_dict() raised mid-serialization; see raptor.log",
             }
             save_json(report_path, minimal)
-            logger.info(f"✓ Minimal-fallback report saved: {report_path}")
+            logger.info("✓ Minimal-fallback report saved: %s", report_path)
         except Exception as e2:
-            logger.error(f"Minimal report also failed: {e2}")
+            logger.error("Minimal report also failed: %s", e2)
 
     def print_summary(self, result: CodeQLWorkflowResult):
         """Print workflow summary."""
@@ -746,7 +751,7 @@ class CodeQLAgent:
                     })
 
         except Exception as e:
-            logger.debug(f"Failed to extract dataflow examples: {e}")
+            logger.debug("Failed to extract dataflow examples: %s", e)
 
         return examples
 
@@ -780,7 +785,7 @@ class CodeQLAgent:
             for i, example in enumerate(dataflow_examples, 1):
                 print(f"    {i}. {example['rule']}: {example['source']} → {example['sink']} ({example['steps']} steps)")
         except Exception as e:
-            logger.debug(f"Failed to print dataflow table: {e}")
+            logger.debug("Failed to print dataflow table: %s", e)
 
 
 def main():
@@ -851,7 +856,7 @@ Examples:
         if not languages or len(languages) != 1:
             print("✗ --build-command requires exactly one language specified with --languages", file=sys.stderr)
             sys.exit(1)
-        build_commands = {languages[0]: args.build_command}
+        build_commands = {_normalise_language(languages[0]): args.build_command}
 
     try:
         # Pre-compute out_dir BEFORE constructing the agent so we
@@ -938,7 +943,7 @@ Examples:
               file=sys.stderr)
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error("Fatal error: %s", e, exc_info=True)
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 

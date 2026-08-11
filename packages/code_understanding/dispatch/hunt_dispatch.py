@@ -126,7 +126,7 @@ def default_hunt_dispatch(
     try:
         result = loop.run(user_message)
     except CostBudgetExceeded as e:
-        logger.warning(f"hunt: model {model.model_name} hit cost cap: {e}")
+        logger.warning("hunt: model %s hit cost cap: %s", model.model_name, e)
         if cost_collector is not None:
             cost_collector(max_cost_usd)  # we hit the cap
         persist_partial_from_exception(

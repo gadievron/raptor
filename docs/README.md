@@ -27,8 +27,10 @@ overview:
 | `/codeql` | CodeQL deep analysis |
 | `/fuzz` | Binary fuzzing |
 | `/web` | Web application testing |
+| `/audit` | Systematic hypothesis-driven code review |
 | `/validate` | Exploitability validation pipeline |
 | `/understand` | Code comprehension and attack surface mapping |
+| `/review` | Query audit state (findings, gaps, coverage, notes) |
 | `/sca` | Software composition analysis |
 | `/binary` | Black-box binary investigation |
 | `/frida` | Dynamic instrumentation |
@@ -59,6 +61,7 @@ overview:
 | [CodeQL](codeql.md) | CodeQL integration and autonomous analysis |
 | [Fuzzing](fuzzing.md) | AFL++ and libFuzzer |
 | [Crash Analysis](crash-analysis.md) | Autonomous crash root-cause analysis |
+| [Audit](audit.md) | Systematic code review: hypotheses, tools, strategies, gates |
 | [Validation](validation.md) | Exploitability validation pipeline (stages 0--1) |
 | [Binary Analysis](binary-analysis.md) | Binary oracle, `/binary`, exploit feasibility |
 | [SCA](sca.md) | Software composition analysis |

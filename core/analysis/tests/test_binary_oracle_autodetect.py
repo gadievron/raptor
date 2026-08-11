@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -16,11 +17,17 @@ from core.analysis.binary_oracle_autodetect import (
 
 _GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
 
+_needs_gcc = pytest.mark.skipif(
+    not shutil.which("gcc"), reason="gcc not available",
+)
+
 
 @pytest.fixture
 def build_tree(tmp_path: Path) -> Path:
     """A target tree shaped like a real autotools / CMake build.
     Synthesises ELF binaries with DWARF via a tiny compile."""
+    if not shutil.which("gcc"):
+        pytest.skip("gcc not available")
     import subprocess as _sp
 
     # Source file shared by all binaries.
@@ -144,6 +151,8 @@ def test_classify_candidate_rejects_split_debug_and_templates(
             f"(got kind={result.kind if result else None})")
 
 
+@_needs_gcc
+@pytest.mark.slow
 def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:
     import subprocess as _sp
     src = tmp_path / "x.c"
@@ -156,6 +165,9 @@ def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:
     assert _has_dwarf(stripped) is False
 
 
+@_needs_gcc
+@pytest.mark.slow
+@pytest.mark.skipif(not shutil.which("make"), reason="make not available")
 def test_detect_finds_makefile_built_binary(tmp_path: Path) -> None:
     """A target with a Makefile that builds into build/ — autodetect
     must find the resulting debug binary after ``make`` runs. This is

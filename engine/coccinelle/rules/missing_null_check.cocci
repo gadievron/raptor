@@ -4,6 +4,7 @@
 // Two rules: assign_alloc for `E = malloc(...)` (re-assignment),
 // decl_alloc for `T E = malloc(...)` (declaration-init). The * context
 // markers are required by spatch for context-mode matching.
+// @role: detection
 
 @assign_alloc@
 expression E;
@@ -11,6 +12,8 @@ position p;
 identifier fld;
 @@
 
+// @vocab: allocators
+// @vocab-tmpl: * E@p = %s(...)
 (
 * E@p = malloc(...);
 |
@@ -40,6 +43,8 @@ identifier fld;
 type T;
 @@
 
+// @vocab: allocators
+// @vocab-tmpl:   T E@p = %s(...)
 (
   T E@p = malloc(...);
 |

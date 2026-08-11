@@ -134,20 +134,32 @@ def parse_spec_response(raw: str) -> list[TaintSpec]:
     specs = []
 
     cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
+    # Strip fences: find the first ``` and last ```, keep only between
+    fence_start = cleaned.find("```")
+    if fence_start >= 0:
+        after_fence = cleaned[fence_start:]
+        lines = after_fence.splitlines()
         lines = [ln for ln in lines if not ln.strip().startswith("```")]
         cleaned = "\n".join(lines)
 
     for line in cleaned.splitlines():
         line = line.strip()
-        if not line or not line.startswith("{"):
+        if not line or (not line.startswith("{") and not line.startswith("[")):
             continue
         try:
             data = json.loads(line)
-            spec = _parse_one_spec(data)
-            if spec:
-                specs.append(spec)
+            if isinstance(data, list):
+                for item in data:
+                    try:
+                        s = _parse_one_spec(item)
+                    except (ValueError, TypeError):
+                        continue
+                    if s:
+                        specs.append(s)
+            else:
+                spec = _parse_one_spec(data)
+                if spec:
+                    specs.append(spec)
         except (json.JSONDecodeError, ValueError, TypeError):
             continue
 
@@ -469,12 +481,28 @@ def _specs_from_list(items: list[dict[str, Any]]) -> list[TaintSpec]:
             tier = EvidenceTier(item.get("evidence_tier", "heuristic"))
         except ValueError:
             tier = EvidenceTier.HEURISTIC
+        tc = item.get("taint_classes", [])
+        if isinstance(tc, str):
+            taint_classes = [tc]
+        elif isinstance(tc, list):
+            taint_classes = tc
+        else:
+            taint_classes = []
+        pa = item.get("params_affected", [])
+        if isinstance(pa, (int, float)):
+            params_affected = [int(pa)]
+        elif isinstance(pa, str) and pa.isdigit():
+            params_affected = [int(pa)]
+        elif isinstance(pa, list):
+            params_affected = pa
+        else:
+            params_affected = []
         specs.append(TaintSpec(
             function=function,
             file=item.get("file", "") if isinstance(item.get("file"), str) else "",
             role=role,
-            taint_classes=item.get("taint_classes", []),
-            params_affected=item.get("params_affected", []),
+            taint_classes=taint_classes,
+            params_affected=params_affected,
             return_tainted=item.get("return_tainted", False),
             confidence=_safe_confidence(item.get("confidence", 0.5)),
             evidence_tier=tier,

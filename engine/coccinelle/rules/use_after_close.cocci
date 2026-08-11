@@ -9,6 +9,7 @@
 //
 // CWE-672: Operation on a Resource after Expiration or Release
 // Zero-FP: using a closed fd without reassignment is always wrong.
+// @role: verification
 
 @close_then_read@
 expression FD;

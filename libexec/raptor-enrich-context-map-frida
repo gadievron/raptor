@@ -14,7 +14,6 @@ from __future__ import annotations
 import faulthandler
 
 import json
-import os
 import signal
 import sys
 from pathlib import Path
@@ -24,6 +23,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -59,6 +59,9 @@ def main() -> int:
     except (json.JSONDecodeError, OSError) as e:
         print(f"✗ Cannot read context-map: {e}", file=sys.stderr)
         return 1
+    if not isinstance(ctx, dict):
+        print("✗ context-map.json is not a JSON object", file=sys.stderr)
+        return 1
     search_dirs = [workdir, workdir.parent]
 
     target_path = None
@@ -66,7 +69,8 @@ def main() -> int:
     if checklist_path.is_file():
         try:
             cl = json.loads(checklist_path.read_text(encoding="utf-8"))
-            target_path = cl.get("target_path")
+            if isinstance(cl, dict):
+                target_path = cl.get("target_path")
         except (json.JSONDecodeError, OSError):
             pass
 

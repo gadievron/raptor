@@ -29,16 +29,33 @@ logger = logging.getLogger(__name__)
 CHECKER_MATCHES_FILE = "checker-matches.jsonl"
 
 
-def _llm_callable_from_client(llm_client) -> Optional[Any]:
+def _llm_callable_from_client(
+    llm_client, cost_tracker=None,
+) -> Optional[Any]:
     """Adapt RAPTOR's ``LLMClient`` to checker_synthesis's
     ``LLMCallable`` Protocol. Returns None when the client doesn't
     expose ``generate_structured`` (e.g. ClaudeCodeProvider in
-    prep-only mode — checker synthesis can't run without an LLM)."""
+    prep-only mode -- checker synthesis can't run without an LLM).
+
+    When *cost_tracker* is provided, each call checks the budget
+    before invoking the LLM and returns None (skipped) when the
+    budget is exhausted.
+    """
     if not hasattr(llm_client, "generate_structured"):
         return None
     from core.llm.task_types import TaskType
 
     def _call(prompt, schema, system_prompt):
+        if cost_tracker is not None:
+            try:
+                max_cost = getattr(cost_tracker, "_max_cost", 0)
+                if max_cost > 0 and cost_tracker.total_cost >= max_cost:
+                    logger.debug(
+                        "checker_synthesis skipped: budget exhausted",
+                    )
+                    return None
+            except Exception:
+                pass
         try:
             data, _full = llm_client.generate_structured(
                 prompt=prompt,
@@ -48,7 +65,9 @@ def _llm_callable_from_client(llm_client) -> Optional[Any]:
             )
             return data
         except Exception as e:
-            logger.warning("checker_synthesis LLM call failed: %s", e)
+            logger.warning(
+                "checker_synthesis LLM call failed: %s", e,
+            )
             return None
     return _call
 
@@ -213,7 +232,7 @@ def _try_replay_from_library(
             entry.rule_id, len(variants),
         )
 
-        _sage_accumulate_rule(entry, seed, len(variants), len(triage_list))
+        _try_graduate_after_update(lib)
 
         return result
     except Exception:
@@ -233,120 +252,27 @@ def _try_promote_to_library(result, repo_root: Path):
             str(repo_root).encode(),
         ).hexdigest()[:12]
         lib.promote(result, target_hash=target_hash)
-
-        if result.rule is not None:
-            _sage_store_new_rule(result)
     except Exception:
         logger.debug("checker_followup: library promotion failed", exc_info=True)
 
 
-def _sage_accumulate_rule(entry, seed, n_variants: int, n_triage: int):
-    """Increment targets_tested in SAGE for a replayed library rule.
+def _try_graduate_after_update(lib):
+    """Graduate eligible rules after a library update.
 
-    When the accumulated target count crosses the graduation threshold,
-    triggers ``RuleLibrary.graduate()`` to promote the rule to the
-    engine rules directory for first-class /scan coverage.
+    The disk manifest already tracks targets, TP rate, and variant
+    counts — graduate() reads those directly.  No external state needed.
     """
     try:
-        from core.sage.hooks import (
-            recall_proven_rules,
-            parse_rule_metadata,
-            store_proven_rule_metadata,
-            should_replay_rule,
-        )
-        import hashlib
-
-        rows = recall_proven_rules(entry.engine, seed.cwe or "")
-        existing_targets = 1
-        for row in rows:
-            meta = parse_rule_metadata(row)
-            if meta.get("rule_id") == entry.rule_id:
-                existing_targets = meta.get("targets_tested", 1)
-                break
-
-        new_targets = existing_targets + 1
-
-        rule_hash = hashlib.sha256(
-            entry.rule_id.encode(),
-        ).hexdigest()[:16]
-
-        store_proven_rule_metadata(
-            engine=entry.engine,
-            cwe=seed.cwe or "",
-            rule_id=entry.rule_id,
-            rule_body_hash=rule_hash,
-            rule_path=str(entry.rule_id),
-            tp_count=n_variants,
-            fp_count=0,
-            total_matches=n_variants + n_triage,
-            dual_control_passed=entry.dual_control,
-            targets_tested=new_targets,
-        )
-
-        updated_meta = {
-            "tp_count": n_variants,
-            "fp_count": 0,
-            "dual_control": entry.dual_control,
-            "targets_tested": new_targets,
-        }
-        if should_replay_rule(updated_meta):
-            _try_graduate_rule(entry)
-    except Exception:
-        logger.debug("checker_followup: SAGE accumulate failed", exc_info=True)
-
-
-def _try_graduate_rule(entry):
-    """Graduate a library rule to the engine rules directory."""
-    try:
-        from packages.checker_synthesis import RuleLibrary
-        from packages.checker_synthesis.library import _DEFAULT_LIBRARY_DIR
         from core.config import RaptorConfig
 
-        lib = RuleLibrary(_DEFAULT_LIBRARY_DIR)
         graduated = lib.graduate(RaptorConfig.ENGINE_DIR)
         if graduated:
             logger.info(
-                "checker_followup: graduated %d rule(s) via SAGE trigger: %s",
+                "checker_followup: graduated %d rule(s): %s",
                 len(graduated), ", ".join(graduated),
             )
     except Exception:
         logger.debug("checker_followup: graduation failed", exc_info=True)
-
-
-def _sage_store_new_rule(result):
-    """Store initial SAGE metadata for a newly promoted rule."""
-    try:
-        from core.sage.hooks import store_proven_rule_metadata
-        import hashlib
-
-        rule = result.rule
-        rule_hash = hashlib.sha256(
-            rule.body.encode() if rule.body else rule.rule_id.encode(),
-        ).hexdigest()[:16]
-
-        tp_count = len([
-            t for t in (result.triage or [])
-            if getattr(t, "status", "") == "variant"
-        ])
-        fp_count = len([
-            t for t in (result.triage or [])
-            if getattr(t, "status", "") == "false_positive"
-        ])
-
-        store_proven_rule_metadata(
-            engine=rule.engine,
-            cwe=result.seed.cwe or "",
-            rule_id=rule.rule_id,
-            rule_body_hash=rule_hash,
-            rule_path=str(result.rule_path or ""),
-            tp_count=tp_count,
-            fp_count=fp_count,
-            total_matches=len(result.matches or []),
-            dual_control_passed=result.dual_control or False,
-            targets_tested=1,
-        )
-    except Exception:
-        logger.debug("checker_followup: SAGE store new rule failed", exc_info=True)
 
 
 def emit_variant_matches_for_finding(
@@ -356,6 +282,7 @@ def emit_variant_matches_for_finding(
     checklist: Optional[Dict[str, Any]],
     repo_root: Path,
     llm_client,
+    cost_tracker=None,
     max_matches: int = 10,
     triage_each: bool = True,
     max_triage_calls: int = 10,
@@ -394,7 +321,9 @@ def emit_variant_matches_for_finding(
             )
             return 0
 
-        llm_callable = _llm_callable_from_client(llm_client)
+        llm_callable = _llm_callable_from_client(
+            llm_client, cost_tracker=cost_tracker,
+        )
         if llm_callable is None:
             logger.debug(
                 "checker_followup: skipped — LLM client does not "

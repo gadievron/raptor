@@ -239,10 +239,13 @@ def _reset_generated_output(out_dir: Path) -> None:
 
     for kind in GENERATED_SEED_KINDS:
         kind_dir = out_dir / kind
-        if kind_dir.is_dir() and not kind_dir.is_symlink():
-            shutil.rmtree(kind_dir)
-        else:
-            kind_dir.unlink(missing_ok=True)
+        try:
+            if kind_dir.is_dir() and not kind_dir.is_symlink():
+                shutil.rmtree(kind_dir)
+            else:
+                kind_dir.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
 
     manifest_path = out_dir / "manifest.json"
     manifest_path.unlink(missing_ok=True)
@@ -449,10 +452,13 @@ def _reset_builtin_output(out_dir: Path, seed_names: set[str]) -> None:
 
     for name in generated_names:
         path = out_dir / name
-        if path.is_file() or path.is_symlink():
-            path.unlink()
-        elif path.is_dir():
-            shutil.rmtree(path)
+        try:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
+        except (FileNotFoundError, OSError):
+            pass
 
 
 __all__ = [

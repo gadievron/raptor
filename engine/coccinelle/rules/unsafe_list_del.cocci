@@ -6,6 +6,7 @@
 // invalid after deletion, corrupting the traversal.
 //
 // Covers CWE-416 / CWE-119: use-after-free via unsafe list deletion.
+// @role: verification
 
 @unsafe_del_fwd@
 iterator name list_for_each_entry;

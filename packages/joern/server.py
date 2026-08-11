@@ -18,6 +18,7 @@ import logging
 import re
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -32,7 +33,12 @@ except ImportError:
 
 from .models import JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_path
-from .runner import _parse_dark_methods, _parse_output, _validate_query
+from .runner import (
+    _escape_scala_string,
+    _parse_dark_methods,
+    _parse_output,
+    _validate_query,
+)
 from .tunables import JoernTunables
 
 logger = logging.getLogger(__name__)
@@ -130,9 +136,11 @@ class JoernServer:
         self._proc: subprocess.Popen | None = None
         self._base_url: str | None = None
         self._cpg_loaded = False
+        self._cpg_path: Path | None = None
         self._http_client: Any | None = None
         self._version_downgrade: bool = False
         self._last_post_error: str = ""
+        self._restart_lock = threading.Lock()
 
     def start(self) -> None:
         """Boot the Joern server and wait for readiness."""
@@ -159,11 +167,13 @@ class JoernServer:
 
         logger.info("starting Joern server on 127.0.0.1:%d", self._port)
 
+        from core.config import RaptorConfig
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            env=RaptorConfig.get_safe_env(),
         )
 
         if not self._wait_for_ready():
@@ -210,8 +220,8 @@ class JoernServer:
         )
         try:
             self._post_sync(warmup, timeout=30)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Joern warmup imports failed: %s", e)
 
     def _warmup_dataflow(self) -> None:
         """Initialize the dataflow engine after CPG load.
@@ -231,8 +241,8 @@ class JoernServer:
         )
         try:
             self._post_sync(warmup, timeout=30)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Joern dataflow warmup failed: %s", e)
 
     def stop(self) -> None:
         """Shut down the Joern server."""
@@ -271,6 +281,37 @@ class JoernServer:
         except Exception:
             return False
 
+    def restart(self) -> bool:
+        """Stop, restart, and reload the CPG.
+
+        Used after a query timeout leaves the single-threaded REPL
+        saturated — subsequent queries would queue behind the stuck
+        query indefinitely.  Returns True if the server came back and
+        the CPG was reloaded successfully.
+
+        Thread-safe: concurrent callers serialise on ``_restart_lock``
+        so only one restart proceeds; the others return True (the
+        server is already fresh).
+        """
+        if not self._restart_lock.acquire(blocking=False):
+            # Another thread is already restarting — wait for it.
+            with self._restart_lock:
+                return self._proc is not None and self._cpg_loaded
+        try:
+            cpg_path = self._cpg_path
+            logger.info("restarting Joern server (stuck query recovery)")
+            self.stop()
+            try:
+                self.start()
+            except RuntimeError:
+                logger.error("Joern server failed to restart")
+                return False
+            if cpg_path is not None and cpg_path.exists():
+                return self.import_cpg(cpg_path)
+            return True
+        finally:
+            self._restart_lock.release()
+
     def import_cpg(self, cpg_path: Path, *, timeout: int = 120) -> bool:
         """Load a pre-built CPG into the running server.
 
@@ -281,7 +322,7 @@ class JoernServer:
             logger.error("CPG file not found: %s", cpg_path)
             return False
 
-        safe_path = str(cpg_path).replace("\\", "\\\\").replace('"', '\\"')
+        safe_path = _escape_scala_string(str(cpg_path))
         query = f'importCpg("{safe_path}")'
 
         logger.info("loading CPG: %s", cpg_path)
@@ -301,6 +342,7 @@ class JoernServer:
 
         logger.info("CPG loaded in %.1fs", elapsed)
         self._cpg_loaded = True
+        self._cpg_path = cpg_path
 
         self._warmup_dataflow()
 
@@ -317,7 +359,7 @@ class JoernServer:
             logger.error("target not a directory: %s", target_path)
             return False
 
-        safe_path = str(target_path).replace("\\", "\\\\").replace('"', '\\"')
+        safe_path = _escape_scala_string(str(target_path))
         query = f'importCode("{safe_path}")'
 
         logger.info("importing code: %s", target_path)
@@ -350,6 +392,15 @@ class JoernServer:
         """Execute a CPGQL query and return parsed results."""
         if timeout is None:
             timeout = self._query_timeout_s
+
+        # Fast check: if the server process is dead, fail immediately
+        # rather than blocking on a stale HTTP connection.
+        if self._proc is not None and self._proc.poll() is not None:
+            return JoernResult(
+                query=cpgql,
+                errors=["server process exited"],
+            )
+
         if not self._cpg_loaded:
             return JoernResult(
                 query=cpgql,
@@ -367,6 +418,11 @@ class JoernServer:
 
         if resp is None:
             detail = self._last_post_error or "server did not respond"
+            # A timeout means the single-threaded REPL is stuck on this
+            # query (or a prior one).  Restart so subsequent queries
+            # don't queue behind the stuck one indefinitely.
+            if "timed out" in detail:
+                self.restart()
             return JoernResult(
                 query=cpgql,
                 errors=[detail],
@@ -453,14 +509,15 @@ class JoernServer:
         payload: dict,
         timeout: int,
     ) -> dict[str, Any] | None:
+        # Fresh client per request.  The Joern REPL is single-threaded;
+        # a timed-out query leaves stale state in the connection pool
+        # that blocks all subsequent queries on the reused socket.  The
+        # ~50ms TCP setup overhead is negligible vs query execution time.
+        client = _httpx.Client(
+            timeout=_httpx.Timeout(timeout, connect=5.0),
+        )
         try:
-            if self._http_client is None:
-                self._http_client = _httpx.Client(
-                    timeout=_httpx.Timeout(timeout, connect=5.0),
-                )
-            resp = self._http_client.post(
-                url, json=payload, timeout=timeout,
-            )
+            resp = client.post(url, json=payload)
             return resp.json()
         except Exception as e:
             if "timed out" in str(e).lower() or "timeout" in type(e).__name__.lower():
@@ -471,6 +528,8 @@ class JoernServer:
                 self._last_post_error = str(e)
             logger.debug("query-sync (httpx) failed: %s", e)
             return None
+        finally:
+            client.close()
 
     def _post_urllib(
         self,
@@ -560,6 +619,13 @@ class JoernServer:
         """
         if timeout is None:
             timeout = self._query_timeout_s
+
+        if self._proc is not None and self._proc.poll() is not None:
+            return JoernResult(
+                query=cpgql,
+                errors=["server process exited"],
+            )
+
         if not self._cpg_loaded:
             return JoernResult(
                 query=cpgql,
@@ -620,6 +686,9 @@ class JoernServer:
             time.sleep(poll_interval)
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        # The server is stuck on this query.  Restart so subsequent
+        # queries don't queue behind it.
+        self.restart()
         return JoernResult(
             query=cpgql, errors=["timeout (async poll)"],
             elapsed_ms=elapsed_ms,
@@ -741,13 +810,15 @@ class JoernServer:
             "import io.shiftleft.codepropertygraph.generated.nodes.CfgNode",
             "import scala.util.Try",
             f"val batchConfig = EngineConfig(maxCallDepth = {max_call_depth})",
+            "implicit val batchContext: EngineContext = "
+            "EngineContext(config = batchConfig)",
         ]
 
         for i, (src, sink) in enumerate(valid_pairs):
             lines.append(
                 f'val src{i} = cpg.method.name("{src}").parameter\n'
                 f'val snk{i} = cpg.call.name("{sink}").argument\n'
-                f'val flows{i} = snk{i}.reachableByFlows(src{i})(batchConfig).take(50).l\n'
+                f'val flows{i} = snk{i}.reachableByFlows(src{i}).take(50).l\n'
                 f'flows{i}.foreach {{ flow =>\n'
                 f'  val steps = flow.elements.map {{ e =>\n'
                 f'    val ln = e.lineNumber.getOrElse(0)\n'

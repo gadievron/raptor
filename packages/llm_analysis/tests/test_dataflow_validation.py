@@ -44,7 +44,7 @@ class FakeCostTracker:
     def fraction_used(self) -> float:
         return self.total_cost / self.budget if self.budget else 0.0
 
-    def add_cost(self, cost: float) -> None:
+    def add_cost(self, model_name: str, cost: float) -> None:
         self.added.append(cost)
         self.total_cost += cost
 

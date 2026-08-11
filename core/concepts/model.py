@@ -77,34 +77,7 @@ class Invariant:
     counter_examples_checked: list[str] = field(default_factory=list)
     confidence: str = "inferred"
     mechanical_rule: str | None = None
-    role: str = "boost"  # "boost" | "guard"
-    concept_class: str | None = None  # "state_machine" | "value_constraint"
-    scope: dict[str, Any] | None = None  # {"files": [...], "concept_ref": "..."}
     relevant_cwes: list[str] = field(default_factory=list)
-    mechanism_tags: list[str] = field(default_factory=list)
-    mechanism_keywords: list[str] = field(default_factory=list)
-
-
-# Security-appropriate ordering for boost/guard confidence comparison.
-# Differs from CONFIDENCE_GRADES: "traced" ranks above "documented"
-# because code evidence is more reliable than docs for security decisions.
-_GUARD_BOOST_ORDER: dict[str, int] = {
-    "inferred": 0,
-    "documented": 1,
-    "traced": 2,
-    "corroborated": 3,
-    "tested": 4,
-}
-
-
-def guard_can_cancel_boost(guard_confidence: str, boost_confidence: str) -> bool:
-    """Check if a guard invariant's confidence is sufficient to cancel a boost.
-
-    Uses security-appropriate ordering where traced > documented.
-    """
-    g = _GUARD_BOOST_ORDER.get(guard_confidence, 0)
-    b = _GUARD_BOOST_ORDER.get(boost_confidence, 0)
-    return g >= b
 
 
 # ------------------------------------------------------------------
@@ -120,6 +93,7 @@ class Contract:
     output_semantics: str = ""
     ownership_transfer: str = ""
     implication: str = ""
+    security_note: str = ""
     hash: str | None = None
 
 
@@ -155,6 +129,7 @@ class StudyItem:
     calls: list[str] = field(default_factory=list)
     flag_checks: list[str] = field(default_factory=list)
     alloc_frees: list[str] = field(default_factory=list)
+    resource_lifecycle: list[str] = field(default_factory=list)
     state_transitions: list[str] = field(default_factory=list)
     gate_checks: list[str] = field(default_factory=list)
     dispatch_tables: list[str] = field(default_factory=list)
@@ -173,12 +148,21 @@ class SecurityContext:
     privilege_level: str = ""  # kernel | root_daemon | user_service | sandboxed
     attack_surface: str = ""  # local_socket | network | filesystem | ipc
     isolation: str = ""  # none | namespace | seccomp | sandbox
+    trust_summary: str = ""  # one-line trust boundary summary
     evidence: list[str] = field(default_factory=list)
 
 
 # ------------------------------------------------------------------
 # Domain model (top-level container)
 # ------------------------------------------------------------------
+
+@dataclass
+class BugPattern:
+    id: str
+    description: str
+    what_to_grep: str = ""
+    relevant_cwes: list[str] = field(default_factory=list)
+
 
 @dataclass
 class DomainModel:
@@ -188,7 +172,9 @@ class DomainModel:
     concepts: list[Concept] = field(default_factory=list)
     invariants: list[Invariant] = field(default_factory=list)
     contracts: list[Contract] = field(default_factory=list)
+    bug_patterns: list[BugPattern] = field(default_factory=list)
     security_context: SecurityContext | None = None
+    key_files: list[dict[str, str]] = field(default_factory=list)
 
     # ----- persistence -------------------------------------------
 
@@ -200,7 +186,12 @@ class DomainModel:
 
     @classmethod
     def load(cls, path: Path) -> DomainModel:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return cls()
+        if not isinstance(raw, dict):
+            return cls()
         concepts = [
             Concept(**{
                 **_filter_fields(Concept, c),
@@ -224,6 +215,10 @@ class DomainModel:
             SecurityContext(**_filter_fields(SecurityContext, sc_raw))
             if sc_raw else None
         )
+        bug_patterns = [
+            BugPattern(**_filter_fields(BugPattern, bp))
+            for bp in raw.get("bug_patterns", [])
+        ]
         return cls(
             version=raw.get("version", "1"),
             target=raw.get("target", ""),
@@ -231,7 +226,9 @@ class DomainModel:
             concepts=concepts,
             invariants=invariants,
             contracts=contracts,
+            bug_patterns=bug_patterns,
             security_context=security_context,
+            key_files=raw.get("key_files", []),
         )
 
     # ----- query helpers -----------------------------------------
@@ -246,7 +243,10 @@ class DomainModel:
         return [c for c in self.contracts if c.function == function]
 
     def concepts_at_confidence(self, min_grade: str) -> list[Concept]:
-        floor = CONFIDENCE_GRADES.index(min_grade)
+        try:
+            floor = CONFIDENCE_GRADES.index(min_grade)
+        except ValueError:
+            return []
         return [
             c for c in self.concepts
             if c.confidence in CONFIDENCE_GRADES

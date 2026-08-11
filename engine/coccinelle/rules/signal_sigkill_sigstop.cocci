@@ -9,6 +9,7 @@
 //
 // CWE-252: Unchecked Return Value (the failing call is never checked)
 // Zero-FP: these calls always fail per POSIX — no legitimate use.
+// @role: verification
 
 @signal_sigkill@
 expression HANDLER;

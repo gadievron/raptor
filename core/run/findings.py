@@ -112,7 +112,7 @@ def stamp_findings_in_run(run_dir: Path) -> Dict[str, int]:
     run_dir = Path(run_dir)
     ref = build_provenance_ref(run_dir)
     if ref is None:
-        logger.debug(f"No manifest in {run_dir}; skipping stamping.")
+        logger.debug("No manifest in %s; skipping stamping.", run_dir)
         return counts
 
     for rel in _STAMP_PATHS:
@@ -134,12 +134,12 @@ def _stamp_file(path: Path, ref: Dict[str, Any]) -> int:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:
-        logger.warning(f"stamp_findings: read failed {path}: {e}")
+        logger.warning("stamp_findings: read failed %s: %s", path, e)
         return -1
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError) as e:
-        logger.warning(f"stamp_findings: parse failed {path}: {e}")
+        logger.warning("stamp_findings: parse failed %s: %s", path, e)
         return -1
 
     findings_list, container_kind = _resolve_findings_list(data)
@@ -177,7 +177,7 @@ def _stamp_file(path: Path, ref: Dict[str, Any]) -> int:
         from core.atomic_fs import write_text_atomically
         write_text_atomically(path, out)
     except OSError as e:
-        logger.warning(f"stamp_findings: write failed {path}: {e}")
+        logger.warning("stamp_findings: write failed %s: %s", path, e)
         return -1
     return new_count
 

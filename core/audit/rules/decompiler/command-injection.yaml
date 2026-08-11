@@ -1,0 +1,36 @@
+rules:
+  - id: decompiler-system-call
+    pattern: system($ARG)
+    message: "system() call — potential command injection"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-popen-call
+    pattern: popen($CMD, ...)
+    message: "popen() call — potential command injection"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-exec-call
+    pattern-either:
+      - pattern: execl($PATH, ...)
+      - pattern: execle($PATH, ...)
+      - pattern: execlp($PATH, ...)
+      - pattern: execv($PATH, ...)
+      - pattern: execve($PATH, ...)
+      - pattern: execvp($PATH, ...)
+    message: "exec family call — potential command injection"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-78"
+      confidence: LOW
+      source: decompiler

@@ -67,17 +67,17 @@ class GoalPlanner:
         """
         if self.current_goal:
             if not self.current_goal.achieved:
-                logger.info(f"Replacing current goal: {self.current_goal.description}")
+                logger.info("Replacing current goal: %s", self.current_goal.description)
             self.goal_history.append(self.current_goal)
 
         self.current_goal = goal
         logger.info("=" * 70)
         logger.info("NEW GOAL SET")
         logger.info("=" * 70)
-        logger.info(f"Goal: {goal.description}")
-        logger.info(f"Type: {goal.goal_type.value}")
+        logger.info("Goal: %s", goal.description)
+        logger.info("Type: %s", goal.goal_type.value)
         if goal.target_value:
-            logger.info(f"Target: {goal.target_value}")
+            logger.info("Target: %s", goal.target_value)
 
     def create_goal_from_user_input(self, user_goal: str) -> Goal:
         """
@@ -214,7 +214,7 @@ class GoalPlanner:
             from core.tuning import get_tuning
             ceiling = get_tuning().max_fuzz_parallel
             adapted["parallel"] = min(hints["parallel_instances"], ceiling)
-            logger.info(f"Goal: Using {adapted['parallel']} parallel instances")
+            logger.info("Goal: Using %s parallel instances", adapted['parallel'])
 
         return adapted
 
@@ -246,14 +246,14 @@ class GoalPlanner:
                 crash_type = getattr(crash, 'crash_type', 'unknown')
                 if goal.target_value and goal.target_value in crash_type:
                     goal_bonus = 100.0  # Huge bonus for exact match
-                    logger.info(f"✨ Crash {crash.crash_id} matches goal: {goal.target_value}")
+                    logger.info("✨ Crash %s matches goal: %s", crash.crash_id, goal.target_value)
 
             elif goal.goal_type == GoalType.TARGET_CODE_AREA:
                 # Check if crash is in target code area
                 function_name = getattr(crash, 'function_name', '')
                 if goal.target_value and goal.target_value in function_name.lower():
                     goal_bonus = 50.0
-                    logger.info(f"✨ Crash {crash.crash_id} in target area: {goal.target_value}")
+                    logger.info("✨ Crash %s in target area: %s", crash.crash_id, goal.target_value)
 
             elif goal.goal_type == GoalType.ACHIEVE_EXPLOIT_TYPE:
                 # Prioritize highly exploitable crashes
@@ -284,7 +284,7 @@ class GoalPlanner:
             if fuzzing_state.total_crashes > 0:
                 goal.progress = 1.0
                 goal.achieved = True
-                logger.info(f"✓ GOAL ACHIEVED: {goal.description}")
+                logger.info("✓ GOAL ACHIEVED: %s", goal.description)
 
         elif goal.goal_type == GoalType.MAXIMIZE_COVERAGE:
             # Progress based on coverage growth rate
@@ -300,7 +300,7 @@ class GoalPlanner:
 
         # Log progress
         if goal.progress > 0:
-            logger.info(f"Goal progress: {goal.progress * 100:.1f}%")
+            logger.info("Goal progress: %.1f%", goal.progress * 100)
 
     def should_continue_towards_goal(self, fuzzing_state) -> bool:
         """
@@ -319,7 +319,7 @@ class GoalPlanner:
 
         # If goal achieved, we can stop
         if goal.achieved:
-            logger.info(f"Goal achieved: {goal.description}")
+            logger.info("Goal achieved: %s", goal.description)
             return False
 
         # If goal is to find specific vulnerability, keep going until found

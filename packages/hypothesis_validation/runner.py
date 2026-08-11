@@ -20,6 +20,7 @@ opinion. Confirmation requires that the tool produced concrete matches.
 """
 
 import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Protocol
 
 from .adapters.base import ToolAdapter, ToolEvidence
@@ -126,10 +127,13 @@ _TOOL_SELECTION_SCHEMA = {
 
 
 _EVALUATION_SCHEMA = {
-    "verdict": "string — one of: confirmed, refuted, inconclusive",
     "reasoning": "string — explanation grounded in the concrete tool output",
     "matches_support_claim": "boolean — true if at least one match is consistent with the hypothesis",
     "refined_rule": "string — if inconclusive, a revised rule that might produce better evidence (empty string if no refinement possible)",
+    "verdict": {
+        "type": "string",
+        "enum": ["confirmed", "refuted", "inconclusive"],
+    },
 }
 
 _MAX_ITERATIONS = 3
@@ -285,6 +289,7 @@ def validate(
                 break
         prev_step = curr_step
         rule = refined_rule
+        hypothesis = replace(hypothesis, context=refined_rule)
 
     return ValidationResult(
         verdict=verdict,
@@ -432,6 +437,11 @@ def _evaluate(
         data = _extract_data(response) or {}
         claim = data.get("verdict", "refuted")
         if claim not in ("confirmed", "refuted", "inconclusive"):
+            logger.warning(
+                "LLM returned invalid verdict %r for hypothesis %r "
+                "— falling back to refuted",
+                claim, hypothesis.text[:80],
+            )
             claim = "refuted"
         verdict = verdict_from(evidence, claim)
         reasoning = data.get("reasoning", "") or evidence.summary
@@ -485,6 +495,11 @@ def _evaluate_with_refinement(
     data = _extract_data(response) or {}
     claim = data.get("verdict", "inconclusive" if evidence.matches else "refuted")
     if claim not in ("confirmed", "refuted", "inconclusive"):
+        logger.warning(
+            "LLM returned invalid verdict %r for hypothesis %r "
+            "— falling back to inconclusive",
+            claim, hypothesis.text[:80],
+        )
         claim = "inconclusive"
     verdict = verdict_from(evidence, claim)
     reasoning = data.get("reasoning", "") or evidence.summary

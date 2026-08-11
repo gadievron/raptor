@@ -20,6 +20,7 @@ re-run any invocation to verify.
 from dataclasses import dataclass, field
 from typing import List, Literal
 
+from .provenance import ensure_same_provenance
 
 Verdict = Literal["confirmed", "refuted", "inconclusive"]
 
@@ -97,6 +98,9 @@ class ValidationResult:
     reasoning: str = ""
     """Optional final LLM reasoning explaining how the verdict was reached.
     Captures any nuance the structured fields miss."""
+
+    def __post_init__(self) -> None:
+        ensure_same_provenance(self.evidence)
 
     @property
     def confirmed(self) -> bool:

@@ -198,7 +198,7 @@ def main(argv: Sequence[str]) -> int:
               file=sys.stderr)
         return 2
 
-    http = default_client()
+    http = default_client(offline=args.offline)
     cache = (None if args.no_cache else
              JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT))
     osv = OsvClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),

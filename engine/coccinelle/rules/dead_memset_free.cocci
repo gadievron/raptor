@@ -11,6 +11,7 @@
 // Zero-FP: memset immediately before free with no intervening read
 // is always a candidate for dead-store elimination. Uses userspace
 // free() only — upstream kernel covers kfree via api/kfree_sensitive.cocci.
+// @role: verification
 
 @dead_clear@
 expression BUF;

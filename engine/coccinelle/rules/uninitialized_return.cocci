@@ -7,6 +7,7 @@
 // This is NOT parametric (-D func= not needed) — it matches any
 // function in the target. The consistency_check runner can still
 // pass -D func= but the rule ignores it.
+// @role: detection
 
 // Pattern 1: int declared without init, returned without assignment
 // on at least one path (goto-error or direct return)

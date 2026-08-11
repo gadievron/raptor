@@ -133,8 +133,9 @@ class CostTracker:
         with self._lock:
             projected = self._total_cost + estimate
         if projected > self._max_cost * cutoff_ratio:
-            logger.info(f"Skipping {phase_name} — estimated ${estimate:.2f} "
-                        f"would push total to ${projected:.2f} (budget: ${self._max_cost:.2f})")
+            logger.info("Skipping %s — estimated $%.2f "
+                        "would push total to $%.2f (budget: $%.2f)",
+                        phase_name, estimate, projected, self._max_cost)
             return True
         return False
 
@@ -353,6 +354,12 @@ def build_llm_config_from_flags(
             # fast-tier models are still auto-seeded by __post_init__ from the
             # primary's OWN provider, so they stay same-provider (cheap).
             llm_config = LLMConfig(primary_model=primary_mc, fallback_models=[])
+            # Pin the operator's --model process-wide so any sub-consumer
+            # deep in the run that constructs ``LLMConfig()`` no-arg
+            # honours the operator's choice instead of silently falling
+            # through to a models.json-configured "thinking model".
+            from core.llm.config import set_operator_primary_override
+            set_operator_primary_override(primary_mc)
             for extra in models[1:]:
                 mc = _resolve_model(extra, "analysis")
                 if mc:
@@ -554,11 +561,11 @@ def orchestrate(
     try:
         report = load_json(prep_report_path, strict=True)
     except Exception as e:
-        logger.error(f"Failed to read Phase 3 report: {e}")
+        logger.error("Failed to read Phase 3 report: %s", e)
         print(f"\n  ✗ Failed to read analysis report: {e}", file=sys.stderr)
         return None
     if report is None:
-        logger.error(f"Phase 3 report not found: {prep_report_path}")
+        logger.error("Phase 3 report not found: %s", prep_report_path)
         print(f"\n  ✗ Phase 3 report not found: {prep_report_path}", file=sys.stderr)
         return None
 
@@ -602,7 +609,7 @@ def orchestrate(
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
 
     if max_findings > 0 and len(findings) > max_findings:
-        logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
+        logger.info("Capping at %d findings (of %d)", max_findings, len(findings))
         findings = findings[:max_findings]
 
     # Resolve model roles
@@ -1559,7 +1566,7 @@ def orchestrate(
         save_json(out_dir / "aggregation.json", aggregation)
     out_path = out_dir / "orchestrated_report.json"
     save_json(out_path, merged)
-    logger.info(f"Orchestrated report saved to {out_path}")
+    logger.info("Orchestrated report saved to %s", out_path)
 
     # Summary
     orch = merged["orchestration"]

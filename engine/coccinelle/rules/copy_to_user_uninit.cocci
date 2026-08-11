@@ -8,6 +8,7 @@
 //
 // Covers CWE-200 / CWE-908: copy_to_user of partially-initialized
 // stack struct. Classic kernel info leak vector.
+// @role: detection
 
 // Stack struct copied to userspace after partial init
 @partial_init@

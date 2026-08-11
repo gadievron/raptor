@@ -82,7 +82,7 @@ def main(
     if cache is None:
         cache = JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT)
     if http is None:
-        http = default_client()
+        http = default_client(offline=args.offline)
 
     ttl_query = 0 if args.no_cache else 24 * 3600
     osv = OsvClient(http, cache, offline=args.offline,
@@ -586,7 +586,7 @@ def _canonical_id(f: VulnFinding) -> str:
     advisories without a CVE assigned.
     """
     if not f.advisories:
-        return f.package or ""
+        return f.dependency.name or ""
     advisory: Advisory = f.advisories[0]
     for alias in advisory.aliases:
         if isinstance(alias, str) and alias.upper().startswith("CVE-"):
@@ -608,7 +608,7 @@ def _ranked(findings: List[VulnFinding]) -> List[VulnFinding]:
 
 def _advisory_line(f: VulnFinding) -> str:
     if not f.advisories:
-        return f"- {f.package or '?'}\n"
+        return f"- {f.dependency.name or '?'}\n"
     primary = f.advisories[0]
     tags: List[str] = [f.severity.title()]
     if f.in_kev:

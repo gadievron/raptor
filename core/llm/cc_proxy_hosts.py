@@ -244,6 +244,7 @@ def _foundry_hosts() -> Optional[list[str]]:
 # load handles binary self-update.
 _CALIBRATED_CACHE: dict[str, "object"] = {}
 _CALIBRATED_CACHE_LOCK = threading.Lock()
+_MISSING = object()  # sentinel distinct from None (a valid cached result)
 
 
 def _resolve_claude_bin() -> Optional[str]:
@@ -278,48 +279,59 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
         claude_bin = _resolve_claude_bin()
     if claude_bin is None:
         return None
+
+    # Acquire lock, check cache. On a miss, plant a sentinel Event so
+    # concurrent threads wait instead of stampeding calibration.
     with _CALIBRATED_CACHE_LOCK:
-        if claude_bin in _CALIBRATED_CACHE:
-            return _CALIBRATED_CACHE[claude_bin]
+        cached = _CALIBRATED_CACHE.get(claude_bin, _MISSING)
+        if isinstance(cached, threading.Event):
+            # Another thread is calibrating — grab its event.
+            waiter = cached
+        elif cached is not _MISSING:
+            return cached
+        else:
+            waiter = None
+            sentinel = threading.Event()
+            _CALIBRATED_CACHE[claude_bin] = sentinel
 
-    try:
-        from core.sandbox.calibrate import load_or_calibrate
-    except ImportError:
-        # Calibrate module isn't available (older checkouts, minimal
-        # containers). Static layers carry the policy.
+    if waiter is not None:
+        waiter.wait()
         with _CALIBRATED_CACHE_LOCK:
-            _CALIBRATED_CACHE[claude_bin] = None
-        return None
+            return _CALIBRATED_CACHE.get(claude_bin)
 
+    # We own the calibration slot.
+    result = None
     try:
-        # Probe args + cache-key env are derived together so the
-        # cached profile invalidates cleanly when the operator
-        # toggles the network-probe opt-in.
-        probe_args = _cc_probe_args()
-        env_keys = _PROVIDER_ENV_KEYS + (_NETWORK_PROBE_OPT_IN_ENV,)
-        # ``--version`` finishes in <1s (20s generous); network probe
-        # runs full claude -p round-trip (~110s observed, 150s budget).
-        timeout = 150 if _network_probe_enabled() else 20
-        profile = load_or_calibrate(
-            claude_bin,
-            probe_args=probe_args,
-            env_keys=env_keys,
-            timeout=timeout,
-        )
-    except (FileNotFoundError, RuntimeError, OSError,
-            subprocess.TimeoutExpired) as exc:
-        logger.debug(
-            "cc_proxy_hosts: calibration of %s failed (%s); "
-            "falling back to static policy",
-            claude_bin, exc,
-        )
-        with _CALIBRATED_CACHE_LOCK:
-            _CALIBRATED_CACHE[claude_bin] = None
-        return None
+        try:
+            from core.sandbox.calibrate import load_or_calibrate
+        except ImportError:
+            return None
 
-    with _CALIBRATED_CACHE_LOCK:
-        _CALIBRATED_CACHE[claude_bin] = profile
-    return profile
+        try:
+            probe_args = _cc_probe_args()
+            env_keys = _PROVIDER_ENV_KEYS + (
+                _NETWORK_PROBE_OPT_IN_ENV,
+            )
+            timeout = 150 if _network_probe_enabled() else 20
+            result = load_or_calibrate(
+                claude_bin,
+                probe_args=probe_args,
+                env_keys=env_keys,
+                timeout=timeout,
+            )
+        except (FileNotFoundError, RuntimeError, OSError,
+                subprocess.TimeoutExpired) as exc:
+            logger.debug(
+                "cc_proxy_hosts: calibration of %s failed (%s); "
+                "falling back to static policy",
+                claude_bin, exc,
+            )
+            result = None
+    finally:
+        with _CALIBRATED_CACHE_LOCK:
+            _CALIBRATED_CACHE[claude_bin] = result
+        sentinel.set()
+    return result
 
 
 def _calibrated_proxy_hosts(

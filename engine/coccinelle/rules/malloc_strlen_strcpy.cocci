@@ -9,6 +9,7 @@
 // CWE-131: Incorrect Calculation of Buffer Size
 // CWE-122: Heap-based Buffer Overflow
 // Zero-FP: strlen(s) without +1 is always one byte short for strcpy.
+// @role: verification
 
 @malloc_strlen@
 expression S;

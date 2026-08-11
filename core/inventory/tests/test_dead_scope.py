@@ -103,6 +103,36 @@ def test_js_commented_if_false_not_detected():
     assert detect_dead_scopes("javascript", src) == []
 
 
+def test_js_template_literals_do_not_break_brace_match():
+    src = (
+        "if (false) {\n"
+        "  function shell(input) {\n"
+        "    exec(`echo ${input}`);\n"
+        "    return execSync(`ls -la ${input}`);\n"
+        "  }\n"
+        "  function other() { return 'uuid-here'; }\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("javascript", src)
+    assert len(ranges) == 1
+    assert ranges[0][0] == 1
+    assert 3 <= ranges[0][1] <= 7
+
+
+def test_js_strings_do_not_break_brace_match():
+    src = (
+        "throw new Error('not loadable');\n"
+        "if (false) {\n"
+        "  function a() { return 'abc'; }\n"
+        "  function b() { return 'def'; }\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("javascript", src)
+    assert len(ranges) == 1
+    assert ranges[0][0] == 2
+    assert ranges[0][1] == 5
+
+
 def test_typescript_alias_detected():
     src = "if (false) {\n  bad();\n}\n"
     assert detect_dead_scopes("typescript", src) == [(1, 3)]
@@ -206,6 +236,149 @@ def test_rust_cfg_on_mod_ranges_module_body():
     ranges = detect_dead_scopes("rust", src)
     assert any(lo <= 3 <= hi for lo, hi in ranges)   # nested fn g
     assert not any(lo <= 5 <= hi for lo, hi in ranges)  # live fn
+
+
+# ---------------------------------------------------------------------------
+# C — static functions with no callers in the translation unit.
+# ---------------------------------------------------------------------------
+
+
+def test_c_static_no_callers_detected():
+    src = (
+        "static int dead_func(int x) {\n"
+        "    return x + 1;\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert (1, 3) in ranges
+
+
+def test_c_static_with_caller_not_detected():
+    src = (
+        "static int helper(int x) {\n"
+        "    return x + 1;\n"
+        "}\n"
+        "int main(void) {\n"
+        "    return helper(42);\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("c", src) == []
+
+
+def test_c_non_static_no_callers_not_detected():
+    src = (
+        "int external_func(int x) {\n"
+        "    return x + 1;\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("c", src) == []
+
+
+def test_c_static_name_in_comment_still_dead():
+    src = (
+        "static int lonely(int x) {\n"
+        "    return x;\n"
+        "}\n"
+        "// lonely is not used\n"
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert (1, 3) in ranges
+
+
+def test_c_static_name_in_string_still_dead():
+    src = (
+        'static int orphan(int x) {\n'
+        '    return x;\n'
+        '}\n'
+        'void log(void) {\n'
+        '    printf("orphan is unused");\n'
+        '}\n'
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert any(lo <= 1 <= hi for lo, hi in ranges)
+
+
+def test_c_mixed_dead_and_live():
+    src = (
+        "static int dead_one(void) { return 0; }\n"
+        "static int alive(int x) { return x; }\n"
+        "int caller(void) { return alive(1); }\n"
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert any(lo <= 1 <= hi for lo, hi in ranges)
+    assert not any(lo <= 2 <= hi for lo, hi in ranges)
+
+
+def test_c_static_variable_not_detected():
+    src = (
+        "static int counter = 0;\n"
+        "int get(void) { return counter; }\n"
+    )
+    assert detect_dead_scopes("c", src) == []
+
+
+def test_c_static_inline_no_callers_detected():
+    src = (
+        "static inline int dead_inline(int x) {\n"
+        "    return x * 2;\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert (1, 3) in ranges
+
+
+def test_c_constructor_attribute_skipped():
+    src = (
+        "static __attribute__((constructor)) void init(void) {\n"
+        "    setup();\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("c", src) == []
+
+
+def test_c_forward_declaration_conservative_miss():
+    src = (
+        "static int helper(int x);\n"
+        "static int helper(int x) {\n"
+        "    return x;\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("c", src) == []
+
+
+def test_c_honeyslop_process_heartbeat():
+    src = (
+        "static int process_heartbeat(const uint8_t *msg, size_t len, uint8_t *out) {\n"
+        "    uint16_t claimed_len;\n"
+        "    if (len < 2) { return -1; }\n"
+        "    memcpy(&claimed_len, msg, 2);\n"
+        "    memcpy(out, msg + 2, claimed_len);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert (1, 7) in ranges
+
+
+def test_c_multiline_declaration_detected():
+    src = (
+        "static int\n"
+        "lonely_func(int x,\n"
+        "            int y)\n"
+        "{\n"
+        "    return x + y;\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("c", src)
+    assert any(lo <= 1 <= hi for lo, hi in ranges)
+
+
+def test_c_callback_registration_not_dead():
+    src = (
+        "static int handler(void *ctx) { return 0; }\n"
+        "void setup(void) { register_callback(handler); }\n"
+    )
+    assert detect_dead_scopes("c", src) == []
 
 
 # ---------------------------------------------------------------------------

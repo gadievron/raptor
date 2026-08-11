@@ -6,6 +6,7 @@
 //
 // This is a parametric rule: pass -D func=<name> to target a specific
 // function. Without -D func, it matches nothing (safe default).
+// @role: detection
 
 // Match checked call sites (assignment + conditional)
 @checked@

@@ -6,6 +6,7 @@
 // sensitive network connections or file handles.
 //
 // CWE-403: Exposure of File Descriptor to Unintended Control Sphere
+// @role: verification
 
 @socket_no_cloexec@
 expression DOMAIN, PROTO;

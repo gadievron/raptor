@@ -11,6 +11,8 @@ import io.shiftleft.semanticcpg.language._
 import io.shiftleft.codepropertygraph.generated.nodes.CfgNode
 import scala.util.Try
 
+implicit val engineContext: EngineContext = EngineContext()
+
 val dangerousSinks = List(
   // Command execution
   "system", "popen", "exec", "execve", "execvp", "execl", "execlp",
@@ -33,21 +35,24 @@ println("JOERN_FLOWS_START")
 for (sinkName <- dangerousSinks) {
   val sinks = cpg.call.name(sinkName).argument
   val sources = cpg.method.parameter
+  val flows = sinks.reachableByFlows(sources).l
 
-val flowLines = flows.map { flow =>
-  val steps = flow.elements.map { e =>
-    val ln = e.lineNumber.getOrElse(0)
-    val cd = e.code.take(200).replace("\\", "\\\\").replace("\"", "\\\"")
-    val (fn, fl) = e match {
-      case n: CfgNode =>
-        (Try(n.method.name).getOrElse(""), Try(n.method.filename).getOrElse(""))
-      case _ => ("", "")
-    }
-    val fnEsc = fn.replace("\\", "\\\\").replace("\"", "\\\"")
-    val flEsc = fl.replace("\\", "\\\\").replace("\"", "\\\"")
-    s"""{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}"""
-  }.mkString(",")
-  "JOERN_FLOW:[" + steps + "]"
+  val flowLines = flows.map { flow =>
+    val steps = flow.elements.map { e =>
+      val ln = e.lineNumber.getOrElse(0)
+      val cd = e.code.take(200).replace("\\", "\\\\").replace("\"", "\\\"")
+      val (fn, fl) = e match {
+        case n: CfgNode =>
+          (Try(n.method.name).getOrElse(""), Try(n.method.filename).getOrElse(""))
+        case _ => ("", "")
+      }
+      val fnEsc = fn.replace("\\", "\\\\").replace("\"", "\\\"")
+      val flEsc = fl.replace("\\", "\\\\").replace("\"", "\\\"")
+      s"""{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}"""
+    }.mkString(",")
+    "JOERN_FLOW:[" + steps + "]"
+  }
+  flowLines.foreach(println)
 }
 
 println("JOERN_FLOWS_END")

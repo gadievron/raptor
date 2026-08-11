@@ -15,9 +15,9 @@ The static + pointer-ref guards are critical:
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
+
+from packages.coccinelle.runner import meets_min_version as _spatch_meets_min
 
 from core.dataflow.finding import Finding, Step
 from core.dataflow.validator import ValidatorVerdict
@@ -140,8 +140,8 @@ def test_pointer_ref_searches_recursively(tmp_path):
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip PR-4 prereqs E2E",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_dead_code_fires_on_static_unreferenced(tmp_path):
     """Static + zero callers + zero pointer-refs → dead-code."""
@@ -159,8 +159,8 @@ def test_dead_code_fires_on_static_unreferenced(tmp_path):
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip PR-4 prereqs E2E",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_dead_code_skipped_for_non_static(tmp_path):
     """Non-static function must not be flagged dead even with zero
@@ -179,8 +179,8 @@ def test_dead_code_skipped_for_non_static(tmp_path):
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip PR-4 prereqs E2E",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_dead_code_skipped_when_pointer_referenced(tmp_path):
     """Static, no calls, BUT registered as a vtable callback — NOT
@@ -205,8 +205,8 @@ def test_dead_code_skipped_when_pointer_referenced(tmp_path):
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip PR-4 prereqs E2E",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_validator_verdict_dead_code_emits_not_exploitable(tmp_path):
     """Adapter integration: dead-code → NOT_EXPLOITABLE wins over
@@ -226,8 +226,8 @@ def test_validator_verdict_dead_code_emits_not_exploitable(tmp_path):
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip PR-4 prereqs E2E",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_validator_verdict_skips_dead_code_for_non_static(tmp_path):
     """A non-static unsafe function with no observed calls in the

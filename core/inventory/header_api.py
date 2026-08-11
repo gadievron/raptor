@@ -115,15 +115,19 @@ def scan_public_api(
 
         if include_dirs is not None:
             rel_str = str(rel_root)
-            if not any(
+            in_scope = any(
                 rel_str == d or rel_str.startswith(d + "/")
                 for d in include_dirs
-            ):
-                if not any(
-                    d.startswith(rel_str + "/") or d == rel_str
-                    for d in include_dirs
-                ):
-                    continue
+            )
+            is_ancestor = any(
+                d.startswith(rel_str + "/")
+                for d in include_dirs
+            )
+            if not in_scope and not is_ancestor:
+                continue
+            if is_ancestor and not in_scope:
+                dirs[:] = [d for d in dirs if d not in _EXCLUDE_DIRS]
+                continue
 
         dirs[:] = [d for d in dirs if d not in _EXCLUDE_DIRS]
 
@@ -132,9 +136,13 @@ def scan_public_api(
             if ext not in _HEADER_EXTENSIONS:
                 continue
 
-            fpath = os.path.join(root, fname)
+            fpath = Path(os.path.join(root, fname))
+            if fpath.is_symlink():
+                continue
             try:
-                with open(fpath, errors="replace") as f:
+                if fpath.stat().st_size > 1_048_576:  # 1 MB cap
+                    continue
+                with open(fpath, encoding="utf-8", errors="replace") as f:
                     content = f.read()
             except OSError:
                 continue

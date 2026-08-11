@@ -150,7 +150,7 @@ class WebCrawler:
         Returns:
             Dict with discovered resources
         """
-        logger.info(f"Starting crawl from {self._crawl_log_label(start_url)}")
+        logger.info("Starting crawl from %s", self._crawl_log_label(start_url))
 
         self.discovered_urls.add(start_url)
 
@@ -179,7 +179,7 @@ class WebCrawler:
         queue: "deque[tuple[str, int]]" = deque([(start_url, 0)])
         while queue:
             if len(self.visited_urls) >= self.max_pages:
-                logger.info(f"Max pages limit reached ({self.max_pages})")
+                logger.info("Max pages limit reached (%d)", self.max_pages)
                 break
             url, depth = queue.popleft()
             self._crawl_recursive(url, depth, _queue=queue)
@@ -199,11 +199,11 @@ class WebCrawler:
         does the per-page work but doesn't expand further.
         """
         if depth > self.max_depth:
-            logger.debug(f"Max depth reached for {self._crawl_log_label(url)}")
+            logger.debug("Max depth reached for %s", self._crawl_log_label(url))
             return
 
         if len(self.visited_urls) >= self.max_pages:
-            logger.info(f"Max pages limit reached ({self.max_pages})")
+            logger.info("Max pages limit reached (%d)", self.max_pages)
             return
 
         if url in self.visited_urls:
@@ -258,11 +258,11 @@ class WebCrawler:
             elif "text/html" in content_type:
                 self._process_html_response(url, response, depth, _queue=_queue)
             else:
-                logger.debug(f"Skipping non-HTML/JSON content: {content_type}")
+                logger.debug("Skipping non-HTML/JSON content: %s", content_type)
 
         except Exception as e:
             logger.warning(
-                f"Error crawling {self._crawl_log_label(url)}: {type(e).__name__}"
+                "Error crawling %s: %s", self._crawl_log_label(url), type(e).__name__
             )
 
     def _process_html_response(self, url: str, response, depth: int, _queue=None) -> None:
@@ -368,11 +368,11 @@ class WebCrawler:
                     else [],
                 }
             )
-            logger.info(f"Discovered API endpoint: {self._crawl_log_label(url)}")
+            logger.info("Discovered API endpoint: %s", self._crawl_log_label(url))
         except Exception as e:
             logger.debug(
-                f"Error parsing JSON from {self._crawl_log_label(url)}: "
-                f"{type(e).__name__}"
+                "Error parsing JSON from %s: %s",
+                self._crawl_log_label(url), type(e).__name__
             )
 
     def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
@@ -399,7 +399,7 @@ class WebCrawler:
             }
 
         except Exception as e:
-            logger.debug(f"Error parsing form: {type(e).__name__}")
+            logger.debug("Error parsing form: %s", type(e).__name__)
             return None
 
     def _extract_api_endpoints_from_js(self, js_code: str) -> None:

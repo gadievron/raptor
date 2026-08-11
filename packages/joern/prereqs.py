@@ -62,9 +62,11 @@ def version() -> Optional[str]:
     if not is_available():
         return None
     try:
+        from core.config import RaptorConfig
         proc = subprocess.run(
             [_joern_path() or "joern", "--version"],
             capture_output=True, text=True, timeout=30,
+            env=RaptorConfig.get_safe_env(),
         )
         out = proc.stdout.strip()
         if out:
@@ -97,9 +99,11 @@ def _java_version() -> Optional[int]:
     if not java:
         return None
     try:
+        from core.config import RaptorConfig
         proc = subprocess.run(
             [java, "-version"],
             capture_output=True, text=True, timeout=10,
+            env=RaptorConfig.get_safe_env(),
         )
         combined = proc.stdout + proc.stderr
         m = re.search(r'"(\d+)(?:\.(\d+))?', combined)

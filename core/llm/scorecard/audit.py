@@ -119,7 +119,7 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
     identical. No locking, no mutation.
     """
     raw = _load_raw(path)
-    if raw is None:
+    if raw is None or not isinstance(raw, dict):
         return AuditReport(
             scorecard_path=str(path),
             schema_version=None,
@@ -131,7 +131,11 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
             decision_class_summaries=[],
             primary_event_type=PRIMARY_EVENT_TYPE,
             verdict="no-data",
-            verdict_reason=f"scorecard file not found at {path}",
+            verdict_reason=(
+                f"scorecard file not found at {path}"
+                if raw is None
+                else f"scorecard is not a JSON object at {path}"
+            ),
         )
 
     schema_version = raw.get("version")

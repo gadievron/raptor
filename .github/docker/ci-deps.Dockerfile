@@ -6,12 +6,12 @@
 # requirements*.txt (or this Dockerfile) change.
 #
 # Base pinned to bookworm to match the devcontainer
-# (mcr.microsoft.com/devcontainers/python:1-3.12-bookworm, glibc 2.36)
+# (mcr.microsoft.com/devcontainers/python:3-3.14-bookworm, glibc 2.36)
 # so platform-sensitive wheels resolve identically — notably z3-solver
 # 4.15.4.0's manylinux_2_34 wheel (see the cap rationale in
 # requirements-dev.txt). PYTHON_VERSION here must track tests.yml's
-# env.PYTHON_VERSION (3.12).
-FROM python:3.12-slim-bookworm
+# env.PYTHON_VERSION (3.14).
+FROM python:3.14.7-slim-bookworm
 
 # OCI labels surface on the GHCR package page. `description` is the only
 # per-package text GHCR renders (it has no per-image README upload — the

@@ -10,6 +10,7 @@
 //
 // CWE-404: Improper Resource Shutdown or Release
 // Zero-FP: fclose on a popen'd stream is always wrong per POSIX.
+// @role: verification
 
 @popen_fclose_assign@
 expression CMD, MODE;

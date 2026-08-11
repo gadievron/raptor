@@ -424,7 +424,10 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
     results = []
     for agent, r in zip(RAPTOR_AGENTS, raw_results, strict=True):
         if isinstance(r, BaseException):
-            name = getattr(agent, "name", str(agent))
+            if isinstance(agent, dict):
+                name = agent.get("name", str(agent))
+            else:
+                name = getattr(agent, "name", str(agent))
             results.append((name, f"failed: {type(r).__name__}: {r}"))
         else:
             results.append(r)

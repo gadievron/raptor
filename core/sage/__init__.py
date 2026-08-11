@@ -22,6 +22,10 @@ from .hooks import (
     recall_proven_rules,
     parse_rule_metadata,
     should_replay_rule,
+    # Study / Teach (N1)
+    store_study_concepts,
+    recall_concepts_for_teach,
+    recall_concepts_for_study,
 )
 
 __all__ = [
@@ -41,4 +45,7 @@ __all__ = [
     "recall_proven_rules",
     "parse_rule_metadata",
     "should_replay_rule",
+    "store_study_concepts",
+    "recall_concepts_for_teach",
+    "recall_concepts_for_study",
 ]

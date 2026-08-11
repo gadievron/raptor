@@ -7,6 +7,7 @@
 //
 // CWE-682: Incorrect Calculation
 // Zero-FP confidence: very high for constant shifts — always UB.
+// @role: verification
 
 @shift_32_on_int@
 constant C;

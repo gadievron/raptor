@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from core.http import HttpClient
+from core.http import HttpClient, HttpError
 from core.json import JsonCache
 from core.oci.client import OciRegistryClient, RegistryError
 from core.oci.image_ref import parse_image_ref
@@ -156,7 +156,7 @@ def _list_tags_cached(
     registry_client = client or OciRegistryClient(http=http)
     try:
         tags = registry_client.list_tags(ref, per_page=per_page)
-    except RegistryError as exc:
+    except (RegistryError, HttpError) as exc:
         raise UpstreamLookupError(
             f"OCI tag list failed for {image_ref}: {exc}"
         ) from exc

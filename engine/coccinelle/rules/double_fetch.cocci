@@ -6,6 +6,7 @@
 // first fetch validated.
 //
 // Covers CWE-367: TOCTOU race in userspace reads.
+// @role: verification
 
 @first_fetch@
 expression uptr, dst1;

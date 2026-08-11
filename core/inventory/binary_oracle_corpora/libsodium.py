@@ -82,8 +82,7 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
+    shutil.rmtree(src, ignore_errors=True)
     logger.info("libsodium: cloning %s (tag %s) → %s",
                 LIBSODIUM_URL, LIBSODIUM_TAG, src)
     if not clone_repository(LIBSODIUM_URL, src, depth=1):
@@ -106,8 +105,7 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        if build_dir.exists():
-            shutil.rmtree(build_dir)
+        shutil.rmtree(build_dir, ignore_errors=True)
         build_dir.mkdir(parents=True)
         env = {**os.environ, "CFLAGS": cflags, "LDFLAGS": ldflags}
         subprocess.run(

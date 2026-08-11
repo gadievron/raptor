@@ -9,6 +9,7 @@
 //
 // CWE-468: Incorrect Pointer Scaling
 // Zero-FP confidence: very high — these patterns are structurally wrong.
+// @role: verification
 
 @double_sizeof_alloc@
 expression E1, N;

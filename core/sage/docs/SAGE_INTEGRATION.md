@@ -8,12 +8,12 @@ RAPTOR uses a **hybrid integration** approach:
 
 1. **SDK Layer** (Python runtime): `core/sage/` module wraps the `sage-agent-sdk` to provide persistent memory for Python packages (fuzzing memory, exploit feasibility, analysis pipeline)
 
-2. **MCP Layer** (Claude Code agents): All 16 Claude Code agents connect to SAGE via MCP for persistent memory across sessions
+2. **MCP Layer** (Claude Code agents): All 16 Claude Code agents connect to SAGE via MCP (stdio transport) for persistent memory across sessions
 
 ```
 RAPTOR
 ├── Claude Code Agents (16)
-│   └── SAGE MCP ──────────────────┐
+│   └── SAGE MCP (stdio) ─────────┐
 ├── Python Packages                │
 │   ├── Fuzzing Memory (SDK) ──────┤
 │   ├── Exploit Feasibility ───────┤
@@ -50,19 +50,20 @@ libexec/raptor-sage-setup
 
 One command does everything; re-runs are safe (see *Reinstall / re-seed* below):
 
-- Verifies `sage-agent-sdk` is importable by `python3`.
-- Merges the SAGE entry from `core/sage/mcp-entry.json` into `./.mcp.json`
-  (creates the file if absent, deep-merges if you already have other MCP
-  servers registered).
-- Sets `SAGE_ENABLED=true` in `.claude/settings.local.json` so Claude Code
-  propagates the flag into RAPTOR subprocesses (Python-pipeline opt-in —
-  the MCP side is `.mcp.json`).
+- Verifies prerequisites (`sage-agent-sdk`, jq, docker, curl, the stdio wrapper).
+- Migrates the SAGE_HOME volume mount if upgrading from the old `.sage-gui` layout
+  (automatic, non-destructive — see *Volume migration* below).
 - `docker compose -f core/sage/docker-compose.yml up -d` — starts SAGE (port
   8090) and Ollama (port 11435, model `nomic-embed-text`).
 - Waits for SAGE health.
 - Seeds institutional knowledge (30+ primitives, 25+ mitigations, system
   prompts, 10 expert personas, methodology, exploitability heuristics).
 - Registers all 16 RAPTOR agents on the SAGE network.
+- Generates the stdio MCP entry in `./.mcp.json` (replaces any stale SSE
+  config; preserves other MCP servers you've registered).
+- Sets `SAGE_ENABLED=true` in `.claude/settings.local.json` so Claude Code
+  propagates the flag into RAPTOR subprocesses (Python-pipeline opt-in).
+- Runs a smoke test against the MCP wrapper (non-fatal if it fails).
 
 ### 3. Restart Claude Code
 
@@ -104,52 +105,107 @@ core/sage/docker-compose.yml down -v` to wipe them.
 
 ## SAGE Domains
 
+Domains use repo-scoped variants (`{repo_key}` = short hash of the
+repository path) to prevent cross-project leakage.  Global domains are
+used for knowledge that generalises across targets.
+
 | Domain | Purpose |
 |--------|---------|
-| `raptor-findings` | Vulnerability findings and analysis results |
-| `raptor-fuzzing` | Fuzzing strategies, crash patterns, exploit techniques |
-| `raptor-crashes` | Crash analysis patterns and root causes |
-| `raptor-forensics` | OSS forensics evidence and investigation patterns |
-| `raptor-exploits` | Exploit development patterns and constraints |
-| `raptor-methodology` | Analysis methodology and expert reasoning |
-| `raptor-campaigns` | Campaign history and outcomes |
-| `raptor-reports` | Report structures and templates |
-| `raptor-agents` | Agent role definitions and capabilities |
-| `raptor-primitives` | Exploitation primitives and dependency graphs |
-| `raptor-prompts` | LLM system prompts and personas |
-| `raptor-personas` | Expert persona definitions |
-| `raptor-config` | Configuration knowledge |
+| `raptor-findings-{repo_key}` | Vulnerability findings and analysis results (repo-scoped) |
+| `raptor-fp-{repo_key}` | Finding verdicts for cross-run FP suppression (repo-scoped) |
+| `raptor-sca-{repo_key}` | SCA findings and verdicts (repo-scoped) |
+| `raptor-concepts-{repo_key}` | Study concept recall for `/understand --teach` (repo-scoped) |
+| `raptor-fuzzing` | Fuzzing strategies and crash outcomes (global) |
+| `raptor-methodology` | Analysis methodology, CodeQL build reliability, expert reasoning (global) |
+| `raptor-rule-library` | Proven checker rules keyed by engine + CWE (global, cross-target) |
+
+See `core/sage/CLAUDE.md` for the authoritative domain list and hook table.
 
 ## Configuration
 
 ### Environment Variables
 
+**RAPTOR-side** (set in `.claude/settings.local.json` or shell):
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SAGE_ENABLED` | `false` | Enable SAGE integration |
+| `SAGE_ENABLED` | `false` | Enable SAGE integration in Python pipelines |
 | `SAGE_URL` | `http://localhost:8090` | SAGE API URL |
-| `SAGE_IDENTITY_PATH` | auto | Path to agent key file |
+| `SAGE_IDENTITY_PATH` | auto | Path to agent key file (in-container) |
 | `SAGE_TIMEOUT` | `15.0` | API request timeout (seconds) |
+
+**Container-side** (set in `docker-compose.yml`, passed to the SAGE container):
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SAGE_HOME` | `/root/.sage` | SAGE data directory inside the container |
+| `SAGE_EMBEDDING_PROVIDER` | `ollama` | Embedding backend (`ollama`, `openai-compatible`, or `hash`) |
+| `SAGE_EMBEDDING_BASE_URL` | `http://ollama:11434` | Ollama API URL (container-internal) |
+| `SAGE_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model name |
+| `REST_ADDR` | `0.0.0.0:8080` | SAGE REST API listen address |
+
+If `SAGE_EMBEDDING_PROVIDER` is unset, SAGE defaults to `hash` — keyword
+matching only, no semantic recall. The docker-compose.yml sets it to `ollama`
+so semantic embeddings are active out of the box.
 
 ### MCP Configuration
 
 `.mcp.json` is `.gitignore`d and managed by `libexec/raptor-sage-setup`.
-The template fragment lives at `core/sage/mcp-entry.json`:
+The setup script generates the entry inline using stdio transport via the
+`libexec/raptor-sage-mcp` wrapper:
 
 ```json
 {
   "mcpServers": {
     "sage": {
-      "type": "sse",
-      "url": "http://localhost:8090/mcp/sse"
+      "command": "/path/to/raptor/libexec/raptor-sage-mcp",
+      "args": [],
+      "env": {
+        "SAGE_PROVIDER": "claude-code",
+        "SAGE_PROJECT": "raptor",
+        "SAGE_IDENTITY_PATH": "/root/.sage/agents/raptor-claude-code/agent.key"
+      }
     }
   }
 }
 ```
 
-The setup script deep-merges this fragment into `./.mcp.json`, preserving
-any other MCP servers you've registered. Uninstall removes only the SAGE
-entry and leaves everything else in place.
+The wrapper `exec`s into `docker compose exec -T sage /usr/local/bin/sage-gui mcp`,
+wiring Claude Code's stdin/stdout directly to the SAGE MCP process inside the
+container. No SSE, no HTTP, no OAuth.
+
+The setup script replaces `.mcpServers.sage` entirely on each run (stale
+`type`/`url` fields from an old SSE config are removed). Other MCP servers
+are preserved. Uninstall removes only the SAGE entry.
+
+### Volume Migration
+
+The docker-compose volume mount changed from `/root/.sage-gui` (SAGE <= 6.6.5)
+to `/root/.sage` (SAGE 11.x). When `libexec/raptor-sage-setup` detects an
+existing container with the old mount, it automatically migrates the data:
+
+1. Stops the sage service (retains the container).
+2. Copies data from both `/root/.sage-gui` (volume) and `/root/.sage`
+   (writable layer — agent keys, ledger) to a host-side backup.
+3. If the destination volume is empty: full copy via a disposable container.
+   If it already has data: detects collisions (byte-for-byte via `cmp -s`)
+   and classifies them. Collisions on critical state (`agent.key`,
+   `vault.key`, `config.yaml`, `data/sage.db`, `data/badger/*`,
+   `data/cometbft/*`) abort migration — both versions preserved for
+   operator review. Non-critical collisions keep the destination version.
+   After collision checks, merges only files missing from the destination.
+4. Verifies every critical file and directory present in the backup exists
+   byte-for-byte in the destination. Copy, comparison, merge, validation,
+   and marker failures all abort before container recreation and preserve
+   the backup for recovery.
+5. Writes a `.migration-complete` marker (only if all checks pass).
+6. Preserves the backup directory for operator verification — the script
+   prints its path and the operator removes it manually after checking.
+   If collisions were detected, the backup is the definitive source for
+   manual comparison.
+
+On an already-migrated setup (container mounts `/root/.sage`), the function
+exits immediately — no backup is created and no data is touched.
 
 ## How It Works
 
@@ -175,7 +231,8 @@ similar = await memory.recall_similar("heap overflow strategies for ASLR binarie
 SAGE usage instructions live in `core/sage/CLAUDE.md` and are conditionally
 loaded by RAPTOR's root `CLAUDE.md` only when the `sage_inception` tool is
 present (i.e. when `.mcp.json` registers SAGE, i.e. only when a user has
-actually run `libexec/raptor-sage-setup`). The tools exposed via MCP:
+actually run `libexec/raptor-sage-setup`). The full list of 30+ MCP tools
+is available via the MCP server's tool discovery; the core tools are:
 
 ```
 sage_inception          # Boot persistent memory
@@ -183,6 +240,22 @@ sage_turn               # Every turn: recall + store
 sage_remember           # Store important findings
 sage_recall             # Check for known patterns
 sage_reflect            # After tasks: dos and don'ts
+sage_forget             # Deprecate a memory
+sage_list               # List memories (with domain filter)
+sage_status             # Memory store overview
+sage_register           # Register an agent
+sage_reinstate          # Reinstate a deprecated memory
+sage_rename             # Rename a memory
+sage_link               # Link two memories
+sage_corroborate        # Independently back a memory
+sage_backlog            # Open tasks
+sage_task               # Create or update a task
+sage_timeline           # Time-bucketed activity view
+sage_pipe / sage_pipe_result  # Pipe data between agents
+sage_scope_list / sage_scope_get  # Scope management
+sage_red_pill           # Introspection
+sage_inbox              # Agent inbox
+sage_gov_propose / sage_gov_vote / sage_gov_status  # Governance
 ```
 
 ### Graceful Degradation
@@ -210,12 +283,20 @@ docker compose -f core/sage/docker-compose.yml logs sage
 ### Embedding model not loaded
 
 ```bash
+# Check which embedding provider SAGE is using
+docker compose -f core/sage/docker-compose.yml exec -T sage printenv SAGE_EMBEDDING_PROVIDER
+
 # Check Ollama models
 curl http://localhost:11435/api/tags
 
 # Pull model manually
 docker compose -f core/sage/docker-compose.yml exec ollama ollama pull nomic-embed-text
 ```
+
+If `SAGE_EMBEDDING_PROVIDER` prints empty or `hash`, SAGE is running with
+keyword matching only — semantic recall will be degraded. Check that the
+docker-compose.yml has `SAGE_EMBEDDING_PROVIDER=ollama` in the sage service's
+environment block.
 
 ### Memory not persisting
 

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 
 from packages.sca import optimise
 from packages.sca.update import _PlanEntry, UpgradeChange
@@ -915,6 +916,7 @@ class TestAnalyzeMajorBumps:
         assert verdicts == {}
         assert len(major_blocked) == 1
 
+    @pytest.mark.slow
     def test_safe_verdict_moves_to_vuln_plans(self):
         from pydantic import BaseModel
 

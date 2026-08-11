@@ -166,17 +166,33 @@ def check_all_fields(
     all_findings: List[LifecycleFinding] = []
     for field in fields:
         if cfgs:
+            checked_sites: set = set()
             covered_files: set = set()
             for rs in field.read_sites:
                 if rs.file in cfgs and rs.file not in covered_files:
-                    all_findings.extend(
-                        check_coverage_with_cfg(
-                            field, cfgs[rs.file], cfg_file=rs.file,
-                        )
+                    cfg_findings = check_coverage_with_cfg(
+                        field, cfgs[rs.file], cfg_file=rs.file,
                     )
+                    all_findings.extend(cfg_findings)
                     covered_files.add(rs.file)
-            if not covered_files:
-                all_findings.extend(check_coverage(field))
+                    # Track read sites handled by CFG to avoid duplicates
+                    for f in cfg_findings:
+                        checked_sites.add(
+                            (f.read_site.file, f.read_site.line),
+                        )
+                    # Also mark all read sites in this file as checked
+                    for rs2 in field.read_sites:
+                        if rs2.file == rs.file:
+                            checked_sites.add((rs2.file, rs2.line))
+            has_uncovered = any(
+                rs.file not in covered_files
+                for rs in field.read_sites
+            )
+            if not covered_files or has_uncovered:
+                for f in check_coverage(field):
+                    site_key = (f.read_site.file, f.read_site.line)
+                    if site_key not in checked_sites:
+                        all_findings.append(f)
         else:
             all_findings.extend(check_coverage(field))
     return all_findings

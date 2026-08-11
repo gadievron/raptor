@@ -66,3 +66,29 @@ def _reset_llm_egress_state():
         os.environ.pop("OLLAMA_HOST", None)
     else:
         os.environ["OLLAMA_HOST"] = _saved_ollama
+
+
+@pytest.fixture(autouse=True)
+def _reset_operator_primary_override():
+    """Snapshot + reset ``_operator_primary_override`` around every
+    test in this directory.
+
+    Defense-in-depth against tests elsewhere in the pytest session
+    that invoke an operator-facing CLI in-process. Concretely,
+    ``packages/code_understanding/tests/test_libexec_trajectory_e2e``
+    imports ``libexec/raptor-understand`` and runs ``main()`` with
+    ``--model fake-haiku-x``; that CLI pins the override to a fake
+    anthropic ModelConfig. Without this reset the pinned model
+    persists in module state and every subsequent core/llm test
+    that expects the default resolution chain sees the leaked
+    override instead — CI failed with three provider-preference
+    tests returning ``fake-haiku-x`` when they expected other
+    providers.
+    """
+    import core.llm.config as cfg
+    saved = getattr(cfg, "_operator_primary_override", None)
+    cfg._operator_primary_override = None
+    try:
+        yield
+    finally:
+        cfg._operator_primary_override = saved

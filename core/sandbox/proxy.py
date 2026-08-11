@@ -1024,8 +1024,7 @@ class EgressProxy:
                 asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
             except RuntimeError:
                 _graceful().close()
-            return
-        if self._loop is not None and self._loop.is_running():
+        elif self._loop is not None and self._loop.is_running():
             async def _cancel_unix():
                 stale = [t for t in self._unix_tasks if not t.done()]
                 for t in stale:
@@ -1037,11 +1036,17 @@ class EgressProxy:
                 asyncio.run_coroutine_threadsafe(_cancel_unix(), self._loop)
             except RuntimeError:
                 pass
-            return
-        try:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        except RuntimeError:
-            pass  # loop already stopped
+        else:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass  # loop already stopped
+        # Join the daemon thread so transport _call_connection_lost
+        # callbacks complete before stop() returns.  Without this,
+        # the thread keeps running and may close recycled fd numbers
+        # that belong to the caller's next subprocess.run pipes.
+        if self._thread is not None:
+            self._thread.join(timeout=drain_timeout + 2.0)
 
     def _stop_thread_best_effort(self) -> None:
         """Defensive cleanup helper called from ``__init__`` when the
@@ -1142,7 +1147,7 @@ class EgressProxy:
         # no peer IP — they're trusted because bind_unix() restricts
         # the socket file to mode 0600.
         if client_ip not in ("127.0.0.1", "::1", "unix"):
-            logger.warning(f"egress proxy: rejecting non-loopback peer {client_ip}")
+            logger.warning("egress proxy: rejecting non-loopback peer %s", client_ip)
             writer.close()
             return
 
@@ -1387,7 +1392,7 @@ class EgressProxy:
                 )
             except (asyncio.TimeoutError, asyncio.IncompleteReadError,
                     ConnectionError) as e:
-                logger.warning(f"egress proxy: upstream CONNECT failed: {e}")
+                logger.warning("egress proxy: upstream CONNECT failed: %s", e)
                 up_writer.close()
                 event.update(result="upstream_failed",
                              reason=f"upstream CONNECT handshake: {e.__class__.__name__}",
@@ -1738,9 +1743,9 @@ def get_proxy(
 
 
 def _reset_for_tests() -> None:
-    """Tear down the singleton. Test-only."""
+    """Tear down the singleton and join its thread. Test-only."""
     global _instance
     with _lock:
         if _instance is not None:
-            _instance.stop()
+            _instance.stop(drain_timeout=0)
             _instance = None

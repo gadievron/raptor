@@ -484,11 +484,16 @@ def walk(
         for pair in todo:
             if limit is not None and n >= limit:
                 break
-            res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                               fetch_timeout=fetch_timeout,
-                               build_timeout=build_timeout,
-                               analyze_timeout=analyze_timeout,
-                               tunables=tunables)
+            try:
+                res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                                   fetch_timeout=fetch_timeout,
+                                   build_timeout=build_timeout,
+                                   analyze_timeout=analyze_timeout,
+                                   tunables=tunables)
+            except Exception as exc:
+                log(f"  [{n + 1}/{len(todo)}] {pair.cve_id} {pair.cwe}: "
+                    f"process_pair crashed: {exc}")
+                res = WalkResult(pair.fix_hash, "error")
             _record(con, pair, res)
             n += 1
             tag = "YIELD" if res.is_yield else res.status
@@ -541,8 +546,13 @@ def promote_misses(
                 break
             n += 1
             pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
-            res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                               build_timeout=build_timeout, build_mode="autobuild")
+            try:
+                res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                                   build_timeout=build_timeout, build_mode="autobuild")
+            except Exception as exc:
+                log(f"  [{n}/{len(rows)}] {cve_id} {cwe}: "
+                    f"process_pair crashed: {exc}")
+                continue
             if res.status == "ok" and res.before_count > 0:
                 con.execute(
                     "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "

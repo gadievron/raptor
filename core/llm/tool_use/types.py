@@ -214,6 +214,59 @@ class TurnResponse:
 
 
 # ---------------------------------------------------------------------------
+# Streaming chunks (L1 substrate)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    """One piece of a streaming response from
+    :meth:`~core.llm.providers.LLMProvider.turn_stream`.
+
+    Providers yield these incrementally as the API response arrives.
+    The :class:`ToolUseLoop` accumulates them into a :class:`TurnResponse`
+    while emitting :class:`StreamDelta` events to subscribers.
+
+    ``type`` discriminates the payload:
+
+    +-----------------+---------------------------------------------------+
+    | type            | populated fields                                  |
+    +=================+===================================================+
+    | text_delta      | ``text`` — incremental text fragment               |
+    +-----------------+---------------------------------------------------+
+    | tool_call_start | ``tool_call_id``, ``tool_call_name``              |
+    +-----------------+---------------------------------------------------+
+    | tool_call_delta | ``tool_call_id``, ``tool_call_input_delta``       |
+    |                 | (partial JSON string)                              |
+    +-----------------+---------------------------------------------------+
+    | tool_call_end   | ``tool_call_id``                                  |
+    +-----------------+---------------------------------------------------+
+    | usage           | token count fields                                |
+    +-----------------+---------------------------------------------------+
+    | done            | ``stop_reason``                                   |
+    +-----------------+---------------------------------------------------+
+    """
+
+    type: Literal[
+        "text_delta",
+        "tool_call_start",
+        "tool_call_delta",
+        "tool_call_end",
+        "usage",
+        "done",
+    ]
+    text: str = ""
+    tool_call_id: str = ""
+    tool_call_name: str = ""
+    tool_call_input_delta: str = ""
+    stop_reason: StopReason | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+
+
+# ---------------------------------------------------------------------------
 # Cache-control opt-ins
 # ---------------------------------------------------------------------------
 
@@ -400,6 +453,20 @@ class ToolCallBlocked:
 
 
 @dataclass(frozen=True)
+class StreamDelta:
+    """Real-time chunk from the provider during a streaming turn.
+
+    Emitted between :class:`TurnStarted` and :class:`TurnCompleted`
+    when the :class:`ToolUseLoop` is running in streaming mode. Each
+    event wraps one :class:`StreamChunk` from the provider's
+    :meth:`~core.llm.providers.LLMProvider.turn_stream`.
+    """
+
+    iteration: int
+    chunk: StreamChunk
+
+
+@dataclass(frozen=True)
 class LoopTerminated:
     """Emitted as the final event of a :meth:`ToolUseLoop.run` call.
 
@@ -426,6 +493,7 @@ class LoopTerminated:
         "tool_timeout",              # handler timeout, not configured to terminate
         "context_overflow",          # request would exceed context window
         "provider_error",            # transport / API failure after retries
+        "credit_exhausted",          # account out of credit / billing failure
         "give_up",                   # caller-supplied should_continue returned False
     ]
     iterations: int
@@ -436,6 +504,7 @@ class LoopTerminated:
 LoopEvent = Union[
     TurnStarted,
     TurnCompleted,
+    StreamDelta,
     ToolCallDispatched,
     ToolCallBlocked,
     ToolCallReturned,
@@ -493,6 +562,7 @@ class ToolLoopResult:
         "tool_timeout",
         "context_overflow",
         "provider_error",
+        "credit_exhausted",
         "give_up",
     ]
     error_message: str | None = None

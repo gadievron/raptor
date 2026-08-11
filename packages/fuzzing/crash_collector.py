@@ -47,7 +47,7 @@ class CrashCollector:
         Returns:
             List of Crash objects
         """
-        logger.info(f"Collecting crashes from: {self.crashes_dir}")
+        logger.info("Collecting crashes from: %s", self.crashes_dir)
 
         crash_files = sorted([
             f for f in self.crashes_dir.iterdir()
@@ -58,12 +58,12 @@ class CrashCollector:
             logger.warning("No crashes found!")
             return []
 
-        logger.info(f"Found {len(crash_files)} crash files")
+        logger.info("Found %d crash files", len(crash_files))
 
         crashes = []
         seen_hashes = set()
 
-        for crash_file in crash_files[:max_crashes] if max_crashes else crash_files:
+        for crash_file in crash_files[:max_crashes] if max_crashes is not None else crash_files:
             crash = self._parse_crash_file(crash_file)
 
             # Deduplicate by input hash (simple approach)
@@ -74,9 +74,9 @@ class CrashCollector:
                 crashes.append(crash)
                 seen_hashes.add(input_hash)
             else:
-                logger.debug(f"Skipping duplicate crash: {crash_file.name}")
+                logger.debug("Skipping duplicate crash: %s", crash_file.name)
 
-        logger.info(f"Collected {len(crashes)} unique crashes")
+        logger.info("Collected %d unique crashes", len(crashes))
 
         return crashes
 
@@ -134,7 +134,7 @@ class CrashCollector:
         logger.info("Crash ranking:")
         for idx, crash in enumerate(ranked[:10], 1):
             signal_name = self._signal_name(crash.signal)
-            logger.info(f"  {idx}. {crash.crash_id} - {signal_name}")
+            logger.info("  %s. %s - %s", idx, crash.crash_id, signal_name)
 
         return ranked
 

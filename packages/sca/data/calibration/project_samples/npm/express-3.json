@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:51:46Z",
+    "fetched_at": "2026-08-01T08:23:42Z",
     "git_ref": "3.21.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express-3",
@@ -33,7 +33,7 @@
       "dep_name": "cookie",
       "dep_version": "0.1.3",
       "ecosystem": "npm",
-      "epss": 0.00749,
+      "epss": 0.00744,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -44,7 +44,7 @@
       "finding_id": "sca:vuln:npm:cookie:0.1.3:GHSA-pxg6-pf52-xh8x",
       "in_kev": false,
       "purl": "pkg:npm/cookie@0.1.3",
-      "raptor_risk_estimate": 7.27635475335,
+      "raptor_risk_estimate": 7.2758942075999995,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -61,10 +61,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403122147,
+        "epss_multiplier": 0.403096632,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.27635475335,
+        "final": 7.2758942075999995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -270,9 +270,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/application.js:187",
+          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
-          "examples/ejs/index.js:21"
+          "lib/application.js:187"
         ],
         "verdict": "imported"
       },
@@ -343,9 +343,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/application.js:187",
+          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
-          "examples/ejs/index.js:21"
+          "lib/application.js:187"
         ],
         "verdict": "imported"
       },
@@ -397,7 +397,7 @@
       "dep_name": "ejs",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.00614,
+      "epss": 0.00619,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -408,7 +408,7 @@
       "finding_id": "sca:vuln:npm:ejs:2.3.3:GHSA-ghr5-ch3p-vcr6",
       "in_kev": false,
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 7.263920018099998,
+      "raptor_risk_estimate": 7.264380563849998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -416,9 +416,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/application.js:187",
+          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
-          "examples/ejs/index.js:21"
+          "lib/application.js:187"
         ],
         "verdict": "imported"
       },
@@ -427,10 +427,10 @@
         "cvss_base": 40.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40243324199999997,
+        "epss_multiplier": 0.402458757,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.263920018099998,
+        "final": 7.264380563849998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -489,9 +489,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/application.js:187",
+          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
-          "examples/ejs/index.js:21"
+          "lib/application.js:187"
         ],
         "verdict": "imported"
       },
@@ -543,7 +543,7 @@
       "dep_name": "ejs",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.32386,
+      "epss": 0.32808,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -554,7 +554,7 @@
       "finding_id": "sca:vuln:npm:ejs:2.3.3:GHSA-phwq-j96m-2c2q",
       "in_kev": false,
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 24.966509233154998,
+      "raptor_risk_estimate": 25.06174088334,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -562,9 +562,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/application.js:187",
+          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
-          "examples/ejs/index.js:21"
+          "lib/application.js:187"
         ],
         "verdict": "imported"
       },
@@ -573,10 +573,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.564565758,
+        "epss_multiplier": 0.566719224,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 24.966509233154998,
+        "final": 25.06174088334,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -825,7 +825,7 @@
       "dep_name": "marked",
       "dep_version": "0.3.5",
       "ecosystem": "npm",
-      "epss": 0.00493,
+      "epss": 0.00513,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -836,7 +836,7 @@
       "finding_id": "sca:vuln:npm:marked:0.3.5:GHSA-p9wx-2529-fp83",
       "in_kev": false,
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 27.75133596327107,
+      "raptor_risk_estimate": 27.758384719184697,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -854,10 +854,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401815779,
+        "epss_multiplier": 0.401917839,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.75133596327107,
+        "final": 27.758384719184697,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

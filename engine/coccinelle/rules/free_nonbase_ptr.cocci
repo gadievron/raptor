@@ -7,6 +7,7 @@
 //
 // CWE-761: Free of Pointer not at Start of Buffer
 // Zero-FP confidence: very high — always undefined behaviour.
+// @role: verification
 
 @free_plus_offset@
 expression P, E;

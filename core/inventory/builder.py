@@ -185,6 +185,7 @@ def build_inventory(
     parallel: bool = True,
     allow_unreachable: bool = False,
     treat_exports_as_entries: Union[bool, str] = "auto",
+    scope: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
@@ -269,7 +270,20 @@ def build_inventory(
 
     # Collect files in single pass
     file_list, pruned_dirs = _collect_source_files(target, extensions)
-    logger.info(f"Found {len(file_list)} source files to process")
+    if scope:
+        scope_prefixes = tuple(
+            str((target / s).resolve()) for s in scope
+        )
+        before = len(file_list)
+        file_list = [
+            f for f in file_list
+            if str(f.resolve()).startswith(scope_prefixes)
+        ]
+        logger.info(
+            "scope filter: %d → %d files (%d excluded)",
+            before, len(file_list), before - len(file_list),
+        )
+    logger.info("Found %d source files to process", len(file_list))
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -337,7 +351,7 @@ def build_inventory(
             for future in as_completed(futures):
                 fp = futures[future]
                 try:
-                    _collect_result(future.result())
+                    _collect_result(future.result(timeout=300))
                 except Exception as exc:
                     logger.warning(
                         "inventory: per-file extractor raised on "
@@ -470,10 +484,11 @@ def build_inventory(
     from core.inventory import save_checklist
     save_checklist(str(output_path), inventory)
 
-    logger.info(f"Built inventory: {len(files_info)} files, {total_items} items "
-                f"({total_functions} functions, {total_sloc} SLOC, "
-                f"{skipped} skipped, {len(excluded_files)} excluded)")
-    logger.debug(f"Saved to: {checklist_file}")
+    logger.info("Built inventory: %d files, %d items "
+                "(%d functions, %d SLOC, %d skipped, %d excluded)",
+                len(files_info), total_items, total_functions,
+                total_sloc, skipped, len(excluded_files))
+    logger.debug("Saved to: %s", checklist_file)
 
     return inventory
 

@@ -1252,9 +1252,40 @@ def enrich_inventory_with_binary_oracle(
     return counts
 
 
+def extract_verdicts(inventory: Dict) -> Dict[str, str]:
+    """Extract a flat {function_name: verdict} dict from an enriched inventory.
+
+    After ``enrich_inventory_with_binary_oracle`` has annotated items,
+    this extracts the combined classification for each function into
+    the shape ``OrchestratorConfig.binary_verdicts`` expects.
+
+    ``absent`` verdicts are only emitted when at least one contributing
+    binary has ``tier == "full"`` (full-DWARF evidence).  Symbol-only
+    tier absent verdicts are not suppression-grade and are excluded.
+    """
+    verdicts: Dict[str, str] = {}
+    for f in inventory.get("files") or []:
+        for item in f.get("items") or []:
+            bo = (item.get("metadata") or {}).get("binary_oracle")
+            if bo and isinstance(bo, dict):
+                classification = bo["classification"]
+                if classification == "absent":
+                    has_full = any(
+                        b.get("tier") == "full"
+                        for b in bo.get("binaries", [])
+                    )
+                    if not has_full:
+                        continue
+                name = item.get("name")
+                if isinstance(name, str) and name:
+                    verdicts[name] = classification
+    return verdicts
+
+
 __all__ = [
     "BinaryOracleWitness",
     "classify_binary_evidence",
     "enrich_inventory_with_binary_oracle",
+    "extract_verdicts",
     "read_build_id",
 ]

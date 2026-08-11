@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from packages.coccinelle.runner import (
     run_rule,
     run_rules,
+    run_rules_batched,
     is_available,
     version,
     version_tuple,
@@ -588,6 +589,82 @@ class TestRunRules:
         assert len(results) == 2
         assert results[0].rule == "a"
         assert results[1].rule == "b"
+
+
+class TestRunRulesBatched:
+    def test_empty_list(self):
+        assert run_rules_batched(Path("/tmp"), []) == {}
+
+    def test_single_rule_delegates(self, tmp_path):
+        rule = tmp_path / "a.cocci"
+        rule.write_text("@r@\nposition p;\n@@\nmalloc@p(...)\n")
+        target = tmp_path / "test.c"
+        target.write_text("void f() {}\n")
+        mock_proc = MagicMock()
+        mock_proc.stdout = ""
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+        with patch(
+            "packages.coccinelle.runner.is_available",
+            return_value=True,
+        ), patch("subprocess.run", return_value=mock_proc):
+            results = run_rules_batched(
+                target, [rule], env=dict(os.environ),
+            )
+        assert "a" in results
+        assert results["a"].rule == "a"
+
+    def test_batched_demultiplexes(self, tmp_path):
+        r1 = tmp_path / "rule_x.cocci"
+        r1.write_text("@r@\nposition p;\n@@\nmalloc@p(...)\n")
+        r2 = tmp_path / "rule_y.cocci"
+        r2.write_text("@s@\nposition p;\n@@\nfree@p(...)\n")
+        target = tmp_path / "test.c"
+        target.write_text("void f() { malloc(1); free(0); }\n")
+        line1 = json.dumps({
+            "file": "test.c", "line": 1, "col": 1,
+            "line_end": 1, "col_end": 10,
+            "rule": "rule_x", "message": "hit x",
+        })
+        line2 = json.dumps({
+            "file": "test.c", "line": 1, "col": 20,
+            "line_end": 1, "col_end": 30,
+            "rule": "rule_y", "message": "hit y",
+        })
+        mock_proc = MagicMock()
+        mock_proc.stdout = ""
+        mock_proc.stderr = (
+            f"COCCIRESULT:{line1}\nCOCCIRESULT:{line2}\n"
+        )
+        mock_proc.returncode = 0
+        with patch(
+            "packages.coccinelle.runner.is_available",
+            return_value=True,
+        ), patch("subprocess.run", return_value=mock_proc):
+            results = run_rules_batched(
+                target, [r1, r2], env=dict(os.environ),
+            )
+        assert set(results.keys()) == {"rule_x", "rule_y"}
+        assert len(results["rule_x"].matches) == 1
+        assert len(results["rule_y"].matches) == 1
+        assert results["rule_x"].matches[0].message == "hit x"
+
+    def test_not_installed(self, tmp_path):
+        r1 = tmp_path / "a.cocci"
+        r1.write_text("@@\n@@\nmalloc(...);\n")
+        r2 = tmp_path / "b.cocci"
+        r2.write_text("@@\n@@\nfree(...);\n")
+        with patch(
+            "packages.coccinelle.runner.is_available",
+            return_value=False,
+        ):
+            results = run_rules_batched(
+                tmp_path, [r1, r2],
+            )
+        assert len(results) == 2
+        for r in results.values():
+            assert not r.ok
+            assert "not installed" in r.errors[0].lower()
 
 
 @pytest.mark.skipif(

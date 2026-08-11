@@ -562,5 +562,4 @@ def load_record(run_dir: Path) -> Optional[Dict[str, Any]]:
 def cleanup_manifest(run_dir: Path) -> None:
     """Remove the reads manifest after converting to a coverage record."""
     manifest = Path(run_dir) / READS_MANIFEST
-    if manifest.exists():
-        manifest.unlink(missing_ok=True)
+    manifest.unlink(missing_ok=True)

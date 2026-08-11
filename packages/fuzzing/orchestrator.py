@@ -321,9 +321,9 @@ class FuzzingOrchestrator:
                     logger.info("=" * 70)
                     logger.info("BINARY CONTEXT ANALYSIS (radare2)")
                     logger.info("=" * 70)
-                    logger.info(f"radare2: {plan.capabilities.radare2}")
-                    logger.info(f"decompiler: {decompiler}")
-                    logger.info(f"output: {out_dir / 'binary-context-map.json'}")
+                    logger.info("radare2: %s", plan.capabilities.radare2)
+                    logger.info("decompiler: %s", decompiler)
+                    logger.info("output: %s", out_dir / 'binary-context-map.json')
                     binary_result = analyse_blackbox_binary(
                         plan.target.path,
                         out_dir=out_dir,
@@ -336,7 +336,7 @@ class FuzzingOrchestrator:
                         f"{len(binary_result.context_map.get('candidate_flows', []))} candidate flows"
                     )
                 except Exception as e:
-                    logger.warning(f"Binary understand failed (non-fatal): {e}")
+                    logger.warning("Binary understand failed (non-fatal): %s", e)
 
         if plan.fuzzer == "afl":
             result = self._run_afl(plan, out_dir, duration_seconds, corpus_dir, dict_path)
@@ -361,7 +361,7 @@ class FuzzingOrchestrator:
                         f"{len(bundle.crashes)} crash witnesses"
                     )
             except Exception as e:
-                logger.warning(f"Binary fuzz evidence append failed (non-fatal): {e}")
+                logger.warning("Binary fuzz evidence append failed (non-fatal): %s", e)
         return result
 
     def _prepare_corpus(
@@ -386,13 +386,13 @@ class FuzzingOrchestrator:
                 source_dir=context_dir,
             )
         except Exception as e:
-            logger.warning(f"Autonomous corpus generator unavailable: {e}")
+            logger.warning("Autonomous corpus generator unavailable: %s", e)
             return self._prepare_builtin_corpus(out_dir, seed_profile)
 
         try:
             seeds = generator.generate_autonomous_corpus(generated_dir, max_seeds=64)
         except Exception as e:
-            logger.warning(f"Autonomous corpus generation failed: {e}")
+            logger.warning("Autonomous corpus generation failed: %s", e)
             return self._prepare_builtin_corpus(out_dir, seed_profile)
         if seeds <= 0:
             return self._prepare_builtin_corpus(out_dir, seed_profile)
@@ -406,7 +406,7 @@ class FuzzingOrchestrator:
             "formats_detected": sorted(generator.detected_formats),
         }
         (out_dir / "generated-corpus.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
-        logger.info(f"Generated agentic fuzz corpus: {seeds} seeds at {generated_dir}")
+        logger.info("Generated agentic fuzz corpus: %s seeds at %s", seeds, generated_dir)
         return generated_dir, info
 
     def _prepare_builtin_corpus(

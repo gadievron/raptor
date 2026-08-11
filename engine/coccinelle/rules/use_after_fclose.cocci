@@ -9,6 +9,7 @@
 // CWE-416: Use After Free
 // Zero-FP: stdio ops on a closed FILE* without reassignment is
 // always a use-after-free.
+// @role: verification
 
 @fclose_then_fprintf@
 expression FP;

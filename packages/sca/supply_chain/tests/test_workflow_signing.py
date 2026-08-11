@@ -43,10 +43,15 @@ _HAS_GPG = shutil.which("gpg") is not None
 
 
 def _git(target: Path, *args: str) -> None:
-    subprocess.run(
+    r = subprocess.run(
         ["git", "-C", str(target), *args],
-        check=True, capture_output=True, text=True,
+        capture_output=True, text=True,
     )
+    if r.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(args)} failed (exit {r.returncode}):\n"
+            f"  stderr: {r.stderr}\n  stdout: {r.stdout}"
+        )
 
 
 def _init_repo(target: Path) -> None:

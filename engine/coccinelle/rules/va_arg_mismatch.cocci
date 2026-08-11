@@ -7,6 +7,7 @@
 // produces wrong values or stack corruption.
 //
 // CWE-686: Function Call With Incorrect Argument Type
+// @role: verification
 
 @va_arg_char@
 identifier AP;

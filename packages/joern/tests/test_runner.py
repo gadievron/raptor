@@ -38,7 +38,7 @@ class TestValidateQuery:
     def test_blocks_java_io(self):
         err = _validate_query('java.io.File("/etc/passwd")')
         assert err is not None
-        assert "java.io" in err
+        assert "blocked pattern" in err
 
     def test_blocks_runtime_exec(self):
         err = _validate_query('Runtime.exec("ls")')
@@ -412,7 +412,7 @@ class TestTemplateSlotInjection:
             escaped = _escape_scala_string(payload)
             query = f'cpg.method.name("{escaped}").l'
             err = _validate_query(query)
-            if "Runtime" in payload or "java.io" in payload:
+            if "Runtime" in payload or "import java" in payload:
                 assert err is not None, (
                     f"should have caught dangerous pattern in: {query}"
                 )

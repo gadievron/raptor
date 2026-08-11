@@ -61,8 +61,8 @@ Exit codes:
 
 from __future__ import annotations
 import faulthandler
+import subprocess
 
-import os
 import signal
 import sys
 from pathlib import Path
@@ -83,6 +83,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (libexec convention) ───────────────
+import os  # noqa: E402
 # Inline before any RAPTOR import (matches raptor-run-sandboxed,
 # raptor-binary) so a malicious PYTHONPATH can't hijack
 # core.* imports before the check fires. This script is invoked
@@ -263,7 +264,7 @@ try:
             timeout=1800,
             strict_env=True,
         )
-except (OSError, RuntimeError, ValueError) as e:
+except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
     _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}",
          code=_RC_WRAPPER_SANDBOX_FAILED)
 

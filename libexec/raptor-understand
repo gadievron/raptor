@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import json
-import os
+import logging
 import signal
 import sys
 from pathlib import Path
@@ -37,6 +37,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -389,6 +390,12 @@ def _do_hunt(args: argparse.Namespace) -> dict:
                 "Unable to resolve --model entries: " + ", ".join(missing) +
                 "\nCheck models.json or set the relevant *_API_KEY env var."
             )
+        # Pin the operator's --model process-wide so any sub-consumer
+        # that constructs ``LLMConfig()`` no-arg honours the operator's
+        # choice instead of silently falling through to a models.json-
+        # configured "thinking model".
+        from core.llm.config import set_operator_primary_override
+        set_operator_primary_override(models[0])
 
     # Per-model budget = total / N, with a small per-model floor.
     # The cocci backend uses far less of this (1 LLM call to write
@@ -457,6 +464,12 @@ def _do_trace(args: argparse.Namespace) -> dict:
             "Unable to resolve --model entries: " + ", ".join(missing) +
             "\nCheck models.json or set the relevant *_API_KEY env var."
         )
+    # Pin the operator's --model process-wide so any sub-consumer
+    # that constructs ``LLMConfig()`` no-arg honours the operator's
+    # choice instead of silently falling through to a models.json-
+    # configured "thinking model".
+    from core.llm.config import set_operator_primary_override
+    set_operator_primary_override(models[0])
 
     n = len(models)
     per_model_cost = max(_PER_MODEL_COST_FLOOR_USD, args.max_cost / n)
@@ -619,6 +632,24 @@ def main() -> int:
     if args.map and args.model:
         parser.error("--model is not used for binary --map")
 
+    # ``_do_hunt`` / ``_do_trace`` pin the operator's --model via
+    # ``set_operator_primary_override`` so every downstream
+    # ``LLMConfig()`` no-arg construction honours it. Snapshot the
+    # prior value and restore on exit so in-process callers (e.g.
+    # code_understanding's ``test_libexec_trajectory_e2e``, which
+    # imports this shim and runs ``main()``) don't leak the pinned
+    # model into subsequent pytest tests. In the CLI-as-subprocess
+    # path this is a no-op — the process exits after main() returns.
+    import core.llm.config as _cfg_mod
+    from core.llm.config import set_operator_primary_override
+    _saved_override = _cfg_mod._operator_primary_override
+    try:
+        return _main_body(args)
+    finally:
+        set_operator_primary_override(_saved_override)
+
+
+def _main_body(args) -> int:
     try:
         # Path resolution can raise ValueError on NUL bytes in the
         # operator-supplied path. Keep inside try so all errors get
@@ -690,7 +721,8 @@ def main() -> int:
             from core.sage.hooks import store_map_results
             store_map_results(target, payload)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug(
+            "SAGE store failed", exc_info=True)
 
     return 0
 

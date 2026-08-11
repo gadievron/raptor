@@ -11,6 +11,7 @@
 //
 // The `when != E = ...` clause prevents false positives where the
 // pointer is reassigned after the free (common in cleanup loops).
+// @role: verification
 
 // kfree variant — field dereference after free
 @kfree_then_deref@
@@ -19,7 +20,9 @@ identifier fld;
 position p_use;
 @@
 
+// @vocab: deallocators
 \(kfree\|kvfree\|vfree\|kfree_sensitive\)(E);
+// @vocab: allocators
 ... when != E = \(\(kmalloc\|kzalloc\|kcalloc\|kvmalloc\|vzalloc\|vmalloc\)(...)\|NULL\)
 * E->fld@p_use
 
@@ -44,7 +47,9 @@ identifier fn;
 position p_use;
 @@
 
+// @vocab: deallocators
 \(kfree\|kvfree\|vfree\|kfree_sensitive\)(E);
+// @vocab: allocators
 ... when != E = \(\(kmalloc\|kzalloc\|kcalloc\|kvmalloc\|vzalloc\|vmalloc\)(...)\|NULL\)
 * fn(E@p_use, ...)
 
@@ -55,6 +60,7 @@ fn << kfree_then_arg.fn;
 @@
 
 import json, sys
+// @vocab: deallocators
 _safe = {"kfree", "kvfree", "vfree", "kfree_sensitive", "kfree_rcu",
          "pr_debug", "pr_info", "pr_err", "pr_warn", "printk",
          "trace_kfree", "WARN", "BUG"}

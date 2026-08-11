@@ -10,6 +10,7 @@
 // CWE-675: Multiple Operations on Resource in Single-Operation Context
 // Zero-FP: closedir on an fdopendir stream always closes the fd —
 // an explicit close(fd) afterwards is always a double-close.
+// @role: verification
 
 @fdopendir_double@
 expression FD;

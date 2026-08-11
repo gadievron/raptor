@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:51:44Z",
+    "fetched_at": "2026-08-01T08:23:40Z",
     "git_ref": "v3.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot",
@@ -93,7 +93,7 @@
           "1.84"
         ],
         "id": "GHSA-574f-3g2m-x479",
-        "modified": "2026-06-30T20:00:18.869683+00:00",
+        "modified": "2026-07-03T18:29:34.748750+00:00",
         "published": "2026-04-17T18:31:50+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-14813",
@@ -178,7 +178,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00505,
+      "epss": 0.00541,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -189,7 +189,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-67mf-3cr5-8w23",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 7.253880120749999,
+      "raptor_risk_estimate": 7.257196050149999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -206,10 +206,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401877015,
+        "epss_multiplier": 0.402060723,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.253880120749999,
+        "final": 7.257196050149999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -513,7 +513,7 @@
           "2.2.11.RELEASE"
         ],
         "id": "GHSA-cm59-pr5q-cw85",
-        "modified": "2026-03-13T21:59:19.426456+00:00",
+        "modified": "2026-07-08T06:29:40.989423+00:00",
         "published": "2022-07-11T20:59:02+00:00",
         "references": [
           "https://github.com/JLLeitschuh/security-research/security/advisories/GHSA-cm59-pr5q-cw85",
@@ -551,9 +551,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "MyWebIntegrationTests.java:18",
+          "SampleCacheApplicationRedisTests.java:24",
+          "MyWebIntegrationTests.java:20"
         ],
         "verdict": "imported"
       },
@@ -605,7 +605,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 0.00358,
+      "epss": 0.00415,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -616,7 +616,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-rc42-6c7j-7h5r",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 13.213620638152499,
+      "raptor_risk_estimate": 13.223202292481247,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -624,9 +624,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "MyWebIntegrationTests.java:18",
+          "SampleCacheApplicationRedisTests.java:24",
+          "MyWebIntegrationTests.java:20"
         ],
         "verdict": "imported"
       },
@@ -635,10 +635,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40112687399999997,
+        "epss_multiplier": 0.401417745,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.213620638152499,
+        "final": 13.223202292481247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -696,9 +696,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "MyWebIntegrationTests.java:18",
+          "SampleCacheApplicationRedisTests.java:24",
+          "MyWebIntegrationTests.java:20"
         ],
         "verdict": "imported"
       },
@@ -750,7 +750,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.00631,
+      "epss": 0.00617,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -761,7 +761,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4gc7-5j7h-4qph",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 9.626768782586248,
+      "raptor_risk_estimate": 9.62506015785375,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -769,9 +769,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -780,10 +780,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40251999299999996,
+        "epss_multiplier": 0.402448551,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.626768782586248,
+        "final": 9.62506015785375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -843,9 +843,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -898,7 +898,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.05413,
+      "epss": 0.05666,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -909,7 +909,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-g5mm-vmx4-3rg7",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 14.448659679281247,
+      "raptor_risk_estimate": 14.492353957312499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -917,9 +917,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -928,10 +928,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.426922539,
+        "epss_multiplier": 0.428213598,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.448659679281247,
+        "final": 14.492353957312499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -972,7 +972,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.02831,
+      "epss": 0.03085,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -983,7 +983,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-4487-x383-qpph",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 14.002736256843749,
+      "raptor_risk_estimate": 14.046603239531247,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -991,9 +991,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -1002,10 +1002,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413746593,
+        "epss_multiplier": 0.415042755,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.002736256843749,
+        "final": 14.046603239531247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1013,6 +1013,80 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-41848"
+        ],
+        "fixed_versions": [
+          "7.0.8",
+          "6.2.19"
+        ],
+        "id": "GHSA-659m-px2c-25wj",
+        "modified": "2026-07-31T21:29:55.714931+00:00",
+        "published": "2026-06-09T06:31:58+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-41848",
+          "https://github.com/spring-projects/spring-framework/commit/12b44f2545a1bec6150c7a05e66092c732597a94",
+          "https://github.com/spring-projects/spring-framework",
+          "https://github.com/spring-projects/spring-framework/releases/tag/v6.2.19",
+          "https://github.com/spring-projects/spring-framework/releases/tag/v7.0.8"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Spring Framework Denial of Service via AntPathMatcher"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.00317,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-659m-px2c-25wj",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 6.693821330508749,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400917651,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.693821330508749,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -1065,9 +1139,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -1139,9 +1213,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -1214,9 +1288,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -1269,7 +1343,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.03279,
+      "epss": 0.03237,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1280,7 +1354,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-rcpf-vj53-7h2m",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 12.202760217131248,
+      "raptor_risk_estimate": 12.196473767643749,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1288,9 +1362,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },
@@ -1299,10 +1373,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.416032737,
+        "epss_multiplier": 0.415818411,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.202760217131248,
+        "final": 12.196473767643749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1359,9 +1433,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "Changelog.java:21",
-          "ChangelogWriter.java:39",
-          "Difference.java:18"
+          "EmbeddedLdapAutoConfiguration.java:58",
+          "RemoteUrlPropertyExtractor.java:29",
+          "DevToolsPropertyDefaultsPostProcessor.java:38"
         ],
         "verdict": "imported"
       },

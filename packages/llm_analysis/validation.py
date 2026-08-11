@@ -119,7 +119,7 @@ def check_self_consistency(results_by_id: Dict[str, Dict]) -> int:
             r["self_contradictory"] = True
             r["contradictions"] = contradictions
             flagged += 1
-            logger.warning(f"Self-contradiction in {fid}: {contradictions[0]}")
+            logger.warning("Self-contradiction in %s: %s", fid, contradictions[0])
         else:
             # Pre-fix this branch was missing — once a finding had
             # `self_contradictory=True` set, it persisted across
@@ -144,6 +144,6 @@ def check_self_consistency(results_by_id: Dict[str, Dict]) -> int:
                 r.pop("contradictions", None)
 
     if flagged:
-        logger.info(f"Self-consistency check: {flagged} finding(s) flagged as contradictory")
+        logger.info("Self-consistency check: %d finding(s) flagged as contradictory", flagged)
 
     return flagged

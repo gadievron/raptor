@@ -125,6 +125,45 @@ class TestDangerousImports(unittest.TestCase):
         self.assertIn("LLVMFuzzerTestOneInput", _ENTRY_POINT_HINTS)
         self.assertIn("DriverEntry", _ENTRY_POINT_HINTS)
 
+    def test_static_dangerous_function_tagged_as_sink(self):
+        """A statically-linked memcpy (not in imports, present in
+        interesting_functions) must be tagged as a dangerous sink."""
+        ctx = BinaryContextMap(binary_path=Path("./stub"))
+        static_memcpy = FunctionInfo(
+            name="memcpy", address=0x42000, size=64,
+        )
+        ctx.interesting_functions.append(static_memcpy)
+        ctx.interesting_functions.append(
+            FunctionInfo(name="parse_route", address=0x41000, size=256),
+        )
+        understand = BinaryUnderstand.__new__(BinaryUnderstand)
+        r2 = MagicMock()
+        r2.cmd.return_value = "[]"
+        understand._T_XREF = 5.0
+        understand._tag_dangerous_callers(r2, ctx)
+        sink_names = [s.name for s in ctx.dangerous_sinks]
+        self.assertIn("memcpy", sink_names)
+        self.assertNotIn("parse_route", sink_names)
+
+    def test_static_sink_not_duplicated_with_import(self):
+        """When memcpy exists as both an import and a local symbol,
+        it should appear in dangerous_sinks only once per address."""
+        ctx = BinaryContextMap(binary_path=Path("./stub"))
+        ctx.imported_functions.append(
+            FunctionInfo(name="sym.imp.memcpy", address=0x407a00,
+                         is_imported=True),
+        )
+        ctx.interesting_functions.append(
+            FunctionInfo(name="sym.memcpy", address=0x407a00, size=16),
+        )
+        understand = BinaryUnderstand.__new__(BinaryUnderstand)
+        r2 = MagicMock()
+        r2.cmd.return_value = "[]"
+        understand._T_XREF = 5.0
+        understand._tag_dangerous_callers(r2, ctx)
+        sink_addrs = [s.address for s in ctx.dangerous_sinks]
+        self.assertEqual(sink_addrs.count(0x407a00), 1)
+
 
 class TestBinaryUnderstand(unittest.TestCase):
     @patch("packages.binary_analysis.radare2_understand.probe_capability")
@@ -538,30 +577,34 @@ class TestTransitiveCallers(unittest.TestCase):
             self.assertEqual(fn.transitively_reaches_dangerous, ["strcpy"])
 
     def test_beyond_depth_cap_not_flagged(self):
-        """Function at depth=4 (one past the _TRANSITIVE_MAX_DEPTH cap)
+        """Function at depth=6 (one past _TRANSITIVE_MAX_DEPTH=5)
         must NOT be flagged — bounds the false-positive blast radius."""
         understand = self._make_understand()
         ctx, _ = self._ctx_with(
-            interesting_names=["top", "h1", "h2", "h3"],
-            sinks_with_callers={"strcpy": ["h3"]},
+            interesting_names=["top", "h1", "h2", "h3", "h4", "h5"],
+            sinks_with_callers={"strcpy": ["h5"]},
         )
         r2 = MagicMock()
         callgraph = [
             {"name": "top", "callrefs": [{"name": "h1"}]},
             {"name": "h1",  "callrefs": [{"name": "h2"}]},
             {"name": "h2",  "callrefs": [{"name": "h3"}]},
-            {"name": "h3",  "callrefs": [{"name": "strcpy"}]},
+            {"name": "h3",  "callrefs": [{"name": "h4"}]},
+            {"name": "h4",  "callrefs": [{"name": "h5"}]},
+            {"name": "h5",  "callrefs": [{"name": "strcpy"}]},
         ]
         r2.cmd.return_value = json.dumps(callgraph)
         understand._tag_transitive_callers(r2, ctx)
         by_name = {f.name: f for f in ctx.interesting_functions}
-        # top is at depth=4, past max_depth=3 → not flagged
+        # top is at depth=6, past max_depth=5 → not flagged
         self.assertEqual(by_name["top"].transitive_distance, 0)
         self.assertEqual(by_name["top"].transitively_reaches_dangerous, [])
-        # h1/h2/h3 at depths 3/2/1 are flagged
-        self.assertEqual(by_name["h3"].transitive_distance, 1)
-        self.assertEqual(by_name["h2"].transitive_distance, 2)
-        self.assertEqual(by_name["h1"].transitive_distance, 3)
+        # h1-h5 at depths 5/4/3/2/1 are flagged
+        self.assertEqual(by_name["h5"].transitive_distance, 1)
+        self.assertEqual(by_name["h4"].transitive_distance, 2)
+        self.assertEqual(by_name["h3"].transitive_distance, 3)
+        self.assertEqual(by_name["h2"].transitive_distance, 4)
+        self.assertEqual(by_name["h1"].transitive_distance, 5)
 
     def test_reaches_multiple_sinks(self):
         """parse_msg calls helper_a (→strcpy) AND helper_b (→memcpy).
@@ -667,6 +710,62 @@ class TestTransitiveCallers(unittest.TestCase):
         r2.cmd.return_value = json.dumps({"unknown_key": "garbage"})
         understand._tag_transitive_callers(r2, ctx)  # must not raise
         self.assertEqual(ctx.interesting_functions[0].transitive_distance, 0)
+
+    def test_aflcj_returns_integer_falls_back_to_afllj(self):
+        """aflcj on some r2 builds returns a bare integer count (e.g.
+        '3264') instead of per-function call-ref data. The fallback
+        loop must skip it and succeed with afllj."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg"],
+            sinks_with_callers={"strcpy": ["parse_msg"]},
+        )
+        r2 = MagicMock()
+        afllj_data = json.dumps([
+            {"name": "parse_msg", "callrefs": [{"name": "strcpy"}]},
+        ])
+
+        def cmd_dispatch(cmd_str):
+            if cmd_str == "aflcj":
+                return "3264"
+            if cmd_str == "afllj":
+                return afllj_data
+            return "[]"
+
+        r2.cmd.side_effect = cmd_dispatch
+        understand._tag_transitive_callers(r2, ctx)
+        self.assertEqual(ctx.interesting_functions[0].transitive_distance, 1)
+
+    def test_address_only_callrefs_resolved(self):
+        """r2's afllj callrefs sometimes contain address-only entries
+        (no name field). The addr-to-name index must resolve these so
+        the transitive BFS still finds sink reachability."""
+        understand = self._make_understand()
+        ctx = BinaryContextMap(binary_path=Path("./stub"))
+        ctx.interesting_functions.append(
+            FunctionInfo(name="parse_msg", address=0x1000, size=64),
+        )
+        ctx.interesting_functions.append(
+            FunctionInfo(name="helper", address=0x1100, size=64),
+        )
+        sink = FunctionInfo(name="strcpy", address=0xdead, is_imported=True)
+        ctx.imported_functions.append(sink)
+        ctx.dangerous_sinks.append(sink)
+        r2 = MagicMock()
+        callgraph = [
+            {"name": "parse_msg", "addr": 0x1000,
+             "callrefs": [{"addr": 0x1100, "type": "CODE", "at": 0x1050}]},
+            {"name": "helper", "addr": 0x1100,
+             "callrefs": [{"addr": 0xdead, "type": "CODE", "at": 0x1150}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        by_name = {f.name: f for f in ctx.interesting_functions}
+        self.assertEqual(by_name["helper"].transitive_distance, 1)
+        self.assertEqual(by_name["parse_msg"].transitive_distance, 2)
+        self.assertEqual(
+            by_name["parse_msg"].transitively_reaches_dangerous, ["strcpy"],
+        )
 
     def test_sinks_not_flagged_as_reaching_themselves(self):
         """A sink that happens to call another sink (e.g. wrapper

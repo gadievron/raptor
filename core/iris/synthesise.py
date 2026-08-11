@@ -16,6 +16,7 @@ or synthesis is disabled via ``RaptorConfig.IRIS_SYNTHESIS_ENABLED``.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -228,7 +229,7 @@ def _read_candidate_source(
     try:
         text = full_path.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
-        if cand.line_start > 0 and cand.line_end > 0:
+        if (cand.line_start or 0) > 0 and (cand.line_end or 0) > 0:
             start = max(0, cand.line_start - 1)
             end = min(len(lines), cand.line_end)
             lines = lines[start:end]
@@ -522,3 +523,141 @@ def _parse_assumption_response(response: str) -> list[SafetyAssumption]:
         except Exception:
             logger.debug("iris.synthesise: skipping malformed assumption item")
     return result
+
+
+# ── Heuristic assumption generators (Phase D) ───────────────────────
+
+_DB_WRITE_KW = re.compile(
+    r"\b(insert|update|save|put|store|write|set|create|add)\b", re.IGNORECASE,
+)
+_DB_READ_KW = re.compile(
+    r"\b(select|find|get|load|read|fetch|query|retrieve)\b", re.IGNORECASE,
+)
+_RENDER_KW = re.compile(
+    r"\b(render|display|print|template|html|response\.write|inner_html|"
+    r"dangerouslySetInnerHTML|v-html|mark_safe|Markup|format_html)\b",
+    re.IGNORECASE,
+)
+_SANITISE_KW = re.compile(
+    r"\b(escape|sanitize|sanitise|encode|bleach|clean|purify|strip_tags|"
+    r"html_escape|markupsafe|cgi\.escape|html\.escape)\b",
+    re.IGNORECASE,
+)
+_CONFIG_READ_KW = re.compile(
+    r"\b(getenv|environ|config\[|config\.get|settings\.|"
+    r"os\.environ|dotenv|cfg\[|cfg\.get|\.env)\b",
+    re.IGNORECASE,
+)
+_SECURITY_DECISION_KW = re.compile(
+    r"\b(auth|allow|deny|permit|grant|restrict|privilege|role|"
+    r"admin|secret|key|token|password|csrf|cors|ssl|tls|verify)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_storage_names(source: str) -> set[str]:
+    """Pull table/model/cache names from source for writer/reader matching."""
+    names: set[str] = set()
+    for m in re.finditer(r"""['"]([A-Za-z_]\w{2,})['"]""", source):
+        names.add(m.group(1).lower())
+    return names
+
+
+def stored_taint_assumptions(
+    gaps: Sequence[dict[str, Any]],
+) -> list[SafetyAssumption]:
+    """Generate assumptions for persistence-layer stored-XSS patterns.
+
+    For each gap that writes to persistence AND has a corresponding
+    reader that renders without sanitisation, creates a SafetyAssumption
+    with category=sanitisation, bug_class=CWE-79.
+    """
+    writers: list[dict[str, Any]] = []
+    readers: list[dict[str, Any]] = []
+    writer_storage: dict[str, set[str]] = {}
+    reader_storage: dict[str, set[str]] = {}
+
+    for gap in gaps:
+        source = gap.get("source", "")
+        if not source:
+            continue
+        key = f"{gap.get('file', '')}:{gap.get('name', '')}"
+        if _DB_WRITE_KW.search(source):
+            writers.append(gap)
+            writer_storage[key] = _extract_storage_names(source)
+        if _DB_READ_KW.search(source):
+            readers.append(gap)
+            reader_storage[key] = _extract_storage_names(source)
+
+    if not writers or not readers:
+        return []
+
+    assumptions: list[SafetyAssumption] = []
+    for reader in readers:
+        rsource = reader.get("source", "")
+        if not _RENDER_KW.search(rsource):
+            continue
+        rkey = f"{reader.get('file', '')}:{reader.get('name', '')}"
+        rnames = reader_storage.get(rkey, set())
+        if not rnames:
+            continue
+
+        for writer in writers:
+            wkey = f"{writer.get('file', '')}:{writer.get('name', '')}"
+            wnames = writer_storage.get(wkey, set())
+            if not (wnames & rnames):
+                continue
+
+            sanitisers = [
+                m.group(0) for m in _SANITISE_KW.finditer(rsource)
+            ]
+            if sanitisers:
+                continue
+
+            assumptions.append(SafetyAssumption(
+                target=reader.get("name", ""),
+                file=reader.get("file", ""),
+                assumption=(
+                    f"Data stored by {writer.get('name', '?')} must be "
+                    f"sanitised before rendering"
+                ),
+                category=AssumptionCategory.SANITISATION,
+                enforced_by=["escape", "sanitize", "sanitise", "html_escape"],
+                bug_class="CWE-79",
+                confidence=0.6,
+                source="heuristic",
+            ))
+    return assumptions
+
+
+def config_provenance_assumptions(
+    gaps: Sequence[dict[str, Any]],
+) -> list[SafetyAssumption]:
+    """Generate assumptions for config-dependent security decisions.
+
+    For each gap that reads configuration AND makes a security decision,
+    creates a SafetyAssumption with category=provenance, bug_class=CWE-15.
+    """
+    assumptions: list[SafetyAssumption] = []
+    for gap in gaps:
+        source = gap.get("source", "")
+        if not source:
+            continue
+        if not _CONFIG_READ_KW.search(source):
+            continue
+        if not _SECURITY_DECISION_KW.search(source):
+            continue
+        assumptions.append(SafetyAssumption(
+            target=gap.get("name", ""),
+            file=gap.get("file", ""),
+            assumption=(
+                f"{gap.get('name', '?')} reads external configuration "
+                f"to make a security decision"
+            ),
+            category=AssumptionCategory.PROVENANCE,
+            enforced_by=[],
+            bug_class="CWE-15",
+            confidence=0.5,
+            source="heuristic",
+        ))
+    return assumptions

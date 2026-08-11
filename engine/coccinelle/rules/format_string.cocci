@@ -17,6 +17,7 @@
 //   preprocessing and will not be flagged (correct behaviour).
 //
 // Covers CWE-134 (Use of Externally-Controlled Format String).
+// @role: verification
 
 // ---------------------------------------------------------------
 // Group 1: format string is the FIRST argument

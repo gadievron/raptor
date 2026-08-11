@@ -400,6 +400,42 @@ def max_output_for(model: str) -> int:
     return limits["max_output"]
 
 
+def resolve_model_name(model: str) -> str:
+    """Resolve ``"default"`` or a bare shorthand to the actual model name.
+
+    Handles two cases:
+      * ``"default"`` → the configured primary model name.
+      * A bare tier-token like ``"haiku"`` / ``"opus"`` / ``"sonnet"`` →
+        the full ``MODEL_LIMITS`` key whose hyphen-separated tokens
+        contain the shorthand (unambiguous single-match only).
+
+    Other model strings pass through unchanged.
+    """
+    if model == "default":
+        try:
+            from core.llm.config import _get_default_primary_model
+
+            mc = _get_default_primary_model()
+            if mc is not None and mc.model_name:
+                return mc.model_name
+        except Exception:
+            pass
+        return model
+
+    if MODEL_LIMITS.get(model) is not None:
+        return model
+
+    try:
+        from core.security.llm_family import resolve_model_shorthand
+
+        resolved = resolve_model_shorthand(model, MODEL_LIMITS.keys())
+        if resolved is not None:
+            return resolved
+    except Exception:
+        pass
+    return model
+
+
 def rpm_for(model: str, *, default: int = 0) -> int:
     """Requests-per-minute limit for *model*.
 
@@ -408,8 +444,10 @@ def rpm_for(model: str, *, default: int = 0) -> int:
     or unknown models when the caller passes ``default=0``).
 
     Bedrock-prefixed identifiers and dated aliases are normalised the
-    same way as :func:`context_window_for`.
+    same way as :func:`context_window_for`.  ``"default"`` is resolved
+    to the actual primary model before lookup.
     """
+    model = resolve_model_name(model)
     limits = MODEL_LIMITS.get(model)
     if limits is None:
         limits = MODEL_LIMITS.get(_strip_dated_alias(model))

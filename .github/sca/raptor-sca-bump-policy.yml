@@ -16,7 +16,7 @@ thresholds:
 
   # Same-major jumps of >= 2 minors are operationally large (removed
   # APIs) even though strict semver calls them "same major". Catches
-  # python 3.12->3.14 and 3.9->3.14 — the latter also desyncs the CI
+  # python 3.14->3.16 and 3.12->3.16 — the latter also desyncs the CI
   # image from tests.yml's pinned interpreter, so it must be reviewed,
   # not auto-applied.
   block_on_minor_skew: 2

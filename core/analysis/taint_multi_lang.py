@@ -576,8 +576,15 @@ def _find_brace_end(content: str, open_pos: int) -> int:
     while pos < len(content) and depth > 0:
         ch = content[pos]
         if in_string:
-            if ch == string_char and content[pos - 1] != "\\":
-                in_string = False
+            if ch == string_char:
+                # Count consecutive backslashes before the quote
+                n_bs = 0
+                scan = pos - 1
+                while scan >= 0 and content[scan] == "\\":
+                    n_bs += 1
+                    scan -= 1
+                if n_bs % 2 == 0:
+                    in_string = False
         elif ch in ('"', "'", "`"):
             in_string = True
             string_char = ch

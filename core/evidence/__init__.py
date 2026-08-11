@@ -150,12 +150,15 @@ def make_evidence(
 
 _logger = logging.getLogger(__name__)
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTIFIER_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*"
+    r"((?:\.|::|/)[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 _NAME_CAP = 120
 
 
 def _is_valid_identifier(name: str) -> bool:
-    """True when *name* looks like a C / Python identifier."""
+    """True when *name* looks like a qualified identifier across languages."""
     return bool(_IDENTIFIER_RE.match(name))
 
 
@@ -212,6 +215,9 @@ class EvidenceRecord:
     file: str
     function: str
 
+    line_start: int = 0
+    line_end: int = 0
+
     sink_unreachable: bool = False
     sink_narrowed_classes: List[str] = field(default_factory=list)
 
@@ -267,6 +273,10 @@ class EvidenceRecord:
             or self.app_sink_targets
             or self.binary_sink_edges
             or self.binary_layer0_findings
+            or self.negative_space
+            or self.sanitizer_calls
+            or self.binary_surface_category
+            or self.binary_parser_boundary
         )
 
     def all_joern_flows(self) -> list:
@@ -644,24 +654,41 @@ def build_evidence_index(
     prefilter_results: Optional[Dict[str, Any]] = None,
     context_map_sinks: Optional[List[Dict[str, Any]]] = None,
     binary_bridge: Optional[Any] = None,
+    scope: "Optional[str | list[str]]" = None,
 ) -> Dict[str, EvidenceRecord]:
     """Build the per-function evidence index from pre-sweep outputs.
 
     Keys are "file:function". Each value aggregates all available
     mechanical evidence for that function.
+
+    When *scope* is set, only functions whose file path starts with the
+    prefix are indexed.  This avoids building evidence records (and
+    running downstream layer0 scans) for thousands of out-of-scope
+    functions when auditing a single file or subdirectory.
     """
+    scope_tuple: "tuple[str, ...] | None" = None
+    if scope:
+        scope_tuple = (scope,) if isinstance(scope, str) else tuple(scope)
+
     index: Dict[str, EvidenceRecord] = {}
 
     for file_entry in checklist.get("files", []):
         file_path = file_entry.get("path", "")
         if not file_path:
             continue
+        if scope_tuple and not file_path.startswith(scope_tuple):
+            continue
         for item in file_entry.get("items", []):
             func_name = item.get("name", "")
             if not func_name:
                 continue
             key = f"{file_path}:{func_name}"
-            index[key] = EvidenceRecord(file=file_path, function=func_name)
+            ls = item.get("line_start", 0)
+            le = item.get("line_end", 0)
+            index[key] = EvidenceRecord(
+                file=file_path, function=func_name,
+                line_start=ls, line_end=le,
+            )
 
     if sink_results is not None:
         _reachable = set()
@@ -679,23 +706,30 @@ def build_evidence_index(
                 if key in index:
                     index[key].app_sink_targets = targets
         eligible = getattr(sink_results, "unreachable_eligible", None)
-        for key, rec in index.items():
-            if key not in _reachable:
-                if eligible is not None:
-                    fk = (rec.file, rec.function)
-                    verdict = eligible.get(fk)
-                    if verdict is not None and verdict.eligible:
+        # Guard: only mark functions as sink_unreachable when Joern
+        # actually produced valid flow data.  When _reachable is empty
+        # AND there's no eligible-verdict map, we can't distinguish
+        # "every function is genuinely unreachable" from "CPG failed to
+        # load" — default to no-signal rather than false suppression.
+        has_valid_data = bool(_reachable) or eligible is not None
+        if has_valid_data:
+            for key, rec in index.items():
+                if key not in _reachable:
+                    if eligible is not None:
+                        fk = (rec.file, rec.function)
+                        verdict = eligible.get(fk)
+                        if verdict is not None and verdict.eligible:
+                            rec.sink_unreachable = True
+                            rec.sink_narrowed_classes = list(
+                                _SINK_DEPENDENT_CWES,
+                            )
+                        elif verdict is not None:
+                            rec.sink_unreachable = False
+                    else:
                         rec.sink_unreachable = True
                         rec.sink_narrowed_classes = list(
                             _SINK_DEPENDENT_CWES,
                         )
-                    elif verdict is not None:
-                        rec.sink_unreachable = False
-                else:
-                    rec.sink_unreachable = True
-                    rec.sink_narrowed_classes = list(
-                        _SINK_DEPENDENT_CWES,
-                    )
 
     if taint_approx_results:
         for key, approx in taint_approx_results.items():
@@ -703,17 +737,16 @@ def build_evidence_index(
                 index[key].taint_approx = approx
         try:
             from core.analysis.taint_approx import compute_transitive_taint
-            bare_approx = {
-                k.split(":")[-1]: v
+            approx_by_key = {
+                k: v
                 for k, v in taint_approx_results.items()
                 if hasattr(v, "direct_flows")
             }
-            if bare_approx:
-                transitive = compute_transitive_taint(bare_approx)
+            if approx_by_key:
+                transitive = compute_transitive_taint(approx_by_key)
                 for key, rec in index.items():
-                    func_name = key.split(":")[-1]
-                    if func_name in transitive:
-                        rec.transitive_taint = transitive[func_name]
+                    if key in transitive:
+                        rec.transitive_taint = transitive[key]
         except Exception:
             _logger.debug("transitive taint computation failed", exc_info=True)
 
@@ -743,6 +776,18 @@ def build_evidence_index(
         for key, flows in imported_joern_flows.items():
             if key in index:
                 index[key].imported_joern_flows = list(flows)
+
+    if sarif_cache is not None:
+        for key, rec in index.items():
+            hits = sarif_cache.lookup(rec.file, rec.line_start, rec.line_end)
+            if hits is None:
+                continue
+            for hit in hits:
+                source = hit.get("_sarif_source", "")
+                if source == "codeql":
+                    rec.codeql_alerts.append(hit)
+                else:
+                    rec.semgrep_hits.append(hit)
 
     if context_map_sinks:
         _attach_context_map_sinks(index, context_map_sinks)

@@ -461,10 +461,12 @@ def collect_outcomes(
             try:
                 pool = resolve()
             except Exception:
+                _log.debug("pool resolve failed", exc_info=True)
                 return
             try:
                 yield from _iter_records_in_dir(pool)
             except Exception:
+                _log.debug("pool iteration failed for %s", pool, exc_info=True)
                 return
 
         for la in _safe_records(bundled_corpus_path):

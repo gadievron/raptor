@@ -7,6 +7,7 @@
 // causing privilege confusion or bypass.
 //
 // Covers CWE-681: incorrect type conversion / truncation.
+// @role: verification
 
 @truncate@
 typedef __old_uid_t, __old_gid_t, __kernel_old_uid_t, __kernel_old_gid_t, __u16;

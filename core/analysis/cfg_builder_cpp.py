@@ -1088,7 +1088,12 @@ class _CPPCFGBuilder:
                     if current_group or current_labels:
                         case_groups.append(current_group)
                         case_entries.append(current_labels)
-                    current_group = []
+                    # tree-sitter nests body stmts inside case_statement
+                    value_node = child.child_by_field_name("value")
+                    current_group = [
+                        c for c in child.children
+                        if c.is_named and c != value_node
+                    ]
                     current_labels = [child]
                 else:
                     current_group.append(child)

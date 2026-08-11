@@ -14,7 +14,9 @@ metadata is left to ``PipResolver`` since it's not a Poetry project.
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -70,36 +72,45 @@ class PoetryResolver:
                 error="no pyproject.toml in project",
             )
 
-        try:
-            proc = _run(
-                ["poetry", "lock", "--no-update", "--no-interaction"],
-                cwd=project_dir,
-                timeout=timeout,
-                proxy_hosts=self.proxy_hosts,
-            )
-        except subprocess.TimeoutExpired:
-            return ResolverResult(
-                ecosystem=self.ecosystem,
-                success=False, available=True,
-                error=f"poetry lock timed out after {timeout}s",
-            )
+        # Copy manifest files into a writable tempdir — the sandbox
+        # only allows writes to the output dir and /tmp, not cwd.
+        with tempfile.TemporaryDirectory(prefix="raptor-sca-poetry-") as tmp:
+            tmp_path = Path(tmp)
+            for fname in ("pyproject.toml", "poetry.lock"):
+                src = project_dir / fname
+                if src.exists():
+                    shutil.copy2(src, tmp_path / fname)
 
-        raw = (proc.stdout + "\n" + proc.stderr).strip()
-        if proc.returncode != 0:
+            try:
+                proc = _run(
+                    ["poetry", "lock", "--no-update", "--no-interaction"],
+                    cwd=tmp_path,
+                    timeout=timeout,
+                    proxy_hosts=self.proxy_hosts,
+                )
+            except subprocess.TimeoutExpired:
+                return ResolverResult(
+                    ecosystem=self.ecosystem,
+                    success=False, available=True,
+                    error=f"poetry lock timed out after {timeout}s",
+                )
+
+            raw = (proc.stdout + "\n" + proc.stderr).strip()
+            if proc.returncode != 0:
+                return ResolverResult(
+                    ecosystem=self.ecosystem,
+                    success=False, available=True,
+                    error=(proc.stderr.strip()
+                           or "poetry lock exited non-zero"),
+                    raw_output=raw,
+                )
+            lockfile = _read_if_exists(tmp_path / "poetry.lock")
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=False, available=True,
-                error=(proc.stderr.strip()
-                       or "poetry lock exited non-zero"),
+                success=True, available=True,
+                proposed_lockfile=lockfile,
                 raw_output=raw,
             )
-        lockfile = _read_if_exists(project_dir / "poetry.lock")
-        return ResolverResult(
-            ecosystem=self.ecosystem,
-            success=True, available=True,
-            proposed_lockfile=lockfile,
-            raw_output=raw,
-        )
 
 
 def _read_if_exists(p: Path) -> Optional[bytes]:

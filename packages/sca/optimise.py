@@ -198,7 +198,7 @@ def main(argv: Sequence[str]) -> int:
 
     # Second pass: retry hygiene plans that _materialise_changes couldn't
     # apply (bare names with no version operator).
-    hygiene_keys = set(hygiene_plans.keys())
+    hygiene_keys = set(hygiene_plans)
     skipped_hygiene = [
         c for c in changes
         if c.skipped_reason is not None
@@ -411,7 +411,7 @@ def _plan_hygiene_pins(
     for plan in vuln_plans.values():
         dep_key = (plan.ecosystem, plan.name, plan.installed)
         existing = vuln_by_dep.get(dep_key)
-        if existing is None or version_compare(plan.target, existing.target) > 0:
+        if existing is None or version_compare(plan.ecosystem, plan.target, existing.target) > 0:
             vuln_by_dep[dep_key] = plan
 
     for key, plan in plans.items():
@@ -773,7 +773,7 @@ def _print_dry_run(
 ) -> None:
     """Print what fix *would* do, grouped by manifest file."""
     all_plans = list(vuln_plans.values()) + list(hygiene_plans.values())
-    vuln_keys = set(vuln_plans.keys())
+    vuln_keys = set(vuln_plans)
 
     by_manifest: Dict[Path, List[_PlanEntry]] = defaultdict(list)
     for plan in all_plans:

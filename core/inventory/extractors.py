@@ -147,7 +147,7 @@ class PythonExtractor:
             self._walk(tree, functions, class_name=None)
             functions.extend(self._top_level_items(tree))
         except SyntaxError as e:
-            logger.warning(f"Failed to parse {filepath}: {e}")
+            logger.warning("Failed to parse %s: %s", filepath, e)
             functions = self._regex_fallback(content)
 
         return functions
@@ -854,15 +854,48 @@ class JavaExtractor:
     PATTERN = r'((?:public|private|protected|static|\s)+)([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{'
     _MAX_JAVA_LINE = 16 * 1024
 
+    @staticmethod
+    def _split_params_respecting_generics(params_str: str) -> List[str]:
+        """Split parameter string on top-level commas only."""
+        parts: List[str] = []
+        depth = 0
+        current: List[str] = []
+        for ch in params_str:
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append("".join(current))
+                current = []
+            else:
+                current.append(ch)
+        if current:
+            parts.append("".join(current))
+        return parts
+
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
         current_class = None
+        brace_depth = 0
+        class_depth = -1
 
         for i, line in enumerate(content.split('\n'), 1):
-            # Track class scope
-            class_match = re.search(r'class\s+(\w+)', line)
+            stripped = line.lstrip()
+
+            brace_depth += line.count("{") - line.count("}")
+
+            class_match = re.search(r'\bclass\s+(\w+)', line)
             if class_match:
                 current_class = class_match.group(1)
+                class_depth = brace_depth
+
+            if current_class is not None and brace_depth < class_depth:
+                current_class = None
+                class_depth = -1
+
+            if stripped.startswith("//") or stripped.startswith("/*"):
+                continue
 
             # Cap line length before regex match — see PATTERN comment
             # for the ReDoS rationale.
@@ -886,7 +919,7 @@ class JavaExtractor:
                     # Parse parameters
                     parameters = []
                     if params_str:
-                        for p in params_str.split(','):
+                        for p in self._split_params_respecting_generics(params_str):
                             parts = p.strip().split()
                             if len(parts) >= 2:
                                 pname = parts[-1]
@@ -1212,6 +1245,15 @@ def _ts_language(lang: str):
             return Language(ts.language_php())
         elif lang == "lua":
             import tree_sitter_lua as ts
+        elif lang == "scala":
+            # Without this branch .scala fell through to the regex
+            # extractor: no ``line_end`` on any function, and roughly a
+            # third fewer functions found. ``line_end`` is what the
+            # source-slicing consumers key on, so a JVM target like
+            # Kafka (Scala broker core, Java clients) silently got a
+            # partial inventory on its Scala half only. Same failure
+            # shape as the cpp and typescript branches above.
+            import tree_sitter_scala as ts
         else:
             return None
         return Language(ts.language())
@@ -1268,6 +1310,13 @@ class TreeSitterExtractor:
         # ``function_signature_item`` — intentionally excluded (no code).
         "rust": ("function_item",),
         "lua": ("function_declaration", "function_definition"),
+        # Scala: ``def`` with a body is ``function_definition`` — NOT
+        # Java's ``method_declaration``. Reusing the Java node names
+        # here extracts zero functions from a file that parses cleanly.
+        # An abstract trait/interface ``def`` with no body parses as
+        # ``function_declaration`` and is intentionally excluded (no
+        # code to review), matching the Rust rule above.
+        "scala": ("function_definition",),
     }
 
     _CLASS_TYPES = {
@@ -1289,6 +1338,10 @@ class TreeSitterExtractor:
         # ``trait T`` with ``T`` (for default methods).
         "rust": ("impl_item", "trait_item"),
         "lua": (),
+        # Scala hosts methods in all three; ``object`` is where the
+        # singleton/companion helpers live, which is a lot of a typical
+        # Scala service's logic.
+        "scala": ("class_definition", "object_definition", "trait_definition"),
     }
 
     def __init__(self, language: str):
@@ -1305,7 +1358,7 @@ class TreeSitterExtractor:
             try:
                 _tree = self.parser.parse(content.encode())
             except Exception as e:
-                logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
+                logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
                 return []  # Caller will fall back to regex extractor
         self._source_lines = content.splitlines(True)
         functions = []
@@ -1544,6 +1597,8 @@ class TreeSitterExtractor:
                                 parameters=params,
                             ),
                         ))
+                    self._walk(arrow, functions, class_name=class_name,
+                               class_attributes=class_attributes)
                     continue
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
@@ -1566,7 +1621,7 @@ class TreeSitterExtractor:
                     if fi:
                         functions.append(fi)
                 except Exception as e:
-                    logger.debug(f"tree-sitter: failed to extract function at line {child.start_point[0]+1}: {e}")
+                    logger.debug("tree-sitter: failed to extract function at line %d: %s", child.start_point[0]+1, e)
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
             elif child.type == "decorated_definition":
@@ -2116,6 +2171,13 @@ class TreeSitterExtractor:
         return None
 
 
+# Languages ``_ts_language`` has a loader branch for. Probed to build the
+# startup banner's grammar list; keep in sync with that branch.
+_TS_PROBE_LANGUAGES = (
+    "python", "java", "javascript", "typescript", "tsx", "c", "cpp",
+    "go", "rust", "csharp", "ruby", "php", "lua", "scala",
+)
+
 _cached_ts_languages: Optional[List[str]] = None
 
 
@@ -2128,7 +2190,12 @@ def _get_ts_languages() -> List[str]:
         _cached_ts_languages = []
         return []
     available = []
-    for lang in ("python", "java", "javascript", "c", "go", "lua"):
+    # Every language ``_ts_language`` can load. This list drifted behind
+    # the loader — cpp, typescript, rust, csharp, ruby and php all had
+    # working branches but were absent here, so the startup banner
+    # under-reported what the inventory could actually parse. Keep the
+    # two in sync when adding a grammar.
+    for lang in _TS_PROBE_LANGUAGES:
         if _ts_language(lang):
             available.append(lang)
     _cached_ts_languages = available
@@ -2299,24 +2366,23 @@ def extract_items(filepath: str, language: str, content: str,
             and i.line_end is not None
             and i.line_end <= i.line_start
         }
-        if broken or True:
-            regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
-            regex_funcs = regex_ext.extract(filepath, content)
-            regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
-            for i, item in enumerate(items):
-                if item.kind == KIND_FUNCTION and item.name in broken:
-                    repair = regex_by_name.get(item.name)
-                    if repair and repair.line_end and repair.line_end > repair.line_start:
-                        items[i] = FunctionInfo(
-                            name=item.name,
-                            line_start=item.line_start,
-                            line_end=repair.line_end,
-                            signature=item.signature or repair.signature,
-                            metadata=item.metadata or repair.metadata,
-                        )
-            for name, rfn in regex_by_name.items():
-                if name not in ts_funcs:
-                    items.append(rfn)
+        regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+        regex_funcs = regex_ext.extract(filepath, content)
+        regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
+        for i, item in enumerate(items):
+            if item.kind == KIND_FUNCTION and item.name in broken:
+                repair = regex_by_name.get(item.name)
+                if repair and repair.line_end and repair.line_end > repair.line_start:
+                    items[i] = FunctionInfo(
+                        name=item.name,
+                        line_start=item.line_start,
+                        line_end=repair.line_end,
+                        signature=item.signature or repair.signature,
+                        metadata=item.metadata or repair.metadata,
+                    )
+        for name, rfn in regex_by_name.items():
+            if name not in ts_funcs:
+                items.append(rfn)
 
     # C/C++ macro extraction (regex — tree-sitter doesn't parse preprocessor)
     if language in ("c", "cpp"):

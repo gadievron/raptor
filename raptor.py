@@ -56,6 +56,7 @@ Examples:
 """
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -389,6 +390,11 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             if res is None:
                 return 1  # extraction failed (message printed); no run sealed yet
             args, target_identity = res
+            # args now points at the extracted directory; update the local
+            # target variable so downstream consumers (license detection,
+            # format_start_line, _preflight_cost_gate) operate on the
+            # extracted tree, not the archive file.
+            target = _extract_target(args)
 
     start_run(out_dir, command, target=target, target_identity=target_identity)
     # Mirror libexec/raptor-run-lifecycle's sentinel so direct
@@ -503,8 +509,8 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                 if record:
                     write_record(out_dir, record, tool_name="codeql")
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).debug("SARIF record write failed: %s", e)
 
 
     if rc == 0:
@@ -521,8 +527,8 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                 summary = render_run_coverage(out_dir)
                 if summary:
                     print("\n" + summary)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).debug("coverage summary skipped: %s", e)
     else:
         fail_run(out_dir, error=f"exit code {rc}")
     return rc
@@ -743,6 +749,15 @@ def mode_sca(args: list) -> int:
             target_from_repo = args[i + 1]
             repo_seen = True
             skip_next = True
+            continue
+        if arg.startswith("--repo="):
+            val = arg[len("--repo="):]
+            if repo_seen:
+                print("raptor.py sca: --repo specified more than once; "
+                      f"using the last value ({val!r})",
+                      file=sys.stderr)
+            target_from_repo = val
+            repo_seen = True
             continue
         forwarded.append(arg)
     if target_from_repo is not None:

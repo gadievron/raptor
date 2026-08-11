@@ -8,6 +8,7 @@
 //
 // Parametric: pass -D func=<name> to restrict to a specific function.
 // Without -D func, matches across all functions (broader but noisier).
+// @role: detection
 
 // Array access via parameter without prior bounds check
 @unchecked_index@

@@ -172,7 +172,8 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                    extra_ro_paths: Optional[Iterable[str]] = None,
                    root_path: Optional[str] = None,
                    persona: Optional["Persona"] = None,
-                   etc_overlay: Optional[dict] = None) -> None:
+                   etc_overlay: Optional[dict] = None,
+                   stage_files: Optional[dict] = None) -> None:
     """Establish pivot_root'd tmpfs sandbox root.
 
     Must be called AFTER the child has entered the new user-ns and acquired
@@ -187,6 +188,17 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
     `sanitise_host_fingerprint=True`. Imported lazily to avoid a circular
     import (fingerprint.apply_overlay imports _mount/MS_BIND from this
     module).
+
+    `stage_files` (Optional[dict[str, bytes]]): when provided, materialise
+    each ``{target_path_in_sandbox: content_bytes}`` entry in the tmpfs
+    root BEFORE pivot_root. Post-pivot the file is visible at
+    ``target_path_in_sandbox``. Useful for staging sentinel files (e.g.
+    a flag file for leak-oracle targets) without polluting the host
+    filesystem or requiring root.  Files are created with mode 0o644
+    (world-readable, owner-writable) since the target may run as an
+    unprivileged UID inside the user-ns. A staging failure logs via
+    ``warn_post_fork`` and continues — partial staging is better than
+    an aborted sandbox setup.
     """
     # Absolutize target/output BEFORE any bind-mount work. A relative
     # path here produces a malformed bind-target like
@@ -500,6 +512,46 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     b"insufficient for /etc write protection)\n"
                 )
                 raise OSError("mount_ns: /etc RO restore failed after overlay") from None
+
+    # 8e. Caller-supplied stage_files — materialise arbitrary files in
+    # the tmpfs root so they appear at their namespace path post-pivot.
+    if stage_files:
+        for stage_target, stage_content in stage_files.items():
+            if not isinstance(stage_target, str) or not stage_target.startswith("/"):
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: stage_files target must be an "
+                    b"absolute path str; skipping\n"
+                )
+                continue
+            if not isinstance(stage_content, (bytes, bytearray)):
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: stage_files content must be "
+                    b"bytes; skipping\n"
+                )
+                continue
+            inside = f"{root}{stage_target}"
+            try:
+                os.makedirs(os.path.dirname(inside), exist_ok=True)
+                fd = os.open(
+                    inside,
+                    os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
+                    0o644,
+                )
+                try:
+                    os.write(fd, bytes(stage_content))
+                finally:
+                    os.close(fd)
+            except OSError as exc:
+                try:
+                    _target_b = stage_target.encode("utf-8", errors="replace")
+                except Exception:
+                    _target_b = b"<unencodable>"
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: stage_files failed for "
+                    + _target_b
+                    + b" (errno=%d); target will not see this file\n"
+                    % (exc.errno or 0)
+                )
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)

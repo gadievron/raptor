@@ -364,7 +364,7 @@ def estimate_partitioned(
     for r in records:
         by_class.setdefault(r.decision_class, []).append(r)
     out: List[DawidSkeneResult] = []
-    for decision_class in sorted(by_class.keys()):
+    for decision_class in sorted(by_class):
         prior = priors.get(decision_class, default_prior)
         out.append(estimate(
             by_class[decision_class], prior,

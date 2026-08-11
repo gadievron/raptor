@@ -162,7 +162,12 @@ class ReadingList:
     def load(cls, path: Path) -> ReadingList:
         if not path.exists():
             return cls(_path=path)
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return cls(_path=path)
+        if not isinstance(raw, dict):
+            return cls(_path=path)
         valid_keys = {f.name for f in dataclasses.fields(ReadingListItem)}
         items = [
             ReadingListItem(**{k: v for k, v in i.items() if k in valid_keys})

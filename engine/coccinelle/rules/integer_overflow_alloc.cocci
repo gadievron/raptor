@@ -19,6 +19,7 @@
 //
 // Covers CWE-190 (Integer Overflow) leading to CWE-122 (Heap Buffer
 // Overflow).
+// @role: verification
 
 // --- Find all allocations with a multiplicative size argument ---
 

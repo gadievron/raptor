@@ -1,9 +1,8 @@
 """Tests for the mechanical ownership/privilege site enrichment
-(``context_map_sites``) and its annotation-synth consumers.
+(``context_map_sites``).
 
 Fully deterministic — no LLM, no cocci. The enricher is driven by a
-duck-typed SourceIntelResult; the consumer path runs the real annotation
-synth driver over a context-map.json carrying the sections.
+duck-typed SourceIntelResult.
 """
 
 from __future__ import annotations
@@ -19,9 +18,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from packages.code_understanding.annotation_synth import (  # noqa: E402
-    synthesise_from_understand_output,
-)
 from packages.code_understanding.context_map_sites import (  # noqa: E402
     enrich_context_map_with_sites,
 )
@@ -240,159 +236,6 @@ def test_degrades_gracefully_without_spatch(monkeypatch):
                       "shared_state": 0, "crypto_inventory": 0}
     assert "ownership_model" not in cmap and "privilege_model" not in cmap
 
-
-# --- consumer: annotation synth -------------------------------------------
-
-
-def test_synth_emits_site_annotations(tmp_path):
-    out = tmp_path / "run"
-    out.mkdir()
-    (out / "checklist.json").write_text(
-        json.dumps({"target_path": str(tmp_path / "repo")}),
-        encoding="utf-8",
-    )
-    cmap = {
-        "ownership_model": [
-            {"kind": "alloc", "file": "a.c", "line": 10,
-             "function": "f", "allocator": "kmalloc"},
-        ],
-        "privilege_model": [
-            {"kind": "capability", "file": "k.c", "line": 1,
-             "function": "sys_x", "name": "capable"},
-        ],
-    }
-    (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
-
-    counts = synthesise_from_understand_output(out)
-
-    assert counts.sources.get("source_intel_site", 0) == 2  # two functions
-    assert counts.emitted == 2
-    # Annotation files mirror the source tree under annotations/.
-    a = (out / "annotations" / "a.c.md").read_text(encoding="utf-8")
-    assert "source_intel_site" in a and "ownership" in a and "kmalloc" in a
-
-
-def test_synth_aggregates_multiple_sites_per_function(tmp_path):
-    # A function with several sites (ownership x2 + privilege) must yield ONE
-    # annotation carrying all of them. Annotations key on (file, function),
-    # so per-site emission would clobber to the last — the exact data-loss the
-    # real-spatch E2E surfaced (3 sites collapsing to 1).
-    out = tmp_path / "run"
-    out.mkdir()
-    (out / "checklist.json").write_text(
-        json.dumps({"target_path": str(tmp_path / "repo")}), encoding="utf-8",
-    )
-    cmap = {
-        "ownership_model": [
-            {"kind": "double_free", "file": "m.c", "line": 9,
-             "function": "do_thing", "free_fn": "kfree", "role": "first"},
-            {"kind": "double_free", "file": "m.c", "line": 10,
-             "function": "do_thing", "free_fn": "kfree", "role": "second"},
-        ],
-        "privilege_model": [
-            {"kind": "capability", "file": "m.c", "line": 7,
-             "function": "do_thing", "name": "capable"},
-        ],
-    }
-    (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
-
-    counts = synthesise_from_understand_output(out)
-    assert counts.emitted == 1  # ONE annotation for do_thing, not three
-    body = (out / "annotations" / "m.c.md").read_text(encoding="utf-8")
-    assert body.count("site:") == 3  # all three sites survive
-    assert "line 9" in body and "line 10" in body and "line 7" in body
-    assert "site_categories=ownership,privilege" in body
-
-
-def test_synth_aggregates_all_three_categories_with_shared_state(tmp_path):
-    # Same regression class as the ownership+privilege test above, extended
-    # to verify shared_state (Phase B concurrency axis) joins the dispatch
-    # tuple cleanly. A function with ownership + privilege + multiple lock
-    # sites must yield ONE annotation carrying every site, with
-    # site_categories listing all three. Regression risk: if the synth
-    # category tuple isn't extended, shared_state sites silently drop and
-    # site_categories degrades to ownership,privilege.
-    out = tmp_path / "run"
-    out.mkdir()
-    (out / "checklist.json").write_text(
-        json.dumps({"target_path": str(tmp_path / "repo")}), encoding="utf-8",
-    )
-    cmap = {
-        "ownership_model": [
-            {"kind": "alloc", "file": "k.c", "line": 5,
-             "function": "handler", "allocator": "kmalloc"},
-        ],
-        "privilege_model": [
-            {"kind": "capability", "file": "k.c", "line": 7,
-             "function": "handler", "name": "capable"},
-        ],
-        "shared_state": [
-            {"kind": "spin_acquire", "file": "k.c", "line": 11,
-             "function": "handler", "fn": "spin_lock", "lock_var": "&sl"},
-            {"kind": "spin_release", "file": "k.c", "line": 14,
-             "function": "handler", "fn": "spin_unlock", "lock_var": "&sl"},
-            {"kind": "mutex_acquire", "file": "k.c", "line": 18,
-             "function": "handler", "fn": "mutex_lock", "lock_var": "&m"},
-        ],
-    }
-    (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
-
-    counts = synthesise_from_understand_output(out)
-    assert counts.emitted == 1  # one annotation per (file, function)
-    body = (out / "annotations" / "k.c.md").read_text(encoding="utf-8")
-    assert body.count("site:") == 5  # 1 ownership + 1 privilege + 3 shared
-    # shared_state-specific extras land in the body
-    assert "fn: spin_lock" in body and "lock_var: &sl" in body
-    assert "fn: mutex_lock" in body and "lock_var: &m" in body
-    # all three categories appear in the metadata header
-    assert "site_categories=ownership,privilege,shared_state" in body
-
-
-def test_synth_aggregates_all_four_categories_with_crypto(tmp_path):
-    # Same regression class as the three-category test above, extended to
-    # verify crypto_inventory (Phase B crypto axis) joins the dispatch
-    # tuple cleanly. A function with ownership + privilege + lock + crypto
-    # sites must yield ONE annotation with every site, site_categories
-    # listing all four. Regression risk: if the synth dispatch tuple
-    # isn't extended, crypto sites silently drop and site_categories
-    # degrades to ownership,privilege,shared_state.
-    out = tmp_path / "run"
-    out.mkdir()
-    (out / "checklist.json").write_text(
-        json.dumps({"target_path": str(tmp_path / "repo")}), encoding="utf-8",
-    )
-    cmap = {
-        "ownership_model": [
-            {"kind": "alloc", "file": "k.c", "line": 5,
-             "function": "session", "allocator": "kmalloc"},
-        ],
-        "privilege_model": [
-            {"kind": "capability", "file": "k.c", "line": 7,
-             "function": "session", "name": "capable"},
-        ],
-        "shared_state": [
-            {"kind": "spin_acquire", "file": "k.c", "line": 11,
-             "function": "session", "fn": "spin_lock", "lock_var": "&sl"},
-        ],
-        "crypto_inventory": [
-            {"kind": "primitive_call", "file": "k.c", "line": 18,
-             "function": "session", "api": "openssl",
-             "fn": "EVP_EncryptInit_ex"},
-            {"kind": "rng_source", "file": "k.c", "line": 19,
-             "function": "session", "api": "openssl", "fn": "RAND_bytes"},
-        ],
-    }
-    (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
-
-    counts = synthesise_from_understand_output(out)
-    assert counts.emitted == 1  # one annotation per (file, function)
-    body = (out / "annotations" / "k.c.md").read_text(encoding="utf-8")
-    assert body.count("site:") == 5  # 1+1+1+2 sites survive
-    # crypto-specific extras (api + fn) land in the body
-    assert "api: openssl" in body
-    assert "fn: EVP_EncryptInit_ex" in body and "fn: RAND_bytes" in body
-    # all four categories appear in the metadata header
-    assert "site_categories=crypto,ownership,privilege,shared_state" in body
 
 
 # --- producer shim --------------------------------------------------------

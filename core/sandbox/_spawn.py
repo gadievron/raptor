@@ -857,6 +857,14 @@ def run_sandboxed(
         else:
             out_r = err_r = out_w = err_w = None
 
+        # Death pipe: orphan-teardown signal. Parent holds death_w for
+        # the duration of the sandbox call; intermediate child watches
+        # death_r via select(). If the orchestrator is hard-killed
+        # (SIGKILL/OOM/crash), death_w auto-closes → child reads EOF →
+        # SIGKILLs the grandchild so the pid-namespace doesn't leak.
+        death_r, death_w = os.pipe()
+        _parent_fds.update({death_r, death_w})
+
         # Precompute Landlock / seccomp preexec callables in parent so
         # import errors surface before fork. Each returns a callable we
         # can invoke in the child.
@@ -940,6 +948,9 @@ def run_sandboxed(
         # read end. status_w is kept open through setup and auto-closes on
         # a successful execvpe (its default O_CLOEXEC) → parent reads EOF.
         os.close(status_r)
+        # Death pipe: child watches death_r; close the write end so only
+        # the parent holds it. Parent dying → death_w closes → EOF.
+        os.close(death_w)
         # Which setup step we're about to attempt — the BaseException
         # catch-all below writes this category to status_w so the parent
         # knows whether to degrade (mount) or fail loud (Landlock/seccomp/
@@ -1364,7 +1375,46 @@ def run_sandboxed(
                 #     128 + sig)` would look like a normal non-zero
                 #     exit to the parent and silently defeat the
                 #     crash/sanitizer diagnostics.
-                _, status = os.waitpid(grand, 0)
+                #
+                # Death-pipe watch: if the orchestrator (parent) is
+                # hard-killed (SIGKILL/OOM/crash), death_w closes →
+                # select sees death_r readable (EOF) → we SIGKILL the
+                # grandchild so the pid-ns doesn't orphan to init.
+                import select as _sel
+                while True:
+                    try:
+                        pid_, status = os.waitpid(grand, os.WNOHANG)
+                    except ChildProcessError:
+                        status = 9
+                        break
+                    if pid_ != 0:
+                        break
+                    try:
+                        ready, _, _ = _sel.select([death_r], [], [], 0.05)
+                    except (OSError, ValueError):
+                        time.sleep(0.05)
+                        continue
+                    if ready:
+                        try:
+                            os.kill(grand, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            os.waitpid(grand, 0)
+                        except ChildProcessError:
+                            pass
+                        if _forwarder_pid > 0:
+                            try:
+                                os.kill(_forwarder_pid, signal.SIGKILL)
+                                os.waitpid(_forwarder_pid, 0)
+                            except (ProcessLookupError,
+                                    ChildProcessError, OSError):
+                                pass
+                        os._exit(137)
+                try:
+                    os.close(death_r)
+                except OSError:
+                    pass
                 # Clean up the proxy bridge forwarder before
                 # mirroring exit status.
                 if _forwarder_pid > 0:
@@ -1423,6 +1473,10 @@ def run_sandboxed(
         # parent's EOF-on-success read would block forever.
         os.close(status_w)
         _parent_fds.discard(status_w)
+        # Death pipe: parent holds death_w only; close the read end now
+        # (BEFORE the tracer fork) so the tracer can't inherit it.
+        os.close(death_r)
+        _parent_fds.discard(death_r)
         if capture_output:
             os.close(out_w)
             _parent_fds.discard(out_w)
@@ -1801,6 +1855,14 @@ def run_sandboxed(
         # so any status byte is already buffered. On timeout the target had
         # execed (hence the timeout) → no status → None.
         setup_status = _drain_status_pipe(status_r, _parent_fds)
+        # Death pipe write end: child has exited (or been killed), no
+        # longer needed. Close it so the fd doesn't leak.
+        if death_w in _parent_fds:
+            try:
+                os.close(death_w)
+            except OSError:
+                pass
+            _parent_fds.discard(death_w)
         # Audit-mode tracer cleanup: target has exited (or been killed
         # via timeout), so the tracer's traced set will become empty
         # and it'll exit naturally. Wait for it to reap; if it doesn't

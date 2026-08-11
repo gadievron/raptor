@@ -460,8 +460,9 @@ def recent_failure_summary(
             "NaN comparisons return False which would silently include "
             "every record in the pool — defended at the entry."
         )
+    from core.cve.cwe import canonicalize_cwe
     now_dt = now or datetime.now(timezone.utc)
-    cwe_norm = cwe.strip().upper()
+    cwe_norm = canonicalize_cwe(cwe) or cwe.strip().upper()
     counts: dict[FailureMode, int] = {}
 
     for r in read_all(
@@ -473,7 +474,8 @@ def recent_failure_summary(
             continue
         if r.failure_mode is None:
             continue
-        if r.cwe.strip().upper() != cwe_norm:
+        r_cwe = canonicalize_cwe(r.cwe) or r.cwe.strip().upper()
+        if r_cwe != cwe_norm:
             continue
         age_days = _record_age_days(r, now_dt)
         if age_days > window_days:

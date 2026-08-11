@@ -479,6 +479,7 @@ class OciRegistryClient:
             resp.close()
             return self.http.request(
                 method, full_url, headers=req_headers, stream=stream,
+                raise_on_status=False,
             )
 
         realm = params.get("realm", "")
@@ -504,6 +505,7 @@ class OciRegistryClient:
         resp.close()
         return self.http.request(
             method, full_url, headers=req_headers, stream=stream,
+            raise_on_status=False,
         )
 
     def _exchange_token(

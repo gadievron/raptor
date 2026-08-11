@@ -576,7 +576,7 @@ def _llm_tiebreak(
             cost_usd, "describe: empty content",
         )
 
-    log.debug(f"intent_match describe step: {description[:200]}...")
+    log.debug("intent_match describe step: %s...", description[:200])
 
     # Step 2: judge whether description matches finding.
     judge_user, judge_sys = _build_judge_prompt(

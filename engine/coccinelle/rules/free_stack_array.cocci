@@ -8,6 +8,7 @@
 //
 // CWE-590: Free of Memory not on the Heap
 // Zero-FP: a named array with a constant size is always on the stack.
+// @role: verification
 
 @free_stack@
 type T;

@@ -28,7 +28,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -90,6 +90,8 @@ def _validate_stage_file(data, filename):
         return ["stage file must be a JSON object"]
 
     stage = data.get("stage", "")
+    if not isinstance(stage, str):
+        stage = ""
     if not stage:
         errors.append("missing 'stage' field")
 
@@ -181,6 +183,10 @@ def main():
         print(f"✗ file not found: {filepath}", file=sys.stderr)
         sys.exit(2)
 
+    if is_already_validated(filepath):
+        print(f"OK: {filepath.name} (cached)")
+        return
+
     data = load_json(filepath)
     if data is None:
         print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
@@ -204,6 +210,8 @@ def main():
         from core.schema_constants import normalise_vuln_type
         changed = False
         for f in data.get("findings", []):
+            if not isinstance(f, dict):
+                continue
             vt = f.get("vuln_type", "")
             norm = normalise_vuln_type(vt)
             if norm != vt:

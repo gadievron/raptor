@@ -1,0 +1,1543 @@
+#!/usr/bin/env python3
+"""CLI for /audit — hypothesis-driven, tool-grounded security review.
+
+Subcommands:
+    run      — run the full audit orchestrator (LLM review + tool validation)
+    gaps     — compute unreviewed functions from inventory + coverage
+    context  — assemble context slice for one function
+    sweep    — log a tool-grounded check (semgrep/coccinelle/codeql/smt/compilation)
+    record   — write annotation + update coverage-audit (enforces G1-G5 gates)
+    rules    — manage synthesized checker rules (Mode 2: save/list/run)
+    report   — generate final summary
+    feedback — import /validate results into annotations
+    stale    — list annotations with stale source hashes
+    ast      — extract function AST subtree and call targets
+    critique — identify gaps in tool coverage
+"""
+
+from __future__ import annotations
+
+import argparse
+import faulthandler
+import json
+import logging
+import signal
+import sys
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+_RAPTOR_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_RAPTOR_DIR))
+os.environ.setdefault("RAPTOR_DIR", str(_RAPTOR_DIR))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def cmd_gaps(args: argparse.Namespace) -> int:
+    from core.audit.gaps import (
+        compute_gaps,
+        load_checklist,
+        load_context_map,
+        write_gaps,
+    )
+    from core.coverage.record import load_records
+
+    out_dir = Path(args.out)
+
+    checklist = load_checklist(out_dir)
+    if not checklist:
+        target_path = Path(args.target) if args.target else _guess_target(out_dir)
+        if target_path and target_path.exists():
+            print(f"building checklist from {target_path} ...", file=sys.stderr)
+            import subprocess
+            env = dict(os.environ, CLAUDECODE="1")
+            cp = subprocess.run(
+                [sys.executable, str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist"),
+                 str(target_path), str(out_dir)],
+                env=env, capture_output=True, text=True, timeout=300,
+            )
+            if cp.returncode != 0:
+                print(f"error: checklist build failed: {cp.stderr.strip()}", file=sys.stderr)
+                return 1
+            print(cp.stdout.strip(), file=sys.stderr)
+            checklist = load_checklist(out_dir)
+        if not checklist:
+            print(f"error: no checklist.json in {out_dir} and no --target to build one",
+                  file=sys.stderr)
+            return 1
+
+    coverage_records = load_records(out_dir)
+    context_map = load_context_map(out_dir)
+
+    if not context_map:
+        print("warning: no context-map.json — gap prioritization will lack "
+              "entry-point and sink data. Run /understand --map first.",
+              file=sys.stderr)
+
+    annotations_dir = Path(args.annotations_dir) if args.annotations_dir else None
+
+    gaps = compute_gaps(
+        checklist,
+        coverage_records,
+        context_map=context_map,
+        strategy_filter=args.strategy,
+        budget=args.budget if not args.prioritize else None,
+        scope=args.scope,
+        annotations_dir=annotations_dir,
+        out_dir=out_dir,
+    )
+
+    if args.prioritize:
+        from core.audit.priority import load_flow_traces, score_functions
+        flow_traces = load_flow_traces(out_dir)
+        gaps = score_functions(
+            gaps, context_map=context_map, flow_traces=flow_traces,
+        )
+        if args.budget and args.budget > 0:
+            gaps = gaps[:args.budget]
+
+    path = write_gaps(gaps, out_dir)
+    print(f"gaps: {len(gaps)} unreviewed functions → {path}")
+
+    by_priority = {}
+    for g in gaps:
+        p = g["priority"]
+        by_priority[p] = by_priority.get(p, 0) + 1
+    for p in sorted(by_priority):
+        labels = {
+            -1: "entry point",
+            0: "no tool coverage",
+            1: "partial coverage",
+            2: "stale annotation",
+            3: "fully covered",
+            4: "dead code",
+        }
+        print(f"  priority {p} ({labels.get(p, '?')}): {by_priority[p]}")
+
+    return 0
+
+
+def cmd_context(args: argparse.Namespace) -> int:
+    from core.audit.context import assemble_context, format_context_for_prompt
+    from core.audit.gaps import load_checklist
+    from core.audit.record import append_audit_log
+
+    out_dir = Path(args.out) if args.out else None
+    target_path = Path(args.target)
+
+    checklist = load_checklist(out_dir) if out_dir else None
+    context_map = None
+    if out_dir:
+        from core.audit.gaps import load_context_map
+        context_map = load_context_map(out_dir)
+
+    line_start = args.line
+    line_end = None
+    if not line_start and checklist:
+        for fi in checklist.get("files", []):
+            if fi.get("path") == args.file:
+                for item in fi.get("items", fi.get("functions", [])):
+                    if item.get("name") == args.function:
+                        line_start = item.get("line_start", 0)
+                        line_end = item.get("line_end")
+                        break
+                break
+
+    ctx = assemble_context(
+        target_path=target_path,
+        file_path=args.file,
+        function_name=args.function,
+        line_start=line_start or 0,
+        line_end=line_end,
+        checklist=checklist,
+        context_map=context_map,
+        inventory=checklist,
+        annotations_dir=(
+            Path(args.annotations_dir) if args.annotations_dir
+            else out_dir / "annotations" if out_dir
+            else None
+        ),
+        out_dir=out_dir,
+    )
+
+    # Write breadcrumb for G5 enforcement — record checks this exists
+    if out_dir:
+        append_audit_log(out_dir, {
+            "action": "context",
+            "key": f"{args.file}:{args.function}",
+            "file": args.file,
+            "function": args.function,
+        })
+
+    from core.security.redaction import redact_secrets
+    raw = json.dumps(ctx, indent=2, default=str) if args.json else format_context_for_prompt(ctx)
+    sanitised = redact_secrets(raw)
+    sys.stdout.write(sanitised)
+    sys.stdout.write("\n")
+
+    return 0
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    from core.audit.record import append_audit_log, load_audit_log, _compute_hash
+    from core.audit.journal import ReviewJournalEntry, append_entry, now_iso
+
+    out_dir = Path(args.out)
+    target_path = Path(args.target) if args.target else _guess_target(out_dir)
+    if not target_path:
+        print("error: --target required (or set in checklist.json)", file=sys.stderr)
+        return 1
+
+    # --- Mechanical gate enforcement ---
+
+    # G5: READ-FIRST — context must have been called for this function,
+    # OR for the primary function if --related-to is set.
+    audit_log = load_audit_log(out_dir)
+    func_key = f"{args.file}:{args.function}"
+    related_to = args.related_to
+
+    has_own_context = any(
+        e.get("action") == "context" and e.get("key") == func_key
+        for e in audit_log
+    )
+    has_related_context = False
+    if related_to:
+        has_related_context = any(
+            e.get("action") == "context" and e.get("key") == related_to
+            for e in audit_log
+        )
+        # related-to must be in the same file
+        rel_file = related_to.split(":")[0] if ":" in related_to else ""
+        if rel_file != args.file:
+            print(
+                f"error [G5 READ-FIRST]: --related-to {related_to} is in a "
+                f"different file than {func_key}.\n"
+                f"  --related-to is for sibling functions in the same file.",
+                file=sys.stderr,
+            )
+            return 1
+
+    has_context = has_own_context or has_related_context
+    if not has_context:
+        if related_to:
+            print(
+                f"error [G5 READ-FIRST]: no context call recorded for "
+                f"primary function {related_to}.\n"
+                f"  The --related-to function must have a context breadcrumb.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"error [G5 READ-FIRST]: no context call recorded for {func_key}.\n"
+                f"  Run: libexec/raptor-audit context --target <path> "
+                f"--file {args.file} --function {args.function} --out {out_dir}",
+                file=sys.stderr,
+            )
+        return 1
+
+    # G2: TOOL-GROUNDED — findings require evidence-tool + vuln-type
+    if args.status == "finding":
+        if not args.evidence_tool:
+            from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
+            tools = "|".join(sorted(VALID_EVIDENCE_TOOLS))
+            print(
+                "error [G2 TOOL-GROUNDED]: --status finding requires "
+                f"--evidence-tool ({tools}).\n"
+                "  If no tool confirms the hypothesis, use --status suspicious.",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.vuln_type:
+            print(
+                "error [G2 TOOL-GROUNDED]: --status finding requires --vuln-type.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # G1: HYPOTHESIS-FIRST — findings/suspicious/dormant require hypothesis
+    if args.status in ("finding", "suspicious", "dormant"):
+        if not args.hypothesis:
+            print(
+                f"error [G1 HYPOTHESIS-FIRST]: --status {args.status} "
+                "requires --hypothesis (testable claim, e.g. "
+                "'if input X reaches sink Y without check Z, CWE-N applies').",
+                file=sys.stderr,
+            )
+            return 1
+
+    # G4: EVIDENCE-IN-ANNOTATION — findings/suspicious/dormant require body
+    if args.status in ("finding", "suspicious", "dormant") and not args.body:
+        print(
+            "error [G4 EVIDENCE-IN-ANNOTATION]: --status finding/suspicious "
+            "requires --body (tool names + results).",
+            file=sys.stderr,
+        )
+        return 1
+
+    # G3: NO-SELF-CRITIQUE — re-recording same function requires a sweep
+    # since the last record. First record is always allowed.
+    last_record_idx = None
+    last_sweep_idx = None
+    for i, e in enumerate(audit_log):
+        entry_key = e.get("key") or (
+            f"{e.get('file')}:{e.get('function')}"
+            if e.get("file") and e.get("function") else None
+        )
+        if entry_key != func_key:
+            continue
+        if e.get("action") == "sweep":
+            last_sweep_idx = i
+        elif e.get("status") and e.get("action") != "context":
+            last_record_idx = i
+
+    if last_record_idx is not None:
+        if last_sweep_idx is None or last_sweep_idx < last_record_idx:
+            print(
+                f"error [G3 NO-SELF-CRITIQUE]: {func_key} was already recorded "
+                f"(entry #{last_record_idx}). Re-recording requires a sweep "
+                f"(tool-grounded check) since the last record.\n"
+                f"  Run a tool first, then: libexec/raptor-audit sweep "
+                f"--out {out_dir} --file {args.file} --function {args.function} "
+                f"--tool <tool> --outcome <confirmed|refuted>",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Auto-resolve line numbers from the checklist when not provided.
+    # Must run before G7 so the reachability check gets the correct
+    # line_start (callers_of matches by exact InternalFunction equality
+    # including line — line=0 silently misses all definitive callers).
+    from core.audit.gaps import load_checklist, load_context_map
+
+    checklist = load_checklist(out_dir)
+    context_map = load_context_map(out_dir)
+
+    line_start = args.line_start or 0
+    line_end = args.line_end
+    if not line_start:
+        for ck_file in checklist.get("files", []):
+            if ck_file.get("path") == args.file:
+                for item in ck_file.get("items", []):
+                    if item.get("name") == args.function:
+                        line_start = item.get("line_start", 0)
+                        if not line_end:
+                            line_end = item.get("line_end")
+                        break
+                break
+
+    # G7: REACHABILITY — findings must be reachable. Two-signal gate:
+    #   - Both call graph (zero callers) AND binary oracle (absent, full
+    #     DWARF) agree → hard downgrade to dormant
+    #   - Call graph only (zero callers, no binary data) → require
+    #     --reach-via explaining how the function is reachable
+    #   - Entry points and functions with callers bypass this gate
+    if args.status == "finding":
+        is_entry = False
+        if context_map:
+            for ep in context_map.get("entry_points", []):
+                if (ep.get("file") == args.file
+                        and ep.get("name") == args.function):
+                    is_entry = True
+                    break
+
+        has_callers = None
+        if not is_entry:
+            inventory = None
+            try:
+                inventory_path = out_dir / "inventory.json"
+                if inventory_path.exists():
+                    with open(inventory_path) as inv_f:
+                        inventory = json.load(inv_f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+            if inventory:
+                try:
+                    from core.analysis.reachability import (
+                        InternalFunction,
+                        callers_of,
+                    )
+                    target = InternalFunction(
+                        file_path=args.file,
+                        name=args.function,
+                        line=line_start,
+                    )
+                    result = callers_of(
+                        inventory, target, exclude_test_files=True,
+                    )
+                    has_callers = len(result.all_callers) > 0
+                except (ImportError, TypeError, ValueError):
+                    pass
+
+        if not is_entry and has_callers is not None and not has_callers:
+            binary_absent = False
+            binary_tier = None
+            for fe in checklist.get("files", []):
+                if fe.get("path") != args.file:
+                    continue
+                for item in fe.get("items", []):
+                    if item.get("name") != args.function:
+                        continue
+                    bo = (item.get("metadata") or {}).get("binary_oracle")
+                    if bo:
+                        binary_absent = bo.get("classification") == "absent"
+                        binary_tier = "full"
+                        for b in bo.get("binaries", []):
+                            if b.get("tier") == "symbol_only":
+                                binary_tier = "symbol_only"
+                                break
+                    break
+                break
+
+            if binary_absent and binary_tier == "full":
+                print(
+                    f"error [G7 REACHABILITY]: {func_key} has zero static "
+                    f"callers AND binary oracle says absent (full DWARF). "
+                    f"This function was removed by the compiler.\n"
+                    f"  Use --status dormant (real bug, unreachable code) "
+                    f"instead of --status finding.",
+                    file=sys.stderr,
+                )
+                return 1
+            elif not args.reach_via:
+                print(
+                    f"error [G7 REACHABILITY]: {func_key} has zero static "
+                    f"callers. This may be dead code.\n"
+                    f"  Provide --reach-via explaining how this function "
+                    f"is reachable (e.g. 'callback registered at foo.c:42', "
+                    f"'HTTP route /admin/status', 'exported API', "
+                    f"'Lua FFI binding').\n"
+                    f"  Or use --status dormant if the bug is real but "
+                    f"unreachable.",
+                    file=sys.stderr,
+                )
+                return 1
+
+    # --- End gates ---
+
+    strategies = args.strategies.split(",") if args.strategies else []
+    if not isinstance(strategies, list):
+        strategies = []
+
+    # Under the annotation → journal migration, ``record_review`` (which
+    # wrote coverage-audit.json) was removed. Manual review recording
+    # via ``raptor-audit record ...`` now appends a review-journal
+    # entry directly. The audit-log entry survives as an event log
+    # for gate/consumer tracking; verdict + context live in the
+    # journal.
+    et_normalised = args.evidence_tool
+    if et_normalised and ":" not in et_normalised:
+        et_normalised = f"{et_normalised}:cli"
+
+    source_hash = _compute_hash(
+        target_path, args.file, line_start or 0, line_end,
+    ) or ""
+
+    hypotheses_list = []
+    if args.hypothesis:
+        hypotheses_list = [{"claim": args.hypothesis, "status": args.status}]
+
+    entry = ReviewJournalEntry(
+        ts=now_iso(),
+        run_id=out_dir.name if out_dir.name else "cli-record",
+        file=args.file,
+        function=args.function,
+        verdict=args.status,
+        source_hash=source_hash,
+        line_start=line_start or 0,
+        line_end=line_end,
+        cwe=args.cwe,
+        strategies=strategies,
+        hypotheses=hypotheses_list,
+        body=args.body or "",
+        evidence_tools=[et_normalised] if et_normalised else [],
+        producer="audit",
+    )
+    try:
+        append_entry(out_dir, entry)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: journal append failed: {exc}", file=sys.stderr)
+        return 1
+
+    # Audit-log event mirrors the journal entry with the gate-flavour
+    # metadata (vuln_type, related_to, reach_via) that isn't part of
+    # the journal schema. Journal is the verdict store; audit-log is
+    # the operational event log.
+    audit_event = {
+        "action": "record",
+        "key": func_key,
+        "file": args.file,
+        "function": args.function,
+        "status": args.status,
+        "hash": source_hash,
+        "strategies": strategies,
+    }
+    if args.cwe:
+        audit_event["cwe"] = args.cwe
+    if et_normalised:
+        audit_event["evidence_tool"] = et_normalised
+    if args.hypothesis:
+        audit_event["hypothesis"] = args.hypothesis
+    if args.vuln_type:
+        audit_event["vuln_type"] = args.vuln_type
+    if related_to:
+        audit_event["related_to"] = related_to
+    if args.reach_via:
+        audit_event["reach_via"] = args.reach_via
+    append_audit_log(out_dir, audit_event)
+
+    if args.status == "finding":
+        from core.audit.findings import emit_finding
+        emit_finding(
+            out_dir=out_dir,
+            file_path=args.file,
+            function_name=args.function,
+            line=line_start,
+            title=f"{args.vuln_type or 'novel'}: {args.function}",
+            description=args.body or "",
+            cwe=args.cwe or args.vuln_type,
+            tool_evidence=(
+                [{"tool": et_normalised}] if et_normalised else None
+            ),
+            hypothesis=args.hypothesis,
+        )
+
+    status_display = args.status.title()
+    print(f"recorded: {args.file}:{args.function} → {status_display}")
+    return 0
+
+
+def cmd_sweep(args: argparse.Namespace) -> int:
+    """Run a mechanical tool against a file/function and log the result.
+
+    When --rule-file is provided with semgrep/coccinelle, the tool is
+    executed automatically and the outcome is determined from results.
+    Without --rule-file, only logs a manual sweep entry.
+    """
+    from core.audit.record import append_audit_log
+
+    out_dir = Path(args.out)
+    target_path = Path(args.target) if args.target else _guess_target(out_dir)
+    if not target_path:
+        print("error: --target required", file=sys.stderr)
+        return 1
+
+    tool = args.tool
+    func_key = f"{args.file}:{args.function}"
+
+    # Auto-run mode: --rule or --rule-file triggers actual tool execution
+    rule_file = args.rule_file
+    if not rule_file and args.rule and tool in ("semgrep", "coccinelle"):
+        import tempfile
+        suffix = ".yaml" if tool == "semgrep" else ".cocci"
+        _tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=suffix, dir=str(out_dir),
+            prefix=".sweep-rule-", delete=False,
+        )
+        _tmp.write(args.rule)
+        _tmp.close()
+        rule_file = _tmp.name
+
+    if rule_file and tool in ("semgrep", "coccinelle", "codeql"):
+        from core.audit.sweep import (
+            run_semgrep_sweep, run_coccinelle_sweep, run_codeql_sweep,
+        )
+
+        rule_path = Path(rule_file)
+        if not rule_path.exists():
+            print(f"error: rule file {rule_path} not found", file=sys.stderr)
+            return 1
+
+        fn_line_start = args.line_start
+        fn_line_end = args.line_end
+        if fn_line_start is None or fn_line_end is None:
+            from core.audit.gaps import load_checklist
+            cl = load_checklist(out_dir)
+            if cl:
+                for fi in cl.get("files", []):
+                    if fi.get("path") == args.file:
+                        for item in fi.get("items", fi.get("functions", [])):
+                            if item.get("name") == args.function:
+                                fn_line_start = fn_line_start or item.get("line_start")
+                                fn_line_end = fn_line_end or item.get("line_end")
+                                break
+                        break
+
+        if tool == "semgrep":
+            result = run_semgrep_sweep(
+                target_path=target_path,
+                file_path=args.file,
+                function_name=args.function,
+                rule_config=str(rule_path),
+                line_start=fn_line_start or 0,
+                line_end=fn_line_end or 0,
+            )
+        elif tool == "codeql":
+            result = run_codeql_sweep(
+                target_path=target_path,
+                file_path=args.file,
+                function_name=args.function,
+                query_path=str(rule_path),
+                database_path=args.codeql_db,
+            )
+        else:
+            result = run_coccinelle_sweep(
+                target_path=target_path,
+                file_path=args.file,
+                function_name=args.function,
+                cocci_rule=str(rule_path),
+                line_start=fn_line_start,
+                line_end=fn_line_end,
+            )
+
+        entry = result.to_log_entry()
+        entry["rule_source"] = str(rule_path)
+        if args.rule and not args.rule_file:
+            entry["rule_inline"] = args.rule
+        append_audit_log(out_dir, entry)
+
+        if not args.rule_file and rule_path.name.startswith(".sweep-rule-"):
+            try:
+                rule_path.unlink()
+            except OSError:
+                pass
+
+        match_info = ""
+        if result.matches:
+            match_info = f" ({len(result.matches)} match(es))"
+        print(f"sweep: {func_key} with {tool} → {result.outcome}{match_info}")
+        if result.matches:
+            for m in result.matches[:5]:
+                print(f"  {m}")
+        if result.errors:
+            for e in result.errors[:3]:
+                print(f"  error: {e}", file=sys.stderr)
+        return 0
+
+    # Auto-run mode: SMT — verb + args instead of rule-file
+    if tool == "smt" and args.smt_verb:
+        from core.audit.sweep import run_smt_sweep
+
+        smt_args = {}
+        if args.smt_args:
+            try:
+                smt_args = json.loads(args.smt_args)
+            except json.JSONDecodeError:
+                print("error: --smt-args must be valid JSON", file=sys.stderr)
+                return 1
+
+        result = run_smt_sweep(
+            file_path=args.file,
+            function_name=args.function,
+            verb=args.smt_verb,
+            smt_args=smt_args,
+        )
+
+        entry = result.to_log_entry()
+        entry["smt_verb"] = args.smt_verb
+        if smt_args:
+            entry["smt_args"] = smt_args
+        append_audit_log(out_dir, entry)
+
+        print(f"sweep: {func_key} with smt:{args.smt_verb} → {result.outcome}")
+        if result.raw_output:
+            for line in result.raw_output.splitlines()[:10]:
+                print(f"  {line}")
+        if result.errors:
+            for e in result.errors[:3]:
+                print(f"  error: {e}", file=sys.stderr)
+        return 0
+
+    # Manual logging mode
+    entry = {
+        "action": "sweep",
+        "key": func_key,
+        "file": args.file,
+        "function": args.function,
+        "tool": tool,
+    }
+
+    if args.rule:
+        entry["rule"] = args.rule
+    if args.query:
+        entry["query"] = args.query
+
+    if args.result_file:
+        result_path = Path(args.result_file)
+        if result_path.exists():
+            entry["result_file"] = str(result_path)
+            try:
+                content = result_path.read_text(errors="replace")
+                if len(content) <= 4096:
+                    entry["result_snippet"] = content
+                else:
+                    entry["result_snippet"] = content[:4096] + "\n... (truncated)"
+            except OSError:
+                pass
+        else:
+            print(f"warning: result file {result_path} not found", file=sys.stderr)
+
+    if args.outcome:
+        entry["outcome"] = args.outcome
+
+    append_audit_log(out_dir, entry)
+    print(f"sweep: {func_key} with {tool} → {args.outcome or 'logged'}")
+    return 0
+
+
+def cmd_rules(args: argparse.Namespace) -> int:
+    """Manage synthesized checker rules (Mode 2)."""
+    from core.audit.rules import save_rule, list_rules, run_rule_sweep
+
+    out_dir = Path(args.out)
+    action = args.action
+
+    if action == "save":
+        if not args.rule_id or not args.tool or not args.content_file:
+            print("error: --rule-id, --tool, and --content-file required for save",
+                  file=sys.stderr)
+            return 1
+        content_path = Path(args.content_file)
+        if not content_path.exists():
+            print(f"error: {content_path} not found", file=sys.stderr)
+            return 1
+        path = save_rule(
+            out_dir=out_dir,
+            rule_id=args.rule_id,
+            tool=args.tool,
+            content=content_path.read_text(),
+            description=args.description or "",
+            origin_file=args.origin_file,
+            origin_function=args.origin_function,
+            cwe=args.cwe,
+        )
+        print(f"saved: {path}")
+        return 0
+
+    elif action == "list":
+        rules = list_rules(out_dir)
+        if not rules:
+            print("no rules saved")
+            return 0
+        for r in rules:
+            status = "ok" if r.get("exists") else "MISSING"
+            desc = r.get("description", "")[:60]
+            print(f"  {r['rule_id']} ({r.get('tool', '?')}) [{status}] — {desc}")
+        print(f"\n{len(rules)} rule(s)")
+        return 0
+
+    elif action == "run":
+        if not args.rule_id:
+            print("error: --rule-id required for run", file=sys.stderr)
+            return 1
+        target_path = Path(args.target) if args.target else _guess_target(out_dir)
+        if not target_path:
+            print("error: --target required", file=sys.stderr)
+            return 1
+        result = run_rule_sweep(
+            out_dir=out_dir,
+            rule_id=args.rule_id,
+            target_path=target_path,
+        )
+        if "error" in result:
+            print(f"error: {result['error']}", file=sys.stderr)
+            return 1
+        print(json.dumps(result, indent=2))
+        return 0
+
+    else:
+        print(f"error: unknown action {action!r}", file=sys.stderr)
+        return 1
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from core.audit.report import generate_report, write_report
+
+    out_dir = Path(args.out)
+    target_path = Path(args.target) if args.target else None
+
+    report = generate_report(out_dir, target_path=target_path)
+    write_report(report, out_dir)
+
+    print(report["summary"])
+    return 0
+
+
+def cmd_stale(args: argparse.Namespace) -> int:
+    from core.annotations.storage import iter_all_annotations, compute_function_hash
+
+    annotations_dir = Path(args.annotations_dir)
+    target_path = Path(args.target)
+
+    if not annotations_dir.exists():
+        print("no annotations directory found")
+        return 0
+
+    stale_count = 0
+    for ann in iter_all_annotations(annotations_dir):
+        old_hash = ann.metadata.get("hash")
+        if not old_hash:
+            continue
+
+        full_path = target_path / ann.file
+        if not full_path.exists():
+            print(f"  deleted: {ann.file}:{ann.function}")
+            stale_count += 1
+            continue
+
+        try:
+            line_start = int(ann.metadata.get("line_start", "0") or "0")
+            line_end = int(ann.metadata.get("line_end", "0") or "0")
+        except (ValueError, TypeError):
+            line_start, line_end = 0, 0
+        if line_start and line_end:
+            new_hash = compute_function_hash(full_path, line_start, line_end)
+            if new_hash and new_hash != old_hash:
+                print(f"  stale: {ann.file}:{ann.function} (hash {old_hash} → {new_hash})")
+                stale_count += 1
+
+    print(f"\n{stale_count} stale annotation(s)")
+    return 0
+
+
+def cmd_feedback(args: argparse.Namespace) -> int:
+    """Import /validate results back into annotations.
+
+    Closes the Reflexion loop: /validate verdicts flow back into
+    /audit annotations, updating status + body so subsequent runs
+    learn from past mistakes.
+
+    Status transitions:
+      - ruled_out / is_true_positive=false → finding|suspicious → clean
+      - confirmed / exploitable when audit said clean → clean → finding
+      - confirmed / exploitable when audit said finding → no status change,
+        append corroboration note
+    """
+    from core.audit.feedback import import_validation_results
+
+    validation_report = Path(args.validation_report)
+    if not validation_report.exists():
+        print(f"error: {validation_report} not found", file=sys.stderr)
+        return 1
+
+    annotations_dir = Path(args.annotations_dir)
+    annotations_dir.mkdir(parents=True, exist_ok=True)
+
+    audit_out = Path(args.audit_out) if args.audit_out else None
+
+    result = import_validation_results(
+        validation_report=validation_report,
+        annotations_dir=annotations_dir,
+        audit_out_dir=audit_out,
+    )
+
+    print(f"Feedback imported: {result['updated']} annotation(s) updated")
+    if result["downgraded"]:
+        print(f"  Downgraded: {result['downgraded']} "
+              f"(finding/suspicious → clean)")
+    if result["upgraded"]:
+        print(f"  Upgraded: {result['upgraded']} (clean → finding)")
+    if result["corroborated"]:
+        print(f"  Corroborated: {result['corroborated']}")
+    if result["skipped"]:
+        print(f"  Skipped (no matching annotation): {result['skipped']}")
+    return 0
+
+
+def cmd_ast(args: argparse.Namespace) -> int:
+    """Extract AST subtree and call targets for a function."""
+    file_path = Path(args.file)
+    if not file_path.exists():
+        print(f"file not found: {file_path}", file=sys.stderr)
+        return 1
+
+    ext = file_path.suffix.lower()
+    ext_to_lang = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".tsx": "tsx", ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp",
+        ".cxx": "cpp", ".hpp": "cpp", ".cs": "csharp", ".go": "go",
+        ".java": "java", ".lua": "lua", ".php": "php", ".rb": "ruby",
+        ".rs": "rust",
+    }
+    lang = ext_to_lang.get(ext)
+    if not lang:
+        print(f"unsupported file type: {ext}", file=sys.stderr)
+        return 1
+
+    from core.inventory.sink_discovery import _get_call_graph_extractors
+    extractors = _get_call_graph_extractors()
+    extractor = extractors.get(lang)
+    if not extractor:
+        print(f"no call graph extractor for {lang}", file=sys.stderr)
+        return 1
+
+    content = file_path.read_text(errors="replace")
+    graph = extractor(content)
+    if graph is None:
+        print("could not parse file", file=sys.stderr)
+        return 1
+
+    func = args.function
+    calls_from = [
+        {"callee": ".".join(c.chain), "line": c.line}
+        for c in graph.calls
+        if c.caller == func
+    ]
+    calls_to = [
+        {"caller": c.caller, "line": c.line}
+        for c in graph.calls
+        if func in c.chain
+    ]
+
+    result = {
+        "file": str(file_path),
+        "function": func,
+        "calls_from": calls_from,
+        "calls_to": calls_to,
+        "indirection": sorted(graph.indirection),
+    }
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_critique(args: argparse.Namespace) -> int:
+    """Tool-grounded critique pass.
+
+    Analyses the audit log to identify:
+    - Reviewed functions with few tool checks (low sweep:record ratio)
+    - Confirmed findings without a codebase-wide rule (Mode 2 gap)
+    - Functions with ``suspicious`` status that could be re-checked
+    - Untested hypotheses (recorded as ``suspicious`` without a sweep)
+
+    Outputs a critique report the LLM or operator can act on.
+    """
+    from core.audit.record import load_audit_log
+    from core.audit.rules import list_rules
+
+    out_dir = Path(args.out)
+    audit_log = load_audit_log(out_dir)
+
+    if not audit_log:
+        print("no audit activity found")
+        return 0
+
+    # Collect per-function stats from the log
+    func_stats: dict = {}
+    for entry in audit_log:
+        key = entry.get("key")
+        if not key:
+            f, fn = entry.get("file", ""), entry.get("function", "")
+            if f and fn:
+                key = f"{f}:{fn}"
+        if not key:
+            continue
+
+        stats = func_stats.setdefault(key, {
+            "context_count": 0,
+            "sweep_count": 0,
+            "sweep_tools": set(),
+            "record_count": 0,
+            "status": None,
+            "hypothesis": None,
+            "evidence_tool": None,
+        })
+
+        action = entry.get("action", "")
+        if action == "context":
+            stats["context_count"] += 1
+        elif action == "sweep":
+            stats["sweep_count"] += 1
+            stats["sweep_tools"].add(entry.get("tool", ""))
+        elif entry.get("status"):
+            stats["record_count"] += 1
+            stats["status"] = entry.get("status")
+            if entry.get("hypothesis"):
+                stats["hypothesis"] = entry["hypothesis"]
+            if entry.get("evidence_tool"):
+                stats["evidence_tool"] = entry["evidence_tool"]
+
+    # Analysis
+    low_sweep = []
+    mode2_gaps = []
+    suspicious_retestable = []
+    total_reviewed = 0
+
+    existing_rules = set()
+    try:
+        for r in list_rules(out_dir):
+            existing_rules.add(r.get("origin_function", ""))
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "rule listing failed", exc_info=True)
+
+    for key, stats in func_stats.items():
+        if stats["record_count"] == 0:
+            continue
+        total_reviewed += 1
+
+        if stats["sweep_count"] < 2 and stats["status"] != "error":
+            low_sweep.append((key, stats["sweep_count"], stats["status"]))
+
+        if stats["status"] == "finding" and stats["evidence_tool"]:
+            func_name = key.split(":")[-1] if ":" in key else key
+            if func_name not in existing_rules:
+                mode2_gaps.append((key, stats["hypothesis"]))
+
+        if stats["status"] == "suspicious":
+            tools_used = stats["sweep_tools"] - {""}
+            all_tools = {"semgrep", "coccinelle", "codeql", "smt"}
+            untried = all_tools - tools_used
+            if untried:
+                suspicious_retestable.append((key, sorted(untried)))
+
+    # Output
+    print(f"Critique report for {out_dir}")
+    print(f"  Functions reviewed: {total_reviewed}")
+    print()
+
+    if low_sweep:
+        print(f"Low tool coverage ({len(low_sweep)} functions with <2 sweeps):")
+        for key, count, status in low_sweep[:15]:
+            print(f"  {key} — {count} sweep(s), status={status}")
+        if len(low_sweep) > 15:
+            print(f"  ... and {len(low_sweep) - 15} more")
+        print()
+
+    if mode2_gaps:
+        print(f"Mode 2 gaps ({len(mode2_gaps)} findings without codebase-wide rules):")
+        for key, hyp in mode2_gaps[:10]:
+            hyp_short = (hyp[:60] + "...") if hyp and len(hyp) > 60 else hyp
+            print(f"  {key} — {hyp_short or '(no hypothesis recorded)'}")
+        print("  → Generate checker rules to sweep the whole codebase")
+        print()
+
+    if suspicious_retestable:
+        print(f"Suspicious functions with untried tools ({len(suspicious_retestable)}):")
+        for key, untried in suspicious_retestable[:10]:
+            print(f"  {key} — try: {', '.join(untried)}")
+        print()
+
+    if not low_sweep and not mode2_gaps and not suspicious_retestable:
+        print("No critique items found — coverage looks thorough.")
+
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run the full audit orchestrator with LLM review."""
+    import subprocess
+
+    target_path = Path(args.target).resolve()
+    if not target_path.is_dir():
+        print(f"error: target not found: {target_path}", file=sys.stderr)
+        return 1
+
+    # --- lifecycle start ---
+    if args.out:
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        lifecycle = subprocess.run(
+            [str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+             "start", "audit", "--target", str(target_path)],
+            capture_output=True, text=True,
+        )
+        if lifecycle.returncode != 0:
+            print(f"lifecycle start failed: {lifecycle.stderr.strip()}",
+                  file=sys.stderr)
+            return 1
+        out_dir = None
+        for line in lifecycle.stdout.strip().splitlines():
+            if line.startswith("OUTPUT_DIR="):
+                out_dir = Path(line.split("=", 1)[1])
+                break
+        if not out_dir:
+            print("lifecycle start did not produce OUTPUT_DIR", file=sys.stderr)
+            return 1
+        for line in lifecycle.stdout.strip().splitlines():
+            print(line)
+
+    # --- build checklist ---
+    checklist_path = out_dir / "checklist.json"
+    if not checklist_path.exists():
+        ck = subprocess.run(
+            [str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist"),
+             str(target_path), "--out", str(out_dir)],
+            capture_output=True, text=True, timeout=300,
+        )
+        if ck.returncode != 0:
+            print(f"checklist build failed: {ck.stderr.strip()}",
+                  file=sys.stderr)
+            _lifecycle_fail(out_dir, "checklist build failed")
+            return 1
+        for line in ck.stdout.strip().splitlines():
+            print(line)
+
+    # --- context map ---
+    # /audit .md runs /understand --map before dispatching here, so
+    # context-map.json should already exist. If called directly without
+    # the .md shim, the orchestrator's bridge searches sibling runs.
+    context_map_path = out_dir / "context-map.json"
+    if not context_map_path.exists():
+        logging.getLogger(__name__).info(
+            "no context-map.json in output dir — "
+            "orchestrator will search sibling runs via the bridge"
+        )
+
+    # --- legacy state check ---
+    # Only run against ACTIVE-PROJECT runs. Detection: an active
+    # project has a ``raptor-project.json`` alongside its runs OR
+    # is resolved via ``ProjectManager.get_active()`` (the .active
+    # symlink lives in the projects dir, not the caller's cwd).
+    # Standalone runs under ``<repo>/out/`` skip this check —
+    # sibling runs in ``out/`` belong to unrelated tools and would
+    # false-positive.
+    project_dir = None
+    if (out_dir / ".raptor-run.json").exists():
+        candidate = out_dir.parent
+        if (candidate / "raptor-project.json").exists():
+            project_dir = candidate
+        else:
+            try:
+                from core.project.project import ProjectManager
+                pm = ProjectManager()
+                active_name = pm.get_active()
+                if active_name:
+                    active_project = pm.load(active_name)
+                    if active_project and active_project.output_dir:
+                        active_out = Path(active_project.output_dir).resolve()
+                        if active_out == candidate.resolve():
+                            project_dir = candidate
+            except Exception:  # noqa: BLE001
+                pass
+    if project_dir is not None:
+        legacy_diag = _check_legacy_state(project_dir)
+        if legacy_diag:
+            print(f"error: {legacy_diag}", file=sys.stderr)
+            _lifecycle_fail(out_dir, "legacy /audit state — migration required")
+            return 1
+
+    from core.audit.pipeline import AuditPipelineOpts, run_audit_pipeline
+    from core.audit.report import generate_report, write_report
+
+    # --- auto-load threat model ---
+    threat_model = None
+    try:
+        from core.threat_model import load_for_target
+        tm = load_for_target(target_path)
+        if tm is not None:
+            threat_model = tm.to_dict()
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "threat-model auto-load failed", exc_info=True)
+
+    # --- load checklist for context assembly (callers, reachability) ---
+    try:
+        checklist_data = json.loads(checklist_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        checklist_data = None
+
+    # --- binary oracle ---
+    binary_verdicts = None
+    from core.analysis.binary_oracle_cli import apply_to_config as _bo_apply
+    binary_paths = _bo_apply(args, target_path)
+    if binary_paths and checklist_data:
+        from core.analysis.binary_oracle import (
+            enrich_inventory_with_binary_oracle,
+            extract_verdicts,
+        )
+        bo_counts = enrich_inventory_with_binary_oracle(
+            checklist_data, binary_paths,
+        )
+        binary_verdicts = extract_verdicts(checklist_data)
+        if binary_verdicts:
+            print(
+                f"Binary oracle: {bo_counts.get('classified', 0)} classified "
+                f"({bo_counts.get('absent', 0)} absent, "
+                f"{bo_counts.get('symbol_present', 0)} present)",
+                flush=True,
+            )
+
+    # --- progress callback ---
+    def on_progress(idx: int, total: int, outcome):
+        if idx < 0:
+            print(f"  {outcome.body}", flush=True)
+            return
+        status_char = {
+            "clean": ".", "suspicious": "?", "finding": "!",
+            "dormant": "~", "error": "x",
+        }.get(outcome.status, ".")
+        print(f"  [{idx+1}/{total}] {outcome.file}:{outcome.function} "
+              f"→ {outcome.status} {status_char}", flush=True)
+
+    # --- run ---
+    print(f"\nStarting audit of {target_path}", flush=True)
+    print(f"Output: {out_dir}\n", flush=True)
+
+    models = args.model or []
+    opts = AuditPipelineOpts(
+        target_path=target_path,
+        out_dir=out_dir,
+        scope=args.scope,
+        models=models if models else None,
+        max_cost_usd=args.max_cost,
+        max_seconds=args.max_time,
+        budget=args.budget,
+        strategy_filter=args.strategy,
+        review_passes=args.review_passes,
+        adversarial=args.adversarial,
+        max_propagation_depth=args.max_propagation_depth,
+        subsystem_depth=args.subsystem_depth,
+        validate=not args.no_validate,
+        no_binary_oracle=getattr(args, "no_binary_oracle", False),
+        binary_verdicts=binary_verdicts,
+        inventory=checklist_data,
+        annotations_dir=Path(args.annotations_dir) if args.annotations_dir else None,
+        codeql_db_path=args.codeql_db,
+        threat_model=threat_model,
+        on_progress=on_progress,
+    )
+
+    try:
+        result = run_audit_pipeline(opts)
+    except Exception as exc:
+        print(f"error: audit pipeline failed: {exc}", file=sys.stderr)
+        _lifecycle_fail(out_dir, f"audit pipeline failed: {exc}")
+        return 1
+
+    # --- report ---
+    report = generate_report(out_dir)
+    report_path = write_report(report, out_dir)
+
+    duration_s = result.total_duration_s
+    duration_str = (
+        f"{int(duration_s // 60)}m{int(duration_s % 60)}s"
+        if duration_s >= 60 else f"{duration_s:.0f}s"
+    )
+    print(f"\n{'='*60}", flush=True)
+    print(f"Audit complete in {duration_str}: {result.reviewed} reviewed, "
+          f"{result.findings} findings, {result.suspicious} suspicious, "
+          f"{result.clean} clean, {result.errors} errors", flush=True)
+    if result.total_cost_usd > 0:
+        print(f"Cost: ${result.total_cost_usd:.2f}", flush=True)
+    print(f"Report: {report_path}", flush=True)
+    print(f"Terminated: {result.terminated_by}", flush=True)
+
+    # --- lifecycle complete ---
+    model_id = args.model[0] if args.model else ""
+    lifecycle_args = [
+        str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+        "complete", str(out_dir),
+    ]
+    if model_id:
+        lifecycle_args.extend(["--model", model_id])
+    subprocess.run(lifecycle_args, capture_output=True)
+
+    return 0 if result.terminated_by == "complete" else 1
+
+
+def _check_legacy_state(project_dir: Path) -> str | None:
+    """Detect pre-migration /audit state that predates the review
+    journal. Returns a diagnostic string if legacy state is present
+    without a journal (blocks startup), or ``None`` to proceed.
+
+    Legacy sources checked:
+    - coverage-audit.json in any sibling run dir
+    - source=llm annotations in <project>/annotations/
+    - checked_by=[audit|agentic] entries on checklist.json
+
+    Journal-present check: <project>/review-journal-index.json exists
+    AND has at least one entry, OR .legacy-audit-abandoned marker
+    exists.
+    """
+    if not project_dir or not project_dir.is_dir():
+        return None
+    marker = project_dir / ".legacy-audit-abandoned"
+    if marker.exists():
+        return None
+    index_path = project_dir / "review-journal-index.json"
+    has_journal = False
+    if index_path.is_file():
+        try:
+            data = json.loads(index_path.read_text())
+            if isinstance(data, dict) and data.get("entries"):
+                has_journal = True
+        except (OSError, json.JSONDecodeError):
+            pass
+    if has_journal:
+        return None
+
+    legacy_sources: list[str] = []
+    for run_dir in project_dir.iterdir():
+        if run_dir.is_dir() and (run_dir / "coverage-audit.json").is_file():
+            legacy_sources.append(f"coverage-audit.json in {run_dir.name}/")
+            break
+    ann_dir = project_dir / "annotations"
+    if ann_dir.is_dir():
+        for ann_path in ann_dir.rglob("*.md"):
+            try:
+                text = ann_path.read_text(errors="replace")
+                if "source=llm" in text:
+                    legacy_sources.append(f"source=llm annotations in {ann_dir.name}/")
+                    break
+            except OSError:
+                continue
+    cl_path = project_dir / "checklist.json"
+    if cl_path.is_file():
+        try:
+            cl = json.loads(cl_path.read_text())
+            for fe in cl.get("files", []):
+                for item in fe.get("items", fe.get("functions", [])) or []:
+                    checked = item.get("checked_by") or []
+                    if any(t in ("audit", "agentic") or t.startswith(("audit:", "agentic:"))
+                           for t in checked):
+                        legacy_sources.append("checked_by=[audit|agentic] on checklist.json")
+                        break
+                if legacy_sources and legacy_sources[-1].startswith("checked_by"):
+                    break
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if not legacy_sources:
+        return None
+
+    return (
+        "legacy /audit state detected on this project but no review "
+        "journal exists. Prior LLM reviews will be treated as "
+        "unreviewed unless migrated.\n\n"
+        "Legacy sources found:\n  - "
+        + "\n  - ".join(legacy_sources)
+        + "\n\nTo migrate: libexec/raptor-migrate-journal "
+        f"{project_dir}\n"
+        "To skip and mark inert: libexec/raptor-migrate-journal "
+        f"{project_dir} --skip-and-mark-inert\n\n"
+        "The migration is idempotent — running it twice is safe."
+    )
+
+
+def _lifecycle_fail(out_dir: Path, reason: str) -> None:
+    """Call lifecycle fail, swallowing errors."""
+    import subprocess
+    subprocess.run(
+        [str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+         "fail", str(out_dir), reason],
+        capture_output=True,
+    )
+
+
+def _guess_target(out_dir: Path) -> Path | None:
+    """Try to extract target_path from checklist.json."""
+    checklist_path = out_dir / "checklist.json"
+    if checklist_path.exists():
+        try:
+            with open(checklist_path) as f:
+                data = json.load(f)
+            tp = data.get("target_path")
+            if tp:
+                return Path(tp)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-audit",
+        description="Mechanical helpers for /audit",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # gaps
+    p_gaps = sub.add_parser("gaps", help="Compute unreviewed functions")
+    p_gaps.add_argument("--out", required=True)
+    p_gaps.add_argument("--target", default=None,
+                        help="Target path — used to auto-build checklist if missing")
+    p_gaps.add_argument("--scope", action="append", default=None,
+                        help="Restrict to files under this path prefix (repeatable)")
+    p_gaps.add_argument("--strategy", default=None)
+    p_gaps.add_argument("--budget", type=int, default=None)
+    p_gaps.add_argument("--prioritize", action="store_true",
+                        help="Score and re-sort by attack-surface proximity")
+    p_gaps.add_argument("--annotations-dir", default=None,
+                        help="Annotations directory for stale detection")
+
+    # context
+    p_ctx = sub.add_parser("context", help="Assemble context slice")
+    p_ctx.add_argument("--target", required=True)
+    p_ctx.add_argument("--file", required=True)
+    p_ctx.add_argument("--function", required=True)
+    p_ctx.add_argument("--line", type=int, default=0)
+    p_ctx.add_argument("--out", default=None)
+    p_ctx.add_argument("--annotations-dir", default=None,
+                        help="Annotations directory (default: $OUT/annotations)")
+    p_ctx.add_argument("--json", action="store_true")
+
+    # record
+    p_rec = sub.add_parser("record", help="Record a function review")
+    p_rec.add_argument("--out", required=True)
+    p_rec.add_argument("--target", default=None)
+    p_rec.add_argument("--file", required=True)
+    p_rec.add_argument("--function", required=True)
+    p_rec.add_argument("--status", required=True, choices=sorted({"clean", "suspicious", "finding", "error", "dormant"}))
+    p_rec.add_argument("--body", default="")
+    p_rec.add_argument("--line-start", type=int, default=None)
+    p_rec.add_argument("--line-end", type=int, default=None)
+    p_rec.add_argument("--cwe", default=None)
+    p_rec.add_argument("--strategies", default=None)
+    from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
+    p_rec.add_argument("--evidence-tool", default=None,
+                       choices=sorted(VALID_EVIDENCE_TOOLS),
+                       help="Required for --status finding")
+    p_rec.add_argument("--hypothesis", default=None,
+                       help="Required for --status finding/suspicious")
+    p_rec.add_argument("--vuln-type", default=None,
+                       help="Required for --status finding")
+    p_rec.add_argument("--related-to", default=None,
+                       help="file:function of primary review this was examined as part of")
+    p_rec.add_argument("--reach-via", default=None,
+                       help="How this function is reachable when it has zero "
+                            "static callers (e.g. 'callback at foo.c:42', "
+                            "'HTTP route /api/x', 'exported API')")
+
+    # sweep
+    p_sweep = sub.add_parser("sweep", help="Log a tool-grounded check")
+    p_sweep.add_argument("--out", required=True)
+    p_sweep.add_argument("--target", default=None)
+    p_sweep.add_argument("--file", required=True)
+    p_sweep.add_argument("--function", required=True)
+    p_sweep.add_argument("--tool", required=True,
+                         choices=["semgrep", "coccinelle", "codeql", "smt", "compilation"])
+    p_sweep.add_argument("--rule", default=None, help="Rule ID or reference")
+    p_sweep.add_argument("--rule-file", default=None,
+                         help="Path to rule file — auto-runs the tool and logs results")
+    p_sweep.add_argument("--query", default=None, help="Query text or file")
+    p_sweep.add_argument("--result-file", default=None, help="Path to tool output")
+    p_sweep.add_argument("--outcome", default=None,
+                         choices=["confirmed", "refuted", "error", "inconclusive"])
+    p_sweep.add_argument("--smt-verb", default=None,
+                         choices=["check-overflow", "check-oob", "check-null-deref",
+                                  "check-overflow-to-oob", "check-negative-bypass",
+                                  "validate-path"],
+                         help="SMT verb to run (requires --tool smt)")
+    p_sweep.add_argument("--smt-args", default=None,
+                         help="JSON dict of args for the SMT verb")
+    p_sweep.add_argument("--codeql-db", default=None,
+                         help="Path to CodeQL database (auto-detected if omitted)")
+    p_sweep.add_argument("--line-start", type=int, default=None,
+                         help="Function start line (auto-detected from checklist)")
+    p_sweep.add_argument("--line-end", type=int, default=None,
+                         help="Function end line (auto-detected from checklist)")
+
+    # rules
+    p_rules = sub.add_parser("rules", help="Manage synthesized checker rules")
+    p_rules.add_argument("action", choices=["save", "list", "run"])
+    p_rules.add_argument("--out", required=True)
+    p_rules.add_argument("--target", default=None)
+    p_rules.add_argument("--rule-id", default=None)
+    p_rules.add_argument("--tool", default=None, choices=["semgrep", "coccinelle"])
+    p_rules.add_argument("--content-file", default=None, help="Path to rule file")
+    p_rules.add_argument("--description", default=None)
+    p_rules.add_argument("--origin-file", default=None)
+    p_rules.add_argument("--origin-function", default=None)
+    p_rules.add_argument("--cwe", default=None)
+
+    # report
+    p_rep = sub.add_parser("report", help="Generate audit summary")
+    p_rep.add_argument("--out", required=True)
+    p_rep.add_argument("--target", default=None)
+
+    # stale
+    p_stale = sub.add_parser("stale", help="List stale annotations")
+    p_stale.add_argument("--annotations-dir", required=True)
+    p_stale.add_argument("--target", required=True)
+
+    # feedback
+    p_fb = sub.add_parser("feedback", help="Import /validate results")
+    p_fb.add_argument("--validation-report", required=True,
+                       help="Path to /validate findings.json or stage-d.json")
+    p_fb.add_argument("--annotations-dir", required=True,
+                       help="Path to audit annotations directory")
+    p_fb.add_argument("--audit-out",
+                       help="Audit output dir (updates coverage-audit.json "
+                            "and audit log)")
+
+    # critique
+    p_crit = sub.add_parser("critique", help="Tool-grounded critique pass")
+    p_crit.add_argument("--out", required=True)
+
+    p_ast = sub.add_parser("ast", help="Extract function AST and call targets")
+    p_ast.add_argument("--file", required=True)
+    p_ast.add_argument("--function", required=True)
+
+    # run (full orchestrator)
+    p_run = sub.add_parser("run", help="Run the full audit orchestrator")
+    p_run.add_argument("target", help="Path to codebase to review")
+    p_run.add_argument("--out", default=None, help="Output directory")
+    p_run.add_argument("--strategy", default=None,
+                       help="Filter to one strategy")
+    p_run.add_argument("--budget", type=int, default=None,
+                       help="Max functions to review")
+    p_run.add_argument("--scope", action="append", default=None,
+                       help="Restrict to a subdirectory (repeatable)")
+    p_run.add_argument("--annotations-dir", default=None)
+    p_run.add_argument("--no-validate", action="store_true",
+                       help="Skip automatic /validate post-pass")
+    p_run.add_argument("--model", action="append", default=None,
+                       help="Model ID (repeatable for multi-model consensus)")
+    p_run.add_argument("--adversarial", action="store_true",
+                       help="Enable adversarial reviewer for positive verdicts")
+    p_run.add_argument("--max-propagation-depth", type=int, default=None,
+                       help="Override adaptive constraint propagation depth")
+    p_run.add_argument("--codeql-db", default=None,
+                       help="Path to CodeQL database for query dispatch")
+    p_run.add_argument("--max-cost", type=float, default=None,
+                       help="Maximum cost in USD before stopping")
+    p_run.add_argument("--max-time", type=float, default=None,
+                       help="Maximum wall-clock seconds before stopping")
+    p_run.add_argument("--review-passes", type=int, default=1,
+                       help="Number of independent review passes per function (self-consistency)")
+    p_run.add_argument("--subsystem-depth", type=int, default=0,
+                       help="Directory grouping depth for subsystem-ordered review")
+    from core.analysis.binary_oracle_cli import add_binary_args
+    add_binary_args(p_run, include_edges=False)
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 1
+
+    dispatch = {
+        "gaps": cmd_gaps,
+        "context": cmd_context,
+        "record": cmd_record,
+        "sweep": cmd_sweep,
+        "rules": cmd_rules,
+        "report": cmd_report,
+        "stale": cmd_stale,
+        "feedback": cmd_feedback,
+        "critique": cmd_critique,
+        "ast": cmd_ast,
+        "run": cmd_run,
+    }
+
+    return dispatch[args.command](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

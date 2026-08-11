@@ -17,9 +17,9 @@ detecting the top-level source root from the target path).
 import bisect
 import faulthandler
 import json
-import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -32,6 +32,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
@@ -44,10 +45,10 @@ if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
-import argparse
-from dataclasses import asdict
+import argparse  # noqa: E402
+from dataclasses import asdict  # noqa: E402
 
-from core.concepts.model import StudyItem
+from core.concepts.model import StudyItem  # noqa: E402
 
 # ------------------------------------------------------------------
 # Patterns
@@ -62,6 +63,7 @@ _ALLOC_PREFIXES = ("alloc_", "new_", "create_", "init_", "open_")
 _FREE_PREFIXES = ("free_", "destroy_", "release_", "close_", "put_")
 _GET_PREFIX = "get_"
 _PUT_PREFIX = "put_"
+_SET_PREFIX = "set_"
 
 _C_EXTENSIONS = frozenset((".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx"))
 
@@ -70,15 +72,18 @@ _C_EXTENSIONS = frozenset((".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx"))
 # ------------------------------------------------------------------
 
 _LOCK_NAMES = frozenset({
+    # kernel spinlocks
     "spin_lock", "spin_lock_irq", "spin_lock_irqsave",
     "spin_lock_bh", "spin_lock_nested",
     "spin_trylock", "spin_trylock_irq", "spin_trylock_irqsave",
     "spin_unlock", "spin_unlock_irq", "spin_unlock_irqrestore",
     "spin_unlock_bh",
+    # kernel mutexes / rwsems
     "mutex_lock", "mutex_lock_interruptible", "mutex_lock_killable",
     "mutex_lock_nested", "mutex_trylock", "mutex_unlock",
     "down_read", "down_read_trylock", "up_read",
     "down_write", "down_write_trylock", "up_write",
+    # kernel rwlocks
     "read_lock", "read_lock_irq", "read_lock_irqsave",
     "read_unlock", "read_unlock_irq", "read_unlock_irqrestore",
     "write_lock", "write_lock_irq", "write_lock_irqsave",
@@ -87,8 +92,22 @@ _LOCK_NAMES = frozenset({
     "raw_spin_unlock", "raw_spin_unlock_irq", "raw_spin_unlock_irqrestore",
     "spin_lock_init", "mutex_init", "rwlock_init",
     "ipc_lock_object", "ipc_unlock_object",
-    "pthread_mutex_lock", "pthread_mutex_unlock",
+    # POSIX threads
+    "pthread_mutex_lock", "pthread_mutex_trylock", "pthread_mutex_unlock",
+    "pthread_mutex_init", "pthread_mutex_destroy",
     "pthread_rwlock_rdlock", "pthread_rwlock_wrlock", "pthread_rwlock_unlock",
+    "pthread_rwlock_init", "pthread_rwlock_destroy",
+    "pthread_spin_lock", "pthread_spin_trylock", "pthread_spin_unlock",
+    "pthread_cond_wait", "pthread_cond_timedwait",
+    "pthread_cond_signal", "pthread_cond_broadcast",
+    # POSIX semaphores
+    "sem_wait", "sem_trywait", "sem_timedwait", "sem_post",
+    # C11 threads
+    "mtx_lock", "mtx_trylock", "mtx_timedlock", "mtx_unlock",
+    "cnd_wait", "cnd_timedwait", "cnd_signal", "cnd_broadcast",
+    # stdio locking
+    "flockfile", "ftrylockfile", "funlockfile",
+    # Library-specific locking (OpenSSL CRYPTO_THREAD etc.) discovered by Layer 1.
 })
 
 _LOCK_PATTERN = re.compile(
@@ -112,12 +131,31 @@ _RCU_PATTERN = re.compile(
 )
 
 _ORDERING_NAMES = frozenset({
+    # kernel barriers
     "smp_store_release", "smp_load_acquire",
     "smp_mb", "smp_mb__before_atomic", "smp_mb__after_atomic",
     "smp_rmb", "smp_wmb",
     "READ_ONCE", "WRITE_ONCE", "data_race",
     "smp_acquire__after_ctrl_dep",
     "__smp_store_release", "__smp_load_acquire",
+    # C11 atomics
+    "atomic_load", "atomic_load_explicit",
+    "atomic_store", "atomic_store_explicit",
+    "atomic_exchange", "atomic_exchange_explicit",
+    "atomic_compare_exchange_strong", "atomic_compare_exchange_weak",
+    "atomic_compare_exchange_strong_explicit",
+    "atomic_compare_exchange_weak_explicit",
+    "atomic_fetch_add", "atomic_fetch_sub",
+    "atomic_fetch_or", "atomic_fetch_and",
+    "atomic_thread_fence", "atomic_signal_fence",
+    # GCC/Clang builtins
+    "__atomic_load_n", "__atomic_store_n",
+    "__atomic_exchange_n", "__atomic_compare_exchange_n",
+    "__atomic_add_fetch", "__atomic_sub_fetch",
+    "__atomic_thread_fence",
+    "__sync_synchronize",
+    "__sync_val_compare_and_swap", "__sync_bool_compare_and_swap",
+    "__sync_fetch_and_add", "__sync_fetch_and_sub",
 })
 
 _ORDERING_PATTERN = re.compile(
@@ -125,10 +163,19 @@ _ORDERING_PATTERN = re.compile(
 )
 
 _BOUNDS_NAMES = frozenset({
+    # kernel user-copy
     "array_index_nospec",
     "access_ok", "copy_from_user", "copy_to_user",
     "get_user", "put_user", "__get_user", "__put_user",
     "check_object_size", "strnlen_user", "strncpy_from_user",
+    # userspace bounded string ops
+    "strlcpy", "strlcat", "strncpy", "strncat", "strnlen", "strndup",
+    "snprintf", "vsnprintf",
+    # C11 Annex K bounds-checking
+    "memcpy_s", "memmove_s", "strcpy_s", "strncpy_s", "strcat_s",
+    "strncat_s", "sprintf_s", "snprintf_s",
+    # POSIX safe reads
+    "fgets", "getline",
 })
 
 _BOUNDS_PATTERN = re.compile(
@@ -145,7 +192,26 @@ _CLAMP_PATTERN = re.compile(
     r"\b(" + "|".join(sorted(_CLAMP_NAMES, key=len, reverse=True)) + r")\s*\(",
 )
 
+_RESOURCE_LIFECYCLE_NAMES = frozenset({
+    "open", "close", "fopen", "fclose", "fdopen", "freopen",
+    "socket", "accept", "connect", "bind", "listen", "shutdown",
+    "pipe", "pipe2", "socketpair",
+    "dup", "dup2", "dup3", "fcntl",
+    "opendir", "closedir", "fdopendir",
+    "dlopen", "dlclose",
+    "popen", "pclose",
+    "tmpfile", "mkstemp", "mkdtemp",
+    "epoll_create", "epoll_create1", "epoll_ctl",
+    "eventfd", "signalfd", "timerfd_create",
+    "inotify_init", "inotify_init1", "inotify_add_watch",
+})
+
+_RESOURCE_LIFECYCLE_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_RESOURCE_LIFECYCLE_NAMES, key=len, reverse=True)) + r")\s*\(",
+)
+
 _OWNED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\s*\*")
+_REFERENCED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\b")
 
 _FLEX_ARRAY_PATTERN = re.compile(r"(\w+)\s+(\w+)\s*\[\s*(?:0|1)?\s*\]\s*;")
 
@@ -154,22 +220,32 @@ _FLAG_CHECK_PATTERN = re.compile(
 )
 
 _ALLOC_NAMES = frozenset({
+    # kernel allocators
     "kmalloc", "kzalloc", "kcalloc", "kvmalloc", "kvzalloc",
     "vmalloc", "vzalloc",
     "alloc_pages", "alloc_page", "__get_free_pages", "__get_free_page",
     "kmem_cache_alloc", "kmem_cache_zalloc",
     "devm_kmalloc", "devm_kzalloc",
     "krealloc", "kvrealloc",
-    "malloc", "calloc", "realloc",
+    # libc
+    "malloc", "calloc", "realloc", "reallocarray", "aligned_alloc",
+    "posix_memalign", "memalign", "valloc", "pvalloc",
+    "strdup", "strndup", "asprintf", "vasprintf",
+    "mmap",
+    # Library-specific allocators (OpenSSL, GLib, cURL, FFmpeg) are
+    # discovered transitively by Layer 1 from these seeds.
 })
 
 _FREE_NAMES = frozenset({
+    # kernel
     "kfree", "kvfree", "vfree",
     "free_pages", "free_page", "__free_pages",
     "kmem_cache_free",
     "devm_kfree",
     "put_page", "release_pages",
-    "free",
+    # libc
+    "free", "munmap",
+    # Library-specific deallocators discovered by Layer 1.
 })
 
 _ALLOC_FREE_PATTERN = re.compile(
@@ -202,7 +278,7 @@ _NULL_GUARD_PATTERN = re.compile(
 )
 
 _VALIDATION_BOUND_PATTERN = re.compile(
-    r"if\s*\(\s*(\w+(?:->\w+)*)\s*([><!]=?)\s*(\w+(?:->\w+|\(\)|\([^)]*\))*)\s*\)"
+    r"if\s*\(\s*(\w+(?:->\w+)*)\s*([><!]=?)\s*(\w+(?:->\w+|\([^)]*\))*)\s*\)"
     r"\s*\{?\s*\n?\s*return\s+(-\w+)",
 )
 
@@ -212,6 +288,7 @@ _ALLOC_THEN_CHECK_PATTERN = re.compile(
 )
 
 _INFRA_TYPES = frozenset({
+    # kernel infrastructure
     "list_head", "hlist_node", "hlist_head",
     "rcu_head", "callback_head",
     "rb_node", "rb_root",
@@ -219,6 +296,16 @@ _INFRA_TYPES = frozenset({
     "timer_list", "hrtimer",
     "kobject", "kref", "module",
     "dentry", "inode",
+    # POSIX / libc infrastructure
+    "sockaddr", "sockaddr_in", "sockaddr_in6", "sockaddr_un",
+    "addrinfo", "hostent",
+    "iovec", "msghdr", "cmsghdr",
+    "pollfd", "epoll_event", "fd_set",
+    "sigaction", "sigset_t", "siginfo_t",
+    "timespec", "timeval", "tm",
+    "stat", "dirent",
+    # GLib
+    "GList", "GSList", "GHashTable", "GString", "GArray",
 })
 
 
@@ -326,6 +413,7 @@ def _extract_structural_signals(body: str) -> dict:
         "clamping_patterns": sorted(set(_CLAMP_PATTERN.findall(body))),
         "flag_checks": flag_checks,
         "alloc_frees": sorted(set(_ALLOC_FREE_PATTERN.findall(body))),
+        "resource_lifecycle": sorted(set(_RESOURCE_LIFECYCLE_PATTERN.findall(body))),
         "state_transitions": state_transitions,
         "gate_checks": sorted(gate_checks_raw),
         "dispatch_tables": dispatch_tables,
@@ -918,6 +1006,238 @@ def _build_type_reference_index(
 _CALL_SITE_RE = re.compile(r"\b(\w+)\s*\(")
 
 
+# ------------------------------------------------------------------
+# Layer 1: transitive wrapper discovery
+# ------------------------------------------------------------------
+
+_RESOURCE_OPENER_NAMES = frozenset({
+    "open", "fopen", "socket", "accept", "pipe", "pipe2",
+    "socketpair", "dup", "dup2", "dup3", "epoll_create",
+    "epoll_create1", "eventfd", "signalfd", "timerfd_create",
+    "inotify_init", "inotify_init1", "mkstemp",
+})
+
+_LOCK_PARAM_RE = re.compile(
+    r"\b(?:pthread_mutex_t|pthread_rwlock_t|pthread_spinlock_t|"
+    r"mtx_t|sem_t|mutex|spinlock_t|rwlock_t|CRYPTO_RWLOCK"
+    r"|spinlock|rwsem|semaphore)\b",
+)
+
+
+def _param_paren_pos(sig: str) -> int:
+    """Find the opening paren of the parameter list, skipping __attribute__((...))."""
+    i = 0
+    while i < len(sig):
+        p = sig.find("(", i)
+        if p == -1:
+            return -1
+        prefix = sig[:p].rstrip()
+        if prefix.endswith("__attribute__"):
+            depth = 1
+            j = p + 1
+            while j < len(sig) and depth > 0:
+                if sig[j] == "(":
+                    depth += 1
+                elif sig[j] == ")":
+                    depth -= 1
+                j += 1
+            i = j
+            continue
+        return p
+    return -1
+
+
+def _returns_pointer(sig: str) -> bool:
+    paren = _param_paren_pos(sig)
+    if paren == -1:
+        return False
+    return "*" in sig[:paren]
+
+
+def _returns_void(sig: str) -> bool:
+    paren = _param_paren_pos(sig)
+    if paren == -1:
+        return False
+    before = sig[:paren].strip()
+    return "void" in before.split() and "*" not in before
+
+
+def _returns_int(sig: str) -> bool:
+    paren = _param_paren_pos(sig)
+    if paren == -1:
+        return False
+    before = sig[:paren].strip()
+    return "int" in before.split() and "*" not in before
+
+
+_MAX_WRAPPER_DISTINCT_CALLS = 4
+
+
+def _is_thin_wrapper(body: str, calls: set[str]) -> bool:
+    """True if body looks like a thin wrapper (few statements, few call sites)."""
+    stmts = [s.strip() for s in body.split(";") if s.strip()]
+    if len(stmts) > 6:
+        return False
+    if len(calls) > _MAX_WRAPPER_DISTINCT_CALLS:
+        return False
+    return True
+
+
+def _discover_project_patterns(
+    functions: list[dict],
+    *,
+    max_passes: int = 2,
+) -> dict[str, str]:
+    """Discover project-specific wrapper patterns via transitive analysis.
+
+    Starting from known primitives (_ALLOC_NAMES, _FREE_NAMES, etc.),
+    discovers functions that wrap known allocators, deallocators, lock
+    primitives, or resource-lifecycle calls.  Transitive: if my_alloc
+    wraps malloc, then pool_alloc wrapping my_alloc is also discovered.
+
+    Only thin wrappers qualify — functions with >6 statements or >4
+    distinct call sites are skipped (builders, not wrappers).
+
+    Returns {function_name: role} where role is one of:
+    allocator, deallocator, lock_wrapper, resource_wrapper.
+    """
+    known_alloc = set(_ALLOC_NAMES)
+    known_dealloc = set(_FREE_NAMES)
+    known_lock = set(_LOCK_NAMES)
+    known_resource = set(_RESOURCE_OPENER_NAMES)
+
+    fn_calls: dict[str, set[str]] = {}
+    fn_sigs: dict[str, str] = {}
+    fn_bodies: dict[str, str] = {}
+    for f in functions:
+        name = f["name"]
+        fn_sigs[name] = f.get("signature", "")
+        body = f.get("body", "")
+        fn_bodies[name] = body
+        if body:
+            fn_calls[name] = {m.group(1) for m in _CALL_SITE_RE.finditer(body)}
+        else:
+            fn_calls[name] = set()
+
+    discovered: dict[str, str] = {}
+
+    for _pass_num in range(max_passes):
+        new_found = 0
+        for f in functions:
+            name = f["name"]
+            if name in discovered:
+                continue
+
+            calls = fn_calls.get(name, set())
+            if not calls:
+                continue
+
+            body = fn_bodies.get(name, "")
+            if not _is_thin_wrapper(body, calls):
+                continue
+
+            sig = fn_sigs.get(name, "")
+
+            if calls & known_alloc and _returns_pointer(sig):
+                discovered[name] = "allocator"
+                known_alloc.add(name)
+                new_found += 1
+                continue
+
+            if calls & known_dealloc and _returns_void(sig):
+                discovered[name] = "deallocator"
+                known_dealloc.add(name)
+                new_found += 1
+                continue
+
+            if calls & known_lock and _LOCK_PARAM_RE.search(sig):
+                discovered[name] = "lock_wrapper"
+                known_lock.add(name)
+                new_found += 1
+                continue
+
+            if calls & known_resource and _returns_int(sig):
+                discovered[name] = "resource_wrapper"
+                known_resource.add(name)
+                new_found += 1
+                continue
+
+        if new_found == 0:
+            break
+
+    return discovered
+
+
+def _find_reading_list_anchors(
+    functions: list[dict],
+    identifiers: list[str],
+) -> set[str]:
+    """Layer 2: find functions that reference reading-list identifiers.
+
+    A function is an anchor if its name matches an identifier, or its
+    body or signature references one (word-boundary match).  Returns
+    the set of function names.
+    """
+    if not identifiers:
+        return set()
+
+    ident_set: set[str] = set()
+    patterns: list[re.Pattern[str]] = []
+    for ident in identifiers:
+        bare = re.sub(r"^(?:struct|union|enum)\s+", "", ident.strip())
+        if not bare:
+            continue
+        ident_set.add(bare)
+        ident_set.add(bare.lower())
+        patterns.append(re.compile(r"\b" + re.escape(bare) + r"\b"))
+
+    anchors: set[str] = set()
+    for f in functions:
+        name = f["name"]
+        if name in ident_set or name.lower() in ident_set:
+            anchors.add(name)
+            continue
+        sig = f.get("signature", "")
+        body = f.get("body", "")
+        text = sig + " " + body
+        for pat in patterns:
+            if pat.search(text):
+                anchors.add(name)
+                break
+
+    return anchors
+
+
+def _expand_via_call_graph(
+    seed_names: set[str],
+    call_graph: dict[str, list[str]],
+    *,
+    max_depth: int = 2,
+    max_fan: int = 5,
+) -> set[str]:
+    """Layer 3: expand seed set by walking callees in the call graph.
+
+    BFS from seed_names, following at most max_fan callees per function,
+    up to max_depth levels.  Returns the expanded set (includes seeds).
+    """
+    expanded = set(seed_names)
+    frontier = set(seed_names)
+
+    for _depth in range(max_depth):
+        next_frontier: set[str] = set()
+        for fn in frontier:
+            callees = call_graph.get(fn, [])
+            for callee in callees[:max_fan]:
+                if callee not in expanded:
+                    expanded.add(callee)
+                    next_frontier.add(callee)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    return expanded
+
+
 def _build_call_graph(functions: list[dict]) -> dict[str, list[str]]:
     """Build forward call graph: for each function, which known functions it calls."""
     known_names = {f["name"] for f in functions}
@@ -966,9 +1286,10 @@ def _find_paired_operations(functions: list[dict]) -> list[tuple[str, str]]:
     for name in sorted(names):
         if name.startswith(_GET_PREFIX):
             suffix = name[len(_GET_PREFIX):]
-            partner = _PUT_PREFIX + suffix
-            if partner in names:
-                _add(name, partner)
+            for partner_pfx in (_PUT_PREFIX, _SET_PREFIX):
+                partner = partner_pfx + suffix
+                if partner in names:
+                    _add(name, partner)
 
     for alloc_pfx in _ALLOC_PREFIXES:
         for name in sorted(names):
@@ -1000,9 +1321,16 @@ def _build_study_items(
     functions: list[dict],
     pairs: list[tuple[str, str]],
     type_ref_index: dict[str, list[tuple[str, str]]] | None = None,
+    *,
+    scoped: bool = False,
+    discovered_patterns: dict[str, str] | None = None,
+    anchor_names: set[str] | None = None,
 ) -> list[StudyItem]:
     call_graph = _build_call_graph(functions)
     type_ref_index = type_ref_index or {}
+    discovered_patterns = discovered_patterns or {}
+    discovered_names = set(discovered_patterns.keys())
+    anchor_names = anchor_names or set()
 
     def _type_ref_names(type_name: str) -> set[str]:
         """Extract just the function names for a type from the index."""
@@ -1123,8 +1451,10 @@ def _build_study_items(
             or has_type_info
             or f["name"] in all_paired
             or f["name"] in type_ref_fns
+            or f["name"] in discovered_names
+            or f["name"] in anchor_names
         )
-        if not has_content:
+        if not scoped and not has_content:
             continue
         item_id = f"func_{f['name']}"
         if item_id in seen_ids:
@@ -1153,9 +1483,100 @@ def _build_study_items(
             clamping_patterns=signals.get("clamping_patterns", []),
             flag_checks=flag_checks,
             alloc_frees=alloc_frees,
+            resource_lifecycle=signals.get("resource_lifecycle", []),
             usage_class=_fn_usage.get(f["name"]),
         ))
 
+    if discovered_patterns:
+        disc_alloc = {n for n, r in discovered_patterns.items()
+                      if r == "allocator"}
+        disc_dealloc = {n for n, r in discovered_patterns.items()
+                        if r == "deallocator"}
+        disc_lock = {n for n, r in discovered_patterns.items()
+                     if r == "lock_wrapper"}
+        disc_resource = {n for n, r in discovered_patterns.items()
+                         if r == "resource_wrapper"}
+        for item in items:
+            if item.kind != "function":
+                continue
+            item_calls = set(item.calls)
+            for name in sorted(item_calls & disc_alloc):
+                if name not in item.alloc_frees:
+                    item.alloc_frees.append(name)
+            for name in sorted(item_calls & disc_dealloc):
+                if name not in item.alloc_frees:
+                    item.alloc_frees.append(name)
+            for name in sorted(item_calls & disc_lock):
+                if name not in item.lock_sites:
+                    item.lock_sites.append(name)
+            for name in sorted(item_calls & disc_resource):
+                if name not in item.resource_lifecycle:
+                    item.resource_lifecycle.append(name)
+
+    return items
+
+
+def _reinject_referenced_types(
+    items: list[StudyItem],
+    pre_filter_index: dict[str, StudyItem],
+    infra_types: set[str],
+) -> list[StudyItem]:
+    """Re-include struct definitions referenced by surviving items.
+
+    Types that the surviving items reference via pointer fields or body
+    usage may have been dropped at tier 3.  This finds those definitions
+    in the pre-filter index and adds them back as tier-2 context items
+    so the LLM doesn't need a follow-up pass to ask "what is struct X?".
+    """
+    surviving = {it.name.lower() for it in items}
+    infra_lower = {t.lower() for t in infra_types}
+    referenced: set[str] = set()
+
+    # Only scan tier 0-1 (focus) items — tier 2 context items are already
+    # secondary; pulling in THEIR deps inflates without helping the LLM
+    # understand the primary identifiers.
+    focus = [it for it in items if (it.relevance_tier or 0) <= 1]
+    for it in focus:
+        for t in it.owned_types:
+            referenced.add(t.lower())
+        if it.definition:
+            pat = (_REFERENCED_TYPE_PATTERN if it.kind == "function"
+                   else _OWNED_TYPE_PATTERN)
+            for m in pat.finditer(it.definition):
+                name = m.group(1).lower()
+                if name not in infra_lower:
+                    referenced.add(name)
+
+    n_readded = 0
+    newly_added: list[StudyItem] = []
+    for type_name in sorted(referenced - surviving):
+        dep = pre_filter_index.get(type_name)
+        if dep is not None:
+            dep.relevance_tier = 2
+            items.append(dep)
+            newly_added.append(dep)
+            surviving.add(type_name)
+            n_readded += 1
+
+    # Second pass: scan newly-reinjected struct definitions for
+    # embedded struct members (e.g. skcipher_walk embeds scatter_walk).
+    for dep in newly_added:
+        if dep.kind != "struct" or not dep.definition:
+            continue
+        for m in _REFERENCED_TYPE_PATTERN.finditer(dep.definition):
+            name = m.group(1).lower()
+            if name in surviving or name in infra_lower:
+                continue
+            embed = pre_filter_index.get(name)
+            if embed is not None:
+                embed.relevance_tier = 2
+                items.append(embed)
+                surviving.add(name)
+                n_readded += 1
+
+    if n_readded:
+        print(f"study-prep: re-included {n_readded} referenced "
+              f"type definitions as context", file=sys.stderr)
     return items
 
 
@@ -1164,16 +1585,27 @@ def _build_study_items(
 # ------------------------------------------------------------------
 
 def _detect_source_root(target: Path) -> Path:
-    """Walk up from target looking for a source root indicator."""
-    indicators = ("Makefile", "Kbuild", "Kconfig", "CMakeLists.txt",
-                  "setup.py", "pyproject.toml", "Cargo.toml", "go.mod",
-                  "pom.xml", "build.gradle", "package.json", ".git")
+    """Walk up from target looking for the project root.
+
+    Prefers .git (definitive VCS root) over build files that may exist
+    at every level in mono-repos or kernel trees.  Falls back to the
+    highest directory containing any build-system indicator.
+    """
+    _VCS_ROOTS = (".git",)
+    _BUILD_INDICATORS = (
+        "Makefile", "Kbuild", "Kconfig", "CMakeLists.txt",
+        "setup.py", "pyproject.toml", "Cargo.toml", "go.mod",
+        "pom.xml", "build.gradle", "package.json",
+    )
     current = target if target.is_dir() else target.parent
+    highest_build: Path | None = None
     while current != current.parent:
-        if any((current / ind).exists() for ind in indicators):
+        if any((current / vcs).exists() for vcs in _VCS_ROOTS):
             return current
+        if any((current / ind).exists() for ind in _BUILD_INDICATORS):
+            highest_build = current
         current = current.parent
-    return target if target.is_dir() else target.parent
+    return highest_build or (target if target.is_dir() else target.parent)
 
 
 # ------------------------------------------------------------------
@@ -1272,7 +1704,12 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
                 seen.add(q)
                 concepts.append(q)
             continue
-        ctx = item.get("context", "")
+        # source_function is the strongest anchor — always include it
+        src_fn = (item.get("source_function") or "").strip()
+        if src_fn and src_fn not in seen:
+            seen.add(src_fn)
+            identifiers.append(src_fn)
+        ctx = item.get("context") or ""
         m = _CONTEXT_NAME_RE.search(ctx)
         if m:
             name = m.group(1)
@@ -1288,9 +1725,100 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
     return identifiers, concepts
 
 
+def _scope_from_reading_list(
+    rl_path: Path,
+    source_root: Path,
+    search_dirs: list[Path],
+    *,
+    max_depth: int = 2,
+) -> list[Path] | None:
+    """Build a targeted file set by chasing includes from reading-list source files.
+
+    Starts from the source_file entries in reading-list.json, resolves
+    their #include directives against search_dirs, and recurses up to
+    max_depth levels.  Returns the scoped file list, or None if the
+    reading list has no source_file entries (fall back to full rglob).
+    """
+    if not rl_path.is_file():
+        return None
+    try:
+        raw = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    seed_files: set[str] = set()
+    for item in raw.get("items", []):
+        sf = item.get("source_file", "")
+        if sf:
+            seed_files.add(sf)
+    if not seed_files:
+        return None
+
+    collected: set[Path] = set()
+    frontier: set[Path] = set()
+    for sf in seed_files:
+        p = (source_root / sf).resolve()
+        if p.is_file():
+            frontier.add(p)
+
+    for _depth in range(max_depth + 1):
+        if not frontier:
+            break
+        new_frontier: set[Path] = set()
+        for fpath in frontier:
+            if fpath in collected:
+                continue
+            collected.add(fpath)
+            try:
+                src = fpath.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for inc in _extract_includes(src):
+                resolved = _resolve_include(inc, search_dirs, source_root)
+                if resolved and resolved not in collected:
+                    new_frontier.add(resolved)
+        frontier = new_frontier
+
+    return sorted(collected) if collected else None
+
+
+def _grep_scope(
+    source_files: list[Path],
+    identifier_arg: str,
+    target: Path,
+) -> list[Path]:
+    """Narrow a large file set to those containing identifier hits.
+
+    When the target tree has >500 files and --identifier is set, a full
+    AST parse is too slow.  Instead, grep for the identifiers and only
+    parse files with hits (plus their direct includes, added later in
+    the external-header pass).
+    """
+    terms = {t.strip() for t in identifier_arg.split(",") if t.strip()}
+    if not terms:
+        return source_files
+    pattern = "|".join(re.escape(t) for t in sorted(terms))
+    hit_files: list[Path] = []
+    regex = re.compile(pattern)
+    for sf in source_files:
+        try:
+            text = sf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if regex.search(text):
+            hit_files.append(sf)
+    print(
+        f"study-prep: grep-scoped {len(source_files)} -> {len(hit_files)} "
+        f"files ({len(terms)} identifiers)",
+        file=sys.stderr,
+    )
+    return hit_files if hit_files else source_files
+
+
 def _llm_seed_concepts_from_names(
     semantic_concepts: list[str],
     all_names: list[str],
+    model: str | None = None,
 ) -> list[str]:
     """Ask LLM to map semantic concepts to concrete identifiers.
 
@@ -1301,7 +1829,17 @@ def _llm_seed_concepts_from_names(
         return []
     try:
         from packages.llm_analysis import get_client
-        client = get_client()
+        if model:
+            from core.llm.config import LLMConfig
+            cfg = LLMConfig()
+            mc = cfg.config_for_model(model)
+            if mc.api_key:
+                client = get_client(config=LLMConfig(
+                    primary_model=mc, fallback_models=[]))
+            else:
+                client = get_client()
+        else:
+            client = get_client()
     except Exception:
         print("study-prep: WARNING: no LLM available for concept seeding",
               file=sys.stderr)
@@ -1325,11 +1863,8 @@ def _llm_seed_concepts_from_names(
         "Return 20-80 identifiers.  No explanation, just the JSON array."
     )
     try:
-        resp = client.chat(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=4096,
-        )
-        text = resp if isinstance(resp, str) else resp.content[0].text
+        resp = client.generate(prompt, max_tokens=4096)
+        text = resp.content if isinstance(resp.content, str) else str(resp.content)
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -1346,6 +1881,7 @@ def _llm_seed_concepts_from_names(
 def _llm_seed_concepts(
     semantic_concepts: list[str],
     study_list_path: Path,
+    model: str | None = None,
 ) -> list[str]:
     """Wrapper: reads names from study-list.json, then delegates to _from_names."""
     if not study_list_path.is_file():
@@ -1355,7 +1891,7 @@ def _llm_seed_concepts(
     except (OSError, json.JSONDecodeError):
         return []
     all_names = sorted({item["name"] for item in data.get("items", [])})
-    return _llm_seed_concepts_from_names(semantic_concepts, all_names)
+    return _llm_seed_concepts_from_names(semantic_concepts, all_names, model=model)
 
 
 def _discover_docs(
@@ -1419,21 +1955,50 @@ def _discover_docs(
             except OSError:
                 continue
             snippet_lower = snippet.lower()
+            # Extract document title from RST heading
+            doc_title = ""
+            lines = snippet.split("\n")
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if (not stripped
+                        or stripped.startswith(("#", "..", ":"))):
+                    continue
+                # Overline format: =====\nTitle\n=====
+                if (all(c in "=-~^" for c in stripped)
+                        and len(stripped) >= 3
+                        and i + 2 < len(lines)
+                        and lines[i + 1].strip()
+                        and lines[i + 2].strip()
+                        and all(c in "=-~^"
+                                for c in lines[i + 2].strip())):
+                    doc_title = lines[i + 1].strip()
+                    break
+                # Underline-only format: Title\n=====
+                if (i + 1 < len(lines)
+                        and lines[i + 1].strip()
+                        and all(c in "=-~^" for c in
+                                lines[i + 1].strip())):
+                    doc_title = stripped
+                break
             for stem in ident_stems:
                 if len(stem) <= 5:
                     # Short stems: require type-qualified reference
                     if (f"struct {stem}" in snippet_lower
                             or f"{stem}_t" in snippet_lower
                             or f"``{stem}``" in snippet_lower):
+                        reason = doc_title or (
+                            f"references type '{stem}' in content")
                         results.append({
                             "file": str(doc_file),
-                            "reason": f"references type '{stem}' in content",
+                            "reason": reason,
                         })
                         break
                 elif stem in snippet_lower:
+                    reason = doc_title or (
+                        f"references '{stem}' in content")
                     results.append({
                         "file": str(doc_file),
-                        "reason": f"references '{stem}' in content",
+                        "reason": reason,
                     })
                     break
 
@@ -1443,6 +2008,133 @@ def _discover_docs(
             break
 
     return results
+
+
+def _chase_reading_list_definitions(
+    rl_path: Path,
+    source_root: Path,
+    target: Path,
+) -> list[Path]:
+    """Find files outside target that define reading-list identifiers.
+
+    When the reading list references types/functions defined outside the
+    study target (e.g. scatterlist.h when target is crypto/), this finds
+    their definitions so the LLM can study them.  Uses subprocess grep
+    for speed.
+    """
+    if not rl_path.is_file():
+        return []
+    try:
+        raw = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    # Collect concrete identifiers from unresolved items
+    _CTX_FULL_RE = re.compile(
+        r"(?:Unresolved|Dependency)\s+\w+:\s+"
+        r"(?:(?:struct|union|enum)\s+)?([A-Za-z_]\w+)"
+    )
+    idents: set[str] = set()
+    for item in raw.get("items", []):
+        if item.get("resolved"):
+            continue
+        ctx = item.get("context") or ""
+        q = item.get("question") or ""
+        # "Unresolved type: struct scatterlist" → scatterlist
+        m = _CTX_FULL_RE.search(ctx)
+        if m:
+            name = m.group(1)
+            if len(name) >= 3:
+                idents.add(name)
+            continue
+        # Backtick-quoted in question
+        for bm in re.finditer(r"`([A-Za-z_]\w+)`", q):
+            name = bm.group(1)
+            if len(name) >= 3:
+                idents.add(name)
+
+    if not idents:
+        return []
+
+    target_resolved = target.resolve()
+    candidates: set[Path] = set()
+
+    def _collect_grep(dest: set[Path]) -> None:
+        """Find files containing struct/function/typedef definitions."""
+        def_patterns: list[str] = []
+        for ident in sorted(idents):
+            escaped = re.escape(ident)
+            def_patterns.append(rf"struct\s+{escaped}\s*\{{")
+            def_patterns.append(rf"\}}\s+{escaped}\s*;")
+            def_patterns.append(rf"^[A-Za-z_].*\b{escaped}\s*\(")
+        if not def_patterns:
+            return
+        combined = "|".join(def_patterns[:300])
+        try:
+            proc = subprocess.run(
+                ["grep", "-rlE", "--include=*.c", "--include=*.h",
+                 combined, str(source_root)],
+                capture_output=True, text=True, timeout=60,
+            )
+            for line in proc.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                p = Path(line).resolve()
+                if p.is_file() and not p.is_relative_to(target_resolved):
+                    dest.add(p)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    def _collect_find(dest: set[Path]) -> None:
+        """Find files named after reading-list identifiers."""
+        long_idents = [i for i in idents if len(i) >= 6]
+        if not long_idents:
+            return
+        name_args: list[str] = []
+        for ident in long_idents:
+            il = ident.lower()
+            if name_args:
+                name_args.append("-o")
+            name_args.extend(["-name", f"{il}.*"])
+            name_args.extend(["-o", "-name", f"*_{il}.*"])
+            name_args.extend(["-o", "-name", f"{il}_*.*"])
+        try:
+            proc = subprocess.run(
+                ["find", str(source_root), "-type", "f", "("]
+                + name_args + [")"],
+                capture_output=True, text=True, timeout=30,
+            )
+            for line in proc.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                p = Path(line).resolve()
+                if p.suffix in (".c", ".h") \
+                        and not p.is_relative_to(target_resolved):
+                    dest.add(p)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    _collect_grep(candidates)
+    _collect_find(candidates)
+
+    # Prioritise definition locations over consumers:
+    # include/, lib/ before drivers/, arch/, tools/, etc.
+    def _priority(p: Path) -> int:
+        for part in p.parts:
+            if part == "include":
+                return 0
+            if part == "lib":
+                return 1
+            if part in ("kernel", "mm", "net", "fs", "security"):
+                return 2
+        return 3
+
+    if candidates:
+        print(f"study-prep: chased {len(candidates)} external definition files "
+              f"for {len(idents)} reading-list identifiers",
+              file=sys.stderr)
+
+    return sorted(candidates, key=_priority)
 
 
 def main() -> None:
@@ -1465,8 +2157,13 @@ def main() -> None:
                     help="Path to reading-list.json; pending items feed --identifier or --concept by resolution tag.")
     ap.add_argument("--include-dir", action="append", default=None, dest="include_dirs",
                     metavar="DIR", help="Additional include search directories (repeatable).")
+    ap.add_argument("--narrow", action="store_true",
+                    help="Narrow extraction: skip API-from-header and stem expansion. "
+                         "Use for follow-up passes where only the named identifiers matter.")
     ap.add_argument("--threads", type=int, default=None,
                     help="Worker threads for file extraction (default: cpu_count).")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override for concept seeding.")
     parsed, _extras = ap.parse_known_args(sys.argv[1:])
 
     target = Path(parsed.target).resolve()
@@ -1535,14 +2232,55 @@ def main() -> None:
             if p.is_dir() and p not in search_dirs:
                 search_dirs.append(p)
 
+    is_scoped = False
     if target.is_file():
         source_files = [target]
+        is_scoped = True
     else:
-        source_files = sorted(
-            f for f in target.rglob("*")
-            if f.suffix in _C_EXTENSIONS and f.is_file()
-            and not f.is_symlink()
-        )
+        scoped = None
+        if parsed.reading_list:
+            scoped = _scope_from_reading_list(
+                Path(parsed.reading_list), source_root, search_dirs,
+            )
+        if scoped is not None:
+            is_scoped = True
+            source_files = [
+                f for f in scoped
+                if f.suffix in _C_EXTENSIONS and f.is_file()
+            ]
+            print(
+                f"study-prep: scoped to {len(source_files)} files "
+                f"via include-chase from reading-list",
+                file=sys.stderr,
+            )
+        else:
+            source_files = sorted(
+                f for f in target.rglob("*")
+                if f.suffix in _C_EXTENSIONS and f.is_file()
+                and not f.is_symlink()
+            )
+            if len(source_files) > 500 and parsed.identifier:
+                source_files = _grep_scope(
+                    source_files, parsed.identifier, target,
+                )
+
+        # Chase reading-list identifiers to their definitions outside target.
+        # This pulls in files like include/linux/scatterlist.h and
+        # lib/scatterlist.c when the reading list references scatterlist.
+        if parsed.reading_list and source_root != target:
+            ext_defs = _chase_reading_list_definitions(
+                Path(parsed.reading_list), source_root, target,
+            )
+            if ext_defs:
+                existing = {f.resolve() for f in source_files}
+                added = [f for f in ext_defs
+                         if f.suffix in _C_EXTENSIONS and f.resolve() not in existing]
+                if added:
+                    is_scoped = True
+                    source_files.extend(added)
+                    print(f"study-prep: added {len(added)} external definition "
+                          f"files to study scope",
+                          file=sys.stderr)
 
     headers = [f for f in source_files if f.suffix in _HEADER_EXTENSIONS]
     c_files = [f for f in source_files if f.suffix in _SOURCE_EXTENSIONS]
@@ -1643,21 +2381,8 @@ def main() -> None:
                     for sf in ext_headers
                 ]
                 for fut in futures:
-                    structs, functions, protos, _incs = fut.result()
+                    structs, _functions, _protos, _incs = fut.result()
                     all_structs.extend(structs)
-                    all_functions.extend(functions)
-                    all_prototypes.extend(protos)
-
-            # Re-dedup after adding external headers
-            proto_names = {p["name"] for p in all_prototypes}
-            fns_with_body = {f["name"] for f in all_functions if f.get("body")}
-            all_functions[:] = [
-                f for f in all_functions
-                if f["name"] not in proto_names or f["name"] in fns_with_body
-            ]
-            all_prototypes[:] = [
-                p for p in all_prototypes if p["name"] not in fns_with_body
-            ]
 
             print(f"study-prep: pass 1.5: {len(ext_headers)} external headers "
                   f"scanned (identifier-relevant includes)",
@@ -1689,7 +2414,7 @@ def main() -> None:
             print("study-prep: no prior study-list.json — will seed concepts "
                   "from in-memory items after extraction", file=sys.stderr)
         else:
-            seeded = _llm_seed_concepts(semantic_concepts, study_list_path)
+            seeded = _llm_seed_concepts(semantic_concepts, study_list_path, model=parsed.model)
             if seeded:
                 identifiers.extend(seeded)
                 _deferred_concepts = []
@@ -1743,7 +2468,11 @@ def main() -> None:
         print(f"study-prep: pass 2 ({len(c_files)} files, {n_workers_p2} threads) "
               f"[{t2 - t1:.1f}s]", file=sys.stderr)
 
-    # Pass 3: resolved includes not already scanned (few files, sequential)
+    # Pass 3: resolved includes not already scanned (few files, sequential).
+    # Files outside the target directory contribute struct definitions only
+    # — their functions/prototypes stay out of the study-item pool to avoid
+    # scope explosion when source_root is wider than target.
+    target_resolved = target.resolve()
     seen_files = {sf.resolve() for sf in source_files}
     for _inc_path, resolved_path in resolved_includes.items():
         rp = Path(resolved_path)
@@ -1751,24 +2480,67 @@ def main() -> None:
             continue
         seen_files.add(rp.resolve())
         is_header = rp.suffix in _HEADER_EXTENSIONS
+        is_external = not rp.resolve().is_relative_to(target_resolved)
         structs, functions, protos, _incs = _scan_file_result(
             rp, source_root, use_ts, None,
-            extract_protos=is_header,
+            extract_protos=is_header and not is_external,
         )
         all_structs.extend(structs)
-        all_functions.extend(functions)
-        all_prototypes.extend(protos)
+        if not is_external:
+            all_functions.extend(functions)
+            all_prototypes.extend(protos)
 
     t3 = time.monotonic()
+
+    # Final dedup: prototypes extracted in pass 1 may now have body
+    # versions from pass 2/3.  Remove those prototypes so they don't
+    # overwrite call-graph entries in _build_call_graph (dict-last-wins).
+    fns_with_body = {f["name"] for f in all_functions if f.get("body")}
+    all_prototypes[:] = [
+        p for p in all_prototypes if p["name"] not in fns_with_body
+    ]
 
     # Build type-reference index from prototypes + functions
     combined_fns = all_functions + all_prototypes
     type_ref_index = _build_type_reference_index(all_prototypes, all_functions)
 
+    # Layer 1: discover project-specific wrapper patterns
+    discovered_patterns = _discover_project_patterns(all_functions)
+    if discovered_patterns:
+        by_role: dict[str, int] = {}
+        for _r in discovered_patterns.values():
+            by_role[_r] = by_role.get(_r, 0) + 1
+        role_summary = ", ".join(f"{r}={c}" for r, c in sorted(by_role.items()))
+        print(f"study-prep: layer 1 discovered {len(discovered_patterns)} "
+              f"patterns ({role_summary})", file=sys.stderr)
+
+    # Layer 2: reading-list anchored function inclusion
+    rl_anchors: set[str] = set()
+    if identifiers:
+        rl_anchors = _find_reading_list_anchors(all_functions, identifiers)
+
+    # Layer 3: call-graph expansion from anchors
+    expanded_anchors: set[str] = set()
+    if rl_anchors:
+        preliminary_cg = _build_call_graph(combined_fns)
+        expanded_anchors = _expand_via_call_graph(
+            rl_anchors, preliminary_cg, max_depth=2, max_fan=5,
+        )
+        n_expanded = len(expanded_anchors) - len(rl_anchors)
+        print(f"study-prep: layer 2+3: {len(rl_anchors)} reading-list anchors"
+              f"{f', +{n_expanded} via call-graph expansion' if n_expanded else ''}",
+              file=sys.stderr)
+
     pairs = _find_paired_operations(combined_fns)
-    items = _build_study_items(all_structs, combined_fns, pairs, type_ref_index)
+    items = _build_study_items(
+        all_structs, combined_fns, pairs, type_ref_index,
+        scoped=is_scoped,
+        discovered_patterns=discovered_patterns,
+        anchor_names=expanded_anchors,
+    )
     t4 = time.monotonic()
-    print(f"study-prep: reduce (type-ref + pairs + items) [{t4 - t3:.1f}s]",
+    print(f"study-prep: reduce (type-ref + pairs + items) [{t4 - t3:.1f}s]"
+          f"{' [scoped — has_content gate bypassed]' if is_scoped else ''}",
           file=sys.stderr)
 
     # Deferred concept seeding: when --concept was passed without a prior
@@ -1776,12 +2548,33 @@ def main() -> None:
     if _deferred_concepts and items:
         all_item_names = sorted({it.name for it in items})
         seeded = _llm_seed_concepts_from_names(
-            _deferred_concepts, all_item_names)
+            _deferred_concepts, all_item_names, model=parsed.model)
         if seeded:
             identifiers.extend(seeded)
             print(f"study-prep: deferred concept seeding: {len(seeded)} identifiers "
                   f"from {len(_deferred_concepts)} concepts (in-memory)",
                   file=sys.stderr)
+
+    # Merge --correlate identifiers early so the relevance filter and doc
+    # discovery see them (previously this ran after both, so standalone
+    # --correlate produced an empty filter set).
+    correlate_identifiers = None
+    if parsed.correlate:
+        correlate_identifiers = [
+            s.strip() for s in re.split(r"[,+]", parsed.correlate)
+            if s.strip()
+        ]
+        if len(correlate_identifiers) < 2:
+            correlate_identifiers = None
+        else:
+            print(f"study-prep: correlation requested for {correlate_identifiers}",
+                  file=sys.stderr)
+            if not identifiers:
+                identifiers = list(correlate_identifiers)
+            else:
+                for ci in correlate_identifiers:
+                    if ci not in identifiers:
+                        identifiers.append(ci)
 
     if identifiers:
         # ident_exact: names that match tier 0 exactly (struct defs)
@@ -1814,28 +2607,25 @@ def main() -> None:
         # a tier-0 struct.  In C, the header IS the API declaration — if
         # the developer put crhold() next to struct cred in cred.h, that's
         # their explicit statement that crhold belongs to the cred API.
-        # For class-based languages the equivalent is "method defined in
-        # the same class" — handled by the language-specific extractor.
-        tier0_headers: set[str] = set()
-        for it in items:
-            if it.name.lower() in ident_exact and it.file.endswith(
-                tuple(_HEADER_EXTENSIONS)
-            ):
-                tier0_headers.add(it.file)
-
-        # Map: function_name → set of headers where it is declared/defined
-        fn_declared_in: dict[str, set[str]] = {}
-        for p in all_prototypes:
-            fn_declared_in.setdefault(p["name"], set()).add(p["file"])
-        for f in all_functions:
-            if f.get("file", "").endswith(tuple(_HEADER_EXTENSIONS)):
-                fn_declared_in.setdefault(f["name"], set()).add(f["file"])
-
-        # Functions whose declaration lives in a tier-0 header
         api_fns: set[str] = set()
-        for fn_name, headers in fn_declared_in.items():
-            if headers & tier0_headers:
-                api_fns.add(fn_name)
+        if not parsed.narrow:
+            tier0_headers: set[str] = set()
+            for it in items:
+                if it.name.lower() in ident_exact and it.file.endswith(
+                    tuple(_HEADER_EXTENSIONS)
+                ):
+                    tier0_headers.add(it.file)
+
+            fn_declared_in: dict[str, set[str]] = {}
+            for p in all_prototypes:
+                fn_declared_in.setdefault(p["name"], set()).add(p["file"])
+            for f in all_functions:
+                if f.get("file", "").endswith(tuple(_HEADER_EXTENSIONS)):
+                    fn_declared_in.setdefault(f["name"], set()).add(f["file"])
+
+            for fn_name, headers in fn_declared_in.items():
+                if headers & tier0_headers:
+                    api_fns.add(fn_name)
 
         # All declared items for return-type and param-dominance checks
         all_declared = list(all_prototypes) + list(all_functions)
@@ -1900,25 +2690,66 @@ def main() -> None:
             name = item.name.lower()
             if name in ident_exact:
                 return 0
-            if _stem_match(name):
+            if not parsed.narrow and _stem_match(name):
                 return 1
             if item.name in api_fns:
                 return 1
+            # In narrow mode, returns-type and param-dominant are context
+            # (tier 2), not focus — for fundamental types these can produce
+            # dozens of functions, inflating batch count.
+            tier = 1 if not parsed.narrow else 2
             if item.name in returns_type:
-                return 1
+                return tier
             if item.name in param_dominant:
-                return 1
-            if item.name in ident_type_fns:
+                return tier
+            if not parsed.narrow and item.name in ident_type_fns:
                 return 2
-            if item.name in body_mentions:
+            if not parsed.narrow and item.name in body_mentions:
                 return 2
             return 3
 
         total_before = len(items)
+        pre_filter_index = {it.name.lower(): it for it in items}
         items = [it for it in items if _relevance(it) <= 2]
         for it in items:
             it.relevance_tier = _relevance(it)
         items.sort(key=_relevance)
+
+        # Types referenced by surviving items may have been dropped
+        # at tier 3.  Re-include their definitions as tier-2 context
+        # so the LLM doesn't need a follow-up pass.
+        items = _reinject_referenced_types(
+            items, pre_filter_index, _INFRA_TYPES)
+
+        # Co-file struct promotion: if a struct in a header is tier 0,
+        # other structs in the same file are likely core types too
+        # (e.g. sg_table defined alongside scatterlist in the same .h).
+        # Promote them to at most tier 2 so they appear in the study.
+        tier0_files = {
+            it.file for it in items
+            if it.kind == "struct" and (it.relevance_tier or 0) == 0
+        }
+        if tier0_files:
+            surviving_names = {it.name.lower() for it in items}
+            cofile_promoted = 0
+            for it in list(pre_filter_index.values()):
+                if it.file not in tier0_files:
+                    continue
+                if it.kind != "struct":
+                    continue
+                if it.name.lower() in surviving_names:
+                    continue
+                it.relevance_tier = 2
+                items.append(it)
+                surviving_names.add(it.name.lower())
+                cofile_promoted += 1
+            if cofile_promoted:
+                print(
+                    f"study-prep: co-file struct promotion: "
+                    f"{cofile_promoted} structs from tier-0 headers",
+                    file=sys.stderr,
+                )
+
         api_promoted = sum(1 for it in items
                           if it.relevance_tier == 1
                           and it.name in api_fns)
@@ -1953,24 +2784,6 @@ def main() -> None:
               f"passthru={usage_counts['passthru']})",
               file=sys.stderr)
 
-    correlate_identifiers = None
-    if parsed.correlate:
-        correlate_identifiers = [
-            s.strip() for s in re.split(r"[,+]", parsed.correlate)
-            if s.strip()
-        ]
-        if len(correlate_identifiers) < 2:
-            correlate_identifiers = None
-        else:
-            print(f"study-prep: correlation requested for {correlate_identifiers}",
-                  file=sys.stderr)
-            if not identifiers:
-                identifiers = list(correlate_identifiers)
-            else:
-                for ci in correlate_identifiers:
-                    if ci not in identifiers:
-                        identifiers.append(ci)
-
     out_path = output_dir / "study-list.json"
     out_data = {
         "target": str(target),
@@ -1995,6 +2808,76 @@ def main() -> None:
         Path(tmp_name).unlink(missing_ok=True)
         raise
     print(f"study-prep: wrote {out_path} ({len(items)} items)", file=sys.stderr)
+
+    if discovered_patterns:
+        patterns_path = output_dir / "patterns.json"
+        patterns_data = {
+            "target": str(target),
+            "source_root": str(source_root),
+            "patterns": {
+                name: {"role": role}
+                for name, role in sorted(discovered_patterns.items())
+            },
+        }
+        fd2, tmp2 = tempfile.mkstemp(
+            dir=str(output_dir), suffix=".tmp", prefix="patterns-",
+        )
+        try:
+            with os.fdopen(fd2, "w", encoding="utf-8") as f2:
+                json.dump(patterns_data, f2, indent=2)
+                f2.write("\n")
+            Path(tmp2).rename(patterns_path)
+        except BaseException:
+            Path(tmp2).unlink(missing_ok=True)
+            raise
+        print(f"study-prep: wrote {patterns_path} "
+              f"({len(discovered_patterns)} patterns)", file=sys.stderr)
+
+        _promote_to_project_concepts(patterns_path, output_dir)
+
+
+def _is_under_projects_base(directory: Path) -> bool:
+    try:
+        from core.project.project import DEFAULT_OUTPUT_BASE
+
+        directory.resolve().relative_to(DEFAULT_OUTPUT_BASE.resolve())
+        return True
+    except (ValueError, Exception):
+        return False
+
+
+def _promote_to_project_concepts(src: Path, output_dir: Path) -> None:
+    """Copy a file to ``<project>/concepts/`` if inside a project."""
+    import shutil
+
+    project_dir = output_dir.parent
+    if not (
+        (project_dir / "project.json").is_file()
+        or _is_under_projects_base(project_dir)
+    ):
+        return
+
+    concepts_dir = project_dir / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    canonical = concepts_dir / src.name
+
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(
+            dir=str(concepts_dir), suffix=".tmp", prefix=f"{src.stem}-",
+        )
+        os.close(fd)
+        shutil.copy2(str(src), tmp)
+        Path(tmp).rename(canonical)
+        print(f"study-prep: promoted {src.name} to {canonical}",
+              file=sys.stderr)
+    except OSError as exc:
+        print(f"study-prep: promotion failed: {exc}", file=sys.stderr)
+        if tmp:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

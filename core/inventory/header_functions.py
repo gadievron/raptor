@@ -11,6 +11,7 @@ Cached per target path.
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -35,8 +36,9 @@ _SKIP_NAMES = frozenset({
 })
 
 _MAX_BODY_LINES = 30
+_MAX_CACHE_ENTRIES = 16
 
-_cache: Dict[str, Dict[str, Tuple[str, str]]] = {}
+_cache: OrderedDict[str, Dict[str, Tuple[str, str]]] = OrderedDict()
 
 
 def _extract_function_body(lines: List[str], open_brace_line: int) -> Optional[str]:
@@ -45,7 +47,7 @@ def _extract_function_body(lines: List[str], open_brace_line: int) -> Optional[s
     start = open_brace_line
     for i in range(start, min(start + _MAX_BODY_LINES + 5, len(lines))):
         depth += lines[i].count("{") - lines[i].count("}")
-        if depth <= 0 and i > start:
+        if depth <= 0:
             body_lines = lines[start:i + 1]
             if len(body_lines) > _MAX_BODY_LINES:
                 return None
@@ -67,14 +69,17 @@ def build_header_function_index(
     """
     key = str(target_path)
     if key in _cache:
+        _cache.move_to_end(key)
         return _cache[key]
 
     index: Dict[str, Tuple[str, str]] = {}
     try:
         for p in target_path.rglob("*"):
-            if not p.is_file() or p.suffix not in _HEADER_EXTENSIONS:
+            if not p.is_file() or p.is_symlink() or p.suffix not in _HEADER_EXTENSIONS:
                 continue
             try:
+                if p.stat().st_size > 1_048_576:  # 1 MB cap
+                    continue
                 text = p.read_text(errors="replace")
             except OSError:
                 continue
@@ -93,6 +98,8 @@ def build_header_function_index(
         pass
 
     _cache[key] = index
+    while len(_cache) > _MAX_CACHE_ENTRIES:
+        _cache.popitem(last=False)
     return index
 
 

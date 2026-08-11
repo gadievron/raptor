@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
 
@@ -284,6 +285,24 @@ class TestFindPairedOperations:
         ]
         pairs = prep._find_paired_operations(funcs)
         assert ("get_page", "put_page") in pairs
+
+    def test_get_set_pair(self) -> None:
+        funcs = [
+            {"name": "get_flags", "file": "util.h", "line": 1, "signature": ""},
+            {"name": "set_flags", "file": "util.h", "line": 10, "signature": ""},
+        ]
+        pairs = prep._find_paired_operations(funcs)
+        assert ("get_flags", "set_flags") in pairs
+
+    def test_get_set_and_put_both_paired(self) -> None:
+        funcs = [
+            {"name": "get_ctx", "file": "ctx.c", "line": 1, "signature": ""},
+            {"name": "put_ctx", "file": "ctx.c", "line": 10, "signature": ""},
+            {"name": "set_ctx", "file": "ctx.c", "line": 20, "signature": ""},
+        ]
+        pairs = prep._find_paired_operations(funcs)
+        assert ("get_ctx", "put_ctx") in pairs
+        assert ("get_ctx", "set_ctx") in pairs
 
     def test_alloc_free_pair(self) -> None:
         funcs = [
@@ -1117,3 +1136,701 @@ void caller(void)
         }]
         items = prep._build_study_items([], funcs, [])
         assert len([i for i in items if i.name == "noop"]) == 0
+
+
+# ------------------------------------------------------------------
+# Layer 1: transitive pattern discovery
+# ------------------------------------------------------------------
+
+
+class TestDiscoverProjectPatterns:
+    def test_allocator_discovered(self) -> None:
+        """A function that calls malloc and returns a pointer is an allocator."""
+        funcs = [
+            {"name": "my_alloc", "signature": "void *my_alloc(size_t n)",
+             "body": "{ return malloc(n); }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert patterns.get("my_alloc") == "allocator"
+
+    def test_deallocator_discovered(self) -> None:
+        """A function that calls free and returns void is a deallocator."""
+        funcs = [
+            {"name": "my_free", "signature": "void my_free(void *p)",
+             "body": "{ free(p); }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert patterns.get("my_free") == "deallocator"
+
+    def test_lock_wrapper_discovered(self) -> None:
+        """A function that takes a mutex param and calls a lock is a lock_wrapper."""
+        funcs = [
+            {"name": "my_lock",
+             "signature": "void my_lock(pthread_mutex_t *m)",
+             "body": "{ pthread_mutex_lock(m); }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert patterns.get("my_lock") == "lock_wrapper"
+
+    def test_lock_wrapper_needs_lock_param(self) -> None:
+        """A function calling a lock but without a lock-type param is not a wrapper."""
+        funcs = [
+            {"name": "do_work",
+             "signature": "void do_work(int x)",
+             "body": "{ pthread_mutex_lock(&global_mtx); do_stuff(); "
+                     "pthread_mutex_unlock(&global_mtx); }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert "do_work" not in patterns
+
+    def test_resource_wrapper_discovered(self) -> None:
+        """A function that calls socket and returns int is a resource_wrapper."""
+        funcs = [
+            {"name": "make_socket",
+             "signature": "int make_socket(int domain)",
+             "body": "{ return socket(domain, SOCK_STREAM, 0); }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert patterns.get("make_socket") == "resource_wrapper"
+
+    def test_transitive_discovery(self) -> None:
+        """Wrappers of discovered wrappers are found in subsequent passes."""
+        funcs = [
+            {"name": "base_alloc", "signature": "void *base_alloc(size_t n)",
+             "body": "{ return malloc(n); }"},
+            {"name": "pool_alloc", "signature": "void *pool_alloc(int pool, size_t n)",
+             "body": "{ return base_alloc(n); }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs, max_passes=2)
+        assert patterns.get("base_alloc") == "allocator"
+        assert patterns.get("pool_alloc") == "allocator"
+
+    def test_no_false_positives_on_non_wrappers(self) -> None:
+        """A function calling malloc but returning int is not an allocator."""
+        funcs = [
+            {"name": "init_stuff", "signature": "int init_stuff(void)",
+             "body": "{ buf = malloc(100); return 0; }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert "init_stuff" not in patterns
+
+    def test_empty_body_skipped(self) -> None:
+        """Functions without bodies produce no patterns."""
+        funcs = [
+            {"name": "proto", "signature": "void *proto(size_t n)", "body": ""},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert len(patterns) == 0
+
+
+# ------------------------------------------------------------------
+# Layer 4: scoped mode bypasses has_content gate
+# ------------------------------------------------------------------
+
+
+class TestScopedMode:
+    def test_empty_function_included_when_scoped(self) -> None:
+        """In scoped mode, functions without signals are still emitted."""
+        funcs = [{
+            "name": "trivial",
+            "file": "test.c",
+            "line": 1,
+            "signature": "void trivial(void)",
+            "doc_comment": "",
+            "signals": {
+                "lock_sites": [], "rcu_usage": [],
+                "ordering_annotations": [], "bounds_guards": [],
+                "error_gotos": [], "clamping_patterns": [],
+                "flag_checks": [], "alloc_frees": [],
+            },
+            "body": "{ return; }",
+        }]
+        items_unscoped = prep._build_study_items([], funcs, [])
+        items_scoped = prep._build_study_items([], funcs, [], scoped=True)
+        assert len([i for i in items_unscoped if i.name == "trivial"]) == 0
+        assert len([i for i in items_scoped if i.name == "trivial"]) == 1
+
+    def test_scoped_mode_preserves_signal_items(self) -> None:
+        """Scoped mode doesn't break items that would pass the gate anyway."""
+        src = """\
+void alloc_thing(void)
+{
+    void *p = malloc(100);
+    free(p);
+}
+"""
+        funcs = prep._extract_functions(src, "test.c")
+        items = prep._build_study_items([], funcs, [], scoped=True)
+        assert any(i.name == "alloc_thing" for i in items)
+
+
+# ------------------------------------------------------------------
+# Signal augmentation from discovered patterns
+# ------------------------------------------------------------------
+
+
+class TestSignalAugmentation:
+    def test_discovered_allocator_augments_alloc_frees(self) -> None:
+        """Calling a discovered allocator adds it to alloc_frees."""
+        funcs = [
+            {"name": "my_alloc", "signature": "void *my_alloc(size_t n)",
+             "body": "{ return malloc(n); }", "file": "t.c", "line": 1,
+             "doc_comment": "", "signals": {"alloc_frees": ["malloc"],
+             "lock_sites": [], "rcu_usage": [], "ordering_annotations": [],
+             "bounds_guards": [], "error_gotos": [], "clamping_patterns": [],
+             "flag_checks": []}},
+            {"name": "consumer", "signature": "void consumer(void)",
+             "body": "{ void *p = my_alloc(10); }", "file": "t.c", "line": 10,
+             "doc_comment": "", "signals": {"alloc_frees": [],
+             "lock_sites": [], "rcu_usage": [], "ordering_annotations": [],
+             "bounds_guards": [], "error_gotos": [], "clamping_patterns": [],
+             "flag_checks": []}},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert patterns.get("my_alloc") == "allocator"
+        items = prep._build_study_items(
+            [], funcs, [], discovered_patterns=patterns,
+        )
+        consumer_item = [i for i in items if i.name == "consumer"][0]
+        assert "my_alloc" in consumer_item.alloc_frees
+
+    def test_discovered_lock_augments_lock_sites(self) -> None:
+        """Calling a discovered lock wrapper adds it to lock_sites."""
+        funcs = [
+            {"name": "my_lock",
+             "signature": "void my_lock(pthread_mutex_t *m)",
+             "body": "{ pthread_mutex_lock(m); }", "file": "t.c", "line": 1,
+             "doc_comment": "", "signals": {"lock_sites": ["pthread_mutex_lock"],
+             "rcu_usage": [], "ordering_annotations": [],
+             "bounds_guards": [], "error_gotos": [], "clamping_patterns": [],
+             "flag_checks": [], "alloc_frees": []}},
+            {"name": "safe_op",
+             "signature": "void safe_op(pthread_mutex_t *m)",
+             "body": "{ my_lock(m); do_work(); }",
+             "file": "t.c", "line": 10,
+             "doc_comment": "", "signals": {"lock_sites": [],
+             "rcu_usage": [], "ordering_annotations": [],
+             "bounds_guards": [], "error_gotos": [], "clamping_patterns": [],
+             "flag_checks": [], "alloc_frees": []}},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        items = prep._build_study_items(
+            [], funcs, [], discovered_patterns=patterns,
+        )
+        safe_item = [i for i in items if i.name == "safe_op"][0]
+        assert "my_lock" in safe_item.lock_sites
+
+
+# ------------------------------------------------------------------
+# Layer 1: thin-wrapper false-positive guard
+# ------------------------------------------------------------------
+
+
+class TestThinWrapperGuard:
+    def test_builder_not_classified_as_allocator(self) -> None:
+        """A struct builder that calls malloc but does more work is not an allocator."""
+        funcs = [
+            {"name": "build_response",
+             "signature": "struct response *build_response(int code, const char *body)",
+             "body": ("{ struct response *r = malloc(sizeof(*r)); "
+                      "r->code = code; r->body = strdup(body); "
+                      "r->headers = NULL; r->status = 200; return r; }")},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert "build_response" not in patterns
+
+    def test_many_calls_not_classified(self) -> None:
+        """A function with >4 distinct call sites is not a wrapper."""
+        funcs = [
+            {"name": "complex_init",
+             "signature": "void *complex_init(void)",
+             "body": ("{ void *p = malloc(100); memset(p, 0, 100); "
+                      "setup(p); configure(p); validate(p); return p; }")},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert "complex_init" not in patterns
+
+    def test_thin_wrapper_still_classified(self) -> None:
+        """A genuine thin wrapper is still classified."""
+        funcs = [
+            {"name": "xmalloc", "signature": "void *xmalloc(size_t n)",
+             "body": "{ void *p = malloc(n); if (!p) abort(); return p; }"},
+        ]
+        patterns = prep._discover_project_patterns(funcs)
+        assert patterns.get("xmalloc") == "allocator"
+
+
+# ------------------------------------------------------------------
+# Prototype dedup regression
+# ------------------------------------------------------------------
+
+
+class TestPrototypeDedup:
+    def test_prototype_does_not_overwrite_body_calls(self) -> None:
+        """When both a prototype and body version exist, call graph keeps body's calls."""
+        funcs_body = [
+            {"name": "helper", "file": "a.c", "line": 1,
+             "signature": "void helper(void)", "body": "{ }",
+             "doc_comment": "", "signals": {}},
+            {"name": "worker", "file": "a.c", "line": 5,
+             "signature": "void worker(void)",
+             "body": "{ helper(); }",
+             "doc_comment": "", "signals": {}},
+        ]
+        protos = [
+            {"name": "worker", "file": "a.h", "line": 1,
+             "signature": "void worker(void)", "body": "",
+             "doc_comment": "", "signals": {}},
+        ]
+        fns_with_body = {f["name"] for f in funcs_body if f.get("body")}
+        deduped_protos = [p for p in protos if p["name"] not in fns_with_body]
+        combined = funcs_body + deduped_protos
+        graph = prep._build_call_graph(combined)
+        assert "helper" in graph["worker"], \
+            "prototype overwrote body version — call graph lost edges"
+
+    def test_without_dedup_calls_are_lost(self) -> None:
+        """Demonstrates the bug: without dedup, prototype's empty calls win."""
+        funcs_body = [
+            {"name": "leaf", "file": "a.c", "line": 1,
+             "signature": "void leaf(void)", "body": "{ }",
+             "doc_comment": "", "signals": {}},
+            {"name": "caller", "file": "a.c", "line": 5,
+             "signature": "void caller(void)",
+             "body": "{ leaf(); }",
+             "doc_comment": "", "signals": {}},
+        ]
+        protos = [
+            {"name": "caller", "file": "a.h", "line": 1,
+             "signature": "void caller(void)", "body": "",
+             "doc_comment": "", "signals": {}},
+        ]
+        combined_no_dedup = funcs_body + protos
+        graph = prep._build_call_graph(combined_no_dedup)
+        assert graph["caller"] == [], \
+            "Expected empty calls (prototype wins via dict-last-wins)"
+
+
+# ------------------------------------------------------------------
+# __attribute__ return-type helpers
+# ------------------------------------------------------------------
+
+
+class TestAttributeSignatures:
+    def test_returns_pointer_with_attribute(self) -> None:
+        sig = '__attribute__((visibility("default"))) void *my_alloc(size_t n)'
+        assert prep._returns_pointer(sig) is True
+
+    def test_returns_void_with_attribute(self) -> None:
+        sig = '__attribute__((noinline)) void my_free(void *p)'
+        assert prep._returns_void(sig) is True
+
+    def test_returns_int_with_attribute(self) -> None:
+        sig = '__attribute__((warn_unused_result)) int open_file(const char *path)'
+        assert prep._returns_int(sig) is True
+
+    def test_nested_attribute_parens(self) -> None:
+        sig = '__attribute__((format(printf, 1, 2))) int my_printf(const char *fmt, ...)'
+        assert prep._returns_int(sig) is True
+        assert prep._returns_pointer(sig) is False
+
+    def test_no_attribute_unchanged(self) -> None:
+        assert prep._returns_pointer("void *foo(int x)") is True
+        assert prep._returns_void("void bar(int x)") is True
+        assert prep._returns_int("int baz(void)") is True
+
+
+# ------------------------------------------------------------------
+# Single-file target sets is_scoped
+# ------------------------------------------------------------------
+
+
+class TestSingleFileScoped:
+    def test_single_file_bypasses_has_content_gate(self) -> None:
+        """A single-file target should include all functions (is_scoped=True)."""
+        funcs = [{
+            "name": "empty_fn",
+            "file": "single.c",
+            "line": 1,
+            "signature": "void empty_fn(void)",
+            "doc_comment": "",
+            "signals": {
+                "lock_sites": [], "rcu_usage": [],
+                "ordering_annotations": [], "bounds_guards": [],
+                "error_gotos": [], "clamping_patterns": [],
+                "flag_checks": [], "alloc_frees": [],
+            },
+            "body": "{ return; }",
+        }]
+        items_scoped = prep._build_study_items([], funcs, [], scoped=True)
+        assert len([i for i in items_scoped if i.name == "empty_fn"]) == 1
+
+
+# ------------------------------------------------------------------
+# Layer 2: reading-list anchored function inclusion
+# ------------------------------------------------------------------
+
+
+class TestLoadReadingList:
+    def test_extracts_source_function(self, tmp_path) -> None:
+        rl = {"items": [
+            {"id": "rl-1", "question": "ownership semantics of crypto_alg?",
+             "source_function": "crypto_register_alg", "resolved": False,
+             "resolution": "identifier"},
+        ]}
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(__import__("json").dumps(rl))
+        idents, concepts = prep._load_reading_list(rl_path)
+        assert "crypto_register_alg" in idents
+
+    def test_skips_resolved_items(self, tmp_path) -> None:
+        rl = {"items": [
+            {"id": "rl-1", "question": "foo?",
+             "source_function": "do_foo", "resolved": True,
+             "resolution": "identifier"},
+        ]}
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(__import__("json").dumps(rl))
+        idents, _ = prep._load_reading_list(rl_path)
+        assert idents == []
+
+    def test_deduplicates(self, tmp_path) -> None:
+        rl = {"items": [
+            {"id": "rl-1", "question": "foo?",
+             "source_function": "do_thing", "resolved": False,
+             "resolution": "identifier"},
+            {"id": "rl-2", "question": "bar?",
+             "source_function": "do_thing", "resolved": False,
+             "resolution": "identifier"},
+        ]}
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(__import__("json").dumps(rl))
+        idents, _ = prep._load_reading_list(rl_path)
+        assert idents.count("do_thing") == 1
+
+
+class TestReadingListAnchors:
+    def test_name_match(self) -> None:
+        """Functions whose name matches an identifier are anchored."""
+        funcs = [
+            {"name": "pool_alloc", "signature": "void *pool_alloc(size_t n)",
+             "body": "{ return NULL; }"},
+            {"name": "unrelated", "signature": "void unrelated(void)",
+             "body": "{ return; }"},
+        ]
+        anchors = prep._find_reading_list_anchors(funcs, ["pool_alloc"])
+        assert "pool_alloc" in anchors
+        assert "unrelated" not in anchors
+
+    def test_body_reference(self) -> None:
+        """Functions whose body references an identifier are anchored."""
+        funcs = [
+            {"name": "consumer", "signature": "void consumer(void)",
+             "body": "{ pool_alloc(100); }"},
+        ]
+        anchors = prep._find_reading_list_anchors(funcs, ["pool_alloc"])
+        assert "consumer" in anchors
+
+    def test_signature_reference(self) -> None:
+        """Functions whose signature references an identifier are anchored."""
+        funcs = [
+            {"name": "init", "signature": "void init(struct my_ctx *ctx)",
+             "body": "{ }"},
+        ]
+        anchors = prep._find_reading_list_anchors(funcs, ["my_ctx"])
+        assert "init" in anchors
+
+    def test_struct_prefix_stripped(self) -> None:
+        """'struct foo' identifier matches 'foo' in body."""
+        funcs = [
+            {"name": "user", "signature": "void user(void)",
+             "body": "{ struct foo *p; }"},
+        ]
+        anchors = prep._find_reading_list_anchors(funcs, ["struct foo"])
+        assert "user" in anchors
+
+    def test_empty_identifiers(self) -> None:
+        funcs = [{"name": "f", "signature": "void f(void)", "body": "{}"}]
+        assert prep._find_reading_list_anchors(funcs, []) == set()
+
+    def test_anchor_included_via_build_study_items(self) -> None:
+        """Anchored functions pass the has_content gate."""
+        funcs = [{
+            "name": "bare_fn",
+            "file": "test.c",
+            "line": 1,
+            "signature": "void bare_fn(void)",
+            "doc_comment": "",
+            "signals": {
+                "lock_sites": [], "rcu_usage": [],
+                "ordering_annotations": [], "bounds_guards": [],
+                "error_gotos": [], "clamping_patterns": [],
+                "flag_checks": [], "alloc_frees": [],
+            },
+            "body": "{ return; }",
+        }]
+        items_no_anchor = prep._build_study_items([], funcs, [])
+        items_anchored = prep._build_study_items(
+            [], funcs, [], anchor_names={"bare_fn"},
+        )
+        assert len([i for i in items_no_anchor if i.name == "bare_fn"]) == 0
+        assert len([i for i in items_anchored if i.name == "bare_fn"]) == 1
+
+
+# ------------------------------------------------------------------
+# Layer 3: call-graph expansion
+# ------------------------------------------------------------------
+
+
+class TestCallGraphExpansion:
+    def test_depth_1_expansion(self) -> None:
+        graph = {"a": ["b", "c"], "b": ["d"], "c": [], "d": []}
+        expanded = prep._expand_via_call_graph({"a"}, graph, max_depth=1)
+        assert expanded == {"a", "b", "c"}
+
+    def test_depth_2_expansion(self) -> None:
+        graph = {"a": ["b"], "b": ["c"], "c": ["d"], "d": []}
+        expanded = prep._expand_via_call_graph({"a"}, graph, max_depth=2)
+        assert expanded == {"a", "b", "c"}
+
+    def test_fan_out_cap(self) -> None:
+        graph = {"a": ["b", "c", "d", "e", "f", "g"], "b": [], "c": [],
+                 "d": [], "e": [], "f": [], "g": []}
+        expanded = prep._expand_via_call_graph(
+            {"a"}, graph, max_depth=1, max_fan=3,
+        )
+        assert "a" in expanded
+        assert len(expanded) == 4  # a + 3 callees
+
+    def test_no_cycles(self) -> None:
+        graph = {"a": ["b"], "b": ["a"]}
+        expanded = prep._expand_via_call_graph({"a"}, graph, max_depth=5)
+        assert expanded == {"a", "b"}
+
+    def test_empty_seed(self) -> None:
+        graph = {"a": ["b"]}
+        assert prep._expand_via_call_graph(set(), graph) == set()
+
+    def test_multiple_seeds(self) -> None:
+        graph = {"a": ["c"], "b": ["d"], "c": [], "d": []}
+        expanded = prep._expand_via_call_graph({"a", "b"}, graph, max_depth=1)
+        assert expanded == {"a", "b", "c", "d"}
+
+
+# ------------------------------------------------------------------
+# External definition chase
+# ------------------------------------------------------------------
+
+
+class TestChaseReadingListDefinitions:
+    def _write_rl(self, out_dir, items):
+        rl_path = out_dir / "reading-list.json"
+        rl_path.write_text(json.dumps({"items": items}), encoding="utf-8")
+        return rl_path
+
+    def test_finds_file_by_name(self, tmp_path) -> None:
+        """A file named after the identifier is found."""
+        target = tmp_path / "crypto"
+        target.mkdir()
+        (target / "cipher.c").write_text("int cipher_fn(void) {}", encoding="utf-8")
+
+        ext = tmp_path / "lib"
+        ext.mkdir()
+        (ext / "scatterlist.c").write_text(
+            "void sg_init_table(struct scatterlist *sg, int n) {}",
+            encoding="utf-8",
+        )
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is struct scatterlist?",
+             "context": "Unresolved type: struct scatterlist",
+             "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        names = {p.name for p in result}
+        assert "scatterlist.c" in names
+
+    def test_skips_files_inside_target(self, tmp_path) -> None:
+        """Files inside the target directory are not returned."""
+        target = tmp_path / "crypto"
+        target.mkdir()
+        (target / "scatterlist.c").write_text(
+            "void sg_init(void) {}", encoding="utf-8",
+        )
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is struct scatterlist?",
+             "context": "Unresolved type: struct scatterlist",
+             "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        target_resolved = target.resolve()
+        for p in result:
+            assert not p.is_relative_to(target_resolved)
+
+    def test_skips_resolved_items(self, tmp_path) -> None:
+        """Already-resolved items don't trigger a chase."""
+        target = tmp_path / "crypto"
+        target.mkdir()
+
+        ext = tmp_path / "lib"
+        ext.mkdir()
+        (ext / "scatterlist.c").write_text("void sg(void) {}", encoding="utf-8")
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is struct scatterlist?",
+             "context": "Unresolved type: struct scatterlist",
+             "resolved": True, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        assert len(result) == 0
+
+    def test_grep_finds_struct_definition(self, tmp_path) -> None:
+        """Grep strategy finds struct definitions even without filename match."""
+        target = tmp_path / "crypto"
+        target.mkdir()
+        (target / "main.c").write_text("int main(void) {}", encoding="utf-8")
+
+        ext = tmp_path / "include"
+        ext.mkdir()
+        (ext / "types.h").write_text(
+            "struct crypto_spawn {\n    int dummy;\n};\n",
+            encoding="utf-8",
+        )
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is `crypto_spawn`?",
+             "context": "Unresolved type: crypto_spawn",
+             "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        names = {p.name for p in result}
+        assert "types.h" in names
+
+    def test_finds_all_matching_files(self, tmp_path) -> None:
+        """All matching files are returned without artificial cap."""
+        target = tmp_path / "crypto"
+        target.mkdir()
+        (target / "main.c").write_text("int main(void) {}", encoding="utf-8")
+
+        ext = tmp_path / "lib"
+        ext.mkdir()
+        for i in range(10):
+            (ext / f"scatter_{i}.c").write_text(
+                f"void scatter_{i}(void) {{}}", encoding="utf-8",
+            )
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is scatter?",
+             "context": "Unresolved type: scatter",
+             "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        assert len(result) >= 10
+
+    def test_empty_reading_list(self, tmp_path) -> None:
+        target = tmp_path / "crypto"
+        target.mkdir()
+        rl = self._write_rl(tmp_path, [])
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        assert result == []
+
+    def test_no_reading_list_file(self, tmp_path) -> None:
+        target = tmp_path / "crypto"
+        target.mkdir()
+        result = prep._chase_reading_list_definitions(
+            tmp_path / "nonexistent.json", tmp_path, target,
+        )
+        assert result == []
+
+    def test_backtick_idents_in_question(self, tmp_path) -> None:
+        """Backtick-quoted identifiers in question are extracted."""
+        target = tmp_path / "crypto"
+        target.mkdir()
+        (target / "main.c").write_text("int main(void) {}", encoding="utf-8")
+
+        ext = tmp_path / "include"
+        ext.mkdir()
+        (ext / "local_lock.h").write_text(
+            "typedef struct { int x; } local_lock_t;\n",
+            encoding="utf-8",
+        )
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What are the semantics of `local_lock_t`?",
+             "context": "", "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, tmp_path, target)
+        names = {p.name for p in result}
+        assert "local_lock.h" in names
+
+
+# ------------------------------------------------------------------
+# Type reinjection
+# ------------------------------------------------------------------
+
+class TestReinjectReferencedTypes:
+    def _make_item(self, name, kind="struct", tier=0, definition="",
+                   owned_types=None):
+        return prep.StudyItem(
+            id=f"{kind}_{name}", kind=kind, name=name, file="test.h",
+            definition=definition, relevance_tier=tier,
+            owned_types=owned_types or [],
+        )
+
+    def test_reinjects_owned_type(self):
+        focus = self._make_item("crypto_tfm", owned_types=["crypto_type"])
+        dep = self._make_item("crypto_type", tier=3)
+        pre_filter = {it.name.lower(): it for it in [focus, dep]}
+        result = prep._reinject_referenced_types(
+            [focus], pre_filter, prep._INFRA_TYPES)
+        names = {it.name for it in result}
+        assert "crypto_type" in names
+        assert dep.relevance_tier == 2
+
+    def test_reinjects_pointer_field_from_definition(self):
+        defn = "struct foo { struct bar_ctx *ctx; int x; };"
+        focus = self._make_item("foo", definition=defn)
+        dep = self._make_item("bar_ctx", tier=3)
+        pre_filter = {it.name.lower(): it for it in [focus, dep]}
+        result = prep._reinject_referenced_types(
+            [focus], pre_filter, prep._INFRA_TYPES)
+        names = {it.name for it in result}
+        assert "bar_ctx" in names
+
+    def test_skips_infra_types(self):
+        defn = "struct foo { struct list_head list; struct bar *b; };"
+        focus = self._make_item("foo", definition=defn)
+        infra = self._make_item("list_head", tier=3)
+        dep = self._make_item("bar", tier=3)
+        pre_filter = {it.name.lower(): it for it in [focus, infra, dep]}
+        result = prep._reinject_referenced_types(
+            [focus], pre_filter, prep._INFRA_TYPES)
+        names = {it.name for it in result}
+        assert "list_head" not in names
+        assert "bar" in names
+
+    def test_skips_already_surviving(self):
+        a = self._make_item("alpha", tier=0, owned_types=["beta"])
+        b = self._make_item("beta", tier=1)
+        pre_filter = {it.name.lower(): it for it in [a, b]}
+        result = prep._reinject_referenced_types(
+            [a, b], pre_filter, prep._INFRA_TYPES)
+        assert len(result) == 2
+
+    def test_only_scans_focus_items(self):
+        focus = self._make_item("primary", tier=0)
+        ctx = self._make_item("secondary", tier=2,
+                              owned_types=["deep_type"])
+        deep = self._make_item("deep_type", tier=3)
+        pre_filter = {it.name.lower(): it for it in [focus, ctx, deep]}
+        result = prep._reinject_referenced_types(
+            [focus, ctx], pre_filter, prep._INFRA_TYPES)
+        names = {it.name for it in result}
+        assert "deep_type" not in names

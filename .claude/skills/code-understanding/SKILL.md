@@ -89,6 +89,20 @@ flow_format: source → transform(s) → sink
 
 **Shared inventory:** MAP-0 runs `build_checklist()` to produce `checklist.json` with SHA-256 checksums per file. This is the same inventory used by `/validate` Stage 0. Coverage tracking (`checked_by` per function) is cumulative across both skills.
 
+**Checklist item schema** (`checklist.json` → `files[].items[]`):
+
+| Field | Type | Values / Notes |
+|-------|------|----------------|
+| `name` | string | Function/global/macro/class name |
+| `kind` | string | `"function"`, `"global"`, `"macro"`, `"class"` |
+| `line_start` | int | First line of the item |
+| `line_end` | int\|null | Last line (null if unknown) |
+| `signature` | string | Full signature (functions only) |
+| `checked_by` | list[str] | Run IDs that have reviewed this item |
+| `metadata` | object | Language-specific: `visibility`, `params`, `return_type`, `attributes` |
+
+The field is `kind`, not `type`. Source: `core/inventory/extractors.CodeItem`.
+
 Output schemas are aligned with the validation pipeline's formats (`attack-surface.json`, `attack-paths.json`, `findings.json`).
 
 ---

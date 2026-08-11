@@ -7,13 +7,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT = 15.0
+_DEFAULT_TIMEOUT = 30.0
 
 
 def _read_timeout() -> float:
     """Parse SAGE_TIMEOUT, falling back to the default on bad input.
 
-    `float(os.getenv("SAGE_TIMEOUT", "15.0"))` raised ValueError on
+    `float(os.getenv("SAGE_TIMEOUT", "30.0"))` raised ValueError on
     non-numeric values (e.g., `SAGE_TIMEOUT=15s`, a typo, or an
     accidentally-quoted shell variable). The exception propagated
     out of dataclass `field(default_factory=...)` at the FIRST

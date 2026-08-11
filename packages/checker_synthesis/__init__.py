@@ -32,7 +32,9 @@ Initial consumers:
 
 from __future__ import annotations
 
+from .cwe_families import cwe_family, cwe_siblings
 from .languages import detect_engine, supported_engines
+from .library import RuleLibrary
 from .models import (
     CheckerSynthesisResult,
     Match,
@@ -51,8 +53,11 @@ __all__ = [
     "LLMCallable",
     "Match",
     "MatchTriage",
+    "RuleLibrary",
     "SeedBug",
     "SynthesisedRule",
+    "cwe_family",
+    "cwe_siblings",
     "detect_engine",
     "supported_engines",
     "synthesise_and_run",

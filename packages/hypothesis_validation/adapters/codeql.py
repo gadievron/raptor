@@ -73,10 +73,10 @@ def _ensure_pack_installed(
         return
     if pack_dir in _INSTALLED_PACK_DIRS:
         return
-    _INSTALLED_PACK_DIRS.add(pack_dir)
 
     if (pack_dir / "codeql-pack.lock.yml").is_file():
         # Already installed — pack-install would be a no-op.
+        _INSTALLED_PACK_DIRS.add(pack_dir)
         return
 
     try:
@@ -85,6 +85,7 @@ def _ensure_pack_installed(
             capture_output=True, text=True,
             timeout=180, env=env,
         )
+        _INSTALLED_PACK_DIRS.add(pack_dir)
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning(
             "codeql pack install on %s failed: %s — analyze may fail with a clearer error",
@@ -413,10 +414,42 @@ class CodeQLAdapter(ToolAdapter):
                 for qp in unique_paths
             }
 
+        # Build a lookup from SARIF ruleId back to the originating
+        # query path.  CodeQL sets ruleId to the query's @id metadata.
+        # Register by both the full @id (extracted from the .ql source)
+        # and the bare stem as a fallback.  Using setdefault for stems
+        # avoids misattribution when query-pack subdirs contain queries
+        # with colliding filenames.
+        rule_to_qp: Dict[str, str] = {}
+        for qp in unique_paths:
+            rule_to_qp.setdefault(Path(qp).stem, qp)
+            try:
+                ql_header = Path(qp).read_text(encoding="utf-8", errors="replace")[:4096]
+                for line in ql_header.split("\n"):
+                    stripped = line.strip().lstrip("*").strip()
+                    if stripped.startswith("@id "):
+                        at_id = stripped[4:].strip()
+                        if at_id:
+                            rule_to_qp[at_id] = qp
+                        break
+            except OSError:
+                pass
+
+        matches_by_qp: Dict[str, List[Dict]] = {qp: [] for qp in unique_paths}
+        for m in all_matches:
+            rid = m.get("rule", "")
+            target = rule_to_qp.get(rid)
+            if target is None and "/" in rid:
+                # ruleId may be qualified like "py/sql-injection"
+                target = rule_to_qp.get(rid.rsplit("/", 1)[-1])
+            if target is not None:
+                matches_by_qp[target].append(m)
+
         results: Dict[str, ToolEvidence] = {}
         for qp in unique_paths:
-            n = len(all_matches)
-            files = sorted({m["file"] for m in all_matches if m.get("file")})
+            qp_matches = matches_by_qp[qp]
+            n = len(qp_matches)
+            files = sorted({m["file"] for m in qp_matches if m.get("file")})
             if n:
                 summary = f"{n} match{'es' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}"
             else:
@@ -425,7 +458,7 @@ class CodeQLAdapter(ToolAdapter):
                 tool=self.name,
                 rule=qp,
                 success=True,
-                matches=all_matches,
+                matches=qp_matches,
                 summary=summary,
             )
 

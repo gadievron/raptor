@@ -64,7 +64,7 @@ def check_landlock_available() -> bool:
 
         if not _LANDLOCK_ARCH_OK:
             state._landlock_cache = -1
-            logger.debug(f"Sandbox: Landlock skipped — unknown syscall table for {platform.machine()}")
+            logger.debug("Sandbox: Landlock skipped — unknown syscall table for %s", platform.machine())
             return False
 
         try:
@@ -73,7 +73,7 @@ def check_landlock_available() -> bool:
             result = libc.syscall(_SYS_LANDLOCK_CREATE, 0, 0, 1)
             if result < 0:
                 state._landlock_cache = -1
-                logger.debug(f"Sandbox: Landlock not available (errno={ctypes.get_errno()})")
+                logger.debug("Sandbox: Landlock not available (errno=%d)", ctypes.get_errno())
                 return False
             abi = int(result)
         except Exception:
@@ -97,7 +97,7 @@ def check_landlock_available() -> bool:
             return False
 
         state._landlock_cache = abi
-        logger.debug(f"Sandbox: Landlock available and functional (ABI version {abi})")
+        logger.debug("Sandbox: Landlock available and functional (ABI version %d)", abi)
         return True
 
 

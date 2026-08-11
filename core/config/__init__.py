@@ -104,6 +104,7 @@ class RaptorConfig:
         # ``verdict-active`` mean nothing to an operator reading /doctor.
         "coccinelle":   {"binary": "spatch",    "severity": "degrades", "affects": "/codeql, /agentic (C/C++ semantic-patch verification)"},
         "gdb":          {"binary": "gdb",       "severity": "required", "affects": "/crash-analysis, /fuzz"},
+        "joern":        {"binary": "joern",     "severity": "degrades", "affects": "/audit (inter-procedural taint analysis)"},
         "rr":           {"binary": "rr",        "severity": "degrades", "affects": "/crash-analysis"},
         "semgrep":      {"binary": "semgrep",   "group": "scanner",     "affects": "/scan, /agentic"},
         # Dynamic analysis tools

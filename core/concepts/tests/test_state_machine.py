@@ -5,8 +5,7 @@ import json
 import pytest
 
 from core.concepts.audit_bridge import (
-    _guard_in_scope,
-    guard_contradicts_finding,
+    invariants_contradicting_finding,
     invariant_violations_for_hypothesis,
 )
 from core.concepts.model import (
@@ -14,7 +13,6 @@ from core.concepts.model import (
     DomainModel,
     Invariant,
     SecurityContext,
-    guard_can_cancel_boost,
 )
 from core.concepts.study import (
     _derive_guard_invariants,
@@ -24,39 +22,6 @@ from core.concepts.study import (
     _parse_value_constraints,
     infer_security_context,
 )
-
-
-# ------------------------------------------------------------------
-# guard_can_cancel_boost
-# ------------------------------------------------------------------
-
-class TestGuardCanCancelBoost:
-    def test_same_confidence_cancels(self):
-        assert guard_can_cancel_boost("traced", "traced") is True
-
-    def test_higher_guard_cancels(self):
-        assert guard_can_cancel_boost("corroborated", "traced") is True
-
-    def test_lower_guard_cannot_cancel(self):
-        assert guard_can_cancel_boost("inferred", "traced") is False
-
-    def test_traced_beats_documented(self):
-        assert guard_can_cancel_boost("traced", "documented") is True
-
-    def test_documented_cannot_cancel_traced(self):
-        assert guard_can_cancel_boost("documented", "traced") is False
-
-    def test_tested_beats_everything(self):
-        for conf in ("inferred", "documented", "traced", "corroborated", "tested"):
-            assert guard_can_cancel_boost("tested", conf) is True
-
-    def test_inferred_only_cancels_inferred(self):
-        assert guard_can_cancel_boost("inferred", "inferred") is True
-        assert guard_can_cancel_boost("inferred", "documented") is False
-
-    def test_unknown_confidence_treated_as_zero(self):
-        assert guard_can_cancel_boost("unknown", "inferred") is True
-        assert guard_can_cancel_boost("unknown", "traced") is False
 
 
 # ------------------------------------------------------------------
@@ -80,8 +45,6 @@ class TestDeriveGuardInvariants:
         assert len(guards) == 1
         g = guards[0]
         assert g.id == "guard.alg_bind_is_oneshot"
-        assert g.role == "guard"
-        assert g.concept_class == "state_machine"
         assert "irreversible" in g.statement
         assert "reverts" in g.negation
 
@@ -168,7 +131,6 @@ class TestParseStateMachines:
         assert concepts[0].id == "state_machine.af_alg_socket_protocol"
         assert concepts[0].confidence == "traced"
         assert len(invariants) == 2
-        assert all(inv.role == "guard" for inv in invariants)
 
     def test_auto_prefixes_id(self):
         raw = {
@@ -193,31 +155,6 @@ class TestParseStateMachines:
         }
         concepts, _ = _parse_state_machines(raw)
         assert concepts[0].id == "state_machine.foo"
-
-    def test_scope_derived_from_evidence_files(self):
-        raw = {
-            "state_machines": [{
-                "id": "test_sm",
-                "description": "test",
-                "states": [{"name": "a"}, {"name": "b"}],
-                "transitions": [
-                    {"from": "a", "to": "b", "via": "init", "one_shot": True},
-                ],
-                "evidence": [
-                    {"type": "code_path", "file": "crypto/algif_aead.c",
-                     "observation": "test"},
-                    {"type": "code_path", "file": "crypto/af_alg.c",
-                     "observation": "test"},
-                ],
-            }],
-        }
-        _, invariants = _parse_state_machines(raw)
-        assert len(invariants) == 1
-        scope = invariants[0].scope
-        assert scope is not None
-        assert "af_alg.c" in scope["files"]
-        assert "algif_aead.c" in scope["files"]
-        assert scope["concept_ref"] == "state_machine.test_sm"
 
     def test_empty_state_machines_returns_empty(self):
         concepts, invariants = _parse_state_machines({})
@@ -249,38 +186,11 @@ class TestParseBatchResponseStateMachines:
                 "evidence": [],
             }],
         }
-        concepts, invariants, contracts = _parse_batch_response(raw)
+        concepts, invariants, contracts, _, _ = _parse_batch_response(raw)
         sm_concepts = [c for c in concepts if c.id.startswith("state_machine.")]
         assert len(sm_concepts) == 1
-        guard_invs = [i for i in invariants if i.role == "guard"]
-        boost_invs = [i for i in invariants if i.role == "boost"]
-        assert len(guard_invs) == 1
-        assert len(boost_invs) == 1
-
-    def test_invariant_role_preserved_from_llm(self):
-        raw = {
-            "concepts": [],
-            "invariants": [
-                {"id": "llm_guard", "concept": "c1", "statement": "x",
-                 "negation": "not x", "confidence": "traced",
-                 "role": "guard"},
-            ],
-            "contracts": [],
-        }
-        _, invariants, _ = _parse_batch_response(raw)
-        assert invariants[0].role == "guard"
-
-    def test_invariant_role_defaults_to_boost(self):
-        raw = {
-            "concepts": [],
-            "invariants": [
-                {"id": "no_role", "concept": "c1", "statement": "x",
-                 "negation": "not x", "confidence": "traced"},
-            ],
-            "contracts": [],
-        }
-        _, invariants, _ = _parse_batch_response(raw)
-        assert invariants[0].role == "boost"
+        # 1 from raw invariants + 1 guard from state machine
+        assert len(invariants) == 2
 
     def test_invariant_description_from_llm(self):
         raw = {
@@ -292,7 +202,7 @@ class TestParseBatchResponseStateMachines:
             ],
             "contracts": [],
         }
-        _, invariants, _ = _parse_batch_response(raw)
+        _, invariants, _, _, _ = _parse_batch_response(raw)
         assert invariants[0].description == "Page refcounting rule"
 
     def test_invariant_description_fallback_to_first_sentence(self):
@@ -305,47 +215,17 @@ class TestParseBatchResponseStateMachines:
             ],
             "contracts": [],
         }
-        _, invariants, _ = _parse_batch_response(raw)
+        _, invariants, _, _, _ = _parse_batch_response(raw)
         assert invariants[0].description == "The ctx pointer is non-NULL"
 
 
 # ------------------------------------------------------------------
-# Guard scope matching
+# invariant_violations_for_hypothesis
 # ------------------------------------------------------------------
 
-class TestGuardInScope:
-    def test_no_scope_always_in_scope(self):
-        inv = {"id": "g1"}
-        assert _guard_in_scope(inv, "any_file.c") is True
-
-    def test_scope_with_matching_file(self):
-        inv = {"id": "g1", "scope": {"files": ["af_alg.c", "algif_aead.c"]}}
-        assert _guard_in_scope(inv, "af_alg.c") is True
-
-    def test_scope_with_path_prefix(self):
-        inv = {"id": "g1", "scope": {"files": ["af_alg.c"]}}
-        assert _guard_in_scope(inv, "crypto/af_alg.c") is True
-
-    def test_scope_excludes_unrelated_file(self):
-        inv = {"id": "g1", "scope": {"files": ["af_alg.c", "algif_aead.c"]}}
-        assert _guard_in_scope(inv, "tcp.c") is False
-
-    def test_empty_files_list_in_scope(self):
-        inv = {"id": "g1", "scope": {"files": []}}
-        assert _guard_in_scope(inv, "any.c") is True
-
-    def test_scope_without_files_key(self):
-        inv = {"id": "g1", "scope": {"concept_ref": "sm.foo"}}
-        assert _guard_in_scope(inv, "any.c") is True
-
-
-# ------------------------------------------------------------------
-# invariant_violations_for_hypothesis with role filter
-# ------------------------------------------------------------------
-
-class TestInvariantViolationsWithRole:
+class TestInvariantViolationsForHypothesis:
     @pytest.fixture
-    def model_with_guards(self, tmp_path):
+    def model_with_invariants(self, tmp_path):
         model = {
             "version": "1",
             "invariants": [
@@ -355,7 +235,6 @@ class TestInvariantViolationsWithRole:
                     "statement": "Pages must not be modified through aliases",
                     "negation": "Writing through aliased scatterlist corrupts pages",
                     "confidence": "traced",
-                    "role": "boost",
                 },
                 {
                     "id": "guard_bind_oneshot",
@@ -363,8 +242,6 @@ class TestInvariantViolationsWithRole:
                     "statement": "bind() is one-shot; pask->private is stable after bind",
                     "negation": "pask->private is NULL during child socket operations",
                     "confidence": "traced",
-                    "role": "guard",
-                    "scope": {"files": ["af_alg.c", "algif_aead.c"]},
                 },
                 {
                     "id": "guard_lock_serialises",
@@ -372,8 +249,6 @@ class TestInvariantViolationsWithRole:
                     "statement": "lock_sock serialises socket operations",
                     "negation": "TOCTOU race between concurrent socket operations",
                     "confidence": "traced",
-                    "role": "guard",
-                    "scope": {"files": ["af_alg.c", "algif_aead.c"]},
                 },
             ],
         }
@@ -382,63 +257,27 @@ class TestInvariantViolationsWithRole:
         )
         return tmp_path
 
-    def test_role_boost_only_returns_boosts(self, model_with_guards):
+    def test_returns_matching_invariants(self, model_with_invariants):
         results = invariant_violations_for_hypothesis(
-            model_with_guards,
-            "Writing through aliased scatterlist corrupts pages",
-            role="boost",
-        )
-        assert len(results) >= 1
-        assert all(r["role"] == "boost" for r in results)
-
-    def test_role_guard_only_returns_guards(self, model_with_guards):
-        results = invariant_violations_for_hypothesis(
-            model_with_guards,
-            "pask->private is NULL during child operations",
-            role="guard",
-        )
-        assert len(results) >= 1
-        assert all(r["role"] == "guard" for r in results)
-
-    def test_role_none_returns_both(self, model_with_guards):
-        results = invariant_violations_for_hypothesis(
-            model_with_guards,
+            model_with_invariants,
             "Writing through aliased scatterlist corrupts pages "
             "and pask->private is NULL during child operations",
         )
-        roles = {r["role"] for r in results}
-        assert "boost" in roles
+        assert len(results) >= 1
 
-    def test_guard_scoped_by_file(self, model_with_guards):
-        results_in = invariant_violations_for_hypothesis(
-            model_with_guards,
-            "pask->private is NULL during child socket operations",
-            role="guard",
-            finding_file="algif_aead.c",
-        )
-        results_out = invariant_violations_for_hypothesis(
-            model_with_guards,
-            "pask->private is NULL during child socket operations",
-            role="guard",
-            finding_file="tcp.c",
-        )
-        assert len(results_in) >= 1
-        assert results_out == []
-
-    def test_confidence_included_in_results(self, model_with_guards):
+    def test_confidence_included_in_results(self, model_with_invariants):
         results = invariant_violations_for_hypothesis(
-            model_with_guards,
+            model_with_invariants,
             "Writing through aliased scatterlist corrupts pages",
-            role="boost",
         )
         assert results[0]["confidence"] == "traced"
 
 
 # ------------------------------------------------------------------
-# guard_contradicts_finding
+# invariants_contradicting_finding
 # ------------------------------------------------------------------
 
-class TestGuardContradictsFinding:
+class TestInvariantsContradictingFinding:
     @pytest.fixture
     def model_dir(self, tmp_path):
         model = {
@@ -450,7 +289,6 @@ class TestGuardContradictsFinding:
                     "statement": "bind() is one-shot; pask->private stable",
                     "negation": "pask->private is NULL during child operations",
                     "confidence": "traced",
-                    "role": "guard",
                 },
             ],
         }
@@ -460,38 +298,38 @@ class TestGuardContradictsFinding:
         return tmp_path
 
     def test_matches_hypothesis(self, model_dir):
-        guards = guard_contradicts_finding(
+        matches = invariants_contradicting_finding(
             model_dir,
             "pask->private is NULL during child socket operations "
             "causing a null pointer dereference",
             [],
         )
-        assert len(guards) >= 1
-        assert guards[0]["invariant_id"] == "guard_bind_oneshot"
+        assert len(matches) >= 1
+        assert matches[0]["invariant_id"] == "guard_bind_oneshot"
 
     def test_matches_precondition(self, model_dir):
-        guards = guard_contradicts_finding(
+        matches = invariants_contradicting_finding(
             model_dir,
             "some unrelated hypothesis text",
             [{"assumption": "pask->private is NULL during child operations"}],
         )
-        assert len(guards) >= 1
+        assert len(matches) >= 1
 
     def test_no_match_returns_empty(self, model_dir):
-        guards = guard_contradicts_finding(
+        matches = invariants_contradicting_finding(
             model_dir,
             "integer overflow in size",
             [{"assumption": "attacker controls buffer size"}],
         )
-        assert guards == []
+        assert matches == []
 
     def test_deduplicates_across_hypothesis_and_preconditions(self, model_dir):
-        guards = guard_contradicts_finding(
+        matches = invariants_contradicting_finding(
             model_dir,
             "pask->private is NULL during child operations",
             [{"assumption": "pask->private is NULL during child operations"}],
         )
-        ids = [g["invariant_id"] for g in guards]
+        ids = [m["invariant_id"] for m in matches]
         assert len(ids) == len(set(ids))
 
 
@@ -500,7 +338,7 @@ class TestGuardContradictsFinding:
 # ------------------------------------------------------------------
 
 class TestInvariantRoundTrip:
-    def test_guard_fields_persist(self, tmp_path):
+    def test_invariant_fields_persist(self, tmp_path):
         model = DomainModel(
             target="test",
             invariants=[
@@ -510,9 +348,6 @@ class TestInvariantRoundTrip:
                     statement="bind is oneshot",
                     negation="bind called twice",
                     confidence="traced",
-                    role="guard",
-                    concept_class="state_machine",
-                    scope={"files": ["af_alg.c"], "concept_ref": "sm.af_alg"},
                 ),
                 Invariant(
                     id="boost.aliasing",
@@ -528,30 +363,14 @@ class TestInvariantRoundTrip:
         loaded = DomainModel.load(p)
 
         assert len(loaded.invariants) == 2
-        guard = loaded.invariants[0]
-        assert guard.role == "guard"
-        assert guard.concept_class == "state_machine"
-        assert guard.scope == {"files": ["af_alg.c"], "concept_ref": "sm.af_alg"}
+        first = loaded.invariants[0]
+        assert first.id == "guard.bind_oneshot"
+        assert first.concept == "state_machine.af_alg"
+        assert first.confidence == "traced"
 
-        boost = loaded.invariants[1]
-        assert boost.role == "boost"
-        assert boost.concept_class is None
-        assert boost.scope is None
-
-    def test_old_model_without_role_defaults_boost(self, tmp_path):
-        p = tmp_path / "model.json"
-        p.write_text(json.dumps({
-            "version": "1",
-            "invariants": [{
-                "id": "old_inv",
-                "concept": "c1",
-                "statement": "x",
-                "negation": "not x",
-            }],
-        }), encoding="utf-8")
-        loaded = DomainModel.load(p)
-        assert loaded.invariants[0].role == "boost"
-        assert loaded.invariants[0].concept_class is None
+        second = loaded.invariants[1]
+        assert second.id == "boost.aliasing"
+        assert second.concept == "aliasing"
 
 
 # ------------------------------------------------------------------
@@ -600,8 +419,6 @@ class TestDeriveValueConstraintGuard:
             "description": "walk page is allocated before use",
         }
         guard = _derive_value_constraint_guard(vc_concept, vc)
-        assert guard.role == "guard"
-        assert guard.concept_class == "value_constraint"
         assert "non-NULL" in guard.statement
         assert "alloc_page()" in guard.statement
         assert "NULL" in guard.negation
@@ -652,7 +469,6 @@ class TestDeriveValueConstraintGuard:
         }
         guard = _derive_value_constraint_guard(vc_concept, vc)
         assert "flags" in guard.statement
-        assert guard.role == "guard"
 
     def test_guard_inherits_confidence(self, vc_concept):
         vc_concept.confidence = "corroborated"
@@ -702,8 +518,6 @@ class TestParseValueConstraints:
         assert concepts[0].id == "value_constraint.authsize_max"
         assert concepts[0].confidence == "traced"
         assert len(invariants) == 1
-        assert invariants[0].role == "guard"
-        assert invariants[0].concept_class == "value_constraint"
 
     def test_auto_prefixes_id(self):
         raw = {
@@ -733,29 +547,6 @@ class TestParseValueConstraints:
         }
         concepts, _ = _parse_value_constraints(raw)
         assert concepts[0].id == "value_constraint.foo"
-
-    def test_scope_from_evidence_files(self):
-        raw = {
-            "value_constraints": [{
-                "id": "walk_page",
-                "description": "walk page allocated",
-                "variable": "walk->page",
-                "constraint_type": "non_null",
-                "enforced_by": "alloc_page",
-                "evidence": [
-                    {"type": "code_path", "file": "crypto/algif_skcipher.c",
-                     "observation": "alloc"},
-                    {"type": "code_path", "file": "crypto/algif_aead.c",
-                     "observation": "alloc"},
-                ],
-            }],
-        }
-        _, invariants = _parse_value_constraints(raw)
-        scope = invariants[0].scope
-        assert scope is not None
-        assert "algif_skcipher.c" in scope["files"]
-        assert "algif_aead.c" in scope["files"]
-        assert scope["concept_ref"] == "value_constraint.walk_page"
 
     def test_empty_value_constraints(self):
         concepts, invariants = _parse_value_constraints({})
@@ -810,12 +601,10 @@ class TestParseBatchResponseValueConstraints:
                 "evidence": [],
             }],
         }
-        concepts, invariants, contracts = _parse_batch_response(raw)
+        concepts, invariants, contracts, _, _ = _parse_batch_response(raw)
         vc_concepts = [c for c in concepts
                        if c.id.startswith("value_constraint.")]
         assert len(vc_concepts) == 1
-        assert invariants[0].role == "guard"
-        assert invariants[0].concept_class == "value_constraint"
 
     def test_combined_state_machine_and_value_constraints(self):
         raw = {
@@ -842,18 +631,15 @@ class TestParseBatchResponseValueConstraints:
                 "evidence": [],
             }],
         }
-        concepts, invariants, _ = _parse_batch_response(raw)
+        concepts, invariants, _, _, _ = _parse_batch_response(raw)
         sm_concepts = [c for c in concepts
                        if c.id.startswith("state_machine.")]
         vc_concepts = [c for c in concepts
                        if c.id.startswith("value_constraint.")]
         assert len(sm_concepts) == 1
         assert len(vc_concepts) == 1
-        guards = [i for i in invariants if i.role == "guard"]
-        assert len(guards) == 2
-        classes = {g.concept_class for g in guards}
-        assert "state_machine" in classes
-        assert "value_constraint" in classes
+        # 1 guard from state machine + 1 guard from value constraint
+        assert len(invariants) == 2
 
 
 # ------------------------------------------------------------------
@@ -871,20 +657,16 @@ class TestValueConstraintRoundTrip:
                     statement="authsize <= MAX after validation",
                     negation="authsize exceeds MAX",
                     confidence="traced",
-                    role="guard",
-                    concept_class="value_constraint",
-                    scope={"files": ["algif_aead.c"],
-                           "concept_ref": "value_constraint.authsize"},
                 ),
             ],
         )
         p = tmp_path / "model.json"
         model.save(p)
         loaded = DomainModel.load(p)
-        guard = loaded.invariants[0]
-        assert guard.role == "guard"
-        assert guard.concept_class == "value_constraint"
-        assert "algif_aead.c" in guard.scope["files"]
+        inv = loaded.invariants[0]
+        assert inv.id == "guard.authsize_check"
+        assert inv.concept == "value_constraint.authsize"
+        assert inv.confidence == "traced"
 
 
 # ------------------------------------------------------------------
@@ -932,22 +714,6 @@ class TestStateMachineGuardEnrichment:
         assert "CWE-362" in oneshot.relevant_cwes
         assert "CWE-367" in oneshot.relevant_cwes
 
-    def test_oneshot_guard_has_mechanism_tags(self):
-        concept = Concept(id="sm.test", description="test", confidence="traced")
-        transitions = [{"via": "init", "from": "A", "to": "B", "one_shot": True}]
-        guards = _derive_guard_invariants(concept, transitions)
-        oneshot = next(g for g in guards if "oneshot" in g.id)
-        assert "state_machine" in oneshot.mechanism_tags
-        assert "one_shot_transition" in oneshot.mechanism_tags
-
-    def test_oneshot_guard_has_keywords(self):
-        concept = Concept(id="sm.test", description="test", confidence="traced")
-        transitions = [{"via": "alg_bind", "from": "UNBOUND", "to": "BOUND", "one_shot": True}]
-        guards = _derive_guard_invariants(concept, transitions)
-        oneshot = next(g for g in guards if "oneshot" in g.id)
-        assert "alg_bind" in oneshot.mechanism_keywords
-        assert "race" in oneshot.mechanism_keywords
-
     def test_serialised_guard_has_description(self):
         concept = Concept(id="sm.test", description="test", confidence="traced")
         transitions = [{"via": "setsockopt", "from": "A", "to": "B", "serialised_by": "lock_sock"}]
@@ -961,7 +727,6 @@ class TestStateMachineGuardEnrichment:
         guards = _derive_guard_invariants(concept, transitions)
         ser = next(g for g in guards if "serialised" in g.id)
         assert "CWE-362" in ser.relevant_cwes
-        assert "lock_sock" in ser.mechanism_keywords
 
     def test_gate_guard_has_description(self):
         concept = Concept(id="sm.test", description="test", confidence="traced")
@@ -977,7 +742,6 @@ class TestStateMachineGuardEnrichment:
         gate = next(g for g in guards if "gates" in g.id)
         assert "CWE-362" in gate.relevant_cwes
         assert "CWE-863" in gate.relevant_cwes
-        assert "check_key" in gate.mechanism_keywords
 
 
 class TestValueConstraintGuardEnrichment:
@@ -994,8 +758,6 @@ class TestValueConstraintGuardEnrichment:
         vc = {"variable": "ctx", "constraint_type": "non_null", "enforced_by": "alloc"}
         guard = _derive_value_constraint_guard(concept, vc)
         assert "CWE-476" in guard.relevant_cwes
-        assert "null_check" in guard.mechanism_tags
-        assert "ctx" in guard.mechanism_keywords
 
     def test_upper_bound_has_overflow_cwes(self):
         concept = Concept(id="value_constraint.ivlen", description="", confidence="traced")
@@ -1005,8 +767,6 @@ class TestValueConstraintGuardEnrichment:
         assert "CWE-190" in guard.relevant_cwes
         assert "CWE-787" in guard.relevant_cwes
         assert "CWE-125" in guard.relevant_cwes
-        assert "bounds_validation" in guard.mechanism_tags
-        assert "ivlen" in guard.mechanism_keywords
 
     def test_lower_bound_has_underflow_cwes(self):
         concept = Concept(id="value_constraint.len", description="", confidence="traced")
@@ -1022,14 +782,12 @@ class TestValueConstraintGuardEnrichment:
               "bound": "0..SIZE", "enforced_by": "validate"}
         guard = _derive_value_constraint_guard(concept, vc)
         assert set(guard.relevant_cwes) == {"CWE-190", "CWE-191", "CWE-787", "CWE-125"}
-        assert "range_guard" in guard.mechanism_tags
 
     def test_unknown_type_empty_cwes(self):
         concept = Concept(id="value_constraint.x", description="", confidence="traced")
         vc = {"variable": "x", "constraint_type": "custom", "enforced_by": "check"}
         guard = _derive_value_constraint_guard(concept, vc)
         assert guard.relevant_cwes == []
-        assert "value_constraint" in guard.mechanism_tags
 
 
 class TestInvariantEnrichmentRoundTrip:
@@ -1043,8 +801,6 @@ class TestInvariantEnrichmentRoundTrip:
             negation="n",
             description="test description",
             relevant_cwes=["CWE-787"],
-            mechanism_tags=["sgl_lifecycle"],
-            mechanism_keywords=["page", "scatterlist"],
         )
         dm = DomainModel(invariants=[inv])
         dm.save(tmp_path / "domain-model.json")
@@ -1052,8 +808,6 @@ class TestInvariantEnrichmentRoundTrip:
         loaded_inv = loaded.invariants[0]
         assert loaded_inv.description == "test description"
         assert loaded_inv.relevant_cwes == ["CWE-787"]
-        assert loaded_inv.mechanism_tags == ["sgl_lifecycle"]
-        assert loaded_inv.mechanism_keywords == ["page", "scatterlist"]
 
     def test_load_without_enrichment_defaults_empty(self, tmp_path):
         raw = {
@@ -1069,8 +823,6 @@ class TestInvariantEnrichmentRoundTrip:
         loaded = DomainModel.load(tmp_path / "domain-model.json")
         inv = loaded.invariants[0]
         assert inv.relevant_cwes == []
-        assert inv.mechanism_tags == []
-        assert inv.mechanism_keywords == []
 
 
 # ------------------------------------------------------------------
