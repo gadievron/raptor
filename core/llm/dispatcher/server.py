@@ -632,6 +632,7 @@ _PROVIDER_FROM_PATH_PREFIX = {
     "/groq/":         "groq",
     "/together/":     "together",
     "/openrouter/":   "openrouter",
+    "/orcarouter/":   "orcarouter",
     "/fireworks/":    "fireworks",
     "/deepinfra/":    "deepinfra",
     "/perplexity/":   "perplexity",

@@ -69,6 +69,7 @@ _AGGREGATOR_PREFIXES: tuple[str, ...] = (
     "together/",
     "groq/",
     "openrouter/",
+    "orcarouter/",
     "fireworks/",
     "deepinfra/",
     "perplexity/",

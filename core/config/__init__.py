@@ -849,6 +849,7 @@ class RaptorConfig:
         "GROQ_API_KEY",         # aggregator + family stem (batch 067)
         "TOGETHER_API_KEY",     # aggregator
         "OPENROUTER_API_KEY",   # aggregator
+        "ORCAROUTER_API_KEY",   # aggregator
         "FIREWORKS_API_KEY",    # aggregator
         "DEEPINFRA_API_KEY",    # aggregator
         "PERPLEXITY_API_KEY",   # aggregator

@@ -245,6 +245,7 @@ class CredentialStore:
             "groq":       _read_env("GROQ_API_KEY"),
             "together":   _read_env("TOGETHER_API_KEY"),
             "openrouter": _read_env("OPENROUTER_API_KEY"),
+            "orcarouter": _read_env("ORCAROUTER_API_KEY"),
             "fireworks":  _read_env("FIREWORKS_API_KEY"),
             "deepinfra":  _read_env("DEEPINFRA_API_KEY"),
             "perplexity": _read_env("PERPLEXITY_API_KEY"),
@@ -1044,6 +1045,15 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             # is preserved end-to-end through the dispatcher.
             upstream_base_url="https://openrouter.ai",
             inject_headers=_bearer_headers("openrouter"),
+        ),
+        "orcarouter": ProviderRule(
+            name="orcarouter",
+            # OrcaRouter's API is rooted at ``/v1`` (OpenAI-compatible
+            # gateway). The SDK's path component (``/v1/chat/completions``
+            # etc.) is preserved end-to-end through the dispatcher, so the
+            # bare host is the correct upstream — same shape as OpenRouter.
+            upstream_base_url="https://api.orcarouter.ai",
+            inject_headers=_bearer_headers("orcarouter"),
         ),
         "fireworks": ProviderRule(
             name="fireworks",
