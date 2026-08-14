@@ -1391,6 +1391,8 @@ def _print_status(project):
         name_col = max(max(len(d.name) for d in runs) + 2, 20)
         for d in runs:
             meta = load_run_metadata(d)
+            if not isinstance(meta, dict):
+                meta = None
             cmd = meta.get("command", "?") if meta else "?"
             status = meta.get("status", "?") if meta else "?"
             findings_str = _get_output_summary(d, meta)
@@ -1449,7 +1451,7 @@ def _print_provenance(project):
     from core.run.provenance import aggregate_provenance, format_provenance_rollup
 
     runs = project.get_run_dirs(sweep=False)
-    metadatas = [load_run_metadata(d) for d in runs]
+    metadatas = [m if isinstance(m, dict) else None for m in (load_run_metadata(d) for d in runs)]
     print(f"Project: {project.name}")
     print(format_provenance_rollup(aggregate_provenance(metadatas)))
 
@@ -1473,7 +1475,8 @@ def _print_run_provenance(project, run_query):
         return
 
     d = matches[0]
-    meta = load_run_metadata(d) or {}
+    raw_meta = load_run_metadata(d)
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
     print(f"Run: {d.name}")
     print(f"  Command: {meta.get('command', '?')}")
     ts = (meta.get("timestamp") or "")[:19]
@@ -1761,9 +1764,14 @@ def _parse_since(spec: str):
             n = float(spec[:-1])
         except ValueError:
             return None
+        if n < 0:
+            return None
         return time.time() - n * multipliers[spec[-1]]
     try:
-        return time.time() - float(spec)
+        n = float(spec)
+        if n < 0:
+            return None
+        return time.time() - n
     except ValueError:
         return None
 

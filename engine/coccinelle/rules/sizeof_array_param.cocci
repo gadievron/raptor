@@ -7,6 +7,7 @@
 //
 // CWE-467: Use of sizeof() on a Pointer Type (array-decay variant)
 // 0xdea catches sizeof-on-pointer but not this specific array-decay case.
+// @role: verification
 
 @sizeof_param_array@
 identifier FUNC, PARAM;

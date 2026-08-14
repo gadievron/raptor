@@ -35,7 +35,7 @@ def _writer_proc(base_str: str, file: str, prefix: str, count: int):
         ))
 
 
-@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
 class TestConcurrentWrites:
     """Two processes hammer the same file. With locking, all writes
     survive. Without it, ~half would be lost to the read-modify-write

@@ -54,26 +54,28 @@ Coccinelle (default-on for C/C++ targets). CodeQL is opt-in via
 
 ### Rule Categories
 
-RAPTOR ships 40 YAML rule files across 15 categories under
-`engine/semgrep/rules/`:
+RAPTOR ships custom YAML rule files under `engine/semgrep/rules/`,
+organised by category:
 
-| Category | Count | Covers |
-|----------|------:|--------|
-| `crypto` | 12 | Weak hash, weak PRNG, weak ciphers, weak KDF iterations/keysize, reused nonce, insecure IV, PKCS1v15 padding, insecure password hash, weak asymmetric keysize, weak block modes |
-| `injection` | 12 | SQL taint, SQL concat, command taint (single + multi-lang), eval taint, SSTI taint, NoSQL taint, XSS, LDAP taint, header injection, log injection, regex DoS |
-| `auth` | 2 | JWT signature bypass (`jwt-no-verify`), TLS certificate skip (`tls-skip-verify`) |
-| `deserialisation` | 2 | Unsafe deserialise (Python/Ruby/PHP), unsafe Java deserialise |
-| `sinks` | 2 | SSRF, open redirect |
-| `filesystem` | 1 | Path traversal |
-| `flows` | 1 | Bad MAC order (encrypt-then-MAC vs MAC-then-encrypt) |
-| `go` | 1 | Go-specific security rules |
-| `java` | 1 | Java-specific security rules |
-| `javascript` | 1 | JavaScript-specific security rules |
-| `logging` | 1 | Secrets in log output |
-| `python` | 1 | Python-specific security rules |
-| `secrets` | 1 | Hardcoded API keys |
-| `web` | 1 | Prototype pollution |
-| `xml` | 1 | XXE |
+| Category | Covers |
+|----------|--------|
+| `crypto` | Weak hash, weak PRNG, weak ciphers, weak KDF iterations/keysize, reused nonce, insecure IV, PKCS1v15 padding, insecure password hash, weak asymmetric keysize, weak block modes |
+| `injection` | SQL taint, SQL concat, command taint (single + multi-lang), eval taint, SSTI taint, NoSQL taint, XSS, LDAP taint, header injection, log injection, regex DoS |
+| `auth` | JWT signature bypass, TLS certificate skip |
+| `deserialisation` | Unsafe deserialise (Python/Ruby/PHP), unsafe Java deserialise |
+| `sinks` | SSRF, open redirect |
+| `filesystem` | Path traversal |
+| `flows` | Bad MAC order (encrypt-then-MAC vs MAC-then-encrypt) |
+| `go` | Go-specific security rules |
+| `java` | Java-specific security rules |
+| `javascript` | JavaScript-specific security rules |
+| `logging` | Secrets in log output |
+| `python` | Python-specific security rules |
+| `secrets` | Hardcoded API keys |
+| `web` | Prototype pollution |
+| `xml` | XXE |
+
+Run `ls engine/semgrep/rules/` for the current file list.
 
 ### Upstream Registry Packs
 
@@ -145,44 +147,26 @@ and deduplicated by resolved absolute path.
 
 ### Rule Inventory
 
-38 semantic patch files under `engine/coccinelle/rules/`, covering
-C/C++ structural patterns that require control-flow sensitivity:
+RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
+covering C/C++ structural patterns that require control-flow sensitivity:
 
-**Memory safety:**
-`use_after_free`, `double_free`, `realloc_losing_ptr`,
-`free_nonbase_ptr`, `stack_addr_escape`, `missing_null_check`
+| Category | Covers |
+|----------|--------|
+| Memory safety | Use-after-free, double free, realloc losing pointer, stack address escape, missing null check, mmap free |
+| Uninitialised data | copy_to_user uninit, uninitialised return |
+| Resource leaks | Resource leak on error, mmap leak, double close, popen/fclose mismatch |
+| Integer issues | Integer overflow in alloc, shift overflow, sign extension, division by zero, UID truncation |
+| Buffer handling | Missing bounds check, strncpy without NUL, snprintf advance, sizeof mismatches |
+| Concurrency | Lock imbalance, sleep under spinlock, RCU violations, use after unlock, missing memory barriers, lock ordering |
+| TOCTOU and races | stat/open TOCTOU, double fetch, check-then-act |
+| Sandbox escape | chroot without chdir, socket without CLOEXEC |
+| Unchecked returns | Unchecked return value, unchecked strtol |
+| Format strings | Format string from untrusted input |
+| API misuse | Signal misuse, fcntl flag domain, double byteswap, inet_ntoa double call |
+| Compiler optimisation hazards | Dead memset before free |
+| Kernel-specific | IS_ERR/PTR_ERR confusion, kfree without RCU grace period |
 
-**Uninitialised data:**
-`copy_to_user_uninit`, `uninitialized_return`
-
-**Resource leaks:**
-`resource_leak_err`, `mmap_leak_err`, `double_close`
-
-**Integer issues:**
-`integer_overflow_alloc`, `shift_overflow`, `sign_extension_widen`,
-`division_by_zero`, `uid_truncation`, `double_sizeof`
-
-**Concurrency:**
-`lock_imbalance`, `sleep_under_spinlock`,
-`gfp_kernel_under_spinlock`, `rcu_no_lock`, `use_after_unlock`
-
-**Buffer handling:**
-`missing_bounds_check`, `strncpy_no_nul`, `snprintf_advance`,
-`copy_user_size_mismatch`, `sizeof_array_param`,
-`sizeof_container_of`
-
-**TOCTOU and race conditions:**
-`toctou_stat_open`, `double_fetch`
-
-**Sandbox escape:**
-`chroot_no_chdir`, `socket_no_cloexec`
-
-**Unchecked returns:**
-`unchecked_return`, `unchecked_strtol`
-
-**Miscellaneous:**
-`va_arg_mismatch`, `init_after_register`, `unsafe_list_del`,
-`sensitive_data_leak`
+Run `ls engine/coccinelle/rules/` for the current file list.
 
 ### Prerequisites
 

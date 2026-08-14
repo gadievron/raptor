@@ -58,39 +58,6 @@ def _patch_system_text(profile: ModelDefenseProfile = CONSERVATIVE) -> str:
     )
 
 
-def _sage_precall_blocks(finding: Dict) -> tuple:
-    """Untrusted blocks derived from optional Phase-0 SAGE scan recall."""
-    from core.security.prompt_envelope import UntrustedBlock
-
-    ctx = finding.get("_sage_precall_scan_context")
-    if not ctx:
-        return ()
-    return (
-        UntrustedBlock(
-            content=str(ctx),
-            kind="sage-precall-scan-context",
-            origin="sage:precall",
-        ),
-    )
-
-
-def _merge_sage_precall(finding: Dict, *blocks) -> tuple:
-    return _sage_precall_blocks(finding) + tuple(blocks)
-
-
-def _group_sage_precall_blocks(
-    finding_ids: List[str],
-    results_by_id: Dict[str, Dict],
-) -> tuple:
-    """Reuse Phase-0 scan precall from any member finding (same text per run)."""
-    for fid in finding_ids:
-        r = results_by_id.get(fid) or {}
-        blocks = _sage_precall_blocks(r)
-        if blocks:
-            return blocks
-    return ()
-
-
 class AnalysisTask(DispatchTask):
     """Per-finding exploitability analysis."""
 
@@ -124,10 +91,9 @@ class AnalysisTask(DispatchTask):
             evidence_blocks_for_finding,
         )
         si_blocks = evidence_blocks_for_finding(finding)
-        extra = _merge_sage_precall(finding, *si_blocks)
         budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=extra,
+            finding, profile=self.profile, extra_blocks=tuple(si_blocks),
             allow_unreachable=self.allow_unreachable,
             budget_tokens=budget,
         )
@@ -239,54 +205,6 @@ def _sca_exploit_priority(f: Dict) -> float:
     return score
 
 
-def _build_sca_exploit_prompt(finding: Dict) -> str:
-    """Build an exploit-oriented prompt for an SCA vulnerability finding."""
-    sca = finding.get("sca", {})
-    lines = [
-        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
-        f"Advisory: {finding.get('finding_id', 'unknown')}",
-        f"Severity: {finding.get('severity', 'unknown')}",
-        f"Description: {finding.get('description', 'N/A')}",
-    ]
-    if sca.get("cvss_score") is not None:
-        lines.append(f"CVSS: {sca['cvss_score']}")
-    if sca.get("in_kev"):
-        lines.append("KEV: YES — known exploited in the wild")
-    if sca.get("epss") is not None:
-        try:
-            lines.append(f"EPSS: {float(sca['epss']):.1%}")
-        except (ValueError, TypeError):
-            lines.append(f"EPSS: {sca['epss']}")
-    lines.append(f"Reachability: {sca.get('reachability', 'not_evaluated')}")
-    if sca.get("fixed_version"):
-        lines.append(f"Fixed in: {sca['fixed_version']}")
-    lines.append(f"Declared in: {finding.get('file_path', 'unknown')}")
-    lines.append("")
-    lines.append("Generate a proof-of-concept exploit that demonstrates this "
-                 "vulnerability is exploitable in a project that imports this "
-                 "dependency. Focus on the specific advisory and version.")
-    return "\n".join(lines)
-
-
-def _build_sca_patch_prompt(finding: Dict) -> str:
-    """Build a patch prompt for an SCA vulnerability finding."""
-    sca = finding.get("sca", {})
-    lines = [
-        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
-        f"Advisory: {finding.get('finding_id', 'unknown')}",
-        f"Severity: {finding.get('severity', 'unknown')}",
-        f"Description: {finding.get('description', 'N/A')}",
-    ]
-    if sca.get("fixed_version"):
-        lines.append(f"Fixed version: {sca['fixed_version']}")
-    lines.append(f"Manifest: {finding.get('file_path', 'unknown')}")
-    lines.append("")
-    lines.append("Generate a minimal patch that upgrades this dependency to "
-                 "the fixed version. Show the exact manifest change needed. "
-                 "If no fixed version exists, suggest a workaround or "
-                 "alternative package.")
-    return "\n".join(lines)
-
 
 class ExploitTask(DispatchTask):
     """Exploit PoC generation for exploitable findings."""
@@ -340,8 +258,6 @@ class ExploitTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        if _is_sca_finding(finding):
-            return _build_sca_exploit_prompt(finding)
         # Phase D: inject source_intel structural evidence for
         # memory-corruption findings so the exploit generator sees the
         # same structural context the analysis step saw (allocations,
@@ -351,57 +267,13 @@ class ExploitTask(DispatchTask):
             evidence_blocks_for_finding,
         )
         si_blocks = evidence_blocks_for_finding(finding)
-        sage_blocks = self._sage_exploit_blocks(finding)
         budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_exploit_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=si_blocks + sage_blocks,
+            finding, profile=self.profile, extra_blocks=tuple(si_blocks),
             budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
-
-    @staticmethod
-    def _sage_exploit_blocks(finding: Dict[str, Any]) -> tuple:
-        try:
-            from core.sage.hooks import (
-                recall_context_for_exploit,
-                format_sage_memories_for_prompt,
-            )
-            from core.security.prompt_envelope import UntrustedBlock
-
-            repo_path = finding.get("repo_path", "")
-            if not repo_path:
-                return ()
-            vuln_type = finding.get("rule_id", "")
-            cwe_id = finding.get("cwe_id", "")
-            mitigations = []
-            feasibility = finding.get("feasibility") or {}
-            exp_paths = feasibility.get("exploitation_paths") or {}
-            if isinstance(exp_paths, list):
-                exp_paths = {str(i): p for i, p in enumerate(exp_paths) if isinstance(p, dict)}
-            for path_info in exp_paths.values():
-                mitigations.extend(path_info.get("chain_breaks", []))
-
-            rows = recall_context_for_exploit(
-                repo_path=repo_path,
-                vuln_type=vuln_type or None,
-                cwe_id=cwe_id or None,
-                mitigations=mitigations[:5] or None,
-            )
-            if not rows:
-                return ()
-            text = format_sage_memories_for_prompt(rows)
-            if not text:
-                return ()
-            return (
-                UntrustedBlock(
-                    content=text,
-                    kind="sage-exploit-prior",
-                    origin="sage:exploits",
-                ),
-            )
-        except Exception:
-            return ()
 
     def get_last_nonce(self) -> str:
         return getattr(self._tls, "nonce", "")
@@ -462,8 +334,6 @@ class PatchTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        if _is_sca_finding(finding):
-            return _build_sca_patch_prompt(finding)
         # Phase D: inject source_intel structural evidence so the
         # patch generator sees the structural context (allocations,
         # hazards, sanitizer-shaped sites) when crafting a fix.
@@ -548,10 +418,9 @@ class ConsensusTask(DispatchTask):
             evidence_blocks_for_finding,
         )
         si_blocks = evidence_blocks_for_finding(finding)
-        extra = _merge_sage_precall(finding, *si_blocks)
         budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=extra,
+            finding, profile=self.profile, extra_blocks=tuple(si_blocks),
             budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
@@ -721,7 +590,7 @@ class JudgeTask(DispatchTask):
         bundle = build_analysis_prompt_bundle_from_finding(
             finding,
             profile=self.profile,
-            extra_blocks=_merge_sage_precall(finding, *extra_blocks),
+            extra_blocks=tuple(extra_blocks),
             budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
@@ -1031,11 +900,10 @@ class GroupAnalysisTask(DispatchTask):
 
         findings_text = "\n".join(summaries) if summaries else "(no prior results)"
 
-        precall = _group_sage_precall_blocks(finding_ids, self.results_by_id)
         bundle = _build_prompt(
             system=GroupAnalysisTask._SYSTEM_TEXT,
             profile=self.profile,
-            untrusted_blocks=precall + (UntrustedBlock(
+            untrusted_blocks=(UntrustedBlock(
                 content=findings_text,
                 kind="prior-finding-summaries",
                 origin=f"group:{criterion}={criterion_value}",
@@ -1173,10 +1041,12 @@ class RetryTask(AnalysisTask):
         # context the primary saw.
         extra_blocks = extra_blocks + evidence_blocks_for_finding(finding)
 
+        budget = getattr(self._tls_budget, "tokens", 0) if hasattr(self, "_tls_budget") else 0
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile,
-            extra_blocks=_merge_sage_precall(finding, *extra_blocks),
+            extra_blocks=tuple(extra_blocks),
             allow_unreachable=self.allow_unreachable,
+            budget_tokens=budget,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)

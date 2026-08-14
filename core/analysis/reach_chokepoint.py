@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Optional, Tuple
 
@@ -249,8 +250,16 @@ def record_suppression(
         }
         if extra:
             record.update(extra)
-        with (out_dir / "suppressions.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
+        line = (json.dumps(record) + "\n").encode("utf-8")
+        fd = os.open(
+            str(out_dir / "suppressions.jsonl"),
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o644,
+        )
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
     except OSError as e:
         logger.debug(
             "reach_chokepoint: failed to write suppression record: %s", e)

@@ -170,7 +170,7 @@ def run_rule(
     Returns:
         SpatchResult with matches parsed from COCCIRESULT lines.
     """
-    rule = Path(rule)
+    rule = Path(rule).resolve()
     target = Path(target)
     rule_name = rule.stem
 
@@ -232,7 +232,7 @@ def run_rule(
             # subprocess_runner.
             fd, tmp_name = tempfile.mkstemp(suffix=".cocci", prefix="raptor-cocci-")
             try:
-                with os.fdopen(fd, "w") as fh:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(injected)
                 harnessed_rule_path = Path(tmp_name)
             except OSError:
@@ -410,6 +410,167 @@ def run_rules(
     return results
 
 
+def run_rules_batched(
+    target: Path,
+    rules: List[Path],
+    *,
+    timeout: int = 300,
+    env: Optional[Dict[str, str]] = None,
+    subprocess_runner=None,
+) -> Dict[str, SpatchResult]:
+    """Run multiple .cocci rules in a single spatch invocation.
+
+    Concatenates rule files into one temp file so spatch parses the C
+    AST once.  Results are demultiplexed by the ``rule`` field in each
+    COCCIRESULT line.  Rules that already contain @script:python@ blocks
+    emitting COCCIRESULT are required (all engine/coccinelle/rules/ do).
+
+    Returns a dict keyed by rule stem name → SpatchResult.
+    Falls back to per-rule run_rule when only one rule is given.
+    """
+    rules = [Path(r).resolve() for r in rules if Path(r).exists()]
+    if not rules:
+        return {}
+    if len(rules) == 1:
+        result = run_rule(
+            target, rules[0], timeout=timeout,
+            env=env, subprocess_runner=subprocess_runner,
+        )
+        return {rules[0].stem: result}
+
+    if not is_available():
+        return {
+            r.stem: SpatchResult(
+                rule=r.stem, rule_path=str(r),
+                errors=["spatch is not installed"],
+                returncode=-1,
+            )
+            for r in rules
+        }
+
+    parts = []
+    rule_stems = []
+    for r in rules:
+        text = r.read_text(encoding="utf-8")
+        parts.append(f"// --- begin {r.stem} ---\n{text}\n")
+        rule_stems.append(r.stem)
+
+    combined = "\n".join(parts)
+
+    fd, tmp_name = tempfile.mkstemp(
+        suffix=".cocci", prefix="raptor-cocci-batch-",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(combined)
+        tmp_path = Path(tmp_name)
+    except OSError:
+        try:
+            Path(tmp_name).unlink()
+        except OSError:
+            pass
+        return {
+            s: SpatchResult(
+                rule=s, errors=["failed to write batch file"],
+                returncode=-1,
+            )
+            for s in rule_stems
+        }
+
+    target = Path(target)
+    cmd = [_spatch_path() or _SPATCH_BIN, "--sp-file", str(tmp_path)]
+    if target.is_dir():
+        cmd.extend(["--dir", str(target)])
+    else:
+        cmd.append(str(target))
+    cmd.append("--very-quiet")
+
+    run_env = dict(env) if env is not None else RaptorConfig.get_safe_env()
+    runner = subprocess_runner or subprocess.run
+
+    if target.is_file():
+        spatch_cwd = target.parent
+    elif target.is_dir():
+        spatch_cwd = target
+    else:
+        spatch_cwd = None
+
+    start = time.monotonic()
+    try:
+        try:
+            proc = runner(
+                cmd, capture_output=True, text=True,
+                timeout=timeout, env=run_env,
+                cwd=str(spatch_cwd) if spatch_cwd else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            partial_stdout = exc.stdout if isinstance(
+                exc.stdout, str,
+            ) else (
+                exc.stdout.decode("utf-8", errors="replace")
+                if exc.stdout else ""
+            )
+            partial_stderr = exc.stderr if isinstance(
+                exc.stderr, str,
+            ) else (
+                exc.stderr.decode("utf-8", errors="replace")
+                if exc.stderr else ""
+            )
+            all_matches = _dedup_matches(
+                _parse_results(partial_stdout, "batch")
+                + _parse_results(partial_stderr, "batch"),
+            )
+            by_rule: Dict[str, List[SpatchMatch]] = {
+                s: [] for s in rule_stems
+            }
+            for m in all_matches:
+                if m.rule in by_rule:
+                    by_rule[m.rule].append(m)
+            return {
+                s: SpatchResult(
+                    rule=s, matches=by_rule.get(s, []),
+                    errors=[f"Batch timeout after {timeout}s"],
+                    returncode=-1,
+                )
+                for s in rule_stems
+            }
+        except OSError as e:
+            return {
+                s: SpatchResult(
+                    rule=s, errors=[str(e)], returncode=-1,
+                )
+                for s in rule_stems
+            }
+
+        elapsed = int((time.monotonic() - start) * 1000)
+        all_matches = _dedup_matches(
+            _parse_results(proc.stdout, "batch")
+            + _parse_results(proc.stderr, "batch"),
+        )
+        errors = _parse_errors(proc.stderr)
+
+        by_rule = {s: [] for s in rule_stems}
+        for m in all_matches:
+            if m.rule in by_rule:
+                by_rule[m.rule].append(m)
+
+        return {
+            s: SpatchResult(
+                rule=s, rule_path=str(r),
+                matches=by_rule.get(s, []),
+                errors=errors,
+                elapsed_ms=elapsed,
+                returncode=proc.returncode,
+            )
+            for s, r in zip(rule_stems, rules)
+        }
+    finally:
+        try:
+            Path(tmp_name).unlink()
+        except OSError:
+            pass
+
+
 def _dedup_matches(matches: List[SpatchMatch]) -> List[SpatchMatch]:
     """Remove duplicate matches (same file+line+col+rule+message),
     preserving order.
@@ -527,7 +688,7 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     # silently emitting partial / wrong data.
     # `re.ASCII` for the same identifier-scope reason as above —
     # rule names are Python identifiers in the harness.
-    rule_names = re.findall(r"@(\w+)@", rule_text, re.ASCII)
+    rule_names = re.findall(r"@[ \t]*(\w+)[ \t]*@", rule_text, re.ASCII)
     if len(set(rule_names)) > 1:
         # Multi-rule file — harness injection isn't safe.
         # Caller handles the no-output case via spatch's

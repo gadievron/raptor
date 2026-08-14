@@ -33,6 +33,8 @@ _TEST_FUNC_PATTERN = re.compile(
 class TestCase:
     """A test case that exercises a target function."""
 
+    __test__ = False
+
     test_file: str
     test_function: str
     target_function: str
@@ -196,7 +198,10 @@ def _infer_target_functions(
                              "hasattr", "getattr", "setattr", "super",
                              "True", "False", "None", "mock", "patch",
                              "fixture", "parametrize", "raises", "warns",
-                             "mark", "skip", "xfail")
+                             "mark", "skip", "xfail",
+                             "open", "sorted", "map", "filter", "zip",
+                             "format", "bytes", "tuple", "os", "json",
+                             "re")
             and call not in targets
         ):
             targets.append(call)

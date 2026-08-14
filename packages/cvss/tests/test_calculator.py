@@ -276,7 +276,7 @@ class TestScoreForLabel:
         receive an ``info``-labelled finding without a numeric
         don't crash."""
         from packages.cvss import score_for_label
-        assert score_for_label("info") == 1.0
+        assert score_for_label("info") == 0.0
 
     def test_case_insensitive(self):
         """Upstream advisories capitalise inconsistently
@@ -317,3 +317,11 @@ class TestScoreForLabel:
         assert scores == sorted(scores), (
             f"label→score is not monotone: {scores}"
         )
+
+    def test_info_maps_below_low(self):
+        from packages.cvss import score_for_label
+        info_score = score_for_label("info")
+        low_score = score_for_label("low")
+        assert info_score is not None
+        assert low_score is not None
+        assert info_score < low_score

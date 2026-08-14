@@ -134,13 +134,17 @@ def _run_forwarder(listen_port, unix_socket_path, death_r):
                     pass
 
 
-def _write_all(fd, data):
+def _write_all(fd, data, timeout=60.0):
     """Write all of *data* to *fd*. Raises OSError on failure."""
+    import time
+    deadline = time.monotonic() + timeout
     mv = memoryview(data)
     while mv:
         try:
             n = os.write(fd, mv)
         except BlockingIOError:
+            if time.monotonic() > deadline:
+                raise OSError(errno.ETIMEDOUT, "write timed out")
             select.select([], [fd], [], 0.5)
             continue
         if n <= 0:

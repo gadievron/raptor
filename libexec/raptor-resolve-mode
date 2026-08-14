@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Resolve execution mode: orchestrator (external LLM) vs in-session (Claude Code).
+
+Usage:
+  raptor-resolve-mode [--local] [--model NAME]
+
+Output (one line):
+  orchestrator <model>   — use libexec/raptor-audit run (or equivalent)
+  in-session             — Claude Code is the LLM, follow SKILL.md
+
+Resolution order:
+  --local           → in-session (force, even if a model is configured)
+  --model <name>    → orchestrator <name>
+  (neither)         → check models.json / env vars; orchestrator if found,
+                      in-session if not
+"""
+import faulthandler
+import signal
+import sys
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+import argparse  # noqa: E402
+import logging  # noqa: E402
+
+logging.disable(logging.INFO)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Resolve execution mode for RAPTOR commands",
+    )
+    parser.add_argument(
+        "--local", action="store_true",
+        help="Force in-session mode (Claude Code as LLM)",
+    )
+    parser.add_argument(
+        "--model", default=None,
+        help="Explicit model name → orchestrator mode",
+    )
+    args = parser.parse_args()
+
+    if args.local:
+        print("in-session")
+        return 0
+
+    if args.model:
+        print(f"orchestrator {args.model}")
+        return 0
+
+    # Auto-detect: check models.json and env vars
+    from core.llm.config import _get_default_primary_model
+    model = _get_default_primary_model()
+    if model is not None:
+        model_id = f"{model.provider}/{model.model_name}"
+        if model.provider.startswith("claudecode"):
+            # The claudecode fallback fires whenever `claude` is on
+            # PATH — but PATH-presence says nothing about whether a
+            # dispatch will actually complete (backend auth, proxy
+            # route, model mapping). Probe once (cached) for liveness
+            # AND the real session model; a failed probe means every
+            # orchestrator LLM call would hang, so fall back to
+            # in-session instead of committing to a broken transport.
+            from core.llm.cc_probe import probe_cc_session_model
+            resolved = probe_cc_session_model()
+            if resolved is None:
+                sys.stderr.write(
+                    "raptor-resolve-mode: claude CLI pre-flight probe "
+                    "failed (no completion / no model in envelope) — "
+                    "claudecode transport unusable; using in-session "
+                    "mode. Fix the CLI backend or configure "
+                    "~/.config/raptor/models.json for direct API.\n"
+                )
+                print("in-session")
+                return 0
+            model_id = f"{model.provider}/{resolved}"
+        print(f"orchestrator {model_id}")
+        return 0
+
+    print("in-session")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

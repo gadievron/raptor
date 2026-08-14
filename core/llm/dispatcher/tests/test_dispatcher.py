@@ -10,6 +10,7 @@ key was injected.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -23,11 +24,10 @@ import pytest
 
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import (
-    LLMDispatcher,
     _TOKEN_HEADER,
+    LLMDispatcher,
     _peer_uid,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -157,22 +157,28 @@ class TestLayer3TokenAuth:
         assert r.status_code == 401
         assert "unknown token" in r.text
 
-    def test_request_with_valid_token_passes_token_check(self, dispatcher):
+    def test_request_with_valid_token_passes_token_check(
+        self, dispatcher, operator_proxy_env,
+    ):
         """A valid token must get past the gate. We don't assert on
         the response body or status because the upstream is the real
         anthropic.com here (CI may or may not have network) — only
-        that the response is NOT one of the gate's rejection shapes."""
-        socket_path, fd = dispatcher.allocate_worker(label="test-l3")
+        that the response is NOT one of the gate's rejection shapes.
+
+        ``operator_proxy_env``: this is the one dispatcher test whose
+        upstream is genuinely external, so it opts back into the
+        operator's proxy route that the conftest autouse scrub
+        removed (mandatory-egress-proxy hosts have no direct path)."""
+        _socket_path, fd = dispatcher.allocate_worker(label="test-l3")
         token = os.read(fd, 64).decode().strip()
         os.close(fd)
         r = self._post(dispatcher, headers={_TOKEN_HEADER: token})
         # Body must NOT contain any of our gate's rejection messages.
         # Decode best-effort — upstream may return gzipped body.
         body_lower = ""
-        try:
+        # Best-effort decode — upstream may return a gzipped body.
+        with contextlib.suppress(Exception):
             body_lower = r.text.lower()
-        except Exception:
-            pass
         for bad in ("missing token", "unknown token", "token expired",
                     "token revoked", "token exhausted"):
             assert bad not in body_lower, f"gate rejected a valid token: {body_lower!r}"
@@ -206,7 +212,7 @@ class TestLayer4TokenLifecycle:
             strip_request_headers=original.strip_request_headers,
         )
         try:
-            socket_path, fd = d.allocate_worker(label="budget-test")
+            _socket_path, fd = d.allocate_worker(label="budget-test")
             token = os.read(fd, 64).decode().strip()
             os.close(fd)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
@@ -237,7 +243,7 @@ class TestLayer4TokenLifecycle:
             token_budget=100,
         )
         try:
-            socket_path, fd = d.allocate_worker(label="expiry-test")
+            _socket_path, fd = d.allocate_worker(label="expiry-test")
             token = os.read(fd, 64).decode().strip()
             os.close(fd)
             # No need to ``time.sleep(0.05)`` here — with
@@ -262,7 +268,7 @@ class TestLayer4TokenLifecycle:
             d.shutdown()
 
     def test_revoked_token_is_rejected(self, dispatcher):
-        socket_path, fd = dispatcher.allocate_worker(label="revoke")
+        _socket_path, fd = dispatcher.allocate_worker(label="revoke")
         token = os.read(fd, 64).decode().strip()
         os.close(fd)
         # Manually flip status — what happens on connection close
@@ -290,7 +296,7 @@ class TestLayer5AuditLog:
         assert any(e["event"] == "server.start" for e in events)
 
     def test_token_issue_is_logged(self, dispatcher):
-        socket_path, fd = dispatcher.allocate_worker(label="audit-test")
+        _socket_path, fd = dispatcher.allocate_worker(label="audit-test")
         os.close(fd)
         events = _read_audit(dispatcher)
         issued = [e for e in events if e["event"] == "token.issue"]
@@ -312,7 +318,7 @@ class TestLayer5AuditLog:
         assert rejects[-1]["reason"] == "unknown token"
 
     def test_audit_does_not_log_token_value(self, dispatcher):
-        socket_path, fd = dispatcher.allocate_worker(label="leak-check")
+        _socket_path, fd = dispatcher.allocate_worker(label="leak-check")
         token = os.read(fd, 64).decode().strip()
         os.close(fd)
         events = _read_audit(dispatcher)
@@ -344,7 +350,7 @@ class _CaptiveUpstream:
             def log_message(self, *_a, **_kw):
                 return
 
-            def do_POST(self):  # noqa: N802
+            def do_POST(self):
                 length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length) if length else b""
                 self_outer.captured["method"] = self.command
@@ -530,7 +536,7 @@ class TestRealAnthropicSDKThroughDispatcher:
         )
 
         try:
-            socket_path, fd = d.allocate_worker(label="sdk-e2e")
+            _socket_path, fd = d.allocate_worker(label="sdk-e2e")
             token = os.read(fd, 64).decode().strip()
             os.close(fd)
 
@@ -588,7 +594,7 @@ class TestRealAnthropicSDKThroughDispatcher:
         """Closure that captures one request and replies with
         ``response_body``. Used to swap in payload-shape responses
         per-test without rebuilding the captive server class."""
-        def do_POST(self):  # noqa: N802
+        def do_POST(self):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length else b""
             upstream.captured["method"] = self.command
@@ -629,7 +635,7 @@ class TestSubprocessE2E:
             "usage": {"input_tokens": 5, "output_tokens": 3},
         }).encode("utf-8")
 
-        def do_POST(handler):  # noqa: N802
+        def do_POST(handler):
             length = int(handler.headers.get("Content-Length", "0"))
             body = handler.rfile.read(length) if length else b""
             upstream.captured["method"] = handler.command
@@ -806,7 +812,7 @@ class _GzipCaptiveUpstream:
             def log_message(self, *_a, **_kw):
                 return
 
-            def do_POST(self):  # noqa: N802
+            def do_POST(self):
                 length = int(self.headers.get("Content-Length", "0"))
                 _ = self.rfile.read(length) if length else b""
                 self.send_response(200)
@@ -912,6 +918,7 @@ class TestQuietNoisyLoggersWired:
         every other test still passes — only operator runs show the
         flood. This test pins the wire."""
         import logging as _logging
+
         from core.llm.log_quiet import _NOISY_LOGGERS
 
         # Reset to a known noisy state BEFORE constructing the

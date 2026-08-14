@@ -1,32 +1,36 @@
 """HypothesisRunner — drive the LLM-tool-LLM validation loop.
 
-Single-shot flow (Phase A — no iteration):
+Flow:
 
     1. Filter adapters to those available on the host.
     2. Build a system prompt that lists tool capabilities.
     3. Ask the LLM to pick a tool and generate a rule for the hypothesis.
     4. Run the chosen adapter with the generated rule.
     5. Ask the LLM to evaluate the tool's evidence and produce a verdict.
-    6. Return ValidationResult with the full audit trail.
+    6. If inconclusive and the LLM suggests a refined rule, repeat from
+       step 4 up to ``max_iterations`` times, guarded by ``must_progress``
+       (uncertainty must strictly decrease between rounds).
+    7. Return ValidationResult with the full audit trail.
 
 The runner does not "trust" the LLM's verdict naively: refutation requires
 that the tool ran successfully (success=True) and produced no matches.
 Inconclusive is the verdict when the tool errored or no applicable tool
 exists — the LLM cannot override absence of mechanical evidence with an
 opinion. Confirmation requires that the tool produced concrete matches.
-
-Future iteration loop (Phase B, deferred): if the LLM marks the result
-inconclusive AND a refined rule is suggested, re-run the adapter with the
-refined rule, up to N iterations. Currently `iterations` is fixed at 1.
 """
 
+import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Protocol
 
 from .adapters.base import ToolAdapter, ToolEvidence
 from .hypothesis import Hypothesis
+from .iteration import IterationStalled, IterationStep, must_progress
 from .provenance import hash_hypothesis
 from .result import Evidence, ValidationResult, Verdict
 from .verdict import verdict_from
+
+logger = logging.getLogger(__name__)
 
 
 _SYSTEM_PROMPT = """\
@@ -123,10 +127,16 @@ _TOOL_SELECTION_SCHEMA = {
 
 
 _EVALUATION_SCHEMA = {
-    "verdict": "string — one of: confirmed, refuted, inconclusive",
     "reasoning": "string — explanation grounded in the concrete tool output",
     "matches_support_claim": "boolean — true if at least one match is consistent with the hypothesis",
+    "refined_rule": "string — if inconclusive, a revised rule that might produce better evidence (empty string if no refinement possible)",
+    "verdict": {
+        "type": "string",
+        "enum": ["confirmed", "refuted", "inconclusive"],
+    },
 }
+
+_MAX_ITERATIONS = 3
 
 
 class LLMClientProtocol(Protocol):
@@ -154,6 +164,7 @@ def validate(
     timeout: int = 300,
     env: Optional[Dict[str, str]] = None,
     task_type: str = "audit",
+    max_iterations: int = _MAX_ITERATIONS,
 ) -> ValidationResult:
     """Validate a hypothesis by orchestrating LLM and tool adapters.
 
@@ -168,10 +179,14 @@ def validate(
             callers should pass RaptorConfig.get_safe_env().
         task_type: Tag passed through to the LLM client for model
             selection. Defaults to "audit".
+        max_iterations: Maximum LLM-tool round-trips (refinement rounds).
+            Must be >= 1.
 
     Returns:
         ValidationResult with verdict, evidence, and reasoning. Never raises.
     """
+    max_iterations = max(max_iterations, 1)
+
     available = [a for a in adapters if a.is_available()]
     if not available:
         return ValidationResult(
@@ -219,31 +234,67 @@ def validate(
         )
 
     adapter = by_name[tool_name]
-    tool_evidence = adapter.run(
-        rule=rule,
-        target=hypothesis.target,
-        timeout=timeout,
-        env=env,
-    )
+    all_evidence: List[Evidence] = []
+    verdict: Verdict = "inconclusive"
+    reasoning = ""
+    prev_step: Optional[IterationStep] = None
 
-    evidence_record = Evidence(
-        tool=tool_evidence.tool,
-        rule=tool_evidence.rule,
-        summary=tool_evidence.summary,
-        matches=tool_evidence.matches,
-        success=tool_evidence.success,
-        error=tool_evidence.error,
-        refers_to=hash_hypothesis(hypothesis),
-    )
+    for iteration in range(max_iterations):
+        tool_evidence = adapter.run(
+            rule=rule,
+            target=hypothesis.target,
+            timeout=timeout,
+            env=env,
+        )
 
-    verdict, reasoning = _evaluate(
-        hypothesis, tool_evidence, llm_client, task_type=task_type,
-    )
+        evidence_record = Evidence(
+            tool=tool_evidence.tool,
+            rule=tool_evidence.rule,
+            summary=tool_evidence.summary,
+            matches=tool_evidence.matches,
+            success=tool_evidence.success,
+            error=tool_evidence.error,
+            refers_to=hash_hypothesis(hypothesis),
+        )
+        all_evidence.append(evidence_record)
+
+        verdict, reasoning, eval_data = _evaluate_with_refinement(
+            hypothesis, tool_evidence, llm_client, task_type=task_type,
+        )
+
+        if verdict in ("confirmed", "refuted"):
+            return ValidationResult(
+                verdict=verdict,
+                evidence=all_evidence,
+                iterations=iteration + 1,
+                reasoning=reasoning,
+            )
+
+        refined_rule = (eval_data or {}).get("refined_rule", "")
+        if not refined_rule or not refined_rule.strip() or refined_rule == rule:
+            break
+
+        curr_step = IterationStep(
+            hypothesis=hypothesis,
+            evidence=list(all_evidence),
+        )
+        if prev_step is not None:
+            try:
+                must_progress(prev_step, curr_step)
+            except IterationStalled as exc:
+                logger.debug(
+                    "hypothesis_validation: iteration stalled at round %d: %s",
+                    iteration, exc,
+                )
+                break
+        prev_step = curr_step
+        rule = refined_rule
+        hypothesis = replace(hypothesis, context=refined_rule)
 
     return ValidationResult(
         verdict=verdict,
-        evidence=[evidence_record],
-        iterations=1,
+        evidence=all_evidence,
+        iterations=len(all_evidence),
         reasoning=reasoning,
     )
 
@@ -386,6 +437,11 @@ def _evaluate(
         data = _extract_data(response) or {}
         claim = data.get("verdict", "refuted")
         if claim not in ("confirmed", "refuted", "inconclusive"):
+            logger.warning(
+                "LLM returned invalid verdict %r for hypothesis %r "
+                "— falling back to refuted",
+                claim, hypothesis.text[:80],
+            )
             claim = "refuted"
         verdict = verdict_from(evidence, claim)
         reasoning = data.get("reasoning", "") or evidence.summary
@@ -406,3 +462,45 @@ def _evaluate(
     verdict = verdict_from(evidence, claim)
     reasoning = data.get("reasoning", "") or evidence.summary
     return verdict, reasoning
+
+
+def _evaluate_with_refinement(
+    hypothesis: Hypothesis,
+    evidence: ToolEvidence,
+    llm_client: LLMClientProtocol,
+    *,
+    task_type: str,
+) -> tuple[Verdict, str, Optional[Dict[str, Any]]]:
+    """Like ``_evaluate`` but also returns the raw eval data for
+    ``refined_rule`` extraction."""
+    if not evidence.success:
+        return (
+            "inconclusive",
+            f"Tool '{evidence.tool}' did not run successfully: {evidence.error}",
+            None,
+        )
+
+    prompt = _build_evaluate_prompt(hypothesis, evidence)
+    try:
+        response = llm_client.generate_structured(
+            prompt=prompt,
+            schema=_EVALUATION_SCHEMA,
+            task_type=task_type,
+        )
+    except Exception:
+        if not evidence.matches:
+            return "refuted", f"Tool ran cleanly with no matches: {evidence.summary}", None
+        return "inconclusive", f"LLM evaluation failed; matches present: {evidence.summary}", None
+
+    data = _extract_data(response) or {}
+    claim = data.get("verdict", "inconclusive" if evidence.matches else "refuted")
+    if claim not in ("confirmed", "refuted", "inconclusive"):
+        logger.warning(
+            "LLM returned invalid verdict %r for hypothesis %r "
+            "— falling back to inconclusive",
+            claim, hypothesis.text[:80],
+        )
+        claim = "inconclusive"
+    verdict = verdict_from(evidence, claim)
+    reasoning = data.get("reasoning", "") or evidence.summary
+    return verdict, reasoning, data

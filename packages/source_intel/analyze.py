@@ -1130,6 +1130,23 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 _MUL_RE = re.compile(r"\*")
 
 
+def _split_outside_parens(s: str, sep: str) -> list[str]:
+    """Split *s* on *sep* only when outside balanced parentheses."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(s):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(depth - 1, 0)
+        elif ch == sep and depth == 0:
+            parts.append(s[start:i])
+            start = i + 1
+    parts.append(s[start:])
+    return parts
+
+
 def _is_pure_sizeof(arg: str) -> bool:
     """Return True iff ``arg`` is exactly `sizeof(...)` with balanced
     parens and nothing after. `sizeof(*p)` qualifies (the `*` is
@@ -1168,9 +1185,10 @@ def _classify_arg_shape(arg: str) -> Optional[str]:
     if _is_pure_sizeof(arg):
         return "sizeof"
     # Multiplication present — could be sizeof*var or var*sizeof.
+    # Split only on `*` outside balanced parens so dereference inside
+    # sizeof(*ptr) is not mistaken for multiplication.
     if "*" in arg:
-        # Look for a known user-input var name in the operands.
-        operands = [op.strip() for op in arg.split("*")]
+        operands = [op.strip() for op in _split_outside_parens(arg, "*")]
         for op in operands:
             # Strip sizeof(...) wrappers.
             if op.startswith("sizeof"):
@@ -1276,9 +1294,11 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
 
     for i in range(0, call_idx + 1):
         line = lines[i]
-        # Strip comments (rough — same approach as adapter.py)
+        # Strip comments and string literals (rough)
         stripped = re.sub(r"/\*.*?\*/", "", line, flags=re.DOTALL)
         stripped = re.sub(r"//.*$", "", stripped, flags=re.MULTILINE)
+        stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
+        stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", stripped)
 
         # Look for `return` / `goto` BEFORE the call line at depth 1
         # (function body), which would mean a normal exit path

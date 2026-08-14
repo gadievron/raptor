@@ -297,8 +297,8 @@ def _extract_versions(data: dict) -> List[str]:
         if not isinstance(files, list):
             continue
         # Drop versions where every artefact was yanked.
-        if files and all(f.get("yanked") for f in files
-                          if isinstance(f, dict)):
+        dict_files = [f for f in files if isinstance(f, dict)]
+        if dict_files and all(f.get("yanked") for f in dict_files):
             continue
         # Some entries appear with no files at all (rare; skip).
         if not files:

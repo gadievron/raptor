@@ -81,7 +81,7 @@ def test_invoke_cc_simple_uses_run_untrusted_networked(captured_helper_kwargs, t
 
 
 def test_invoke_cc_simple_passes_documented_proxy_allowlist(
-    captured_helper_kwargs, tmp_path,
+    captured_helper_kwargs, tmp_path, monkeypatch,
 ):
     """proxy_hosts comes from the empirical-default set
     (api.anthropic.com + mcp-proxy.anthropic.com +
@@ -89,6 +89,13 @@ def test_invoke_cc_simple_passes_documented_proxy_allowlist(
     future change adds an unrelated host without justification,
     this fires."""
     from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    # Hermetic on Bedrock/Vertex-configured hosts: the provider-aware
+    # allowlist would otherwise return that cloud's endpoints instead
+    # of the first-party defaults asserted below.
+    for var in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY"):
+        monkeypatch.delenv(var, raising=False)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()

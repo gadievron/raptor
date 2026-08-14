@@ -195,6 +195,7 @@ _RPMTAG_RELEASE = 1002
 _RPMTAG_EPOCH = 1003
 
 _RPMTAG_TYPE_STRING = 6
+_RPMTAG_TYPE_INT32 = 4
 
 
 def parse_rpm_sqlite(content: bytes) -> List[InstalledPackage]:
@@ -218,13 +219,13 @@ def parse_rpm_sqlite(content: bytes) -> List[InstalledPackage]:
     tempfile is auto-cleaned on context exit.
     """
     out: List[InstalledPackage] = []
-
-    with tempfile.NamedTemporaryFile(
-        prefix="raptor-rpm-", suffix=".sqlite", delete=False,
-    ) as fp:
-        fp.write(content)
-        tmp_path = Path(fp.name)
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(
+            prefix="raptor-rpm-", suffix=".sqlite", delete=False,
+        ) as fp:
+            tmp_path = Path(fp.name)
+            fp.write(content)
         # ``mode=ro`` URI open guards against any accidental writes.
         conn = sqlite3.connect(
             f"file:{tmp_path}?mode=ro", uri=True,
@@ -248,10 +249,11 @@ def parse_rpm_sqlite(content: bytes) -> List[InstalledPackage]:
         finally:
             conn.close()
     finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
     return out
 
 
@@ -299,19 +301,21 @@ def _parse_rpm_header(blob: bytes) -> Optional[InstalledPackage]:
             value = _read_rpm_string(blob, data_start + off, data_end)
             if value is not None:
                 fields[tag] = value
-        elif tag == _RPMTAG_EPOCH:
-            # Epoch is INT32 (type 4); keep it as bytes for now,
-            # we'll only use it if both name+version are found.
-            pass
+        elif tag == _RPMTAG_EPOCH and typ == _RPMTAG_TYPE_INT32:
+            epoch_off = data_start + off
+            if epoch_off + 4 <= len(blob):
+                fields[_RPMTAG_EPOCH] = struct.unpack(
+                    ">i", blob[epoch_off:epoch_off + 4],
+                )[0]
 
     name = fields.get(_RPMTAG_NAME)
     version = fields.get(_RPMTAG_VERSION)
     release = fields.get(_RPMTAG_RELEASE)
     if not name or not version:
         return None
-    full_version = (
-        f"{version}-{release}" if release else version
-    )
+    epoch = fields.get(_RPMTAG_EPOCH)
+    ver_str = f"{version}-{release}" if release else version
+    full_version = f"{epoch}:{ver_str}" if epoch else ver_str
     # OSV's "Red Hat" ecosystem covers RHEL / Rocky / Alma / older
     # CentOS. SUSE / openSUSE use a separate ecosystem; we'd need
     # ``/etc/os-release`` parsing to distinguish. For now,

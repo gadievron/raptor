@@ -244,6 +244,7 @@ def _foundry_hosts() -> Optional[list[str]]:
 # load handles binary self-update.
 _CALIBRATED_CACHE: dict[str, "object"] = {}
 _CALIBRATED_CACHE_LOCK = threading.Lock()
+_MISSING = object()  # sentinel distinct from None (a valid cached result)
 
 
 def _resolve_claude_bin() -> Optional[str]:
@@ -278,48 +279,59 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
         claude_bin = _resolve_claude_bin()
     if claude_bin is None:
         return None
+
+    # Acquire lock, check cache. On a miss, plant a sentinel Event so
+    # concurrent threads wait instead of stampeding calibration.
     with _CALIBRATED_CACHE_LOCK:
-        if claude_bin in _CALIBRATED_CACHE:
-            return _CALIBRATED_CACHE[claude_bin]
+        cached = _CALIBRATED_CACHE.get(claude_bin, _MISSING)
+        if isinstance(cached, threading.Event):
+            # Another thread is calibrating — grab its event.
+            waiter = cached
+        elif cached is not _MISSING:
+            return cached
+        else:
+            waiter = None
+            sentinel = threading.Event()
+            _CALIBRATED_CACHE[claude_bin] = sentinel
 
-    try:
-        from core.sandbox.calibrate import load_or_calibrate
-    except ImportError:
-        # Calibrate module isn't available (older checkouts, minimal
-        # containers). Static layers carry the policy.
+    if waiter is not None:
+        waiter.wait()
         with _CALIBRATED_CACHE_LOCK:
-            _CALIBRATED_CACHE[claude_bin] = None
-        return None
+            return _CALIBRATED_CACHE.get(claude_bin)
 
+    # We own the calibration slot.
+    result = None
     try:
-        # Probe args + cache-key env are derived together so the
-        # cached profile invalidates cleanly when the operator
-        # toggles the network-probe opt-in.
-        probe_args = _cc_probe_args()
-        env_keys = _PROVIDER_ENV_KEYS + (_NETWORK_PROBE_OPT_IN_ENV,)
-        # ``--version`` finishes in <1s (20s generous); network probe
-        # runs full claude -p round-trip (~110s observed, 150s budget).
-        timeout = 150 if _network_probe_enabled() else 20
-        profile = load_or_calibrate(
-            claude_bin,
-            probe_args=probe_args,
-            env_keys=env_keys,
-            timeout=timeout,
-        )
-    except (FileNotFoundError, RuntimeError, OSError,
-            subprocess.TimeoutExpired) as exc:
-        logger.debug(
-            "cc_proxy_hosts: calibration of %s failed (%s); "
-            "falling back to static policy",
-            claude_bin, exc,
-        )
-        with _CALIBRATED_CACHE_LOCK:
-            _CALIBRATED_CACHE[claude_bin] = None
-        return None
+        try:
+            from core.sandbox.calibrate import load_or_calibrate
+        except ImportError:
+            return None
 
-    with _CALIBRATED_CACHE_LOCK:
-        _CALIBRATED_CACHE[claude_bin] = profile
-    return profile
+        try:
+            probe_args = _cc_probe_args()
+            env_keys = _PROVIDER_ENV_KEYS + (
+                _NETWORK_PROBE_OPT_IN_ENV,
+            )
+            timeout = 150 if _network_probe_enabled() else 20
+            result = load_or_calibrate(
+                claude_bin,
+                probe_args=probe_args,
+                env_keys=env_keys,
+                timeout=timeout,
+            )
+        except (FileNotFoundError, RuntimeError, OSError,
+                subprocess.TimeoutExpired) as exc:
+            logger.debug(
+                "cc_proxy_hosts: calibration of %s failed (%s); "
+                "falling back to static policy",
+                claude_bin, exc,
+            )
+            result = None
+    finally:
+        with _CALIBRATED_CACHE_LOCK:
+            _CALIBRATED_CACHE[claude_bin] = result
+        sentinel.set()
+    return result
 
 
 def _calibrated_proxy_hosts(
@@ -422,6 +434,29 @@ _DEFAULT_ANTHROPIC_HOSTS: tuple[str, ...] = (
 )
 
 
+def _binary_readable_paths(claude_bin: Optional[str] = None) -> list[str]:
+    """Paths needed to *exec* the Claude Code binary itself.
+
+    Landlock blocks execve on files outside the readable set, and
+    the launcher in ``~/.local/bin`` is typically a symlink into a
+    versioned install dir — both the link's directory and the
+    resolved target's directory must be readable or the sandboxed
+    child dies with exit 126 before producing any stderr.
+    """
+    bin_path = claude_bin or shutil.which("claude")
+    if not bin_path:
+        return []
+    link = Path(bin_path)
+    paths = [str(link.parent)]
+    try:
+        real = link.resolve()
+    except OSError:
+        return paths
+    if real.parent != link.parent:
+        paths.append(str(real.parent))
+    return paths
+
+
 def readable_paths_for_cc_dispatch(
     claude_bin: Optional[str] = None,
 ) -> list[str]:
@@ -433,16 +468,21 @@ def readable_paths_for_cc_dispatch(
             ``proxy_hosts_for_cc_dispatch``. Calibration runs against
             this exact binary; static fallback engages on miss.
 
-    Priority: calibrated profile > default install layout. Every
-    path-using cc_dispatch site (cc_dispatch.invoke_cc_simple +
-    agentic_passes' /understand prepass + /validate postpass)
-    routes through this so per-binary calibration takes effect
-    everywhere the policy matters.
+    The result is the union of the static floor (default install
+    layout + the binary's own exec paths) and the calibrated
+    profile. The calibrated layer EXTENDS the floor rather than
+    replacing it: calibration observes ``open()``/``stat()``
+    syscalls, so it structurally cannot record the ``execve`` of
+    the binary itself — a calibrated-only policy can't even exec
+    the CLI (observed as `/validate` post-pass exit 126 with empty
+    stderr). Every path-using cc_dispatch site
+    (cc_dispatch.invoke_cc_simple + agentic_passes' /understand
+    prepass + /validate postpass) routes through this so per-binary
+    calibration takes effect everywhere the policy matters.
     """
-    calibrated = _calibrated_readable_paths(claude_bin)
-    if calibrated is not None:
-        return calibrated
-    return _default_readable_paths()
+    floor = _default_readable_paths() + _binary_readable_paths(claude_bin)
+    calibrated = _calibrated_readable_paths(claude_bin) or []
+    return list(dict.fromkeys(floor + calibrated))
 
 
 def _reset_calibrate_cache_for_tests() -> None:

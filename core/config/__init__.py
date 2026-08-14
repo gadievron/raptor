@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 RAPTOR Centralized Configuration Module
 
@@ -8,10 +7,10 @@ including paths, timeouts, limits, and baseline settings.
 
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import ClassVar
 
 
-class classproperty:  # noqa: N801
+class classproperty:
     """Descriptor that works like @property but on the class itself."""
 
     def __init__(self, func):
@@ -80,6 +79,7 @@ class RaptorConfig:
                 ["git", "-C", str(repo), "describe",
                  "--tags", "--dirty=-local", "--always"],
                 capture_output=True, text=True, timeout=2,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError):
             return cls.VERSION
@@ -91,7 +91,7 @@ class RaptorConfig:
     # Tool dependencies for startup checks
     # severity: "required" = feature unavailable, "degrades" = feature limited
     # group: tools in same group need at least one present
-    TOOL_DEPS = {
+    TOOL_DEPS: ClassVar[dict] = {
         "afl++":        {"binary": "afl-fuzz",  "severity": "required", "affects": "/fuzz"},
         "codeql":       {"binary": "codeql",    "group": "scanner",     "affects": "/codeql, /agentic"},
         # Coccinelle (spatch) is required for source_intel's verdict-
@@ -104,15 +104,23 @@ class RaptorConfig:
         # ``verdict-active`` mean nothing to an operator reading /doctor.
         "coccinelle":   {"binary": "spatch",    "severity": "degrades", "affects": "/codeql, /agentic (C/C++ semantic-patch verification)"},
         "gdb":          {"binary": "gdb",       "severity": "required", "affects": "/crash-analysis, /fuzz"},
+        "joern":        {"binary": "joern",     "severity": "degrades", "affects": "/audit (inter-procedural taint analysis)"},
         "rr":           {"binary": "rr",        "severity": "degrades", "affects": "/crash-analysis"},
         "semgrep":      {"binary": "semgrep",   "group": "scanner",     "affects": "/scan, /agentic"},
         # Dynamic analysis tools
         "frida":        {"binary": "frida",       "severity": "degrades", "affects": "/frida, dynamic analysis, /fuzz harness probe"},
         "frida-trace":  {"binary": "frida-trace", "severity": "degrades", "affects": "dynamic tracing"},
         "jadx":         {"binary": "jadx",        "severity": "degrades", "affects": "Android/APK reverse engineering"},
+        # SMT feasibility engine — a Python module, not a binary
+        # (checked via importlib.util.find_spec). Consumers guard the
+        # import and degrade: /audit path-feasibility, /codeql dataflow
+        # validation, and exploit_feasibility one-gadget checks fall
+        # back to LLM-only / unknown verdicts without it. ``pip`` names
+        # the PyPI distribution (module name differs).
+        "z3":           {"module": "z3", "pip": "z3-solver", "severity": "degrades", "affects": "/audit, /codeql, /exploit (SMT feasibility)"},
     }
 
-    TOOL_GROUPS = {
+    TOOL_GROUPS: ClassVar[dict] = {
         "scanner": {"min_required": 1, "affects": "/scan, /agentic"},
     }
 
@@ -147,7 +155,7 @@ class RaptorConfig:
     # LocalFlowSource-based queries (covering CLI sources like sys.argv
     # that the stdlib RemoteFlowSource model excludes) are picked up
     # without operator configuration.
-    EXTRA_CODEQL_PACK_ROOTS: List[Path] = [
+    EXTRA_CODEQL_PACK_ROOTS: ClassVar[list[Path]] = [
         REPO_ROOT / "packages" / "llm_analysis" / "codeql_packs",
     ]
 
@@ -243,7 +251,7 @@ class RaptorConfig:
     CODEQL_DB_AUTO_CLEANUP = True    # Automatically cleanup old databases
 
     # Baseline Semgrep Packs (always included)
-    BASELINE_SEMGREP_PACKS: List[Tuple[str, str]] = [
+    BASELINE_SEMGREP_PACKS: ClassVar[list[tuple[str, str]]] = [
         ("semgrep_security_audit", "p/security-audit"),
         ("semgrep_owasp_top_10", "p/owasp-top-ten"),
         ("semgrep_secrets", "p/secrets"),
@@ -251,7 +259,7 @@ class RaptorConfig:
 
     # Mapping of policy groups to their corresponding semgrep registry packs
     # Format: {local_dir_name: (pack_name, pack_identifier)}
-    POLICY_GROUP_TO_SEMGREP_PACK: Dict[str, Tuple[str, str]] = {
+    POLICY_GROUP_TO_SEMGREP_PACK: ClassVar[dict[str, tuple[str, str]]] = {
         # Only packs that exist on semgrep.dev and are cached in registry-cache/
         # deserialisation, filesystem, logging: no registry pack exists, local rules only
         # crypto: p/crypto and category/crypto both 404 — local rules only
@@ -299,7 +307,7 @@ class RaptorConfig:
     # — no env var (binary_oracle hasn't yet shown a need to cross
     # subprocess boundaries; revisit if /validate or another helper grows
     # one).
-    BINARY_ORACLE_PATHS: Tuple[str, ...] = ()
+    BINARY_ORACLE_PATHS: tuple[str, ...] = ()
 
     # Inc 2b Tier 1: when True, extract direct call edges from each
     # binary in BINARY_ORACLE_PATHS (via r2) and annotate inventory
@@ -339,9 +347,9 @@ class RaptorConfig:
     OLLAMA_HOST = _OllamaHostDescriptor()
 
     # Proxy variables to strip for security
-    PROXY_ENV_VARS = [
-        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "no_proxy",
+    PROXY_ENV_VARS: ClassVar[list] = [
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "all_proxy",
     ]
 
     # ----- Env allowlist (primary) and blocklist (belt + braces) -----
@@ -467,6 +475,11 @@ class RaptorConfig:
         "LD_DEBUG",        # Loader debug output — info leak (maps, symbols)
         "LD_PROFILE",      # Loader profiling — writes profile data, side-channel
         "LD_SHOW_AUXV",    # Prints auxv including randomised addresses
+        # macOS dyld equivalents — no-ops on Linux, critical on macOS
+        "DYLD_INSERT_LIBRARIES",      # macOS equivalent of LD_PRELOAD
+        "DYLD_LIBRARY_PATH",          # macOS equivalent of LD_LIBRARY_PATH
+        "DYLD_FALLBACK_LIBRARY_PATH", # macOS fallback library resolution
+        "DYLD_FRAMEWORK_PATH",        # macOS framework injection
         # glibc data-module hijack (survives AT_SECURE on setuid binaries)
         "GCONV_PATH",      # iconv gconv-modules path — loads attacker .so on iconv use
         "LOCPATH",         # Locale data path — loads attacker locale modules
@@ -648,7 +661,7 @@ class RaptorConfig:
     # the user's *default* config is read from $HOME, which we don't strip.
     # GIT_CONFIG_NOSYSTEM=1 belt-and-braces in case /dev/null isn't honoured
     # on the platform (e.g. some Windows builds).
-    GIT_ENV_VARS = {
+    GIT_ENV_VARS: ClassVar[dict] = {
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ASKPASS": "true",
         "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -843,6 +856,7 @@ class RaptorConfig:
         "GROQ_API_KEY",         # aggregator + family stem (batch 067)
         "TOGETHER_API_KEY",     # aggregator
         "OPENROUTER_API_KEY",   # aggregator
+        "ORCAROUTER_API_KEY",   # aggregator
         "FIREWORKS_API_KEY",    # aggregator
         "DEEPINFRA_API_KEY",    # aggregator
         "PERPLEXITY_API_KEY",   # aggregator
@@ -881,8 +895,24 @@ class RaptorConfig:
         ``python raptor.py <mode>`` invocations. Mirrors the existing
         ``include_python_user_base`` opt-in on ``get_safe_env`` —
         same default-False, opt-in pattern as ``preserve_proxy``.
+
+        Proxy vars are ALWAYS preserved here (``preserve_proxy=True``
+        on the underlying ``get_safe_env``). Rationale: this env is
+        exclusively for RAPTOR's own analysis scripts — trusted code
+        that hosts the sandbox egress proxy, spawns ``claude`` CLI
+        children, and makes provider SDK calls, all of which resolve
+        their upstream route from the process environment at runtime
+        (``core/sandbox/proxy.py`` autodetect,
+        ``egress.operator_proxy_env()``,
+        ``get_safe_env(preserve_proxy=True)``). Stripping the
+        operator's launch-time proxy here starves every one of those
+        mechanisms one level down and breaks all outbound HTTP on
+        mandatory-egress-proxy hosts. The hostile-repo threat that
+        motivates the default strip does not apply: these children
+        never execute target-repo code with this env.
         """
         env = RaptorConfig.get_safe_env(
+            preserve_proxy=True,
             include_python_user_base=include_python_user_base,
         )
         for var in RaptorConfig.LLM_API_KEY_VARS:

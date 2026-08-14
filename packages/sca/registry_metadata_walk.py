@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -197,14 +198,14 @@ def _walk_one_ecosystem(
 
     # BFS queue of (name, version, depth) to walk. Items are added when
     # discovered; visited check happens at pop time.
-    queue: List[Tuple[str, str, int]] = []
+    queue: deque[Tuple[str, str, int]] = deque()
     for d in seeds:
         if d.version is None:
             continue                  # can't walk metadata without a version
         queue.append((_norm_name(d.name, ecosystem), d.version, 0))
 
     while queue:
-        name, version, depth = queue.pop(0)
+        name, version, depth = queue.popleft()
         if depth >= max_depth:
             continue
         # The ``visited`` set is seeded at the caller with the

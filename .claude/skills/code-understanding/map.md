@@ -363,6 +363,36 @@ from `false`; consumers must not collapse `null` to `false`. Cache-keyed
 on `(binary_sha256, build_flags_source, schema_version)` — one
 `analyze_binary` call per run. Idempotent.
 
+**[MAP-5h] Build Joern CPG cache (optional)**
+
+When Joern is available and the target contains C/C++/Java/Scala source,
+pre-build a cached CPG so that later `/audit` and `/agentic` runs can
+query callers/callees without the cold-start penalty:
+
+```bash
+libexec/raptor-build-cpg-cache "$RESOLVED_TARGET" "$WORKDIR"
+```
+
+Opt-in — skipped when Joern is not installed or the target has no
+supported source files. Writes `cpg-cache-manifest.json` to `$WORKDIR`.
+
+**[MAP-5i] Enrich with Joern taint-flow confirmation (optional)**
+
+After building the CPG cache (MAP-5h), confirm which entry-point → sink
+pairs have a mechanically-verified taint flow. Annotates entry points
+with `has_taint_flow` and `taint_reaches_sinks`, sinks with
+`taint_reached_from`, and adds a `taint_summary` to the context map.
+
+```bash
+libexec/raptor-enrich-context-map-taint "$WORKDIR"
+```
+
+Opt-in — skipped when no CPG cache exists or Joern is not installed.
+Caps at 500 (entry × sink) pairs to prevent combinatorial explosion.
+Idempotent. Downstream consumers: `/validate` Stage B imports
+`has_taint_flow` via the understand bridge, pre-confirming B-3.1
+reachability. `/diagram` renders confirmed flows as solid edges.
+
 **[MAP-6] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.

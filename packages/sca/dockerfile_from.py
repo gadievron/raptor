@@ -584,7 +584,7 @@ def fetch_image_sbom(
     # ``packages_from_layer_files`` handles that ordering.
     layer_files: Dict[str, bytes] = {}
     layers_scanned = 0
-    wanted = set(LAYER_FILE_PATHS.keys())
+    wanted = set(LAYER_FILE_PATHS)
     for layer in image_manifest.layers:
         if layer.size and layer.size > max_layer_bytes:
             logger.debug(
@@ -904,6 +904,9 @@ def _walk_gitlab_image_refs(data: dict):
                         yield name.strip(), label
 
     yield from _from(data, "top-level")
+    default_block = data.get("default")
+    if isinstance(default_block, dict):
+        yield from _from(default_block, "default")
     for k, v in data.items():
         if not isinstance(k, str) or k in _RESERVED:
             continue
@@ -1039,7 +1042,6 @@ def scan_image_sources(
         client = OciRegistryClient(http=default_client())
 
     deps: List[Dependency] = []
-    digest_cache: Dict[str, ImageSbom] = {}
     seen_images: Dict[str, Optional[ImageSbom]] = {}
 
     # Fetch SBOMs for unique images in parallel — each call is an
@@ -1061,7 +1063,7 @@ def scan_image_sources(
                 image, client=client,
                 platform_os=platform_os,
                 platform_arch=platform_arch,
-                digest_cache=digest_cache,
+                digest_cache=None,
                 disk_cache=cache,
             )
         # Cap at 8 — most repos have far fewer unique images, and
@@ -1072,8 +1074,6 @@ def scan_image_sources(
             thread_name_prefix="sca-oci-sbom",
         ) as pool:
             for image, sbom in pool.map(_fetch_one, unique_images):
-                # ``None`` is recorded so the per-ref loop below
-                # treats the fetch as known-bad without retrying.
                 seen_images[image] = sbom
 
     for ref in refs:

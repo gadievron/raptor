@@ -101,7 +101,7 @@ TIERS: dict[str, dict] = {
             "packages/hypothesis_validation/runner.py",
             "packages/codeql/autonomous_analyzer.py",
             "packages/codeql/dataflow_validator.py",
-            "packages/codeql/build_detector.py",
+            "core/build/build_detector.py",
             "packages/web/fuzzer.py",
             "packages/autonomous/dialogue.py",
             "core/llm/multi_model/prompt_helpers.py",

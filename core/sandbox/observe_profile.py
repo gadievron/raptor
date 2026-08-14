@@ -208,6 +208,12 @@ class ObserveProfile:
         for c in other.connect_targets:
             if c not in self.connect_targets:
                 self.connect_targets.append(c)
+        if other.budget_truncated:
+            self.budget_truncated = True
+        for cat, count in other.dropped_by_category.items():
+            self.dropped_by_category[cat] = (
+                self.dropped_by_category.get(cat, 0) + count
+            )
 
 
 # open(2) flag bits — duplicated here (rather than imported from
@@ -381,6 +387,8 @@ def parse_observe_log(run_dir, *,
     seen_connect: set = set()
 
     for rec in _iter_records(log_path):
+        if not isinstance(rec, dict):
+            continue
         # Provenance: when an expected nonce is set, drop records
         # without a matching value. Records the tracer wrote carry
         # the per-run nonce; records the target binary spoofed into

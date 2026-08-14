@@ -120,7 +120,7 @@ def scan_imports(
     target = target.resolve()
     out: Dict[str, List[Tuple[Path, int, bool]]] = {}
     for java_file in _walk_java_sources(target, max_depth=max_depth):
-        is_test = _is_test_file(java_file)
+        is_test = _is_test_file(java_file, target)
         try:
             text = java_file.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
@@ -257,10 +257,22 @@ def _walk_java_sources(
     )
 
 
-def _is_test_file(path: Path) -> bool:
+def _is_test_file(path: Path, scan_root: Optional[Path] = None) -> bool:
     """Heuristic test-file detection. Conservative — false positives
-    only mark as test (lower confidence), never miss a real source."""
-    parts = {p.lower() for p in path.parts}
+    only mark as test (lower confidence), never miss a real source.
+
+    Relativises the path to ``scan_root`` before checking parts so
+    that projects checked out under a directory named ``test`` (e.g.
+    ``/home/test/myproject/``) don't misclassify every file.
+    """
+    if scan_root is not None:
+        try:
+            rel = path.relative_to(scan_root)
+        except ValueError:
+            rel = path
+    else:
+        rel = path
+    parts = {p.lower() for p in rel.parts}
     if "test" in parts or "tests" in parts:
         return True
     name = path.stem

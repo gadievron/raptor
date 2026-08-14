@@ -217,19 +217,18 @@ def calibrate_results(
                 fallback_reasons[fid] = "ds_missing_in_result"
                 continue
             converged = ds_convergence[fid]
-            method = METHOD_DAWID_SKENE if converged else METHOD_VOTE
-            reason: Optional[str] = (
-                None if converged else "ds_did_not_converge"
-            )
+            if not converged:
+                fallback_reasons[fid] = "ds_did_not_converge"
+                continue
             out[fid] = CalibratedVerdict(
                 posterior_true_positive=fp.posterior,
                 credible_interval=fp.credible_interval,
                 n_models=fp.n_models,
                 decision_class=fp.decision_class,
-                aggregation_method=method,
-                aggregation_fallback_reason=reason,
-                converged=converged,
-                model_reliabilities=ds_reliabilities[fid] if converged else [],
+                aggregation_method=METHOD_DAWID_SKENE,
+                aggregation_fallback_reason=None,
+                converged=True,
+                model_reliabilities=ds_reliabilities[fid],
             )
 
     # Step 3: vote fallback for everything else.

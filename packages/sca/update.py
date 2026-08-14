@@ -1107,10 +1107,14 @@ def _rewrite_requirements_txt(
             if not body:
                 out_lines.append(raw)
                 continue
-            line_value = re.split(r"\s+#", body, maxsplit=1)[0].strip()
+            parts = re.split(r"\s+#", body, maxsplit=1)
+            line_value = parts[0].strip()
+            inline_comment = "  #" + parts[1] if len(parts) > 1 else ""
         else:
             comment_prefix = ""
-            line_value = re.split(r"\s+#", stripped, maxsplit=1)[0].strip()
+            parts = re.split(r"\s+#", stripped, maxsplit=1)
+            line_value = parts[0].strip()
+            inline_comment = "  #" + parts[1] if len(parts) > 1 else ""
 
         m = re.match(r"^([A-Za-z0-9_\-.]+)\s*([<>=!~]=?[^\s;]+)?", line_value)
         if not m:
@@ -1138,6 +1142,7 @@ def _rewrite_requirements_txt(
             m.group(2) or "", plan.target, floor_raise=plan.floor_raise)
         new_inner = m.group(1) + new_spec + line_value[m.end():]
         new_line = f"{comment_prefix}{new_inner}" if comment_prefix else new_inner
+        new_line += inline_comment
         out_lines.append(raw.replace(stripped, new_line))
         rewrote = True
     if not rewrote:

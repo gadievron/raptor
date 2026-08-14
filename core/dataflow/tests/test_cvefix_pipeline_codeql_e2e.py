@@ -36,7 +36,10 @@ _HOST_ALLOWED_GUARD = (
     "    g = c.asCfgNode() and node = c.getArg(0).asCfgNode() and branch = true) }"
 )
 
-pytestmark = pytest.mark.skipif(_CODEQL is None, reason="codeql CLI not installed")
+pytestmark = [
+    pytest.mark.skipif(_CODEQL is None, reason="codeql CLI not installed"),
+    pytest.mark.slow,
+]
 
 
 def _query_pack_available() -> bool:

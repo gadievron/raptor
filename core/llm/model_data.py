@@ -78,6 +78,7 @@ PROVIDER_DEFAULT_MODELS = {
 #
 # Cost-class ratio (input/output, per-1K, vs flagship default):
 #   Anthropic:  Opus  $0.005/$0.025  →  Haiku   $0.001/$0.005   (~5×)
+#   (Note: Sonnet 5 is now $0.002/$0.010 — cheaper than previous Sonnet tier)
 #   OpenAI:     5.4   $0.0025/$0.015 →  4o-mini $0.00015/$0.0006 (~25×)
 #   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
 #   Mistral:    Large $0.002/$0.006  →  Small   $0.00015/$0.0006 (~13×)
@@ -104,9 +105,11 @@ PROVIDER_FAST_MODELS = {
 MODEL_COSTS = {
     # Anthropic — current
     "claude-fable-5":          {"input": 0.010,   "output": 0.050},
+    "claude-mythos-5":         {"input": 0.010,   "output": 0.050},
+    "claude-opus-5":           {"input": 0.005,   "output": 0.025},
     "claude-opus-4-8":         {"input": 0.005,   "output": 0.025},
     "claude-opus-4-7":         {"input": 0.005,   "output": 0.025},
-    "claude-sonnet-5":         {"input": 0.003,   "output": 0.015},
+    "claude-sonnet-5":         {"input": 0.002,   "output": 0.010},
     "claude-sonnet-4-6":       {"input": 0.003,   "output": 0.015},
     "claude-haiku-4-5":        {"input": 0.001,   "output": 0.005},
     # Anthropic — legacy (still served via API)
@@ -190,6 +193,8 @@ MODEL_COSTS = {
 MODEL_LIMITS = {
     # Anthropic — current
     "claude-fable-5":          {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-mythos-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-5":           {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-4-8":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-4-7":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-sonnet-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
@@ -300,6 +305,8 @@ PROVIDER_ENV_KEYS = {
 # adds global-CRIS coverage; non-listed models stay at 1.0×.
 _BEDROCK_GLOBAL_CRIS_MODELS: frozenset[str] = frozenset({
     "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
     "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-sonnet-5",
@@ -400,6 +407,42 @@ def max_output_for(model: str) -> int:
     return limits["max_output"]
 
 
+def resolve_model_name(model: str) -> str:
+    """Resolve ``"default"`` or a bare shorthand to the actual model name.
+
+    Handles two cases:
+      * ``"default"`` → the configured primary model name.
+      * A bare tier-token like ``"haiku"`` / ``"opus"`` / ``"sonnet"`` →
+        the full ``MODEL_LIMITS`` key whose hyphen-separated tokens
+        contain the shorthand (unambiguous single-match only).
+
+    Other model strings pass through unchanged.
+    """
+    if model == "default":
+        try:
+            from core.llm.config import _get_default_primary_model
+
+            mc = _get_default_primary_model()
+            if mc is not None and mc.model_name:
+                return mc.model_name
+        except Exception:
+            pass
+        return model
+
+    if MODEL_LIMITS.get(model) is not None:
+        return model
+
+    try:
+        from core.security.llm_family import resolve_model_shorthand
+
+        resolved = resolve_model_shorthand(model, MODEL_LIMITS.keys())
+        if resolved is not None:
+            return resolved
+    except Exception:
+        pass
+    return model
+
+
 def rpm_for(model: str, *, default: int = 0) -> int:
     """Requests-per-minute limit for *model*.
 
@@ -408,8 +451,10 @@ def rpm_for(model: str, *, default: int = 0) -> int:
     or unknown models when the caller passes ``default=0``).
 
     Bedrock-prefixed identifiers and dated aliases are normalised the
-    same way as :func:`context_window_for`.
+    same way as :func:`context_window_for`.  ``"default"`` is resolved
+    to the actual primary model before lookup.
     """
+    model = resolve_model_name(model)
     limits = MODEL_LIMITS.get(model)
     if limits is None:
         limits = MODEL_LIMITS.get(_strip_dated_alias(model))
@@ -465,11 +510,15 @@ def price_for(
 
 
 # Anthropic-specific cache pricing multipliers (vs base input rate).
-# Cache writes are 1.25x input; cache reads are 0.1x input. Used by
-# AnthropicToolUseProvider to compute cost when the response carries
-# ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
-ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25
+# Two write durations exist: 5-minute (1.25×) and 1-hour (2×).
+# Cache reads/refreshes are 0.1× regardless of write duration.
+# Used by AnthropicToolUseProvider to compute cost when the response
+# carries ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
+ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER = 1.25
+ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER = 2.0
 ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1
+# Backward compat alias — most callers use the 5-minute default.
+ANTHROPIC_CACHE_WRITE_MULTIPLIER = ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER
 
 # ---------------------------------------------------------------------------
 # Data provenance — where MODEL_COSTS / MODEL_LIMITS values come from.

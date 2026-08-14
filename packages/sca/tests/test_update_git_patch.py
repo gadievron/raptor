@@ -80,6 +80,7 @@ def test_git_patch_written_alongside_proposed(tmp_path: Path) -> None:
         "--out", str(out),
         "--allow-major",
         "--git-patch",
+        "--offline",
     ])
     assert rc == 0
     patch = out / "upgrade.patch"
@@ -128,6 +129,7 @@ def test_git_apply_actually_applies(tmp_path: Path) -> None:
         "--findings", str(findings),
         "--out", str(out),
         "--git-patch",
+        "--offline",
     ])
     patch = out / "upgrade.patch"
     assert patch.exists()
@@ -174,6 +176,7 @@ def test_git_patch_skipped_when_no_changes_applied(tmp_path: Path) -> None:
         "--out", str(out),
         "--allow-major",
         "--git-patch",
+        "--offline",
     ])
     assert not (out / "upgrade.patch").exists()
 
@@ -193,5 +196,6 @@ def test_no_git_patch_flag_means_no_patch(tmp_path: Path) -> None:
     out = tmp_path / "out"
     update.main([
         "--findings", str(findings), "--out", str(out),
+        "--offline",
     ])
     assert not (out / "upgrade.patch").exists()

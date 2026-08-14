@@ -36,9 +36,9 @@ def _path_from_locations(
     }
     for idx, loc_wrapper in enumerate(locations):
         location = loc_wrapper.get("location", {})
-        physical_loc = location.get("physicalLocation", {})
-        artifact = physical_loc.get("artifactLocation", {})
-        region = physical_loc.get("region", {})
+        physical_loc = location.get("physicalLocation") or {}
+        artifact = physical_loc.get("artifactLocation") or {}
+        region = physical_loc.get("region") or {}
         # Untrusted scanner-supplied text — escape control / format
         # bytes before surfacing into the operator-facing dataflow
         # path. A scanner producing `message.text = "evil\x1b[2J"`
@@ -50,7 +50,7 @@ def _path_from_locations(
             location.get("message", {}).get("text", "") or ""
         )
         snippet = escape_nonprintable(
-            region.get("snippet", {}).get("text", "") or ""
+            (region.get("snippet") or {}).get("text", "") or ""
         )
         step_info = {
             "file": artifact.get("uri", ""),
@@ -165,8 +165,8 @@ def _result_key(
     """
     rule_id = result.get("ruleId", "")
     locs = result.get("locations") or [{}]
-    phys = locs[0].get("physicalLocation", {}) if locs else {}
-    uri = phys.get("artifactLocation", {}).get("uri", "")
+    phys = (locs[0].get("physicalLocation") or {}) if locs else {}
+    uri = (phys.get("artifactLocation") or {}).get("uri", "")
     region = phys.get("region", {}) or {}
     line = region.get("startLine", 0)
     end_line = region.get("endLine", line)  # multi-line spans differ
@@ -374,7 +374,7 @@ def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
         Parsed SARIF dict, or None on error
     """
     if not sarif_path.exists():
-        logger.error(f"SARIF: file does not exist: {sarif_path}")
+        logger.error("SARIF: file does not exist: %s", sarif_path)
         return None
 
     max_size = 100 * 1024 * 1024  # 100 MiB
@@ -395,8 +395,8 @@ def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
         st = sarif_path.stat()
         if st.st_size > max_size:
             logger.error(
-                f"SARIF: file too large ({st.st_size / 1024 / 1024:.0f} MiB): "
-                f"{sarif_path}"
+                "SARIF: file too large (%.0f MiB): %s",
+                st.st_size / 1024 / 1024, sarif_path,
             )
             return None
         with sarif_path.open("rb") as f:
@@ -404,26 +404,26 @@ def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
         if len(raw) > max_size:
             # Race: file grew between stat and read.
             logger.error(
-                f"SARIF: file grew past {max_size / 1024 / 1024:.0f} MiB "
-                f"during read: {sarif_path}"
+                "SARIF: file grew past %.0f MiB during read: %s",
+                max_size / 1024 / 1024, sarif_path,
             )
             return None
         content = raw.decode("utf-8", errors="replace")
     except OSError as e:
-        logger.warning(f"SARIF: could not read {sarif_path}: {e}")
+        logger.warning("SARIF: could not read %s: %s", sarif_path, e)
         return None
 
     try:
         data = json.loads(content or "{}")
     except json.JSONDecodeError as e:
-        logger.error(f"SARIF: invalid JSON in {sarif_path}: {e}")
+        logger.error("SARIF: invalid JSON in %s: %s", sarif_path, e)
         return None
     except OSError as e:
-        logger.error(f"SARIF: could not read {sarif_path}: {e}")
+        logger.error("SARIF: could not read %s: %s", sarif_path, e)
         return None
 
     if not isinstance(data, dict):
-        logger.error(f"SARIF: root must be an object in {sarif_path}")
+        logger.error("SARIF: root must be an object in %s", sarif_path)
         return None
 
     return data
@@ -460,11 +460,11 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
 
     runs = data.get("runs") or []
-    logger.info(f"SARIF parser: found {len(runs)} run(s) in SARIF file")
+    logger.info("SARIF parser: found %d run(s) in SARIF file", len(runs))
     
     for run_idx, run in enumerate(runs):
         results = run.get("results", [])
-        logger.info(f"SARIF parser: run {run_idx + 1}: {len(results)} result(s)")
+        logger.info("SARIF parser: run %d: %d result(s)", run_idx + 1, len(results))
 
         tool_name = get_tool_name(run)
 
@@ -550,10 +550,10 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
                 or sha
             )
 
-            loc = (result.get("locations") or [{}])[0].get("physicalLocation", {})
-            artifact = loc.get("artifactLocation", {})
-            region = loc.get("region", {})
-            snippet = region.get("snippet", {}).get("text", "")
+            loc = (result.get("locations") or [{}])[0].get("physicalLocation") or {}
+            artifact = loc.get("artifactLocation") or {}
+            region = loc.get("region") or {}
+            snippet = (region.get("snippet") or {}).get("text", "")
 
             # Extract dataflow path if present
             code_flows = result.get("codeFlows") or []
@@ -580,7 +580,7 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
                 }
             )
 
-    logger.info(f"SARIF parser: parsed {len(findings)} total findings")
+    logger.info("SARIF parser: parsed %d total findings", len(findings))
     return findings
 
 
@@ -656,10 +656,25 @@ def validate_sarif(
             "skipping full validation"
         )
     except jsonschema.ValidationError as e:
-        logger.warning(f"SARIF validation: schema validation failed: {e.message}")
+        logger.warning("SARIF validation: schema validation failed: %s", e.message)
         return False
 
     return True if full_validation_ran else None
+
+
+_TOOL_NAME_MAP = {
+    "semgrep oss": "semgrep",
+    "semgrep": "semgrep",
+    "codeql": "codeql",
+    "coccinelle": "coccinelle",
+}
+
+
+def _normalise_tool_name(driver_name: str) -> str:
+    """Map a SARIF ``tool.driver.name`` to the canonical key used by
+    ``scan_coverage.py`` (``semgrep``, ``codeql``, ``coccinelle``).
+    Falls back to a lowercased version of the driver name."""
+    return _TOOL_NAME_MAP.get(driver_name.lower(), driver_name.lower())
 
 
 def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
@@ -682,6 +697,7 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
             "none": 0,
         },
         "findings_by_rule": {},
+        "findings_by_tool": {},
         "tools_used": [],
     }
 
@@ -702,6 +718,11 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
             # Count findings
             results = run.get("results", [])
             metrics["total_findings"] += len(results)
+
+            tool_key = _normalise_tool_name(tool_name)
+            metrics["findings_by_tool"][tool_key] = (
+                metrics["findings_by_tool"].get(tool_key, 0) + len(results)
+            )
 
             for result in results:
                 # Count by severity

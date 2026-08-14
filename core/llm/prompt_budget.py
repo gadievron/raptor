@@ -172,4 +172,4 @@ def context_budget_for_model(
         window = context_window_for(model)
     except (KeyError, ImportError):
         window = 200_000
-    return window - system_prompt_tokens - response_headroom
+    return max(0, window - system_prompt_tokens - response_headroom)

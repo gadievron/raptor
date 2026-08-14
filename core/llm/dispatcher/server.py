@@ -532,7 +532,10 @@ class LLMDispatcher:
             parts.append(f"label={safe_worker}")
         if safe_reason:
             parts.append(f"reason={safe_reason}")
-        _logger.log(level, " ".join(parts))
+        try:
+            _logger.log(level, " ".join(parts))
+        except OSError:
+            pass
         if self._audit_path is None:
             return
         with self._audit_lock:
@@ -587,13 +590,17 @@ class LLMDispatcher:
             if rec is None:
                 return None, "unknown token"
             if rec.status in ("revoked", "exhausted", "expired"):
+                # Evict terminal-state records to prevent unbounded growth.
+                self._tokens.pop(raw, None)
                 return None, f"token {rec.status}"
             now = time.time()
             if now >= rec.expires_at:
                 rec.status = "expired"
+                self._tokens.pop(raw, None)
                 return None, "token expired"
             if rec.requests_made >= rec.request_budget:
                 rec.status = "exhausted"
+                self._tokens.pop(raw, None)
                 return None, "token budget exhausted"
             rec.status = "active"
             rec.requests_made += 1
@@ -625,6 +632,7 @@ _PROVIDER_FROM_PATH_PREFIX = {
     "/groq/":         "groq",
     "/together/":     "together",
     "/openrouter/":   "openrouter",
+    "/orcarouter/":   "orcarouter",
     "/fireworks/":    "fireworks",
     "/deepinfra/":    "deepinfra",
     "/perplexity/":   "perplexity",
@@ -712,7 +720,11 @@ def _make_request_handler(dispatcher: LLMDispatcher) -> type:
                 return
 
             # ---- request body ----
-            content_length = int(self.headers.get("Content-Length", "0"))
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except (ValueError, TypeError):
+                self._send_simple(400, "invalid Content-Length")
+                return
             body = self.rfile.read(content_length) if content_length else b""
 
             method = self.command

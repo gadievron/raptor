@@ -46,6 +46,8 @@ Examples:
 """
 
 import argparse
+import contextlib
+import logging
 import os
 import subprocess
 import sys
@@ -57,9 +59,9 @@ from pathlib import Path
 # happens to land on the repo root because we live here, but explicit
 # is safer than implicit.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import core.startup.process_init  # noqa: E402,F401
-from core.run.output import get_output_dir, resolve_default_target, TargetMismatchError
-from core.run.metadata import start_run, complete_run, fail_run
+import core.startup.process_init  # noqa: F401
+from core.run.metadata import complete_run, fail_run, start_run
+from core.run.output import TargetMismatchError, get_output_dir, resolve_default_target
 from core.run.safe_io import safe_run_mkdir
 
 
@@ -150,9 +152,9 @@ def _preflight_cost_gate(
     the runtime cap still enforces during execution.
     """
     try:
-        from core.run.target_types import load
-        from core.run.estimator import estimate_from_scorecard, format_estimate
         from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+        from core.run.estimator import estimate_from_scorecard, format_estimate
+        from core.run.target_types import load
     except ImportError:
         return False
     try:
@@ -177,10 +179,8 @@ def _preflight_cost_gate(
             f"Raise the cap or re-run without --max-cost-usd.",
             file=sys.stderr, flush=True,
         )
-        try:
+        with contextlib.suppress(Exception):
             fail_run(out_dir, "pre-flight cost gate exceeded")
-        except Exception:  # noqa: BLE001
-            pass
         return True
     return False
 
@@ -231,7 +231,7 @@ def _rewrite_target_arg(args: list, old: str, new: str) -> list:
 # same archive). Re-exported here under the old private name
 # for backward compatibility with anything in this module that
 # still references _safe_cache_name.
-from core.archive import safe_cache_name as _safe_cache_name  # noqa: E402
+from core.archive import safe_cache_name as _safe_cache_name
 
 
 def _unpack_archive_target(target: str, args: list, out_dir: Path):
@@ -276,7 +276,7 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
         tmp = Path(tempfile.mkdtemp(dir=sources_root, prefix=".extract-"))
         try:
             stats = extract_to_dir(target, tmp)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Broad on purpose: extraction runs on attacker-controlled input,
             # so ANY failure (ArchiveError, an unforeseen OSError/ValueError, or
             # a MemoryError from an oversized archive) must fail the run
@@ -385,6 +385,11 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             if res is None:
                 return 1  # extraction failed (message printed); no run sealed yet
             args, target_identity = res
+            # args now points at the extracted directory; update the local
+            # target variable so downstream consumers (license detection,
+            # format_start_line, _preflight_cost_gate) operate on the
+            # extracted tree, not the archive file.
+            target = _extract_target(args)
 
     start_run(out_dir, command, target=target, target_identity=target_identity)
     # Mirror libexec/raptor-run-lifecycle's sentinel so direct
@@ -427,7 +432,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             )
             if _summary:
                 print(_summary, flush=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # License detection is non-essential; never fail the
             # lifecycle on a detector bug.
             print(f"  (license-detect skipped: {e})",
@@ -436,13 +441,11 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # Target shape summary — operator sees what RAPTOR detected
     # before any LLM cost incurs.
     if target:
-        try:
+        with contextlib.suppress(Exception):
             from packages.describe.start_line import format_start_line
             _start_line = format_start_line(Path(target))
             if _start_line:
                 print(_start_line, flush=True)
-        except Exception:  # noqa: BLE001
-            pass
 
     # Pre-flight cost gate (scorecard-derived). When the operator
     # declared --max-cost-usd, compare the scorecard estimate
@@ -450,38 +453,10 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # cap. Refuses to start when the estimate clearly exceeds the
     # budget. When no scorecard data exists the gate does not fire
     # — the runtime cap still enforces during execution.
-    if max_cost_usd is not None:
+    if max_cost_usd is not None:  # noqa: SIM102
         if _preflight_cost_gate(target, max_cost_usd, out_dir):
             return 1
 
-    # SAGE: Pre-scan recall
-    try:
-        from core.json import save_json
-        from core.sage.hooks import recall_context_for_scan
-        sage_context = recall_context_for_scan(target or "")
-        if sage_context:
-            # Same flush rationale as the lifecycle banner —
-            # when stdout is piped (operator's ``| tee``), block-
-            # buffering makes these lines appear AFTER the
-            # subprocess output unless explicitly flushed.
-            print(
-                f"📚 SAGE: Recalled {len(sage_context)} historical memories",
-                flush=True,
-            )
-            for mem in sage_context[:3]:
-                print(
-                    f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...",
-                    flush=True,
-                )
-        try:
-            save_json(
-                out_dir / "sage_precall_scan.json",
-                {"memories": sage_context},
-            )
-        except Exception:
-            pass
-    except Exception:
-        pass
 
     # Re-inject --max-cost-usd for downstream runtime enforcement.
     # The pre-flight gate consumed the value above; downstream
@@ -508,7 +483,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # Write coverage records from tool outputs (before lifecycle complete)
     try:
         from core.coverage.record import (
-            build_from_semgrep, build_from_codeql, write_record,
+            build_from_codeql,
+            build_from_semgrep,
+            write_record,
         )
         if not (out_dir / "coverage-semgrep.json").exists():
             for json_path in out_dir.glob("semgrep_*.json"):
@@ -527,90 +504,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                 if record:
                     write_record(out_dir, record, tool_name="codeql")
                     break
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug("SARIF record write failed: %s", e)
 
-    # SAGE: Post-scan storage
-    if rc == 0:
-        try:
-            from core.sage.hooks import store_scan_results
-            import json
-            # Try to find and store SARIF results.
-            # `os.walk(followlinks=False)` instead of `Path.rglob`:
-            # rglob follows symlinks under Python <3.13. A scanner
-            # that drops a stray symlink into out_dir (some tools'
-            # caches link to /tmp paths that themselves get cleaned
-            # mid-run, leaving dangling symlinks) would either hang
-            # the SARIF discovery in a loop or escape out of the
-            # out_dir entirely and pick up an unrelated SARIF file
-            # from somewhere else on the filesystem.
-            sarif_files = []
-            seen_sarif = set()
-            for dirpath, _dirnames, filenames in os.walk(
-                str(out_dir), followlinks=False
-            ):
-                for fname in filenames:
-                    if not fname.endswith(".sarif"):
-                        continue
-                    fpath = Path(dirpath) / fname
-                    if fpath.is_symlink():
-                        continue
-                    key = str(fpath.resolve())
-                    if key in seen_sarif:
-                        continue
-                    seen_sarif.add(key)
-                    sarif_files.append(fpath)
-            sarif_files.sort()
-            findings = []
-            for sf in sarif_files:
-                try:
-                    # `encoding="utf-8-sig"` so a BOM-prefixed SARIF
-                    # file (some Windows-edited tool outputs, certain
-                    # MSBuild-emitted SARIFs, the IDE-reformatted
-                    # exports operators sometimes round-trip through)
-                    # parses cleanly. Pre-fix the bare `read_text()`
-                    # used the host locale's preferred encoding;
-                    # cp1252/latin-1 hosts mangled non-ASCII evidence,
-                    # AND a leading BOM landed at char 0 which the
-                    # JSON parser rejected with "Expecting value:
-                    # line 1 column 1 (char 0)" — no breadcrumb that
-                    # the encoding was the actual problem.
-                    sarif = json.loads(sf.read_text(encoding="utf-8-sig"))
-                    for run in (sarif.get("runs") or []):
-                        for result in (run.get("results") or []):
-                            # Defensive locations[] guard. Pre-fix
-                            # `result.get("locations") or [{}]` only
-                            # handled None and empty list — but
-                            # malformed SARIF emitters sometimes ship
-                            # `locations` as a single dict (instead
-                            # of array of dicts). Then `locs[0]`
-                            # raised KeyError 0 (dict has no integer
-                            # key) and the whole sarif-parse loop
-                            # crashed for the file. isinstance guard
-                            # falls back to `[{}]` so we get the
-                            # "unknown" path string instead of a
-                            # crash.
-                            locs = result.get("locations")
-                            if not isinstance(locs, list) or not locs:
-                                locs = [{}]
-                            first = locs[0] if isinstance(locs[0], dict) else {}
-                            findings.append({
-                                "rule_id": result.get("ruleId", "unknown"),
-                                "level": result.get("level", "warning"),
-                                "message": (result.get("message") or {}).get("text", ""),
-                                "file_path": (first
-                                              .get("physicalLocation", {})
-                                              .get("artifactLocation", {})
-                                              .get("uri", "unknown")),
-                            })
-                except (OSError, KeyError, TypeError, json.JSONDecodeError):
-                    continue
-            if findings:
-                stored = store_scan_results(target or "", findings, {"total_findings": len(findings)})
-                if stored > 0:
-                    print(f"\n📚 SAGE: Stored {stored} findings for cross-run learning")
-        except Exception:
-            pass
 
     if rc == 0:
         # Engine versions + deterministically_reproducible are filled by the
@@ -626,8 +522,8 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                 summary = render_run_coverage(out_dir)
                 if summary:
                     print("\n" + summary)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger(__name__).debug("coverage summary skipped: %s", e)
     else:
         fail_run(out_dir, error=f"exit code {rc}")
     return rc
@@ -653,10 +549,11 @@ def _get_or_start_dispatcher():
     if _active_dispatcher is not None:
         return _active_dispatcher
     try:
+        import atexit
+        import uuid
+
         from core.llm.dispatcher.auth import CredentialStore, seed_from_config
         from core.llm.dispatcher.server import LLMDispatcher
-        import uuid
-        import atexit
         # CredentialStore.__init__ reads env vars. Operators who keep
         # keys in ~/.config/raptor/models.json (the documented UX the
         # startup banner advertises) need the explicit seed pass —
@@ -682,7 +579,7 @@ def _get_or_start_dispatcher():
         )
         atexit.register(_active_dispatcher.shutdown)
         return _active_dispatcher
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Failure to start the dispatcher must not break the run —
         # fall through to the env-direct path. The credential leak
         # channel stays open in this case but is no worse than today.
@@ -730,6 +627,7 @@ def _run_script(script_path: Path, args: list) -> int:
         try:
             return subprocess.run(
                 cmd, env=RaptorConfig.get_safe_env(), timeout=15,
+                check=False,
             ).returncode
         except subprocess.TimeoutExpired:
             print(f"✗ Help rendering for {script_path.name} timed out",
@@ -755,6 +653,7 @@ def _run_script(script_path: Path, args: list) -> int:
         result = subprocess.run(
             cmd,
             env=RaptorConfig.get_llm_env(include_python_user_base=True),
+            check=False,
         )
         return result.returncode
     except KeyboardInterrupt:
@@ -768,18 +667,16 @@ def _run_script(script_path: Path, args: list) -> int:
         # active"). cancel_run flips status to "cancelled"
         # and clears the active-run pointer; subsequent
         # invocations get a clean slate.
-        try:
-            from core.sandbox.summary import get_active_run_dir
+            # Best-effort. Don't mask the original Ctrl-C
+            # by raising secondary errors during cleanup.
+        with contextlib.suppress(Exception):
             from core.run.metadata import cancel_run
+            from core.sandbox.summary import get_active_run_dir
             active = get_active_run_dir()
             if active:
                 cancel_run(active)
-        except Exception:
-            # Best-effort. Don't mask the original Ctrl-C
-            # by raising secondary errors during cleanup.
-            pass
         return 130
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Pre-fix the blanket `return 1` collapsed every internal
         # exception (FileNotFoundError, ValueError, RuntimeError,
         # OSError, etc.) into the same exit code as a child process
@@ -849,6 +746,15 @@ def mode_sca(args: list) -> int:
             repo_seen = True
             skip_next = True
             continue
+        if arg.startswith("--repo="):
+            val = arg[len("--repo="):]
+            if repo_seen:
+                print("raptor.py sca: --repo specified more than once; "
+                      f"using the last value ({val!r})",
+                      file=sys.stderr)
+            target_from_repo = val
+            repo_seen = True
+            continue
         forwarded.append(arg)
     if target_from_repo is not None:
         # Insert after the subcommand if one is present, else at front.
@@ -869,14 +775,17 @@ def mode_sca(args: list) -> int:
         # allowlist (in this branch) doesn't include the markers, so we
         # set the trust marker explicitly here. ``raptor.py`` is itself
         # a trusted entry point.
-        env = RaptorConfig.get_safe_env()
+        # preserve_proxy: the SCA child hosts the egress proxy for
+        # OSV / registry / KEV traffic; its upstream autodetect reads
+        # the child's env, so the operator's proxy must survive.
+        env = RaptorConfig.get_safe_env(preserve_proxy=True)
         env["_RAPTOR_TRUSTED"] = "1"
-        result = subprocess.run(cmd, env=env)
+        result = subprocess.run(cmd, env=env, check=False)
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user", file=sys.stderr)
         return 130
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"\n✗ Error running raptor-sca: {e}", file=sys.stderr)
         return 1
 
@@ -906,14 +815,16 @@ def mode_binary(args: list) -> int:
     if not wrapper.exists():
         print(f"✗ Binary wrapper not found: {wrapper}", file=sys.stderr)
         return 1
-    env = RaptorConfig.get_safe_env()
+    # preserve_proxy: the binary surface dispatches `claude` CLI
+    # children whose route home is the operator's launch-time proxy.
+    env = RaptorConfig.get_safe_env(preserve_proxy=True)
     env["_RAPTOR_TRUSTED"] = "1"
     try:
         return subprocess.call([str(wrapper), *args], env=env)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user", file=sys.stderr)
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"\n✗ Error running raptor-binary: {exc}", file=sys.stderr)
         return 1
 
@@ -988,8 +899,12 @@ def mode_codeql(args: list) -> int:
         print(f"✗ CodeQL script not found: {codeql_script}", file=sys.stderr)
         return 1
 
-    # Default to scan-only; autonomous analysis requires explicit --analyze
-    if '--scan-only' not in args and '--analyze' not in args:
+    # Default to scan-only; autonomous analysis requires explicit --analyze.
+    # Strip --analyze after using it as a sentinel — the codeql child
+    # script does not define it in its argparse.
+    analyze = '--analyze' in args
+    args = [a for a in args if a != '--analyze']
+    if '--scan-only' not in args and not analyze:
         args = ['--scan-only'] + args
 
     # Re-inject --trust-repo stripped by main(): the codeql child parses it
@@ -1094,7 +1009,9 @@ def mode_frida(args: list) -> int:
     if not wrapper.exists():
         print(f"✗ Frida wrapper not found: {wrapper}", file=sys.stderr)
         return 1
-    env = RaptorConfig.get_safe_env()
+    # preserve_proxy: remote frida-server targets and any LLM-backed
+    # follow-on need the operator's launch-time proxy in the child.
+    env = RaptorConfig.get_safe_env(preserve_proxy=True)
     env.setdefault("_RAPTOR_TRUSTED", "1")
     return subprocess.call([str(wrapper), *args], env=env)
 
@@ -1177,6 +1094,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
             [sys.executable, str(script_path), "--help"],
             env=RaptorConfig.get_safe_env(),
             timeout=10,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         print(f"✗ Help rendering for {mode} timed out after 10s", file=sys.stderr)
@@ -1388,7 +1306,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\nInterrupted by user", file=sys.stderr)
         sys.exit(130)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)

@@ -42,7 +42,7 @@ from .update import (
     _plan_targets,
     _rewrite_one,
 )
-from .versions import compare as version_compare
+from .versions import VersionError, compare as version_compare
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ def main(argv: Sequence[str]) -> int:
 
     # Second pass: retry hygiene plans that _materialise_changes couldn't
     # apply (bare names with no version operator).
-    hygiene_keys = set(hygiene_plans.keys())
+    hygiene_keys = set(hygiene_plans)
     skipped_hygiene = [
         c for c in changes
         if c.skipped_reason is not None
@@ -411,7 +411,13 @@ def _plan_hygiene_pins(
     for plan in vuln_plans.values():
         dep_key = (plan.ecosystem, plan.name, plan.installed)
         existing = vuln_by_dep.get(dep_key)
-        if existing is None or version_compare(plan.target, existing.target) > 0:
+        try:
+            is_higher = existing is None or version_compare(
+                plan.ecosystem, plan.target, existing.target,
+            ) > 0
+        except VersionError:
+            is_higher = existing is None
+        if is_higher:
             vuln_by_dep[dep_key] = plan
 
     for key, plan in plans.items():
@@ -527,8 +533,10 @@ def _materialise_pin_changes(
         except ValueError:
             rel = Path(manifest.name)
 
+        proposed_copy = proposed_root / rel
+        read_from = proposed_copy if proposed_copy.exists() else manifest
         try:
-            original = manifest.read_text(encoding="utf-8")
+            original = read_from.read_text(encoding="utf-8")
         except OSError as e:
             for plan in plan_list:
                 out.append(UpgradeChange(
@@ -773,7 +781,7 @@ def _print_dry_run(
 ) -> None:
     """Print what fix *would* do, grouped by manifest file."""
     all_plans = list(vuln_plans.values()) + list(hygiene_plans.values())
-    vuln_keys = set(vuln_plans.keys())
+    vuln_keys = set(vuln_plans)
 
     by_manifest: Dict[Path, List[_PlanEntry]] = defaultdict(list)
     for plan in all_plans:

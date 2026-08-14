@@ -137,7 +137,7 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
         if sig_num in {s.value for s in crash_signals}:
             info["crashed"] = True
             evidence_items.append(f"Process crashed with {sig_name}")
-            logger.info(f"Sandbox: {cmd_display} killed by {sig_name} (crash)")
+            logger.info("Sandbox: %s killed by %s (crash)", cmd_display, sig_name)
         elif sig_num in {s.value for s in resource_signals}:
             info["resource_exceeded"] = True
             if hasattr(signal, "SIGXCPU") and sig_num == signal.SIGXCPU:
@@ -146,17 +146,17 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
                 evidence_items.append(f"Process killed by {sig_name} — file size limit exceeded")
             else:
                 evidence_items.append(f"Process killed by {sig_name} — resource limit exceeded")
-            logger.warning(f"Sandbox: {cmd_display} killed by {sig_name} (resource limit)")
+            logger.warning("Sandbox: %s killed by %s (resource limit)", cmd_display, sig_name)
         elif sig_num in {s.value for s in seccomp_signals}:
             info["seccomp_killed"] = True
             evidence_items.append(
                 "Process killed by SIGSYS — seccomp blocked a syscall "
                 "(likely 32-bit-compat int 0x80 or an explicit KILL rule)"
             )
-            logger.info(f"Sandbox: {cmd_display} killed by SIGSYS (seccomp)")
+            logger.info("Sandbox: %s killed by SIGSYS (seccomp)", cmd_display)
         else:
             evidence_items.append(f"Process killed by {sig_name}")
-            logger.debug(f"Sandbox: {cmd_display} killed by {sig_name}")
+            logger.debug("Sandbox: %s killed by %s", cmd_display, sig_name)
 
     # Check stderr for sanitizer reports (ASAN, UBSAN, MSAN, TSAN).
     # `crashed` strictly means "process did not exit normally" — we only set
@@ -194,21 +194,21 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
             evidence_items.append(f"AddressSanitizer: {bug_type}")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info(f"Sandbox: {cmd_display} — ASAN detected {bug_type}")
+            logger.info("Sandbox: %s — ASAN detected %s", cmd_display, bug_type)
         elif "UndefinedBehaviorSanitizer" in stderr_text:
             info["sanitizer"] = "ubsan"
             evidence_items.append("UndefinedBehaviorSanitizer triggered")
-            logger.info(f"Sandbox: {cmd_display} — UBSAN triggered")
+            logger.info("Sandbox: %s — UBSAN triggered", cmd_display)
         elif "MemorySanitizer" in stderr_text:
             info["sanitizer"] = "msan"
             evidence_items.append("MemorySanitizer: use of uninitialised memory")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info(f"Sandbox: {cmd_display} — MSAN triggered")
+            logger.info("Sandbox: %s — MSAN triggered", cmd_display)
         elif "ThreadSanitizer" in stderr_text:
             info["sanitizer"] = "tsan"
             evidence_items.append("ThreadSanitizer: data race detected")
-            logger.info(f"Sandbox: {cmd_display} — TSAN triggered")
+            logger.info("Sandbox: %s — TSAN triggered", cmd_display)
 
     # Build evidence: flat string for simple consumers, list for structured access
     if evidence_items:
@@ -281,7 +281,7 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
         if category == "write":
             # Write blocks need "Permission denied" alongside the pattern to
             # filter noise like "cannot create output file: No space left".
-            if "Permission denied" not in stderr:
+            if "Permission denied" not in stderr and "Read-only file system" not in stderr:
                 continue
             if not landlock_engaged:
                 continue

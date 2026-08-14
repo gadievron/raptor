@@ -154,6 +154,8 @@ class SandboxProfile:
     @classmethod
     def from_json(cls, raw: str) -> "SandboxProfile":
         d = json.loads(raw)
+        if not isinstance(d, dict):
+            raise ValueError(f"SandboxProfile JSON must be an object, got {type(d).__name__}")
         connects = [
             ConnectTarget(**t) for t in d.get("connect_targets", [])
         ]

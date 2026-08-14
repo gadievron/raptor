@@ -87,7 +87,7 @@ def main(
     if cache is None:
         cache = JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT)
     if http is None:
-        http = default_client()
+        http = default_client(offline=args.offline)
 
     dep = _synthesise_dep(canonical_eco, args.name, args.version)
 

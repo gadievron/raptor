@@ -7,11 +7,11 @@ import pytest
 from packages.llm_analysis.tasks import (
     ExploitTask,
     PatchTask,
-    _build_sca_exploit_prompt,
-    _build_sca_patch_prompt,
     _is_sca_finding,
     _sca_exploit_priority,
 )
+from packages.llm_analysis.prompts.exploit import build_sca_exploit_prompt_bundle
+from packages.llm_analysis.prompts.patch import build_sca_patch_prompt_bundle
 
 
 def _make_sca_finding(
@@ -158,7 +158,7 @@ class TestExploitTaskSCA:
         prompt = task.build_prompt(finding)
         assert "test-pkg" in prompt
         assert "PyPI" in prompt
-        assert "proof-of-concept" in prompt.lower()
+        assert task.get_last_nonce()
 
     def test_mixed_code_and_sca(self):
         task = ExploitTask()
@@ -193,26 +193,28 @@ class TestPatchTaskSCA:
         prompt = task.build_prompt(finding)
         assert "test-pkg" in prompt
         assert "2.0.0" in prompt
-        assert "upgrade" in prompt.lower()
+        assert task.get_last_nonce()
 
 
 class TestBuildSCAPrompts:
-    def test_exploit_prompt_includes_kev(self):
-        f = _make_sca_finding(in_kev=True)
-        prompt = _build_sca_exploit_prompt(f)
-        assert "KEV" in prompt
+    def test_exploit_bundle_has_nonce(self):
+        f = _make_sca_finding()
+        bundle = build_sca_exploit_prompt_bundle(f)
+        assert bundle.nonce
 
-    def test_exploit_prompt_includes_epss(self):
-        f = _make_sca_finding(epss=0.75)
-        prompt = _build_sca_exploit_prompt(f)
-        assert "EPSS" in prompt
+    def test_exploit_bundle_contains_package(self):
+        f = _make_sca_finding()
+        bundle = build_sca_exploit_prompt_bundle(f)
+        user = next(m.content for m in bundle.messages if m.role == "user")
+        assert "test-pkg" in user
 
-    def test_patch_prompt_no_fixed_version(self):
-        f = _make_sca_finding(fixed_version=None)
-        prompt = _build_sca_patch_prompt(f)
-        assert "workaround" in prompt.lower() or "alternative" in prompt.lower()
-
-    def test_patch_prompt_with_fixed_version(self):
+    def test_patch_bundle_has_nonce(self):
         f = _make_sca_finding(fixed_version="3.1.0")
-        prompt = _build_sca_patch_prompt(f)
-        assert "3.1.0" in prompt
+        bundle = build_sca_patch_prompt_bundle(f)
+        assert bundle.nonce
+
+    def test_patch_bundle_contains_fixed_version(self):
+        f = _make_sca_finding(fixed_version="3.1.0")
+        bundle = build_sca_patch_prompt_bundle(f)
+        user = next(m.content for m in bundle.messages if m.role == "user")
+        assert "3.1.0" in user

@@ -190,3 +190,84 @@ class TestEnrichAllTraces:
         (tmp_path / "flow-trace-bad.json").write_text("not json", encoding="utf-8")
         count = enrich_all_traces(tmp_path, {"files": []})
         assert count == 0
+
+
+class _FakeAssumption:
+    def __init__(self, enforced_by):
+        self.enforced_by = enforced_by
+
+
+class TestEnrichTraceWithAssumptionFilter:
+    def test_marks_siblings_lacking_enforcer(self):
+        from core.orchestration.trace_widening import enrich_trace_with_assumption_filter
+
+        cl = {
+            "files": [
+                {
+                    "path": "src/routes/query.py",
+                    "functions": [
+                        {"name": "handle_query", "line": 34},
+                        {"name": "handle_admin", "line": 80},
+                    ],
+                    "call_graph": {
+                        "calls": [
+                            {"caller": "handle_query", "chain": ["run_query"], "line": 48},
+                            {"caller": "handle_admin", "chain": ["run_query"], "line": 92},
+                            {"caller": "handle_admin", "chain": ["validate"], "line": 90},
+                        ],
+                    },
+                },
+                {
+                    "path": "src/admin/bulk.py",
+                    "functions": [{"name": "bulk_import", "line": 5}],
+                    "call_graph": {
+                        "calls": [
+                            {"caller": "bulk_import", "chain": ["run_query"], "line": 15},
+                        ],
+                    },
+                },
+            ],
+        }
+        trace = {
+            "steps": [
+                {"step": 1, "type": "entry", "function": "handle_query",
+                 "definition": "src/routes/query.py:34"},
+                {"step": 2, "type": "call", "function": "run_query",
+                 "definition": "src/services/query_service.py:12"},
+            ],
+        }
+        assumptions = [_FakeAssumption(enforced_by=["validate"])]
+        enriched = enrich_trace_with_assumption_filter(trace, cl, assumptions)
+
+        siblings = enriched["steps"][1].get("siblings", [])
+        assert len(siblings) >= 1
+
+        by_func = {s["function"]: s for s in siblings}
+        if "handle_admin" in by_func:
+            assert by_func["handle_admin"].get("lacks_enforcer") is not True
+        if "bulk_import" in by_func:
+            assert by_func["bulk_import"].get("lacks_enforcer") is True
+
+    def test_no_assumptions_leaves_siblings_unchanged(self):
+        from core.orchestration.trace_widening import enrich_trace_with_assumption_filter
+
+        cl = _checklist_with_calls()
+        trace = _trace_data()
+        enriched = enrich_trace_with_assumption_filter(trace, cl, [])
+
+        step2 = enriched["steps"][1]
+        siblings = step2.get("siblings", [])
+        for s in siblings:
+            assert "lacks_enforcer" not in s
+
+    def test_empty_enforced_by_skips_marking(self):
+        from core.orchestration.trace_widening import enrich_trace_with_assumption_filter
+
+        cl = _checklist_with_calls()
+        trace = _trace_data()
+        assumptions = [_FakeAssumption(enforced_by=[])]
+        enriched = enrich_trace_with_assumption_filter(trace, cl, assumptions)
+
+        step2 = enriched["steps"][1]
+        for s in step2.get("siblings", []):
+            assert "lacks_enforcer" not in s

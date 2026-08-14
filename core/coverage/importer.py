@@ -125,9 +125,14 @@ def _total_lines_by_file(checklist: Dict[str, Any]) -> Dict[str, int]:
 
 
 def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
-    """Function-level marks from inventory ``checked_by`` labels.
+    """DEPRECATED — kept for one release for backward compat.
 
-    Returns the number of (function, tool) marks applied.
+    ``checked_by`` on checklist items was removed under the
+    annotation → journal migration; new /audit runs never write it.
+    This importer is a no-op on fresh runs but retained so that
+    partial upgrades (new engine reading a pre-migration checklist)
+    still surface prior review state. Delete after the migration
+    settles.
     """
     marks = 0
     for fe in checklist.get("files", []):
@@ -143,6 +148,86 @@ def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
             for tool in fn.get("checked_by", []) or []:
                 store.mark(path, lo, hi, tool)
                 marks += 1
+    return marks
+
+
+def import_journal(
+    store: CoverageStore,
+    project_dir: Path,
+    checklist: Dict[str, Any],
+) -> int:
+    """Import LLM review existence from the project-level review-
+    journal index into the coverage store.
+
+    Under the annotation → journal migration this replaces
+    ``import_checked_by`` as the source of LLM-review coverage.
+    Journal entries are projected into ``(file, line_range, tool)``
+    intervals — the coverage store's schema — using the checklist's
+    inventory line ranges to translate function names to line
+    intervals. Full context (verdict, hypotheses, body, model,
+    strategies, ``domain_model_hash``) stays exclusively in the
+    journal; the store carries existence only.
+
+    Tool label matches the journal entry's producer convention:
+    ``audit`` for /audit reviews, ``agentic`` for /agentic reviews.
+    Both are already familiar coverage-store tool labels — no
+    consumer changes needed.
+
+    Returns the number of function-level marks applied.
+    """
+    from .journal import load_index
+
+    try:
+        entries = load_index(project_dir)
+    except Exception:
+        return 0
+    if not entries:
+        return 0
+
+    # Build a fast (file, function) → (line_start, line_end) lookup
+    # from the checklist. Functions absent from the checklist are
+    # skipped — a journal entry without an inventory anchor can't
+    # be projected onto a line range.
+    ranges: Dict[tuple, tuple] = {}
+    for fe in checklist.get("files", []):
+        path = fe.get("path")
+        if not path:
+            continue
+        for fn in fe.get("items", fe.get("functions", [])) or []:
+            name = fn.get("name")
+            lo = fn.get("line_start")
+            if name and lo is not None:
+                hi = fn.get("line_end")
+                hi = hi if hi is not None else lo
+                ranges[(path, name)] = (lo, hi)
+
+    marks = 0
+    for entry in entries.values():
+        rng = ranges.get((entry.file, entry.function))
+        if rng is None:
+            # Try the entry's own line_start/line_end (may be present
+            # from the journal write path).
+            lo = entry.line_start
+            hi = entry.line_end if entry.line_end is not None else lo
+            if not lo:
+                continue
+            rng = (lo, hi)
+        lo, hi = rng
+        # Tool label priority:
+        #   1. Explicit ``producer`` field on the entry — set by the
+        #      write path per amendment §1 A2, always accurate.
+        #   2. ``run_id`` prefix heuristic for legacy entries without
+        #      ``producer`` — /agentic runs conventionally start with
+        #      ``agentic_`` or ``scan``; everything else defaults to
+        #      ``audit`` (historical checked_by convention).
+        tool = getattr(entry, "producer", None)
+        if not tool:
+            tool = "audit"
+            run_id = entry.run_id or ""
+            if run_id.startswith("agentic") or run_id.startswith("scan"):
+                tool = "agentic"
+        store.mark(entry.file, lo, hi, tool)
+        marks += 1
     return marks
 
 
@@ -453,17 +538,31 @@ def backfill(
     run_dirs: Iterable[Path],
     checklist: Dict[str, Any],
     annotations_base: Optional[Path] = None,
+    project_dir: Optional[Path] = None,
 ) -> int:
-    """One-shot backfill: inventory meta + function-level ``checked_by`` +
-    file-level records from every run dir + (when ``annotations_base`` is
-    given) durable annotations as llm-category coverage. Returns total marks.
+    """One-shot backfill: inventory meta + LLM review existence
+    (from the project-level review-journal index — post-migration
+    source of truth) + file-level records from every run dir +
+    (when ``annotations_base`` is given) durable annotations as
+    llm-category coverage. Returns total marks.
+
+    ``project_dir`` — canonical location of ``review-journal-index.json``.
+    When omitted, falls back to the pre-migration ``import_checked_by``
+    read for backward compat with older projects that lack a journal
+    index. Callers should pass ``project_dir`` explicitly to get the
+    modern behaviour.
 
     The caller saves the store afterwards.
     """
     store.import_inventory_meta(checklist)
     store.set_content_id(checklist)            # git-X ≡ zip-X equivalence id
     inv_paths = _inventory_paths(checklist)
-    total = import_checked_by(store, checklist)
+    if project_dir is not None:
+        total = import_journal(store, project_dir, checklist)
+    else:
+        # Legacy path: no project_dir supplied → still surface any
+        # pre-migration ``checked_by`` entries as LLM coverage.
+        total = import_checked_by(store, checklist)
     run_dir_list = list(run_dirs)
     for run_dir in run_dir_list:
         total += import_run_dir(store, run_dir, checklist)

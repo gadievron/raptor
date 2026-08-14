@@ -112,149 +112,136 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         if _thinking_model_checked and _cached_thinking_model is not None:
             return _cached_thinking_model
 
-    models = _get_configured_models()
-    if not models:
-        return None
+        models = _get_configured_models()
+        if not models:
+            return None
 
-    # Define priority order for thinking models (best first)
-    thinking_model_patterns = [
-        # Tier 1: Most capable models
-        ("anthropic", "claude-opus-4-6", 110),
-        ("openai", "gpt-5.4-pro", 100),
-        ("openai", "gpt-5.4", 95),
-        ("openai", "o3", 90),
+        # Define priority order for thinking models (best first)
+        thinking_model_patterns = [
+            # Tier 1: Most capable models
+            ("anthropic", "claude-opus-4-6", 110),
+            ("openai", "gpt-5.4-pro", 100),
+            ("openai", "gpt-5.4", 95),
+            ("openai", "o3", 90),
 
-        # Tier 2: Strong models
-        ("openai", "gpt-5.2", 80),
-        ("openai", "o4-mini", 78),
-        ("mistral", "mistral-large-latest", 75),
+            # Tier 2: Strong models
+            ("openai", "gpt-5.2", 80),
+            ("openai", "o4-mini", 78),
+            ("mistral", "mistral-large-latest", 75),
 
-        # Tier 3: Latest capable models (fallback)
-        ("anthropic", "claude-sonnet-4-6", 70),
-        ("gemini", "gemini-2.5-pro", 65),
-        ("gemini", "gemini-2.5-flash", 55),
-    ]
+            # Tier 3: Latest capable models (fallback)
+            ("anthropic", "claude-sonnet-4-6", 70),
+            ("gemini", "gemini-2.5-pro", 65),
+            ("gemini", "gemini-2.5-flash", 55),
+        ]
 
-    # Find best matching model
-    best_model = None
-    best_score = -1
+        # Find best matching model
+        best_model = None
+        best_score = -1
 
-    for model_entry in models:
-        if not isinstance(model_entry, dict):
-            logger.debug(f"Skipping malformed model entry (not a dict): {type(model_entry)}")
-            continue
+        for model_entry in models:
+            if not isinstance(model_entry, dict):
+                logger.debug("Skipping malformed model entry (not a dict): %s", type(model_entry))
+                continue
 
-        try:
-            entry_provider = model_entry.get('provider', '')
-            if entry_provider is None:
-                entry_provider = ''
+            try:
+                entry_provider = model_entry.get('provider', '')
+                if entry_provider is None:
+                    entry_provider = ''
 
-            entry_model = model_entry.get('model', '')
-            if entry_model is None:
-                entry_model = ''
-            # Default to best known model for provider if not specified
-            if not entry_model and entry_provider:
-                entry_model = PROVIDER_DEFAULT_MODELS.get(entry_provider, '')
+                entry_model = model_entry.get('model', '')
+                if entry_model is None:
+                    entry_model = ''
+                # Default to best known model for provider if not specified
+                if not entry_model and entry_provider:
+                    entry_model = PROVIDER_DEFAULT_MODELS.get(entry_provider, '')
 
-            entry_role = model_entry.get('role', '')
-            if entry_role is None:
-                entry_role = ''
+                entry_role = model_entry.get('role', '')
+                if entry_role is None:
+                    entry_role = ''
 
-            # Score this model
-            for pattern_provider, pattern_model, base_score in thinking_model_patterns:
-                if entry_provider == pattern_provider and entry_model == pattern_model:
-                    # Boost score if explicitly tagged as reasoning/thinking
-                    effective_score = base_score
-                    if entry_role in ('thinking', 'reasoning'):
-                        effective_score += 10
+                # Score this model
+                for pattern_provider, pattern_model, base_score in thinking_model_patterns:
+                    if entry_provider == pattern_provider and entry_model == pattern_model:
+                        # Boost score if explicitly tagged as reasoning/thinking
+                        effective_score = base_score
+                        if entry_role in ('thinking', 'reasoning'):
+                            effective_score += 10
 
-                    if effective_score > best_score:
-                        best_score = effective_score
+                        if effective_score > best_score:
+                            best_score = effective_score
 
-                        # Resolve API key: entry-level, then env var
-                        api_key = model_entry.get('api_key')
-                        if not api_key:
-                            env_key = PROVIDER_ENV_KEYS.get(entry_provider)
-                            if env_key:
-                                api_key = os.getenv(env_key)
+                            # Resolve API key: entry-level, then env var
+                            api_key = model_entry.get('api_key')
+                            if not api_key:
+                                env_key = PROVIDER_ENV_KEYS.get(entry_provider)
+                                if env_key:
+                                    api_key = os.getenv(env_key)
 
-                        # Determine cost
-                        cost_info = MODEL_COSTS.get(entry_model, {})
-                        cost_per_1k = (cost_info.get('input', 0.005) + cost_info.get('output', 0.005)) / 2
+                            # Determine cost
+                            cost_info = MODEL_COSTS.get(entry_model, {})
+                            cost_per_1k = (cost_info.get('input', 0.005) + cost_info.get('output', 0.005)) / 2
 
-                        # Determine max_tokens and max_context from config or limits
-                        limits = MODEL_LIMITS.get(entry_model, {})
-                        max_tokens = model_entry.get(
-                            'max_output',
-                            limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
-                        )
-                        max_context = model_entry.get(
-                            'max_context',
-                            limits.get('max_context', _DEFAULT_MAX_CONTEXT_LOCAL),
-                        )
-
-                        # Set api_base for non-Anthropic providers. For
-                        # ``ollama`` specifically, prefer the operator-
-                        # configured ``RaptorConfig.OLLAMA_HOST`` over
-                        # the ``localhost:11434`` default; otherwise an
-                        # operator running a remote Ollama server gets a
-                        # ``Connection refused`` against their loopback
-                        # interface even though the rest of the codebase
-                        # (``_build_ollama_config`` /
-                        # ``_ollama_check_url``) correctly honours the
-                        # configured host. Explicit ``api_base`` in
-                        # ``model_entry`` wins over both — handled below
-                        # via the ``Optional overrides from config``
-                        # path.
-                        if entry_provider == "ollama":
-                            from core.config import RaptorConfig
-                            # Reuse the same scheme/url validator
-                            # the cold-start path uses
-                            # (``_build_ollama_config``). Pre-fix
-                            # the user-config branch took
-                            # ``OLLAMA_HOST`` raw — an operator who
-                            # forgot the scheme (``example.com:11434``
-                            # instead of ``http://example.com:11434``)
-                            # got a broken ``api_base`` here even
-                            # though the cold-start path would have
-                            # surfaced the same misconfig as a
-                            # ValueError. Run through the validator
-                            # so both paths fail the same way.
-                            ollama_base = _validate_ollama_url(
-                                RaptorConfig.OLLAMA_HOST,
+                            # Determine max_tokens and max_context from config or limits
+                            limits = MODEL_LIMITS.get(entry_model, {})
+                            max_tokens = model_entry.get(
+                                'max_output',
+                                limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
                             )
-                            api_base = f"{ollama_base.rstrip('/')}/v1"
-                        else:
-                            api_base = PROVIDER_ENDPOINTS.get(entry_provider)
+                            max_context = model_entry.get(
+                                'max_context',
+                                limits.get('max_context', _DEFAULT_MAX_CONTEXT_LOCAL),
+                            )
 
-                        # Optional overrides from config
-                        timeout = model_entry.get('timeout', 120)
+                            # Set api_base for non-Anthropic providers. For
+                            # ``ollama`` specifically, prefer the operator-
+                            # configured ``RaptorConfig.OLLAMA_HOST`` over
+                            # the ``localhost:11434`` default; otherwise an
+                            # operator running a remote Ollama server gets a
+                            # ``Connection refused`` against their loopback
+                            # interface even though the rest of the codebase
+                            # (``_build_ollama_config`` /
+                            # ``_ollama_check_url``) correctly honours the
+                            # configured host. Explicit ``api_base`` in
+                            # ``model_entry`` wins over both — handled below
+                            # via the ``Optional overrides from config``
+                            # path.
+                            if entry_provider == "ollama":
+                                from core.config import RaptorConfig
+                                ollama_base = _validate_ollama_url(
+                                    RaptorConfig.OLLAMA_HOST,
+                                )
+                                api_base = f"{ollama_base.rstrip('/')}/v1"
+                            else:
+                                api_base = PROVIDER_ENDPOINTS.get(entry_provider)
 
-                        best_model = ModelConfig(
-                            provider=entry_provider,
-                            model_name=entry_model,
-                            api_key=api_key,
-                            api_base=api_base,
-                            max_tokens=max_tokens,
-                            max_context=max_context,
-                            timeout=timeout,
-                            temperature=0.7,
-                            cost_per_1k_tokens=cost_per_1k,
-                            role=entry_role or None,
-                        )
-                    break
+                            # Optional overrides from config
+                            timeout = model_entry.get('timeout', 120)
 
-        except Exception as e:
-            logger.debug(f"Error processing model entry {model_entry.get('model', 'unknown')}: {e}")
-            continue
+                            best_model = ModelConfig(
+                                provider=entry_provider,
+                                model_name=entry_model,
+                                api_key=api_key,
+                                api_base=api_base,
+                                max_tokens=max_tokens,
+                                max_context=max_context,
+                                timeout=timeout,
+                                temperature=0.7,
+                                cost_per_1k_tokens=cost_per_1k,
+                                role=entry_role or None,
+                            )
+                        break
 
-    if best_model:
-        logger.debug(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
+            except Exception as e:
+                logger.debug("Error processing model entry %s: %s", model_entry.get('model', 'unknown'), e)
+                continue
 
-    with _thinking_model_lock:
+        if best_model:
+            logger.debug("Auto-selected thinking model: %s/%s (score: %s)", best_model.provider, best_model.model_name, best_score)
+
         _cached_thinking_model = best_model
         _thinking_model_checked = best_model is not None
-    return best_model
+        return best_model
 
 
 # ---------------------------------------------------------------------------
@@ -335,12 +322,14 @@ def _build_ollama_config() -> Optional['ModelConfig']:
         return None
     preferred = ['mistral', 'qwen', 'codellama', 'llama', 'gemma', 'deepseek-coder', 'deepseek']
     selected_model = ollama_models[0]
+    found = False
     for pref in preferred:
         for model in ollama_models:
             if pref in model.lower():
                 selected_model = model
+                found = True
                 break
-        if selected_model != ollama_models[0]:
+        if found:
             break
     ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
     # Look up the actual limits when known. Pre-fix the log claimed
@@ -374,31 +363,45 @@ def _build_ollama_config() -> Optional['ModelConfig']:
     )
 
 
+# Sentinel model name for the claudecode fallback: "inherit whatever
+# model the operator's `claude` CLI session is configured to use".
+# ClaudeCodeLLMProvider omits `--model` when it sees this, so the
+# subprocess resolves its model exactly like an interactive session
+# (settings.json, ANTHROPIC_MODEL, Bedrock/Vertex model mapping).
+# Hardcoding a name here breaks installs whose backend doesn't serve
+# that ID — e.g. a Bedrock-backed CLI with no mapping for the bare
+# Anthropic name hangs/fails on every call. Operators who want a
+# specific model on the claudecode provider set it in models.json.
+CLAUDECODE_SESSION_MODEL = "session-default"
+
+
 def _build_claudecode_config() -> Optional['ModelConfig']:
     """Last-resort fallback: ``claude`` CLI on PATH, no API key needed.
     Slower (subprocess + ``--json-schema`` structured output for
     tool-use) but works for users who only have Claude Code installed.
 
-    ``timeout=300`` is calibrated from real-CC runs: simple turns are
-    5-15s, ``--json-schema`` against a rich tool catalog can push to
-    60-180s. 300s gives 2-3x headroom for worst case without letting
-    a single turn consume a whole ``ToolUseLoop.max_seconds`` budget.
-    Cloud APIs default to 120s in ``ModelConfig`` (well-tuned for
-    them); CC's subprocess + structured-output overhead needs more.
+    ``timeout=600`` is calibrated from real-CC runs: simple turns are
+    5-15s, ``--json-schema`` against a rich tool catalog 60-180s, and
+    audit-sized structured reviews (large system prompt + context
+    slice) measured 170s+ on Bedrock-backed CLIs — the previous 300s
+    ceiling killed the heaviest re-review calls after they had already
+    billed. Cloud APIs default to 120s in ``ModelConfig`` (well-tuned
+    for them); CC's subprocess + structured-output overhead needs more.
     """
     import shutil
     if not shutil.which("claude"):
         return None
-    default_model = PROVIDER_DEFAULT_MODELS["anthropic"]
-    limits = MODEL_LIMITS.get(default_model, {})
+    # Capacity limits are unknowable without asking the CLI which model
+    # it will use; assume the current Anthropic flagship's as a proxy.
+    limits = MODEL_LIMITS.get(PROVIDER_DEFAULT_MODELS["anthropic"], {})
     return ModelConfig(
         provider="claudecode",
-        model_name=default_model,
+        model_name=CLAUDECODE_SESSION_MODEL,
         api_key=None,
         max_tokens=limits.get("max_output", 32000),
         max_context=limits.get("max_context", 1000000),
         temperature=0.7,
-        timeout=300,
+        timeout=600,
         cost_per_1k_tokens=0.0,
     )
 
@@ -467,6 +470,16 @@ def _build_bedrock_config() -> Optional['ModelConfig']:
     )
 
 
+def _build_claudecode_resumable_config() -> Optional['ModelConfig']:
+    """CC with session persistence — ``--resume`` reuses the session
+    across subprocess calls for near-zero input cost on turn 2+."""
+    base = _build_claudecode_config()
+    if base is None:
+        return None
+    from dataclasses import replace
+    return replace(base, provider="claudecode-resumable")
+
+
 _PROVIDER_BUILDERS = {
     "anthropic":  _build_anthropic_config,
     "openai":     lambda: _build_openai_compat_config("openai"),
@@ -475,6 +488,7 @@ _PROVIDER_BUILDERS = {
     "bedrock":    _build_bedrock_config,
     "ollama":     _build_ollama_config,
     "claudecode": _build_claudecode_config,
+    "claudecode-resumable": _build_claudecode_resumable_config,
 }
 
 # Default order. Anthropic first (cache-control + task-budget beta —
@@ -490,6 +504,34 @@ _DEFAULT_PROVIDER_ORDER = (
 )
 
 
+# Operator's explicit primary model. Set by CLIs that expose --model
+# so every downstream ``LLMConfig()`` no-arg construction honours the
+# operator's directive. Without this, ``_get_default_primary_model()``
+# would silently prefer a models.json-configured "thinking model"
+# (typically Gemini) over the ANTHROPIC_API_KEY env-var route the
+# operator's --model resolves through — breaking the "if I pass
+# --model, use it" contract on every sub-consumer inside the run.
+#
+# Contract: process-wide. Once set, every subsequent LLMConfig() /
+# ``get_client()`` / ``_get_default_primary_model()`` call returns
+# this model as the primary. Set once at operator-facing CLI entry;
+# never mutated mid-run.
+_operator_primary_override: Optional['ModelConfig'] = None
+
+
+def set_operator_primary_override(model: Optional['ModelConfig']) -> None:
+    """Pin the process-wide primary to ``model``, or ``None`` to clear.
+
+    Called by operator-facing CLIs after they resolve the operator's
+    ``--model`` flag, so no downstream consumer accidentally falls
+    through to a models.json-configured "thinking model" (which is
+    the shape of the pre-fix regression that inflated per-iteration
+    cost ~20× on tool-loop runs).
+    """
+    global _operator_primary_override
+    _operator_primary_override = model
+
+
 def _get_default_primary_model(
     prefer: Optional[List[str]] = None,
 ) -> Optional['ModelConfig']:
@@ -497,6 +539,11 @@ def _get_default_primary_model(
     Get default primary model based on available providers.
 
     Resolution order:
+    0. **Operator override** (``set_operator_primary_override``).
+       When an operator-facing CLI has resolved ``--model`` and
+       pinned it, honour that directive across every downstream
+       consumer, unconditionally. Beats every other step; ``prefer``
+       is ignored (operator's explicit choice trumps consumer hint).
     1. **Preferred providers via env var** (when ``prefer`` set).
        Try each named provider in order; skip silently if absent.
     2. **Operator's thinking-model config** (``~/.config/raptor/models.json``).
@@ -515,6 +562,8 @@ def _get_default_primary_model(
     ``cache_control`` + task-budget savings, and that linkage should
     be explicit in code rather than coincidence with the default.
     """
+    if _operator_primary_override is not None:
+        return _operator_primary_override
     if isinstance(prefer, str):
         prefer = [prefer]
     prefer_set = set(prefer) if prefer else None
@@ -551,10 +600,12 @@ def _get_default_primary_model(
     if (thinking_model
             and thinking_model.api_key
             and (prefer_set is None or thinking_model.provider in prefer_set)):
-        logger.info(
-            f"Using automatic thinking model: "
-            f"{thinking_model.provider}/{thinking_model.model_name}"
-        )
+        if not getattr(_get_default_primary_model, "_logged", False):
+            logger.info(
+                f"Using automatic thinking model: "
+                f"{thinking_model.provider}/{thinking_model.model_name}"
+            )
+            _get_default_primary_model._logged = True
         return thinking_model
 
     # Step 3: default-order autodetect via env vars. Skip providers
@@ -606,8 +657,10 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
     if not api_key and provider == "bedrock":
         api_key = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
-    limits = MODEL_LIMITS.get(model_name, {})
-    costs = MODEL_COSTS.get(model_name, {})
+    from core.llm.model_data import _strip_dated_alias
+    undated = _strip_dated_alias(model_name)
+    limits = MODEL_LIMITS.get(model_name, {}) or MODEL_LIMITS.get(undated, {})
+    costs = MODEL_COSTS.get(model_name, {}) or MODEL_COSTS.get(undated, {})
     cost_per_1k = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2
 
     # Honour the operator-configured remote Ollama host (see
@@ -725,7 +778,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
     config_providers = set()  # Track which providers the config covers
 
     # --- Config file entries first ---
-    primary = _get_best_thinking_model()
+    primary = _get_default_primary_model()
     primary_key = (primary.provider, primary.model_name) if primary else None
 
     for entry in _get_configured_models():
@@ -806,7 +859,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
                 model_name="mistral-large-latest",
                 api_key=os.getenv("MISTRAL_API_KEY"),
                 api_base=PROVIDER_ENDPOINTS["mistral"],
-                max_tokens=128000,
+                max_tokens=8192,
                 max_context=128000,
                 temperature=0.7,
                 cost_per_1k_tokens=0.002,
@@ -1169,10 +1222,14 @@ class LLMConfig:
             resolve_model_shorthand,
             unknown_model_message,
         )
+        from core.llm.model_data import _strip_dated_alias
 
         candidates = self._configured_models()
+        bare = bare_model_id(model_id)
         for mc in candidates:
-            if mc.model_name == model_id:
+            if mc.model_name == model_id or mc.model_name == bare:
+                return mc
+            if _strip_dated_alias(mc.model_name) == bare:
                 return mc
 
         # Shorthand expansion: when the operator passes a bare tier token
@@ -1196,6 +1253,11 @@ class LLMConfig:
                     )
                     return mc
 
+        if model_id in _PROVIDER_BUILDERS:
+            mc = _PROVIDER_BUILDERS[model_id]()
+            if mc is not None:
+                return mc
+
         provider = provider_of(model_id)
         if not provider:
             # Fail loudly rather than synthesizing a keyless, provider-less
@@ -1213,13 +1275,18 @@ class LLMConfig:
                     target, bare_model_id(mc.model_name)
                 ),
             )
+            limits = MODEL_LIMITS.get(bare) or MODEL_LIMITS.get(
+                _strip_dated_alias(bare), {},
+            )
             return ModelConfig(
                 provider=provider,
-                model_name=model_id,
+                model_name=bare_model_id(model_id),
                 api_key=best.api_key,
                 api_base=best.api_base,
+                max_tokens=limits.get("max_output", best.max_tokens),
+                max_context=limits.get("max_context", best.max_context),
             )
-        return ModelConfig(provider=provider, model_name=model_id)
+        return ModelConfig(provider=provider, model_name=bare_model_id(model_id))
 
     def to_file(self, config_path: Path) -> None:
         """Save a MINIMAL snapshot of this configuration to JSON.

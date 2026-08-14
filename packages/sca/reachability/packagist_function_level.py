@@ -153,7 +153,7 @@ def refine_packagist_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"package imported but the {len(qualified_names)} "
+                        f"package imported but the {len(paired)} "
                         f"OSV-listed affected symbol(s) are not called "
                         f"from non-test PHP source"
                     ),

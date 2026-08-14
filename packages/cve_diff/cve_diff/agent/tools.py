@@ -283,6 +283,8 @@ def _osv_expand_aliases_impl(identifier: str) -> str:
         )
     except HttpError:
         return json.dumps({"aliases": []})
+    if not isinstance(data, dict):
+        return json.dumps({"aliases": []})
     aliases = list(data.get("aliases") or [])
     return json.dumps({"aliases": aliases, "primary_id": data.get("id")})
 
@@ -298,7 +300,11 @@ def _deterministic_hints_impl(cve_id: str) -> str:
         data = _http_client().get_json(
             f"{_OSV_BASE}/vulns/{cve_id}", timeout=int(_TIMEOUT_S), retries=0,
         )
+        if not isinstance(data, dict):
+            data = {}
         for ref in data.get("references") or []:
+            if not isinstance(ref, dict):
+                continue
             url = ref.get("url") or ""
             m = _GITHUB_COMMIT_URL_RE.search(url)
             if m:
@@ -308,7 +314,11 @@ def _deterministic_hints_impl(cve_id: str) -> str:
             if km:
                 hints.append({"slug": _LINUX_UPSTREAM_SLUG, "sha": km.group(1), "source": "osv_kernel_shortlink"})
         for aff in data.get("affected") or []:
+            if not isinstance(aff, dict):
+                continue
             for rng in aff.get("ranges") or []:
+                if not isinstance(rng, dict):
+                    continue
                 if (rng.get("type") or "").upper() != "GIT":
                     continue
                 repo = rng.get("repo") or ""
@@ -317,6 +327,8 @@ def _deterministic_hints_impl(cve_id: str) -> str:
                 if m:
                     repo_slug = m.group(1)
                 for ev in rng.get("events") or []:
+                    if not isinstance(ev, dict):
+                        continue
                     sha = ev.get("fixed") or ""
                     if sha and repo_slug:
                         hints.append({"slug": repo_slug, "sha": sha, "source": "osv_affected_fixed"})
@@ -327,8 +339,12 @@ def _deterministic_hints_impl(cve_id: str) -> str:
     nvd_payload = _nvd.get_payload(cve_id)
     if nvd_payload:
         for vuln in nvd_payload.get("vulnerabilities") or []:
+            if not isinstance(vuln, dict):
+                continue
             cve = vuln.get("cve") or {}
             for ref in cve.get("references") or []:
+                if not isinstance(ref, dict):
+                    continue
                 url = ref.get("url") or ""
                 m = _GITHUB_COMMIT_URL_RE.search(url)
                 if m:

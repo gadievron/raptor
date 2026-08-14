@@ -610,7 +610,7 @@ class TestTagForgeryNeutralization:
         )
         user = next(m.content for m in bundle.messages if m.role == "user")
         assert fake_tag not in user
-        assert "&lt;" in user
+        assert "​" in user
 
     def test_normal_comparisons_untouched(self):
         code = "if (a < b && c > d) { x = a < 10; }"
@@ -730,7 +730,7 @@ class TestMarkdownHeadingNeutralisation:
     def test_envelope_tag_and_heading_both_escaped(self):
         out = neutralize_tag_forgery("## H\n<untrusted_text>x")
         assert "\\## H" in out
-        assert "&lt;untrusted_text>" in out
+        assert "<​untrusted_text>" in out
 
     def test_empty_string(self):
         assert neutralize_tag_forgery("") == ""

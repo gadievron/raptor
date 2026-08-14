@@ -22,7 +22,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -215,6 +215,8 @@ def _apply_stage_file(workdir, stage_letter):
         if "updates" in staged and isinstance(staged["updates"], dict):
             # Preferred format: {"updates": {"FIND-001": {fields...}}}
             for finding_id, update_dict in staged["updates"].items():
+                if not isinstance(update_dict, dict):
+                    continue
                 finding = by_id.get(finding_id)
                 if finding:
                     _deep_merge(finding, update_dict)
@@ -269,20 +271,6 @@ def _apply_stage_file(workdir, stage_letter):
         container["stage"] = staged.get("stage", stage_letter.upper())
         save_json(findings_path, container)
         print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
-
-    # Emit per-function annotations for stages that have a wired
-    # mapping (Stage A produces verdicts, Stage B refines with
-    # hypothesis + proximity). Best-effort — annotation failures
-    # never break the stage merge.
-    try:
-        from packages.exploitability_validation.annotation_emit import (
-            emit_stage_annotations,
-        )
-        n = emit_stage_annotations(Path(workdir), stage_letter)
-        if n > 0:
-            print(f"  Annotations emitted: {n} (per-function review trail)")
-    except Exception:
-        pass
 
     # Delete the stage file. Guard the unlink — pre-fix
     # `stage_path.unlink()` raised `FileNotFoundError` if the
@@ -398,12 +386,12 @@ def _build_standalone_pocs(target, build_dir):
 
     compiler = "gcc"
     try:
-        _sp.run([compiler, "--version"], capture_output=True, check=True, env=_safe_env)
-    except (FileNotFoundError, _sp.CalledProcessError):
+        _sp.run([compiler, "--version"], capture_output=True, check=True, timeout=10, env=_safe_env)
+    except (FileNotFoundError, _sp.CalledProcessError, _sp.TimeoutExpired):
         compiler = "cc"
         try:
-            _sp.run([compiler, "--version"], capture_output=True, check=True, env=_safe_env)
-        except (FileNotFoundError, _sp.CalledProcessError):
+            _sp.run([compiler, "--version"], capture_output=True, check=True, timeout=10, env=_safe_env)
+        except (FileNotFoundError, _sp.CalledProcessError, _sp.TimeoutExpired):
             print("No C compiler found — skipping PoC build", file=sys.stderr)
             return
 
@@ -448,9 +436,9 @@ def prepare_A(workdir, target=None):
     if not checklist:
         print("✗ checklist.json not found", file=sys.stderr)
         sys.exit(1)
-    total_files = checklist['total_files']
+    total_files = checklist.get('total_files', 0)
     total_sloc = checklist.get('total_sloc', 0)
-    print(f"Checklist: {total_files} files, {checklist['total_items']} items, {total_sloc} SLOC")
+    print(f"Checklist: {total_files} files, {checklist.get('total_items', 0)} items, {total_sloc} SLOC")
     if total_files <= 20 and total_sloc < 2000:
         print("  Target size: small — keep analysis concise, one tool call per finding where possible")
     if existing:
@@ -624,7 +612,9 @@ def prepare_B(workdir, target=None):
             continue
         sa = finding.get("stage_a_summary", {})
         poc = finding.get("poc", {})
-        fid = finding["id"]
+        fid = finding.get("id")
+        if not fid:
+            continue
         num = fid.split("-")[-1] if "-" in fid else str(fast_count + 1)
 
         if (finding.get("status") == "poc_success"
@@ -863,6 +853,9 @@ def prepare_D(workdir, target=None):
 
 
     data = _findings(workdir)
+    if not data:
+        print("✗ findings.json not found — cannot run stage D", file=sys.stderr)
+        sys.exit(1)
 
     # --- Schema validation ---
     _validate_file(workdir, "findings.json", validate_findings)
@@ -1326,6 +1319,46 @@ def _bridge_understand_output(out_dir, checklist, target,
               f" {n_traces} traces, {n_targets} priority targets")
 
 
+def _bridge_audit_output(out_dir, target=None):
+    """Import /audit constraints, attack chains, and summaries into the validate run."""
+    try:
+        from core.orchestration.audit_bridge import (
+            find_audit_output,
+            load_audit_constraints,
+            enrich_attack_paths,
+            load_attack_chains,
+            inject_chains_as_hypotheses,
+            load_summaries,
+            enrich_with_summaries,
+        )
+    except ImportError:
+        return
+
+    audit_dir = find_audit_output(out_dir, target_path=target)
+    if not audit_dir:
+        return
+
+    constraints = load_audit_constraints(audit_dir)
+    if constraints:
+        attack_paths_file = Path(out_dir) / "attack-paths.json"
+        enriched = enrich_attack_paths(attack_paths_file, constraints)
+        n_constraints = len(constraints)
+        print(f"  Audit bridge: loaded {n_constraints} constraints from {audit_dir.name}"
+              f" — enriched {enriched} attack-path steps")
+
+    chains = load_attack_chains(audit_dir)
+    if chains:
+        attack_surface_file = Path(out_dir) / "attack-surface.json"
+        injected = inject_chains_as_hypotheses(chains, attack_surface_file)
+        print(f"  Audit bridge: injected {injected} chain hypotheses into attack-surface")
+
+    summaries = load_summaries(audit_dir)
+    if summaries:
+        attack_paths_file = Path(out_dir) / "attack-paths.json"
+        enriched_steps = enrich_with_summaries(attack_paths_file, summaries)
+        print(f"  Audit bridge: enriched {enriched_steps} attack-path steps with callee contracts")
+
+
 def prepare_bridge(workdir, target=None):
     """Import /understand output into the validate run."""
     from core.json import load_json
@@ -1428,6 +1461,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         if not no_bridge:
             _bridge_understand_output(out_dir, checklist, target,
                                       pre_rebuild_checklist=pre_rebuild_checklist)
+            _bridge_audit_output(out_dir, target)
 
         print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
         print(f"OUTPUT_DIR={out_dir}")

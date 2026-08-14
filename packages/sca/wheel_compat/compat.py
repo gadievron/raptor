@@ -122,7 +122,7 @@ def _best_match(
         if w.arch == "any" and w.os == "any":
             candidates.append(w)
             continue
-        if w.arch != pair.arch and w.arch != "any":
+        if w.arch != pair.arch and w.arch != "any" and w.arch != "universal2":
             continue
         # OS-family check. macOS / Windows tags don't satisfy a
         # Linux project pair and vice-versa. The platform_matrix
@@ -436,7 +436,7 @@ def find_compatible_version(
 
 
 _STABLE_VERSION_RE = __import__("re").compile(
-    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?$"
+    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:\.post\d+)?$"
 )
 
 

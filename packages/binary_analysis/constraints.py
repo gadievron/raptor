@@ -15,7 +15,7 @@ import logging
 
 from core.json import load_json
 
-from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def validate_constraint_file(
     path: Path,
     *,
     binary_sha256: str,
-) -> tuple[Optional[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[Optional[dict[str, Any]], list[BinaryEvidenceRecord]]:
     payload = load_json(Path(path))
     if not isinstance(payload, dict):
         raise ValueError(f"constraint file is not a JSON object: {path}")

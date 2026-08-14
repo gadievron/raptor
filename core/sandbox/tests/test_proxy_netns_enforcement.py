@@ -130,7 +130,7 @@ class TestProxyUnixSocket:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning:multiprocessing")
-@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
 class TestProxyBridge:
     """TCP-to-Unix forwarder integration."""
 

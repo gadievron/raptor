@@ -134,6 +134,9 @@ class Dependency:
                                             # use this as the cluster
                                             # key.
 
+    inline_comment: Optional[str] = None    # trailing ``# note`` text
+                                            # from the raw line, preserved
+                                            # for round-trip rewriting
     version_floor: Optional[str] = None     # tightest lower bound
                                             # (``>=`` / ``>``) from the
                                             # original specifier — the

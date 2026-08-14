@@ -32,12 +32,14 @@ def _restore_llm_caches():
     import core.llm.detection as det
     saved_checked = getattr(cfg, "_thinking_model_checked", None)
     saved_cached = getattr(cfg, "_cached_thinking_model", None)
+    saved_override = getattr(cfg, "_operator_primary_override", None)
     saved_avail = getattr(det, "_cached_llm_availability", None)
     try:
         yield
     finally:
         cfg._thinking_model_checked = saved_checked
         cfg._cached_thinking_model = saved_cached
+        cfg._operator_primary_override = saved_override
         det._cached_llm_availability = saved_avail
 
 
@@ -742,8 +744,8 @@ class TestFallbackModelsFromConfig:
                 det._cached_llm_availability = None
                 fallbacks = _get_default_fallback_models()
         names = [f.model_name for f in fallbacks]
-        assert "gemini-2.5-pro" in names
         assert "gemini-2.5-flash" in names
+        assert "gemini-2.5-pro" not in names
 
 
 class TestModelDataConsistency:
@@ -766,3 +768,116 @@ class TestModelDataConsistency:
         for model, limits in MODEL_LIMITS.items():
             assert "max_context" in limits, f"'{model}' missing 'max_context'"
             assert "max_output" in limits, f"'{model}' missing 'max_output'"
+
+
+class TestOperatorPrimaryOverride:
+    """The operator's ``--model`` directive must reach every downstream
+    consumer, not just the actor loop. Regression this guards against:
+    ``LLMConfig()`` no-arg constructions were silently falling through
+    to the models.json-configured "thinking model" (e.g. gemini-2.5-pro),
+    inflating per-iteration cost ~20× on tool-loop runs and breaking
+    the "if I pass --model, use that model" operator contract.
+    """
+
+    def test_override_short_circuits_thinking_model_path(self, tmp_path):
+        """When the override is set, ``_get_default_primary_model``
+        returns it unconditionally — even when a higher-scored
+        thinking model is configured."""
+        import core.llm.config as cfg
+        from core.llm.config import (
+            ModelConfig, _get_default_primary_model,
+            set_operator_primary_override,
+        )
+
+        conf = tmp_path / "models.json"
+        conf.write_text(json.dumps({
+            "models": [
+                {"provider": "gemini", "model": "gemini-2.5-pro",
+                 "api_key": "test-key"},
+            ]
+        }))
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(conf)}, clear=False):
+            cfg._thinking_model_checked = False
+            cfg._cached_thinking_model = None
+            picked = _get_default_primary_model()
+            assert picked is not None
+            assert picked.provider == "gemini"
+
+            override = ModelConfig(
+                provider="anthropic", model_name="claude-opus-4-7",
+                api_key="op-key", max_tokens=1000, max_context=200000,
+                temperature=0.7, cost_per_1k_tokens=0.015,
+            )
+            set_operator_primary_override(override)
+            picked2 = _get_default_primary_model()
+            assert picked2 is override
+            assert picked2.provider == "anthropic"
+            assert picked2.model_name == "claude-opus-4-7"
+
+    def test_override_beats_prefer_arg(self):
+        """``prefer=`` is a downstream consumer's hint. The operator's
+        explicit override beats it — otherwise a sub-consumer with a
+        specific provider preference could route the run through a
+        different model than what the operator asked for."""
+        from core.llm.config import (
+            ModelConfig, _get_default_primary_model,
+            set_operator_primary_override,
+        )
+
+        override = ModelConfig(
+            provider="anthropic", model_name="claude-opus-4-7",
+            api_key="op-key", max_tokens=1000, max_context=200000,
+            temperature=0.7, cost_per_1k_tokens=0.015,
+        )
+        set_operator_primary_override(override)
+        picked = _get_default_primary_model(prefer=["openai", "gemini"])
+        assert picked is override
+
+    def test_llmconfig_no_arg_honours_override(self):
+        """The whole reason for the override — every anonymous
+        ``LLMConfig()`` construction picks up the operator's choice.
+        Without this, sub-consumers deep inside a run (mutator,
+        refuter, judge, brain-adjacent LLMs) would silently take the
+        thinking-model path."""
+        from core.llm.config import (
+            LLMConfig, ModelConfig,
+            set_operator_primary_override,
+        )
+
+        override = ModelConfig(
+            provider="anthropic", model_name="claude-opus-4-7",
+            api_key="op-key", max_tokens=1000, max_context=200000,
+            temperature=0.7, cost_per_1k_tokens=0.015,
+        )
+        set_operator_primary_override(override)
+        cfg = LLMConfig()
+        assert cfg.primary_model is override
+
+    def test_override_none_restores_default_path(self, tmp_path):
+        """Clearing the override with ``None`` restores the pre-fix
+        resolution chain — no permanent state change."""
+        import core.llm.config as cfg
+        from core.llm.config import (
+            ModelConfig, _get_default_primary_model,
+            set_operator_primary_override,
+        )
+
+        conf = tmp_path / "models.json"
+        conf.write_text(json.dumps({
+            "models": [
+                {"provider": "gemini", "model": "gemini-2.5-pro",
+                 "api_key": "test-key"},
+            ]
+        }))
+        set_operator_primary_override(ModelConfig(
+            provider="anthropic", model_name="claude-opus-4-7",
+            api_key="op-key", max_tokens=1000, max_context=200000,
+            temperature=0.7, cost_per_1k_tokens=0.015,
+        ))
+        set_operator_primary_override(None)
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(conf)}, clear=False):
+            cfg._thinking_model_checked = False
+            cfg._cached_thinking_model = None
+            picked = _get_default_primary_model()
+            assert picked is not None
+            assert picked.provider == "gemini"

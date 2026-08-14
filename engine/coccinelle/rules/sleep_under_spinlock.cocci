@@ -8,6 +8,7 @@
 //
 // CWE-764: Multiple Locks of a Critical Resource (deadlock class)
 // Zero-FP confidence: very high — always wrong.
+// @role: verification
 
 @sleep_under_spin@
 expression L;

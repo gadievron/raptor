@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 # Deliberately broader than core/function_taxonomy: ubiquitous functions
 # like read/fread/open are zero-signal as *sinks* but valid evidence that
@@ -55,9 +55,9 @@ class InputChannel:
 def recover_static_channels(
     binary_sha256: str,
     imports: Iterable[str],
-) -> tuple[list[InputChannel], list[EvidenceRecord]]:
+) -> tuple[list[InputChannel], list[BinaryEvidenceRecord]]:
     channels: list[InputChannel] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     import_set = {str(item) for item in imports}
     for kind, symbols in _IMPORT_CHANNELS.items():
         matched = sorted(import_set.intersection(symbols))
@@ -91,10 +91,10 @@ def merge_observed_channels(
     binary_sha256: str,
     channels: list[InputChannel],
     runtime_events: Iterable[dict[str, Any]],
-) -> tuple[list[InputChannel], list[EvidenceRecord]]:
+) -> tuple[list[InputChannel], list[BinaryEvidenceRecord]]:
     channels = list(channels)
     by_kind = {channel.kind: channel for channel in channels}
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     observed: dict[str, list[dict[str, Any]]] = {}
     for event in runtime_events:
         kind = event_channel_kind(event)

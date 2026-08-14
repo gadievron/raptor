@@ -4,6 +4,8 @@ import os
 import platform
 import tempfile
 import unittest
+
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -107,6 +109,7 @@ class TestOrchestratorPlanning(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
+    @pytest.mark.slow
     def test_macos_with_broken_afl_does_not_run_plain_macho_as_libfuzzer(self):
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as f:
             f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 1024)

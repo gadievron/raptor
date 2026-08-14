@@ -142,19 +142,26 @@ def test_npm_dry_run_success(monkeypatch, tmp_path: Path) -> None:
         encoding="utf-8",
     )
     # Lockfile gets written by the fake "install" — simulate.
+    # The resolver copies manifest files into an internal tempdir and
+    # runs npm there, so the mock must write the lockfile to the cwd
+    # kwarg (the resolver's tempdir), not to tmp_path.
     fake_lock = b'{"name":"app","lockfileVersion":3,"packages":{}}'
 
-    def npm_install_writes_lockfile(cmd):
-        if cmd[:2] == ["npm", "install"]:
-            (tmp_path / "package-lock.json").write_bytes(fake_lock)
-            return True
-        return False
+    def smart_run(cmd, **kwargs):
+        cwd = kwargs.get("cwd")
+        for matcher, result in [
+            (lambda c: c == ["npm", "--version"],
+             _FakeProc(returncode=0, stdout="10.0.0\n")),
+            (lambda c: c[:2] == ["npm", "install"],
+             _FakeProc(returncode=0, stdout="ok")),
+        ]:
+            if matcher(cmd):
+                if cmd[:2] == ["npm", "install"] and cwd:
+                    (Path(cwd) / "package-lock.json").write_bytes(fake_lock)
+                return result
+        return _FakeProc(returncode=1)
 
-    _patch_run(monkeypatch, [
-        (lambda c: c == ["npm", "--version"],
-         _FakeProc(returncode=0, stdout="10.0.0\n")),
-        (npm_install_writes_lockfile, _FakeProc(returncode=0, stdout="ok")),
-    ])
+    monkeypatch.setattr(subprocess, "run", smart_run)
     r = NpmResolver()
     res = r.dry_run(tmp_path)
     assert res.success is True
@@ -639,7 +646,11 @@ def test_npm_run_routes_through_sandbox_with_proxy(monkeypatch, tmp_path):
     cmd, kwargs = install_calls[0]
     assert kwargs["use_egress_proxy"] is True
     assert kwargs["proxy_hosts"] == ["registry.npmjs.org"]
-    assert kwargs["target"] == str(tmp_path)
+    # target= is the resolver's copy-dir (manifest files copied into a
+    # writable tempdir so the sandbox can confine reads to it), NOT the
+    # original project dir.
+    assert kwargs["target"] != str(tmp_path)
+    assert "raptor-sca-npm-" in kwargs["target"]
     # output= is a per-call tempdir, NOT the project dir. Asserts the
     # fix for the .home/ contamination bug: routing the sandbox's
     # writable surface to a tempdir avoids polluting the operator's
@@ -754,6 +765,19 @@ def test_yarn_berry_uses_update_lockfile_mode(monkeypatch, tmp_path):
     YarnResolver().dry_run(tmp_path)
     install = next(c for c, _ in captured if c[:2] == ["yarn", "install"])
     assert "--mode=update-lockfile" in install
+
+
+def test_yarn_berry_disables_scripts(monkeypatch, tmp_path):
+    from packages.sca.resolvers.yarn import YarnResolver
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    _patch_run(monkeypatch, [
+        (lambda c: c == ["yarn", "--version"], _ok_proc("3.6.0")),
+    ])
+    captured = _capture_sandbox_call(monkeypatch)
+    YarnResolver().dry_run(tmp_path)
+    _, kwargs = next((c, k) for c, k in captured if c[:2] == ["yarn", "install"])
+    env = kwargs.get("env") or {}
+    assert env.get("YARN_ENABLE_SCRIPTS") == "false"
 
 
 def test_yarn_proxy_hosts(monkeypatch, tmp_path):

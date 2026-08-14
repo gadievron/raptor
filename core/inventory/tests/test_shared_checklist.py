@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 # core/inventory/tests/test_shared_checklist.py -> repo root
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from core.inventory import save_checklist
+from core.inventory import save_checklist, update_checklist
 from core.json import load_json, save_json
 from core.run.metadata import _setup_checklist_symlink, _promote_checklist
 
@@ -63,6 +63,52 @@ class TestSaveChecklist(unittest.TestCase):
             self.assertTrue((run_dir / "checklist.json").is_symlink())
             loaded = load_json(project_dir / "checklist.json")
             self.assertEqual(loaded["v"], 2)
+
+
+class TestUpdateChecklist(unittest.TestCase):
+
+    def test_read_modify_write(self):
+        with TemporaryDirectory() as d:
+            save_checklist(d, {"files": [], "counter": 0})
+
+            def bump(data):
+                data["counter"] = data.get("counter", 0) + 1
+                return data
+
+            update_checklist(d, bump)
+            loaded = load_json(Path(d) / "checklist.json")
+            self.assertEqual(loaded["counter"], 1)
+
+    def test_creates_file_when_absent(self):
+        with TemporaryDirectory() as d:
+            update_checklist(d, lambda data: {"created": True})
+            loaded = load_json(Path(d) / "checklist.json")
+            self.assertTrue(loaded["created"])
+
+    def test_passes_empty_dict_when_file_absent(self):
+        with TemporaryDirectory() as d:
+            received = []
+
+            def capture(data):
+                received.append(dict(data))
+                return {"ok": True}
+
+            update_checklist(d, capture)
+            self.assertEqual(received, [{}])
+
+    def test_preserves_existing_fields(self):
+        with TemporaryDirectory() as d:
+            save_checklist(d, {"files": [{"path": "a.py"}], "version": 1})
+
+            def add_field(data):
+                data["extra"] = "added"
+                return data
+
+            update_checklist(d, add_field)
+            loaded = load_json(Path(d) / "checklist.json")
+            self.assertEqual(loaded["version"], 1)
+            self.assertEqual(loaded["extra"], "added")
+            self.assertEqual(len(loaded["files"]), 1)
 
 
 class TestSetupChecklistSymlink(unittest.TestCase):

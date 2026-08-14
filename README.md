@@ -27,7 +27,6 @@
 
 ```
 
-<a href="https://smithery.ai/skills?ns=gadievron&utm_source=github&utm_medium=badge"><img src="https://smithery.ai/badge/skills/gadievron"></a>
 <a href="https://github.com/gadievron/raptor/actions/workflows/github-code-scanning/codeql"><img src="https://github.com/gadievron/raptor/actions/workflows/github-code-scanning/codeql/badge.svg"></a>
 
 **Authors:** Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright
@@ -46,6 +45,14 @@ RAPTOR is an autonomous security research framework built on top of Claude Code 
 It is not polished software. It was built in free time, held together with enthusiasm and duct tape, and it works well enough that we can't stop using it. If you want to make it better, open a PR.
 
 RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot. We really wanted to call it RAPTOR.
+
+### How it's built
+
+RAPTOR is mostly AI-generated code. The humans set direction, review
+output, and make design decisions; the AI writes the implementation.
+Mechanical verification (tests, static analysis, corpus calibration) keeps
+the quality bar where it needs to be regardless of who — or what — wrote
+the code.
 
 ---
 
@@ -143,6 +150,8 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/scan` | Static analysis with Semgrep and CodeQL | Stable |
 | `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
 | `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
+| `/audit` | Hypothesis-driven, tool-grounded systematic code review | Beta |
+| `/review` | Query audit state: findings, gaps, coverage, operator notes | Stable |
 | `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
 | `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
@@ -153,6 +162,7 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
 | `/project` | Named workspaces to organise runs and track findings over time | Stable |
 | `/threat-model` | Create, inspect, and maintain per-project threat models | Stable |
+| `/sage` | Persistent memory layer (store, recall, link, corroborate) | Stable |
 | `/frida` | Dynamic instrumentation via Frida | Alpha |
 | `/web` | Web application scanning | Alpha/stub |
 
@@ -294,10 +304,10 @@ CodeQL needs network access only during initial setup to download the CLI and qu
 
 ## Custom rules
 
-RAPTOR ships 170 custom static analysis rules, adversarially tested to eliminate false positives:
+RAPTOR ships 185 custom static analysis rules, adversarially tested to eliminate false positives:
 
 - **Semgrep (123 rules)** — taint-tracking and pattern rules for Python, Go, Java, and JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE, LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure TLS, and hardcoded secrets.
-- **Coccinelle (39 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer), integer bugs (overflow, sign extension, double sizeof), resource leaks, kernel bugs (GFP_KERNEL/sleep under spinlock, missing bounds checks), buffer handling (strncpy without NUL, copy_user size mismatch), format string injection, TOCTOU races, and more.
+- **Coccinelle (54 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer, free of stack array, mmap'd memory, use-after-close), integer bugs (overflow, sign extension, double sizeof), resource leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion, format string injection, TOCTOU races, and more.
 - **CodeQL (8 queries)** — interprocedural taint tracking for C++ (format string injection, integer truncation, use-after-move, iterator invalidation) and Java (XXE, insecure deserialisation, log injection, Spring SSRF).
 
 Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`, `engine/codeql/queries/`. These complement the registry packs (`p/security-audit`, `p/owasp-top-ten`, `p/0xdea`, `p/trailofbits`) which provide ~950 additional rules — overlap is minimal.
@@ -467,6 +477,7 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/architecture.md` | Codebase structure and directory tree |
 | `docs/llm.md` | LLM provider configuration, Bedrock, multi-model workflows |
 | `docs/sandbox.md` | Process isolation: profiles, Landlock, namespaces |
+| `docs/audit.md` | Systematic code review: hypotheses, tools, strategies, gates |
 | `docs/validation.md` | Exploitability validation pipeline (stages 0--1) |
 | `docs/static-analysis.md` | Semgrep and Coccinelle rules |
 | `docs/codeql.md` | CodeQL integration and autonomous analysis |

@@ -48,7 +48,11 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     blockers = path_data.get("blockers", [])
     status = path_data.get("status", "uncertain")
 
-    prox_desc = _proximity_desc(int(proximity))
+    try:
+        proximity = int(proximity)
+    except (TypeError, ValueError):
+        proximity = 0
+    prox_desc = _proximity_desc(proximity)
     has_runtime = path_data.get("runtime_evidence_available", False)
 
     lines = ["flowchart TD"]

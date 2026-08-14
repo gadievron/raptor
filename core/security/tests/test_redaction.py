@@ -44,7 +44,7 @@ def test_redacts_supported_secret_query_parameter_names(param_name):
 
 
 def test_preserves_non_secret_query_parameters_and_fragments():
-    value = "https://example.test/search?q=report&next=/home&page_token=cursor123#section"
+    value = "https://example.test/search?q=report&next=/home&page=cursor123#section"
 
     assert redact_secrets(value) == value
 

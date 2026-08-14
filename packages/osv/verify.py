@@ -130,7 +130,8 @@ def verify(
     psha = picked_sha.lower()
 
     for s, sha in ref_pairs:
-        if s == pslug and sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
+        if s == pslug and len(psha) >= 7 and len(sha) >= 7 \
+                and sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
             return OracleVerdict(
                 cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
                 verdict=Verdict.MATCH_EXACT, source=source_label,
@@ -138,7 +139,8 @@ def verify(
             )
 
     for s, sha in range_pairs:
-        if sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
+        if len(psha) >= 7 and len(sha) >= 7 \
+                and sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
             if s == pslug:
                 return OracleVerdict(
                     cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
@@ -167,6 +169,7 @@ def verify(
     for s, sha in ref_pairs:
         if (
             s != pslug
+            and len(psha) >= 7 and len(sha) >= 7
             and sha.startswith(psha[:12]) and psha.startswith(sha[:12])
         ):
             return OracleVerdict(

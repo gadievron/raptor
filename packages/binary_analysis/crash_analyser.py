@@ -17,7 +17,6 @@ from typing import Dict, List, Optional
 from core.config import RaptorConfig
 from core.hash import sha256_string
 from core.logging import get_logger
-from core.sage.hooks import store_crash_analysis_pattern
 from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 # _run_trusted: read-only tools (file, readelf, nm, strings, etc.) — no namespace overhead.
 # Crash-analysis work runs a debugger or ASAN-instrumented binary:
@@ -117,7 +116,7 @@ class CrashAnalyser:
         if not self.binary.exists():
             raise FileNotFoundError(f"Binary not found: {binary_path}")
 
-        logger.info(f"Crash analyser initialized for: {self.binary}")
+        logger.info("Crash analyser initialized for: %s", self.binary)
         
         # Check tool availability first
         self._available_tools = self._check_tool_availability()
@@ -144,15 +143,15 @@ class CrashAnalyser:
 
         # For macOS binaries (Mach-O), prefer LLDB
         if system == "darwin" or "mach-o" in binary_type:
-            logger.info(f"Detected macOS/Mach-O binary, trying LLDB. Binary type: {binary_type[:100]}...")
+            logger.info("Detected macOS/Mach-O binary, trying LLDB. Binary type: %s...", binary_type[:100])
             try:
                 result = _run_trusted(["lldb", "--version"], capture_output=True, text=True, timeout=5)
-                logger.info(f"LLDB version check result: {result.returncode}, stdout: {(result.stdout or '')[:100]}, stderr: {(result.stderr or '')[:100]}")
+                logger.info("LLDB version check result: %s, stdout: %s, stderr: %s", result.returncode, (result.stdout or '')[:100], (result.stderr or '')[:100])
                 if result.returncode == 0:
                     logger.info("Using LLDB debugger for macOS/Mach-O binary")
                     return "lldb"
             except Exception as e:
-                logger.warning(f"LLDB version check failed: {e}")
+                logger.warning("LLDB version check failed: %s", e)
             logger.warning("LLDB not available for macOS binary, this may not work well")
         
         # Default to gdb for Linux/Windows or if LLDB fails
@@ -195,9 +194,9 @@ class CrashAnalyser:
         missing_tools = [tool for tool, avail in available.items() if not avail]
         
         if available_tools:
-            logger.info(f"Available reverse engineering tools: {', '.join(available_tools)}")
+            logger.info("Available reverse engineering tools: %s", ', '.join(available_tools))
         if missing_tools:
-            logger.warning(f"Missing reverse engineering tools: {', '.join(missing_tools)}")
+            logger.warning("Missing reverse engineering tools: %s", ', '.join(missing_tools))
             
         return available
 
@@ -259,9 +258,9 @@ class CrashAnalyser:
                             symbols[addr_int] = name
                             
         except Exception as e:
-            logger.debug(f"Failed to load symbol table with nm: {e}")
+            logger.debug("Failed to load symbol table with nm: %s", e)
             
-        logger.info(f"Loaded {len(symbols)} symbols from binary")
+        logger.info("Loaded %d symbols from binary", len(symbols))
         return symbols
 
     def _resolve_address_to_function(self, address: str) -> str:
@@ -311,7 +310,7 @@ class CrashAnalyser:
                     return function, file_line
                     
         except Exception as e:
-            logger.debug(f"addr2line failed: {e}")
+            logger.debug("addr2line failed: %s", e)
             
         return "unknown", "unknown"
 
@@ -328,9 +327,9 @@ class CrashAnalyser:
             CrashContext with extracted information
         """
         logger.info("=" * 70)
-        logger.info(f"Analysing crash: {crash_id}")
-        logger.info(f"  Signal: {signal}")
-        logger.info(f"  Input: {input_file}")
+        logger.info("Analysing crash: %s", crash_id)
+        logger.info("  Signal: %s", signal)
+        logger.info("  Input: %s", input_file)
 
         context = CrashContext(
             crash_id=crash_id,
@@ -344,7 +343,7 @@ class CrashAnalyser:
             context.binary_info = self._get_binary_info()
             logger.info("✓ Binary info extracted")
         except Exception as e:
-            logger.error(f"✗ Binary info failed: {e}")
+            logger.error("✗ Binary info failed: %s", e)
 
         # Check for ASan instrumentation
         has_asan = self._detect_asan_binary()
@@ -361,7 +360,7 @@ class CrashAnalyser:
                 else:
                     logger.warning("ASan analysis produced no output")
             except Exception as e:
-                logger.error(f"✗ ASan analysis failed: {e}")
+                logger.error("✗ ASan analysis failed: %s", e)
         else:
             logger.info("ℹ️  Binary not ASan-instrumented - using debugger analysis")
             context.binary_info["asan_enabled"] = "false"
@@ -375,14 +374,14 @@ class CrashAnalyser:
                 self._parse_gdb_output(context, debugger_output)
             logger.info("✓ Debugger analysis complete")
         except Exception as e:
-            logger.error(f"✗ Debugger analysis failed: {e}")
+            logger.error("✗ Debugger analysis failed: %s", e)
 
         # Get disassembly at crash site
         try:
             context.disassembly = self._get_disassembly(context.crash_address)
             logger.info("✓ Disassembly extracted")
         except Exception as e:
-            logger.error(f"✗ Disassembly failed: {e}")
+            logger.error("✗ Disassembly failed: %s", e)
 
         # Get memory layout and protection information
         try:
@@ -390,7 +389,7 @@ class CrashAnalyser:
             context.binary_info.update(memory_info)
             logger.info("✓ Memory layout and protections analysed")
         except Exception as e:
-            logger.error(f"✗ Memory layout analysis failed: {e}")
+            logger.error("✗ Memory layout analysis failed: %s", e)
 
         # Detect environmental crashes (debugger artifacts, etc.)
         try:
@@ -398,7 +397,7 @@ class CrashAnalyser:
             context.binary_info.update(env_info)
             logger.info("✓ Environmental crash detection complete")
         except Exception as e:
-            logger.error(f"✗ Environmental crash detection failed: {e}")
+            logger.error("✗ Environmental crash detection failed: %s", e)
 
         # Analyze memory regions around crash address
         try:
@@ -406,7 +405,7 @@ class CrashAnalyser:
             context.binary_info.update(region_info)
             logger.info("✓ Memory region analysis complete")
         except Exception as e:
-            logger.error(f"✗ Memory region analysis failed: {e}")
+            logger.error("✗ Memory region analysis failed: %s", e)
 
         # Try to resolve function name if not found in backtrace
         if not context.function_name or context.function_name == "unknown":
@@ -416,13 +415,13 @@ class CrashAnalyser:
                 if func_name != "unknown":
                     context.function_name = func_name
                     context.source_location = file_line
-                    logger.info(f"✓ Function resolved with addr2line: {func_name} at {file_line}")
+                    logger.info("✓ Function resolved with addr2line: %s at %s", func_name, file_line)
                 else:
                     # Fall back to symbol table
                     func_name = self._resolve_address_to_function(context.crash_address)
                     if func_name != "unknown":
                         context.function_name = func_name
-                        logger.info(f"✓ Function resolved with symbols: {func_name}")
+                        logger.info("✓ Function resolved with symbols: %s", func_name)
             
             # Also try to resolve using link register (lr) for return address
             if context.registers and "lr" in context.registers:
@@ -430,53 +429,40 @@ class CrashAnalyser:
                 if lr_addr and lr_addr.startswith("0x"):
                     func_name, file_line = self._resolve_address_with_addr2line(lr_addr)
                     if func_name != "unknown" and func_name != context.function_name:
-                        logger.info(f"✓ Return address resolved: {func_name} at {file_line}")
+                        logger.info("✓ Return address resolved: %s at %s", func_name, file_line)
                         # Update source location if we found a better one
                         if not context.source_location or context.source_location == "unknown":
                             context.source_location = file_line
 
         # Log extracted information for debugging
         logger.info("Extracted crash information:")
-        logger.info(f"  Signal: {context.signal}")
-        logger.info(f"  Crash address: {context.crash_address}")
-        logger.info(f"  Crash instruction: {context.crash_instruction}")
-        logger.info(f"  Function: {context.function_name}")
+        logger.info("  Signal: %s", context.signal)
+        logger.info("  Crash address: %s", context.crash_address)
+        logger.info("  Crash instruction: %s", context.crash_instruction)
+        logger.info("  Function: %s", context.function_name)
         if context.source_location:
-            logger.info(f"  Source location: {context.source_location}")
-        logger.info(f"  Registers: {len(context.registers)} found")
-        logger.info(f"  Stack trace: {len(context.stack_trace.split())} frames")
-        logger.info(f"  Disassembly: {len(context.disassembly.split()) if context.disassembly else 0} lines")
-        logger.info(f"  Binary info: {len(context.binary_info)} fields")
+            logger.info("  Source location: %s", context.source_location)
+        logger.info("  Registers: %d found", len(context.registers))
+        logger.info("  Stack trace: %d frames", len(context.stack_trace.split()))
+        logger.info("  Disassembly: %d lines", len(context.disassembly.split()) if context.disassembly else 0)
+        logger.info("  Binary info: %d fields", len(context.binary_info))
         
         # Log security-relevant information
         if context.binary_info.get("aslr_enabled") != "unknown":
-            logger.info(f"  ASLR: {context.binary_info.get('aslr_enabled')}")
+            logger.info("  ASLR: %s", context.binary_info.get('aslr_enabled'))
         if context.binary_info.get("stack_canaries") != "unknown":
-            logger.info(f"  Stack canaries: {context.binary_info.get('stack_canaries')}")
+            logger.info("  Stack canaries: %s", context.binary_info.get('stack_canaries'))
         if context.binary_info.get("nx_enabled") != "unknown":
-            logger.info(f"  NX/DEP: {context.binary_info.get('nx_enabled')}")
+            logger.info("  NX/DEP: %s", context.binary_info.get('nx_enabled'))
         if context.binary_info.get("environmental_crash") == "true":
-            logger.info(f"  Environmental crash: {context.binary_info.get('reason', 'unknown')}")
+            logger.info("  Environmental crash: %s", context.binary_info.get('reason', 'unknown'))
         if context.binary_info.get("memory_region"):
-            logger.info(f"  Memory region: {context.binary_info.get('memory_region')}")
+            logger.info("  Memory region: %s", context.binary_info.get('memory_region'))
 
         # Compute stack hash for deduplication
         context.stack_hash = self._compute_stack_hash(context.stack_trace)
         if context.stack_hash:
-            logger.info(f"  Stack hash: {context.stack_hash}")
-
-        # Future-agent note: this hook is additive and must remain best-effort.
-        # Do not let memory persistence affect crash-analysis success path.
-        store_crash_analysis_pattern(
-            repo_path=str(self.binary.parent),
-            binary_path=str(self.binary),
-            signal=context.signal,
-            function_name=context.function_name,
-            crash_type=context.crash_type,
-            source_location=context.source_location,
-            stack_hash=context.stack_hash,
-            exploitability_hint=context.exploitability,
-        )
+            logger.info("  Stack hash: %s", context.stack_hash)
 
         return context
 
@@ -625,9 +611,9 @@ class CrashAnalyser:
         # lines that summarise stdout/stderr lengths so operators
         # who care about diagnostics still see the size signal.
         if result.stdout:
-            logger.debug(f"GDB stdout length: {len(result.stdout)} chars")
+            logger.debug("GDB stdout length: %d chars", len(result.stdout))
         if result.stderr:
-            logger.debug(f"GDB stderr length: {len(result.stderr)} chars")
+            logger.debug("GDB stderr length: %d chars", len(result.stderr))
 
         return result.stdout
 
@@ -706,9 +692,9 @@ class CrashAnalyser:
             # caller; the operator's logging surfaces capture the
             # data without the temp-file sidecar.
             if result.stdout:
-                logger.debug(f"LLDB stdout length: {len(result.stdout)} chars")
+                logger.debug("LLDB stdout length: %d chars", len(result.stdout))
             if result.stderr:
-                logger.debug(f"LLDB stderr length: {len(result.stderr)} chars")
+                logger.debug("LLDB stderr length: %d chars", len(result.stderr))
 
             return result.stdout
         finally:
@@ -896,7 +882,8 @@ class CrashAnalyser:
             if stripped.startswith(("frame #", "* frame #")):
                 backtrace_lines.append(stripped)
 
-        context.stack_trace = "\n".join(backtrace_lines)
+        if not context.stack_trace:
+            context.stack_trace = "\n".join(backtrace_lines)
 
         # Extract crash instruction and address from disassembly
         crash_instruction_found = False
@@ -924,7 +911,7 @@ class CrashAnalyser:
                             addr_part,
                         )
                 crash_instruction_found = True
-                logger.debug(f"Found crash instruction: {context.crash_instruction}")
+                logger.debug("Found crash instruction: %s", context.crash_instruction)
 
         # If no crash instruction found, try to find PC register value
         if not context.crash_address and context.registers:
@@ -961,7 +948,7 @@ class CrashAnalyser:
                         parts = line.split(" at ")[1].split()
                         if parts:
                             context.source_location = parts[0].strip()
-                            logger.info(f"✓ Source location extracted from backtrace: {parts[0].strip()}")
+                            logger.info("✓ Source location extracted from backtrace: %s", parts[0].strip())
                     break
                 # Alternative format without backticks
                 elif " in " in line:
@@ -1058,7 +1045,8 @@ class CrashAnalyser:
                 elif "quit" in line.lower():
                     break
 
-        context.stack_trace = "\n".join(backtrace_lines)
+        if not context.stack_trace:
+            context.stack_trace = "\n".join(backtrace_lines)
 
         # Extract crash instruction and address
         crash_instruction_found = False
@@ -1073,7 +1061,7 @@ class CrashAnalyser:
                     if is_valid_hex_address(addr_part):
                         context.crash_address = addr_part
                 crash_instruction_found = True
-                logger.debug(f"Found crash instruction: {context.crash_instruction}")
+                logger.debug("Found crash instruction: %s", context.crash_instruction)
 
         # If no crash instruction found with =>, try to find it from disassembly
         if not crash_instruction_found:
@@ -1087,10 +1075,10 @@ class CrashAnalyser:
                             addr_start = line.index("0x")
                             addr_end = addr_start + 18
                             addr_part = line[addr_start:addr_end].split()[0]
-                            if addr_part.startswith("0x"):
+                            if is_valid_hex_address(addr_part):
                                 context.crash_address = addr_part
                         crash_instruction_found = True
-                        logger.debug(f"Found crash instruction from disassembly: {context.crash_instruction}")
+                        logger.debug("Found crash instruction from disassembly: %s", context.crash_instruction)
                         break
 
         # If no crash instruction found, try to find PC/RIP register value
@@ -1193,7 +1181,7 @@ class CrashAnalyser:
                 return "No disassembly instructions found"
 
         except Exception as e:
-            logger.debug(f"Disassembly failed: {e}")
+            logger.debug("Disassembly failed: %s", e)
             return f"Disassembly unavailable: {e}"
 
     def _get_binary_info(self) -> Dict[str, str]:
@@ -1213,7 +1201,7 @@ class CrashAnalyser:
                     info["file_type"] = result.stdout.strip()
                     
             except Exception as e:
-                logger.debug(f"file command failed: {e}")
+                logger.debug("file command failed: %s", e)
         else:
             logger.debug("file tool not available - skipping binary type detection")
         
@@ -1230,7 +1218,7 @@ class CrashAnalyser:
                     info["elf_header"] = result.stdout.strip()
                     
             except Exception as e:
-                logger.debug(f"readelf failed: {e}")
+                logger.debug("readelf failed: %s", e)
         else:
             logger.debug("readelf tool not available - skipping ELF header analysis")
             
@@ -1299,10 +1287,13 @@ class CrashAnalyser:
                 text=True,
                 timeout=10,
             )
-            if "__stack_chk_fail" in result.stdout or "__chk_fail" in result.stdout:
-                info["stack_canaries"] = "enabled"
+            if result.returncode == 0:
+                if "__stack_chk_fail" in result.stdout or "__chk_fail" in result.stdout:
+                    info["stack_canaries"] = "enabled"
+                else:
+                    info["stack_canaries"] = "not_detected"
             else:
-                info["stack_canaries"] = "not_detected"
+                info["stack_canaries"] = "unknown"
         except (OSError, subprocess.SubprocessError):
             info["stack_canaries"] = "unknown"
             
@@ -1314,7 +1305,7 @@ class CrashAnalyser:
                 text=True,
                 timeout=5,
             )
-            if "NOUNDEFS" in result.stdout or "NO_HEAP_EXECUTION" in result.stdout:
+            if "NO_HEAP_EXECUTION" in result.stdout:
                 info["nx_enabled"] = "enabled"
             else:
                 info["nx_enabled"] = "not_detected"
@@ -1530,7 +1521,7 @@ class CrashAnalyser:
                 return True
                 
         except Exception as e:
-            logger.debug(f"ASan detection failed: {e}")
+            logger.debug("ASan detection failed: %s", e)
             
         return False
 
@@ -1605,7 +1596,7 @@ class CrashAnalyser:
             logger.warning("ASan analysis timed out")
             return "ASan analysis timed out"
         except Exception as e:
-            logger.debug(f"ASan analysis failed: {e}")
+            logger.debug("ASan analysis failed: %s", e)
             return f"ASan analysis failed: {e}"
 
     def _parse_asan_output(self, context: CrashContext, asan_output: str) -> None:

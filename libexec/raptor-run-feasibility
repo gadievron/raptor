@@ -16,7 +16,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -96,12 +96,13 @@ def main():
     # serialises stage transitions, so this script's lock is
     # the only contended writer.
     import fcntl
-    findings_lock_fh = open(findings_path, "rb")
+    lock_path = findings_path.with_suffix(".lock")
+    findings_lock_fh = open(lock_path, "a+b")
     try:
         try:
             fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
         except OSError as e:
-            print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock", file=sys.stderr)
+            print(f"WARNING: could not acquire flock on {lock_path}: {e} — proceeding without lock", file=sys.stderr)
 
         findings_data = load_json(findings_path)
         if findings_data is None:
@@ -142,12 +143,12 @@ def main():
         print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}", file=sys.stderr)
         print("  Mapping per-finding verdicts (vuln-type-aware)...", file=sys.stderr)
         mapped = map_findings_to_constraints(
-            [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
+            [{"id": f.get("id"), "vuln_type": f.get("vuln_type", "")} for f in group if f.get("id")],
             constraints,
         )
 
         # Update findings with feasibility data
-        by_id = {f["id"]: f for f in findings_data.get("findings", [])}
+        by_id = {f.get("id"): f for f in findings_data.get("findings", []) if f.get("id")}
         for assessment in mapped:
             finding = by_id.get(assessment.finding_id)
             if finding:

@@ -292,11 +292,13 @@ def run(cfg: RunConfig,
     session = None
     device = None
     pid: Optional[int] = None
+    spawned = False
 
     try:
         device = _resolve_device(frida_mod, cfg)
         result.device_id = getattr(device, "id", None) or str(device)
         session, pid = _attach_or_spawn(frida_mod, device, cfg)
+        spawned = bool(cfg.target.binary or cfg.spawn)
         result.resolved_pid = pid
 
         script = session.create_script(cfg.script_source)
@@ -305,7 +307,7 @@ def run(cfg: RunConfig,
 
         # If we spawned, the process is suspended pre-load. Resume it
         # AFTER load so hooks are in place before main() runs.
-        if cfg.target.binary or cfg.spawn:
+        if spawned:
             device.resume(pid)
 
         # Sleep loop with SIGINT trap so Ctrl-C in the operator's shell
@@ -340,6 +342,13 @@ def run(cfg: RunConfig,
                 session.detach()
         except Exception:
             pass
+        # Kill the spawned process so it does not remain permanently
+        # suspended when attach/create_script/load/resume failed.
+        if spawned and device is not None and pid is not None:
+            try:
+                device.kill(pid)
+            except Exception:
+                pass
         result.duration_actual_sec = round(time.monotonic() - started, 3)
         result.events_captured = event_count["n"]
         _write_metadata(cfg, result)

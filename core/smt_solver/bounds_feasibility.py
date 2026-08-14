@@ -37,7 +37,8 @@ def check_bounds_infeasible(
     Returns None when Z3 is unavailable, no conditions are found, or the
     solver times out.
     """
-    if not any(c in cwe for c in _OVERFLOW_CWES):
+    cwe_num = cwe.rsplit("-", 1)[-1] if "-" in cwe else cwe
+    if cwe_num not in _OVERFLOW_CWES:
         return None
 
     try:

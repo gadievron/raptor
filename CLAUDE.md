@@ -17,7 +17,7 @@ VERY IMPORTANT: follow these steps in order.
 
 ## EXECUTION RULES
 
-When a skill, command file, or user message specifies a literal command (`Execute: foo`, a fenced shell block as the action, or "run X"), execute it verbatim. Do not add pipes (`| tail`, `| head`, `| grep`), redirects (`2>&1`, `>/dev/null`), flags (`--verbose`, `-q`), wrappers (`timeout`, `nice`), or `cd` prefixes.
+When a skill, command file, or user message specifies a literal command (`Execute: foo`, a fenced shell block as the action, or "run X"), execute it verbatim. Do not add pipes (`| tail`, `| head`, `| grep`), redirects (`2>&1`, `>/dev/null`), flags (`--verbose`, `-q`), wrappers (`timeout`, `nice`), `cd` prefixes, or env-var prefixes (`VAR=x cmd`). Environment variables like `CLAUDECODE` are already set by the launcher; prepending them changes the command string and breaks permission grants.
 RAPTOR pipelines emit progress lines, real-time cost tracking, and the `OUTPUT_DIR=<path>` sentinel that downstream lifecycle steps parse. Truncating or filtering that stream breaks both operator visibility and orchestration.
 
 Exception: when the skill itself shows the modification (e.g. a documented `| tee logfile` pattern), follow what the skill prints.
@@ -30,29 +30,42 @@ When a `/command` fires:
 
 1. Read `.claude/commands/<name>.md` frontmatter.
 2. If `dispatch: <command-line>`: substitute placeholders (operator arguments verbatim; `$OUTPUT_DIR` from RUN LIFECYCLE; `$TARGET_PATH` from DEFAULT TARGET DIRECTORY), then run the substituted command. EXECUTION RULES apply — no pipes / flags / wrappers added.
-3. If `dispatch: skill`: this is a multi-step workflow. Follow the body of the .md; there is no single libexec to run.
+3. If `dispatch: skill`: this is a multi-step workflow. **Read the full body of the .md** — it contains the execution steps, mode detection, and the actual libexec commands to run. The body is the source of truth; do not guess CLI commands or libexec script names from training memory.
 4. Operator arguments pass through **verbatim**. If a subcommand isn't in the .md's documented surface, run it anyway and let the dispatch's own error surface. Do NOT silently rewrite to a similar subcommand.
 5. Never infer the dispatch from the description or from training-memory. The .md is authoritative; CI (`.github/scripts/check_command_metadata.py`) enforces every command has a parseable `dispatch:` field whose target exists on disk.
+6. When unsure which libexec script exists, check `ls libexec/raptor-<name>*` — do not guess names.
+7. When a skill body references another `/command` (e.g. `/understand --map` inside `/audit`), resolve it through the same dispatch lookup: read `.claude/commands/<name>.md` to find the actual CLI and its flag syntax. Do not invent flags — if unsure, run the dispatch target with `--help`.
 
 ---
 
 ## COMMANDS
 
-/project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export
-/scan /fuzz /web /agentic /codeql /analyze - Security testing
-/exploit /patch - Generate PoCs and fixes (beta)
-/validate - Exploitability validation pipeline (see below)
-/understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
-/diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
-/annotate - Per-function prose annotations (manual or LLM-emitted) attached to source files
+/project - Project management — `libexec/raptor-project-manager <subcommand> [args]`
+/scan /fuzz /web /codeql /analyze - Security testing — `python3 raptor.py <command>`
+/agentic - Scan → dedup → analysis pipeline — `libexec/raptor-agentic --repo <path>`
+/exploit /patch - Generate PoCs and fixes (beta) — `python3 raptor.py agentic`
+/validate - Exploitability validation pipeline — `dispatch: skill`, see below
+/understand - Code understanding — `dispatch: skill` (mode-routed: binary --map and multi-model --hunt/--trace go to `libexec/raptor-understand`; source-tree modes run in-session)
+/diagram - Mermaid visual maps — `libexec/raptor-render-diagrams <out-dir> [args]`
+/audit - Hypothesis-driven code audit — `dispatch: skill`, see below
+/review - Navigate audit results — `libexec/raptor-review $ARGUMENTS`
+/annotate - Per-function prose annotations (human-only) — `libexec/raptor-annotate <subcommand> [args]`
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
 **Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, and `--validate` to run the full validation pipeline on exploitable findings afterwards. Both flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
+/sage - SAGE persistent memory: status, recall, browse, store, manage
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
 /scorecard - Inspect per-model reliability across decision classes; ask natural-language questions about which model is good at what (see below)
+/ask - Send a prompt to any configured LLM model (see below)
 /create-skill - Save approaches (alpha)
+
+**Ask:** `libexec/raptor-llm-ask --model <name> "prompt"` sends a free-form prompt to any configured model and prints the response. Use for cross-model diagnosis, debugging model reasoning, or comparing verdicts. Supports `--system`, `--file` (prepend file as context), `--json-schema` (structured output), `--debug` (show cost and metadata). When the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, route through this tool. Example: `libexec/raptor-llm-ask --model gemini-2.5-pro --file context.txt "Why did you classify this function as suspicious?"`.
+
+**SAGE:** `libexec/raptor-sage` is the mechanical CLI for SAGE persistent memory (status, recall, list, remember, forget, domains, timeline, backlog, task, link, corroborate, get). When asked about SAGE memories, what SAGE knows, or to store/recall knowledge, route to this. If SAGE is not installed, run `libexec/raptor-sage-setup` to install the Docker sidecar and embedding model.
+
+**Verified outcomes:** When asked what RAPTOR has confirmed, proven, or verified, run `libexec/raptor-verified-outcomes <output_dir>` (or `--project-root <dir>` for cross-run view). Surfaces oracle-verified confirmations from `/fuzz`, `/agentic`, `/crash-analysis`, `/validate` in one place.
 
 ---
 
@@ -131,7 +144,7 @@ The coverage tracking plugin (`plugins/coverage/`) tracks which source files the
 
 When scanning untrusted repositories:
 
-- **Environment sanitisation**: `RaptorConfig.get_safe_env()` strips environment variables that tools may shell-evaluate (`TERMINAL`, `EDITOR`, `VISUAL`, `BROWSER`, `PAGER`). Always use `get_safe_env()` when spawning subprocesses.
+- **Environment sanitisation**: `RaptorConfig.get_safe_env()` uses a strict allowlist (`SAFE_ENV_ALLOWLIST`) — only ~30 explicitly named variables plus `LC_*` prefixes are kept; everything else is dropped. A secondary blocklist (`DANGEROUS_ENV_VARS`) covers `TERMINAL`, `EDITOR`, `VISUAL`, `BROWSER`, `PAGER` as belt-and-braces. Always use `get_safe_env()` when spawning subprocesses.
 - **File path injection**: Never interpolate file paths from scanned repos into shell command strings. Use list-based `subprocess` arguments.
 
 ---
@@ -221,6 +234,18 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 
 ---
 
+## SYSTEMATIC CODE REVIEW
+
+The `/audit` command runs a hypothesis-driven code audit with tool verification. The LLM forms hypotheses about assumption violations; deterministic tools (Semgrep, Coccinelle, CodeQL, SMT, Joern) validate. The LLM never directly classifies code as vulnerable — tool output is the verdict.
+
+**Usage:** `/audit <target> [--model <name>] [--max-cost <usd>] [--review-passes N] [--adversarial]`
+
+**Dispatch:** `dispatch: skill` — `.claude/commands/audit.md` contains execution steps including mode routing (`--model` → orchestrator, `--local` / default → in-session).
+
+See `docs/audit.md` for the full pipeline, gates, strategies, and tool menu. `/review` is the companion operator CLI for navigating results across all four layers (coverage, journal, context-map, annotations).
+
+---
+
 ## CODE UNDERSTANDING
 
 The `/understand` command provides deep, adversarial code comprehension for security research.
@@ -251,7 +276,7 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 The `/diagram` command generates Mermaid visual maps from `/understand` and `/validate` JSON outputs, giving researchers a visual representation of code flows, sources, sinks, trust boundaries, attack trees, and attack paths. Consider this 
 very much a WIP but it could be of use for those wanting to see relationships and flows better. 
 
-**Usage:** `/diagram <out-dir> [--target <name>] [--type context-map|flow-trace|attack-tree|attack-paths|all]`
+**Usage:** `/diagram <out-dir> [--target <name>]`
 
 **What gets rendered:**
 - `context-map.json` → flowchart LR: entry points → trust boundaries → sinks; unchecked flows as dashed edges
@@ -270,20 +295,13 @@ very much a WIP but it could be of use for those wanting to see relationships an
 
 ## ANNOTATIONS
 
-The `/annotate` command attaches free-form prose to individual functions, stored as markdown mirroring the source tree. Operators write manual review notes; LLM passes (`/agentic`, `/understand`) emit per-function annotations automatically.
+The `/annotate` command attaches free-form prose to individual functions, stored as markdown mirroring the source tree. Operators write manual review notes via `/annotate add`.
 
 **Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
 
 **Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
 
-**Source attribution:** Every annotation carries `metadata.source=human` or `metadata.source=llm`. LLM-driven writes pass `overwrite=respect-manual` so a manual operator note is never silently clobbered. Operators using `/annotate add` set `source=human` by default.
-
 **Staleness:** Annotations stamped with `--lines N-M` carry a `metadata.hash` short prefix of the function's source. `/annotate stale` re-computes and lists annotations whose source has drifted.
-
-**Where annotations come from:**
-- `/agentic` — emits one annotation per analysed finding under `<run_output_dir>/annotations/`. Status mapped from the LLM's `is_true_positive` × `is_exploitable`. Body is the LLM's `reasoning`.
-- `/understand --map` / `--trace` — post-processor synthesises annotations for entry points, sinks, trust boundaries, unchecked flows, and per-step trace records.
-- `/annotate add` — operator-driven manual entry.
 
 **Operator workflow:**
 ```
@@ -357,7 +375,7 @@ Default behaviour (no flags): /agentic and /codeql auto-detect debug binaries un
 - `symbol_present` / `inlined` / `folded` — the function survived compilation in some form
 - `absent` — the compiler / linker removed it from the analysed binary
 
-`absent` is corpus-earned for suppression: **1952/1952 verdicts correct across 6 iteratively-tuned corpora (consistency) + 187/187 on the held-out zstd v1.5.6 corpus with NO classifier tuning (generalization)** — rule-of-three 95% UB on miss rate ≤1.6% on first-contact-with-unseen-data. The held-out is non-vacuous: 473/1431 functions exercised by the workload, zero `absent` verdicts on actually-live functions. Conditional on full-DWARF evidence — a stripped binary in the analysed set downgrades to `tier="symbol_only"` and the chokepoint refuses to suppress.
+`absent` is corpus-earned for suppression: **1952/1952 absent verdicts correct across 6 iteratively-tuned corpora (consistency) + 187/187 absent verdicts correct on the held-out zstd v1.5.6 corpus with NO classifier tuning (generalization)** — rule-of-three 95% UB on miss rate ≤1.6% on first-contact-with-unseen-data. The held-out is non-vacuous: 473/1431 functions exercised by the workload, zero `absent` verdicts on actually-live functions. Conditional on full-DWARF evidence — a stripped binary in the analysed set downgrades to `tier="symbol_only"` and the chokepoint refuses to suppress.
 
 The verdict flows through the existing reachability chokepoint: /codeql + /agentic skip LLM analysis on absent-function findings (pre-LLM hard-suppress); /validate's demoter clamps attack-path proximity; /understand --map annotates entry-points and sinks with the per-binary verdict + tier.
 

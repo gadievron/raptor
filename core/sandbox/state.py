@@ -54,6 +54,9 @@ _ptrace_available_cache = None
 # under (allow default) baseline succeeds. Set by check_seatbelt_
 # available() in probes.py. Linux hosts always cache False.
 _seatbelt_available_cache = None
+# raptor-gidmap-allow helper: None = unchecked, False = not available,
+# str = resolved absolute path to the binary (with CAP_SETGID confirmed).
+_gidmap_allow_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
 # `_user_limits_cache_decided_at` carries the wall-clock when the
 # cache was last populated FROM THE FAILURE PATH (parse error,
@@ -118,6 +121,7 @@ _ptrace_unavailable_warned = False
 # transient load) and the gate proceeds leniently instead of failing loud.
 _engage_probe_indeterminate_warned = False
 _audit_warned_no_spawn = False
+_gidmap_allow_warned_missing = False
 # NOTE: B's mount-ns Landlock fallback logs at DEBUG (no warn-once
 # flag needed — workflow proceeds correctly at Landlock-only, same
 # posture as Ubuntu defaults). The speculative-C retry uses the

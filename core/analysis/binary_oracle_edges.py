@@ -559,7 +559,8 @@ def _parse_axffj_batch(
     ``{type, at, ref, name}``."""
     current_caller: Optional[str] = None
     buf: List[str] = []
-    for line in output.splitlines():
+    for raw_line in output.splitlines():
+        line = re.sub(r"\x1b\[[\d;]*m", "", raw_line)
         if line.startswith("BATCH "):
             _flush_axffj(buf, current_caller, addr_to_name, index)
             try:

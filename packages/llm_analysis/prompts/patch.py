@@ -189,7 +189,11 @@ def build_patch_prompt_bundle_from_finding(
     extra_blocks: tuple[UntrustedBlock, ...] = (),
 ) -> PromptBundle:
     """Bundle equivalent of ``build_patch_prompt_from_finding``."""
-    if finding.get("rule_id", "").startswith("sca:"):
+    if (
+        finding.get("source_type") == "dependency"
+        or finding.get("vuln_type", "").startswith("sca:")
+        or finding.get("rule_id", "").startswith("sca:")
+    ):
         return build_sca_patch_prompt_bundle(finding, profile=profile)
     return build_patch_prompt_bundle(
         rule_id=finding.get("rule_id", "unknown"),

@@ -1,8 +1,9 @@
 """Tests for core.config.RaptorConfig."""
 
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 # Pre-fix this file did:
 #
@@ -49,9 +50,9 @@ class TestEffectiveVersion:
 
     def test_uses_git_describe_and_strips_leading_v(self):
         """In a checkout, derive from describe (leading 'v' stripped)."""
+        import subprocess
         from pathlib import Path
         from types import SimpleNamespace
-        import subprocess
 
         repo = Path(__file__).resolve().parents[3]
         if not (repo / ".git").exists():
@@ -204,9 +205,9 @@ class TestGetOutDir:
         the path-component boundary specifically to allow
         ``/usr-local-foo`` while still catching ``/usr/x``.
         """
-        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": system_path}):
-            with pytest.raises(ValueError, match="resolves under system path"):
-                RaptorConfig.get_out_dir()
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": system_path}), \
+                pytest.raises(ValueError, match="resolves under system path"):
+            RaptorConfig.get_out_dir()
 
     def test_accepts_usr_local_lookalike(self):
         """`/usr-local-foo` must NOT match the `/usr` rule.
@@ -401,3 +402,44 @@ class TestGetLlmEnvIncludePythonUserBase:
             assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test-f102b"
 
 
+
+
+class TestGetLlmEnvPreservesProxy:
+    """``get_llm_env()`` must carry the operator's launch-time proxy
+    vars through to RAPTOR's own analysis children.
+
+    This env is exclusively for trusted RAPTOR scripts, and every
+    downstream proxy mechanism (sandbox egress upstream autodetect,
+    ``egress.operator_proxy_env()``, ``get_safe_env(preserve_proxy=
+    True)``) reads the *current process* env — so stripping proxy vars
+    at this seam starves all of them one level down and breaks every
+    outbound call on mandatory-egress-proxy hosts.
+    """
+
+    def test_proxy_vars_preserved(self):
+        injected = {
+            "HTTPS_PROXY": "http://proxy.corp:3128",
+            "https_proxy": "http://proxy.corp:3128",
+            "NO_PROXY": "169.254.169.254",
+        }
+        with patch.dict(os.environ, injected):
+            env = RaptorConfig.get_llm_env()
+            for var, val in injected.items():
+                assert env.get(var) == val
+
+    def test_no_proxy_vars_invented(self):
+        scrubbed = {
+            k: v for k, v in os.environ.items()
+            if k not in RaptorConfig.PROXY_ENV_VARS
+        }
+        with patch.dict(os.environ, scrubbed, clear=True):
+            env = RaptorConfig.get_llm_env()
+            for var in RaptorConfig.PROXY_ENV_VARS:
+                assert var not in env
+
+    def test_get_safe_env_default_still_strips(self):
+        """Regression guard: the untrusted-child default is unchanged —
+        only the LLM/trusted seam preserves proxy vars."""
+        with patch.dict(os.environ, {"HTTPS_PROXY": "http://proxy.corp:3128"}):
+            env = RaptorConfig.get_safe_env()
+            assert "HTTPS_PROXY" not in env

@@ -13,6 +13,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
+# proxy_hosts_for_cc_dispatch is provider-aware: on a host whose ambient
+# env selects Bedrock/Vertex/Foundry it returns that cloud's endpoints,
+# not the first-party defaults these tests assert. Pin the provider env
+# to first-party (empty string = unset for the truthiness checks) so the
+# tests are hermetic on any host.
+_FIRST_PARTY_PROVIDER_ENV = {
+    "CLAUDE_CODE_USE_BEDROCK": "",
+    "CLAUDE_CODE_USE_VERTEX": "",
+    "CLAUDE_CODE_USE_FOUNDRY": "",
+}
+
 from core.orchestration.agentic_passes import (
     _enrich_agentic_checklist,
     _select_findings_for_validate,
@@ -356,7 +367,8 @@ class UnderstandPrepassTests(unittest.TestCase):
             with patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=dispatcher), \
                  patch("core.orchestration.agentic_passes.run_untrusted_networked",
-                       side_effect=_sandbox_capture):
+                       side_effect=_sandbox_capture), \
+                 patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV):
                 run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -594,7 +606,8 @@ class ValidatePostpassTests(unittest.TestCase):
             with patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=dispatcher), \
                  patch("core.orchestration.agentic_passes.run_untrusted_networked",
-                       side_effect=_sandbox_capture):
+                       side_effect=_sandbox_capture), \
+                 patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV):
                 run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
                     claude_bin="/fake/claude",

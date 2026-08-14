@@ -14,7 +14,6 @@ from .record import (
     write_record,
     load_record,
     load_records,
-    cleanup_manifest,
     COVERAGE_RECORD_FILE,
     READS_MANIFEST,
 )
@@ -76,7 +75,6 @@ __all__ = [
     "write_record",
     "load_record",
     "load_records",
-    "cleanup_manifest",
     "COVERAGE_RECORD_FILE",
     "READS_MANIFEST",
     "CoverageStore",

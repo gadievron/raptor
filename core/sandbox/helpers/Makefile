@@ -39,37 +39,24 @@ LDFLAGS ?=
 COORD_BIN    := raptor-coord-launcher
 COORD_SRC    := raptor-coord-launcher.c
 
-all: $(COORD_BIN)
+GIDMAP_BIN   := raptor-gidmap-allow
+GIDMAP_SRC   := raptor-gidmap-allow.c
+
+all: $(COORD_BIN) $(GIDMAP_BIN)
 
 $(COORD_BIN): $(COORD_SRC)
+	$(CC) $(CFLAGS) $(SAFETY_CFLAGS) $(LDFLAGS) $(SAFETY_LDFLAGS) -o $@ $<
+
+$(GIDMAP_BIN): $(GIDMAP_SRC)
 	$(CC) $(CFLAGS) $(SAFETY_CFLAGS) $(LDFLAGS) $(SAFETY_LDFLAGS) -o $@ $<
 	@echo
 	@echo "  Built: $$(realpath $@)"
 	@echo
-	@echo "  This is the COORDINATOR LAUNCHER. The Python side resolves"
-	@echo "  it against this checkout's path; leave it here."
+	@echo "  Grant CAP_SETGID so it can write gid_map without denying setgroups:"
+	@echo "      sudo setcap cap_setgid=ep $$(realpath $@)"
 	@echo
-	@echo "  Pick the grant for your distro:"
-	@echo
-	@echo "  Ubuntu 24.04+ (sysctl=1 default, AppArmor confinement):"
-	@echo "      sudo cp raptor-coord-launcher.apparmor \\"
-	@echo "             /etc/apparmor.d/raptor-coord-launcher"
-	@echo "      sudo apparmor_parser -r /etc/apparmor.d/raptor-coord-launcher"
-	@echo
-	@echo "  RHEL with hardened SELinux:"
-	@echo "      # Customise raptor-coord-launcher.selinux.te first."
-	@echo "      make -f /usr/share/selinux/devel/Makefile raptor-coord-launcher.pp"
-	@echo "      sudo semodule -i raptor-coord-launcher.pp"
-	@echo "      sudo chcon -t raptor_coord_launcher_exec_t $$(realpath $@)"
-	@echo
-	@echo "  Debian / older Ubuntu (unprivileged_userns_clone=0):"
-	@echo "      sudo setcap cap_net_admin,cap_sys_admin+ep $$(realpath $@)"
-	@echo
-	@echo "  Easiest (if your admin agrees to relax system hardening):"
-	@echo "      echo 'kernel.apparmor_restrict_unprivileged_userns=0' \\"
-	@echo "          | sudo tee /etc/sysctl.d/99-raptor.conf"
-	@echo "      sudo sysctl --system"
-	@echo "      (no per-binary grant needed; coord.py uses direct unshare)"
+	@echo "  core/sandbox/_spawn.py auto-detects this binary and uses it"
+	@echo "  instead of newgidmap when CAP_SETGID is present."
 	@echo
 
 # Informational target. We never auto-grant anything.
@@ -132,4 +119,4 @@ check:
 	fi
 
 clean:
-	rm -f $(COORD_BIN)
+	rm -f $(COORD_BIN) $(GIDMAP_BIN)

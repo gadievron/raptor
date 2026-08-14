@@ -25,7 +25,6 @@ except IndexError:                                      # pragma: no cover
 from core.llm import egress
 from core.llm.config import LLMConfig, ModelConfig
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -57,7 +56,7 @@ def stub_proxy(monkeypatch):
 
 
 def _model(provider: str = "anthropic", model_name: str = "x",
-           api_base: str = None) -> ModelConfig:
+           api_base: str | None = None) -> ModelConfig:
     return ModelConfig(
         provider=provider,
         model_name=model_name,
@@ -333,3 +332,102 @@ class TestSubprocessStripStillWorks:
         env = RaptorConfig.get_safe_env()
         assert "HTTPS_PROXY" not in env
         assert "https_proxy" not in env
+
+
+# ---------------------------------------------------------------------------
+# Loopback helpers + Ollama-only NO_PROXY hygiene
+# ---------------------------------------------------------------------------
+
+
+class TestUrlIsLoopback:
+    def test_loopback_forms(self):
+        assert egress.url_is_loopback("http://localhost:11434/v1")
+        assert egress.url_is_loopback("http://127.0.0.1:11434")
+        assert egress.url_is_loopback("http://127.1.2.3:8080/x")
+        assert egress.url_is_loopback("http://0.0.0.0:11434")
+        assert egress.url_is_loopback("http://[::1]:11434")
+
+    def test_remote_forms(self):
+        assert not egress.url_is_loopback("https://api.anthropic.com")
+        assert not egress.url_is_loopback("http://ollama.internal.corp:11434")
+        assert not egress.url_is_loopback("not a url")
+
+
+class TestLoopbackSafeGet:
+    def test_loopback_bypasses_proxy_env(self, monkeypatch):
+        captured = {}
+
+        class _FakeSession:
+            def __init__(self):
+                self.trust_env = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, timeout=None):
+                captured["trust_env"] = self.trust_env
+                captured["url"] = url
+                return "session-response"
+
+        import requests
+        monkeypatch.setattr(requests, "Session", _FakeSession)
+        out = egress.loopback_safe_get("http://localhost:11434/api/tags",
+                                       timeout=2)
+        assert out == "session-response"
+        assert captured["trust_env"] is False
+
+    def test_remote_keeps_proxy_env(self, monkeypatch):
+        captured = {}
+
+        import requests
+        def _fake_get(url, timeout=None):
+            captured["url"] = url
+            return "get-response"
+
+        monkeypatch.setattr(requests, "get", _fake_get)
+        out = egress.loopback_safe_get("https://ollama.corp/api/tags",
+                                       timeout=2)
+        assert out == "get-response"
+        assert captured["url"] == "https://ollama.corp/api/tags"
+
+
+class TestOllamaOnlyProxiedHost:
+    def test_no_proxy_augmented_without_chokepoint(self, stub_proxy,
+                                                   monkeypatch):
+        """Ollama-only config on a mandatory-proxy host: NO_PROXY must
+        gain the loopback entries (or the SDK routes localhost through
+        the corporate proxy), while HTTPS_PROXY stays untouched and no
+        chokepoint proxy is brought up."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+        monkeypatch.setenv("NO_PROXY", "169.254.169.254")
+        cfg = _config(primary=_model(
+            provider="ollama",
+            model_name="llama3",
+            api_base="http://localhost:11434/v1",
+        ))
+        egress.enable_llm_egress(cfg)
+        no_proxy = os.environ["NO_PROXY"]
+        assert "169.254.169.254" in no_proxy   # operator entry kept
+        assert "localhost" in no_proxy
+        assert "127.0.0.1" in no_proxy
+        assert os.environ["HTTPS_PROXY"] == "http://proxy.corp:3128"
+        assert stub_proxy == []                 # no chokepoint
+
+    def test_no_mutation_without_operator_proxy(self, stub_proxy,
+                                                monkeypatch):
+        """Unproxied host: the Ollama-only path stays mutation-free."""
+        for v in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY",
+                  "http_proxy", "NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(v, raising=False)
+        cfg = _config(primary=_model(
+            provider="ollama",
+            model_name="llama3",
+            api_base="http://localhost:11434/v1",
+        ))
+        egress.enable_llm_egress(cfg)
+        assert "NO_PROXY" not in os.environ
+        assert "HTTPS_PROXY" not in os.environ
+        assert stub_proxy == []

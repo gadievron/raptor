@@ -130,10 +130,12 @@ def test_output_is_sorted(tmp_path):
 
 
 def test_compose_proxy_hosts_no_dockerfiles_matches_static_set(tmp_path):
-    """Empty target → result equals SCA_ALLOWED_HOSTS; preserves
-    the existing test_passes_proxy_hosts contract."""
+    """Empty target → result is a superset of SCA_ALLOWED_HOSTS.
+    The proxy is a process-wide singleton with UNION semantics, so
+    other subsystems (LLM backends) may have added their own hosts
+    before this test runs."""
     hosts = _compose_proxy_hosts(tmp_path)
-    assert set(hosts) == set(SCA_ALLOWED_HOSTS)
+    assert set(SCA_ALLOWED_HOSTS) <= set(hosts)
 
 
 def test_compose_proxy_hosts_with_dockerfile_unions(tmp_path):

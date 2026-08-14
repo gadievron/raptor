@@ -47,7 +47,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class ProjectSample:
 # Ten entries is enough to validate the collection loop; the list
 # expands incrementally per follow-up PRs that add new CVE-bearing
 # projects.
-PROJECT_SAMPLES: List[ProjectSample] = [
+PROJECT_SAMPLES: list[ProjectSample] = [
     ProjectSample(
         name="requests", ecosystem="PyPI",
         repo_url="https://github.com/psf/requests.git",
@@ -575,23 +575,23 @@ class CollectResult:
     project: str
     ecosystem: str
     written: bool
-    error: Optional[str]
+    error: str | None
     finding_count: int
 
 
 def collect_project_samples(
     *,
     out_dir: Path,
-    samples: Optional[List[ProjectSample]] = None,
-    http: Optional[Any] = None,
-    cache: Optional[Any] = None,
+    samples: list[ProjectSample] | None = None,
+    http: Any | None = None,
+    cache: Any | None = None,
     git_clone_timeout: int = 120,
     sca_timeout: int = 300,
-    only_licenses: Optional[List[str]] = None,
+    only_licenses: list[str] | None = None,
     jobs: int = 1,
     prewarm: bool = True,
     _mp_start_method: str = "spawn",
-) -> List[CollectResult]:
+) -> list[CollectResult]:
     """Clone each sample, run SCA, write findings.
 
     ``only_licenses`` filters the sample list — when set, only
@@ -626,7 +626,7 @@ def collect_project_samples(
             mp_start_method=_mp_start_method, prewarm=prewarm,
         )
 
-    results: List[CollectResult] = []
+    results: list[CollectResult] = []
     for sample in samples:
         try:
             result = _collect_one(
@@ -634,7 +634,7 @@ def collect_project_samples(
                 git_clone_timeout=git_clone_timeout,
                 sca_timeout=sca_timeout,
             )
-        except Exception as e:                              # noqa: BLE001
+        except Exception as e:
             logger.warning(
                 "sca.calibration.project_samples: %s/%s failed: %s",
                 sample.ecosystem, sample.name, e, exc_info=True,
@@ -673,7 +673,7 @@ def _prewarm_global_feeds() -> None:
 
 
 def _collect_parallel(
-    samples: List[ProjectSample],
+    samples: list[ProjectSample],
     out_dir: Path,
     *,
     jobs: int,
@@ -681,7 +681,7 @@ def _collect_parallel(
     sca_timeout: int,
     mp_start_method: str,
     prewarm: bool = True,
-) -> List[CollectResult]:
+) -> list[CollectResult]:
     """Run the per-project collect across a process pool.
 
     Each project is independent (its own temp clone + own output file), so
@@ -700,7 +700,7 @@ def _collect_parallel(
     if prewarm:
         _prewarm_global_feeds()
     ctx = mp.get_context(mp_start_method)
-    results: List[Optional[CollectResult]] = [None] * len(samples)
+    results: list[CollectResult | None] = [None] * len(samples)
     with ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as pool:
         fut_to_idx = {
             pool.submit(
@@ -735,8 +735,8 @@ def _collect_parallel(
 
 
 def _collect_one_captured(
-    args: "tuple[ProjectSample, Path, int, int]",
-) -> "tuple[CollectResult, str]":
+    args: tuple[ProjectSample, Path, int, int],
+) -> tuple[CollectResult, str]:
     """Process-pool worker: run ``_collect_one`` with all output (prints,
     logging, the rich ``sca >`` progress, and subprocess stdio) redirected at
     the file-descriptor level into a temp file, so the parent can flush it as
@@ -774,8 +774,8 @@ def _collect_one(
     sample: ProjectSample,
     out_dir: Path,
     *,
-    http: Optional[Any],
-    cache: Optional[Any],
+    http: Any | None,
+    cache: Any | None,
     git_clone_timeout: int,
     sca_timeout: int,
 ) -> CollectResult:
@@ -792,7 +792,9 @@ def _collect_one(
         from core.config import RaptorConfig
         from core.git.clone import safe_git_command
         from core.sandbox.preexec import set_pdeathsig
-        _env = RaptorConfig.get_safe_env()
+        # preserve_proxy: clone/fetch dial the remote — git honours
+        # proxy env; no direct route on mandatory-proxy hosts.
+        _env = RaptorConfig.get_safe_env(preserve_proxy=True)
         _pre = set_pdeathsig()
         try:
             if _is_sha:
@@ -858,7 +860,7 @@ def _collect_one(
         # files themselves get discarded along with the clone.
         sca_out = Path(tmp) / "sca-out"
         try:
-            from packages.sca.pipeline import run_sca, RunOptions
+            from packages.sca.pipeline import RunOptions, run_sca
             run_sca(
                 target=clone_root, output_dir=sca_out,
                 options=RunOptions(
@@ -918,9 +920,9 @@ def _collect_one(
 
 
 def _sanitise_findings(
-    findings: List[Dict[str, Any]],
+    findings: list[dict[str, Any]],
     clone_root: Path,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Strip file paths + transient details that don't help
     validation, keep score + dep + advisory metadata.
 
@@ -929,7 +931,7 @@ def _sanitise_findings(
     paths would also leak the file structure of the project we
     just discarded.
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for f in findings:
         if not isinstance(f, dict):
             continue

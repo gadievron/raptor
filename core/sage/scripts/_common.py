@@ -51,5 +51,5 @@ async def async_memory_exists(
         )
         return bool(response.memories)
     except Exception as e:
-        logger.debug(f"SAGE tag existence check failed ({domain_tag}/{tag}): {e}")
+        logger.debug("SAGE tag existence check failed (%s/%s): %s", domain_tag, tag, e)
         return False

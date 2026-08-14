@@ -154,7 +154,6 @@ _PUBLISH_ACTION_PATTERNS: Tuple[re.Pattern, ...] = (
     re.compile(_quoted_pair("cargo", "publish")),
     re.compile(r"\btwine\s+upload\b"),
     re.compile(_quoted_pair("twine", "upload")),
-    re.compile(r"\bpython\s+-m\s+build\b"),
     re.compile(r"\bgem\s+push\b"),
     re.compile(_quoted_pair("gem", "push")),
     re.compile(r"\bcomposer\s+(?:upload|publish)\b"),

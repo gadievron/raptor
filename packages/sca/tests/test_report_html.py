@@ -164,6 +164,19 @@ def test_html_escapes_advisory_summary_html_tags() -> None:
     assert "&lt;script&gt;alert" in html
 
 
+def test_epss_below_display_floor_suppressed() -> None:
+    d = _dep()
+    findings = build_vuln_findings(
+        [d], [OsvResult(d.key(), [_adv()])],
+    )
+    findings[0].epss = 0.005
+    html = render_html_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=findings, hygiene_findings=[],
+    )
+    assert "EPSS" not in html
+
+
 def test_html_escapes_dep_name_html_tags() -> None:
     """Dep names that contain HTML metacharacters (e.g. an attacker
     publishes ``<img>`` as a package name) must be escaped."""

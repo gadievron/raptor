@@ -667,7 +667,7 @@ def _run_graph(args: argparse.Namespace) -> int:
         cmd.extend(["--tier", args.tier])
     if args.json:
         cmd.append("--json")
-    return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
+    return subprocess.run(cmd, env=RaptorConfig.get_safe_env(), timeout=60).returncode
 
 
 def _print_file(run_dir: str, filename: str, *, json_output: bool = False) -> int:
@@ -706,7 +706,7 @@ def _run_diagram(args: argparse.Namespace) -> int:
         cmd.append("--stdout")
     if args.force:
         cmd.append("--force")
-    return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
+    return subprocess.run(cmd, env=RaptorConfig.get_safe_env(), timeout=120).returncode
 
 
 def main(argv: Sequence[str] | None = None) -> int:

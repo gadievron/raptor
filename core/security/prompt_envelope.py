@@ -263,7 +263,9 @@ def wrap_tool_result(content: str, tool_name: str) -> str:
     """
     nonce = _generate_nonce()
     safe_origin = _xml_attr_escape(tool_name)
-    safe_content = neutralize_tag_forgery(content)
+    safe_content = _strip_autofetch_markup(content)
+    safe_content = _escape_for_envelope(safe_content)
+    safe_content = neutralize_tag_forgery(safe_content)
     return (
         f'<untrusted-{nonce} kind="tool-result" origin="{safe_origin}">\n'
         f'{safe_content}\n'
@@ -379,19 +381,21 @@ def neutralize_tag_forgery(content: str) -> str:
     """
     def _escape_match(m: re.Match) -> str:
         s = m.group(0)
-        # XML-style: leading `<` → `&lt;`. Leaves the rest of the tag
-        # intact so the model still recognises "this looked like a
-        # tag" but it cannot match an envelope close.
+        # XML-style: insert ZWSP after `<` so the model no longer
+        # pattern-matches the tag against an envelope boundary.
+        # Prior approach used entity escaping (&lt;) which caused
+        # double-encoding when a downstream consumer also XML-escaped
+        # the result (e.g. _render_slot's _xml_content_escape pass).
         if s.startswith('<'):
-            return '&lt;' + s[1:]
-        # Bracket-style: leading `[` → `&#91;`, and the trailing `]`
-        # if present → `&#93;`. Without escaping the trailing bracket
-        # the model still pattern-matches `MARK_INPT]` against an
-        # envelope close at the line-end boundary.
+            return '<​' + s[1:]
+        # Bracket-style: insert ZWSP after `[` and before `]` so the
+        # model no longer pattern-matches against envelope boundaries.
+        # Same rationale as the XML-style fix above — entity escaping
+        # (&#91;/&#93;) caused double-encoding downstream.
         if s.startswith('['):
             inner = s[1:-1] if s.endswith(']') else s[1:]
-            tail = '&#93;' if s.endswith(']') else ''
-            return '&#91;' + inner + tail
+            tail = '​]' if s.endswith(']') else ''
+            return '[​' + inner + tail
         # Line-marker style (BEGIN_X / END_X): break the keyword by
         # inserting a zero-width space after the `_` so the visual
         # match against `BEGIN_<MARKER>` no longer fires. ZWSP is
@@ -540,12 +544,14 @@ def _render_passthrough(block: UntrustedBlock, nonce: str, profile: ModelDefense
     # _safe_label neutralizes --- in kind/origin but _content_for_envelope
     # does not neutralize --- in the content body. A standalone ---
     # line in attacker content would visually close the passthrough
-    # boundary, letting subsequent content escape the envelope.
+    # boundary, and a line matching the opening format
+    # (--- word (from word) ---) could forge a trust-level change.
+    # Neutralise both: any line that starts with 3+ dashes, whether
+    # bare (closing) or with trailing text (opening-format).  Only
+    # the leading dash run is replaced; trailing text stays verbatim.
     rendered = re.sub(
-        r'(?m)^([ \t]*)-{3,}([ \t]*)$',
-        lambda m: m.group(1) + '-‐-'
-        + '-' * max(0, len(m.group(0).strip()) - 3)
-        + m.group(2),
+        r'(?m)^([ \t]*)(---(-*))',
+        lambda m: m.group(1) + '-‐-' + '-' * len(m.group(3)),
         rendered,
     )
     return f'--- {kind}{origin} ---\n{rendered}\n---'
@@ -566,7 +572,7 @@ def _render_slot(name: str, value: TaintedString, profile: ModelDefenseProfile) 
     if value.trust == 'trusted':
         rendered = _xml_content_escape(_escape_for_envelope(value.value))
     else:
-        rendered = _xml_content_escape(_content_for_envelope(value.value, profile))
+        rendered = _content_for_envelope(_xml_content_escape(value.value), profile)
     return f'<slot name="{safe_name}" trust="{value.trust}">{rendered}</slot>'
 
 

@@ -615,6 +615,8 @@ def _fetch_crates_license(
         data = http.get_json(url)
     except Exception:                                   # noqa: BLE001
         return None
+    if not isinstance(data, dict):
+        return None
     crate = (data or {}).get("crate") or {}
     spdx = crate.get("license") if isinstance(crate, dict) else None
     if isinstance(spdx, str) and spdx.strip():

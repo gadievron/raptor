@@ -171,6 +171,41 @@ def test_all_error_panel_falls_back():
     assert verdicts["F1"].aggregation_fallback_reason == "no_panel"
 
 
+def test_non_converged_ds_falls_through_to_vote(monkeypatch):
+    """When D-S does not converge, the finding should fall through to the
+    vote fallback rather than being labeled 'dawid_skene' with unconverged
+    posterior data."""
+    from core.llm.multi_model import calibrated_aggregation as ca
+    from core.llm.multi_model.dawid_skene import (
+        DawidSkeneResult, FindingPosterior,
+    )
+    from core.llm.scorecard.priors import uniform_prior
+
+    fake_result = DawidSkeneResult(
+        decision_class="agentic:rule-a",
+        findings=[FindingPosterior(
+            finding_id="F1", decision_class="agentic:rule-a",
+            posterior=0.99, posterior_log_odds=4.6,
+            credible_interval=(0.8, 1.0), n_models=3,
+        )],
+        model_reliabilities=[],
+        iterations=100,
+        converged=False,
+        class_prior=uniform_prior(),
+        fixed_class_rate=0.5,
+    )
+    monkeypatch.setattr(ca, "estimate_partitioned", lambda *a, **kw: [fake_result])
+
+    results = {
+        "F1": _make_finding("F1", "rule-a", is_exploitable=True, analyses=[
+            _entry("m1", True), _entry("m2", True), _entry("m3", False),
+        ]),
+    }
+    verdicts = calibrate_results(results)
+    assert verdicts["F1"].aggregation_method == METHOD_VOTE
+    assert verdicts["F1"].aggregation_fallback_reason == "ds_did_not_converge"
+
+
 # ---------------------------------------------------------------------------
 # Per-class partition
 # ---------------------------------------------------------------------------

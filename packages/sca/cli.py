@@ -138,8 +138,8 @@ def _dispatch_fix(argv: List[str]) -> int:
     has_harden = "--harden" in argv
     has_findings = "--findings" in argv
 
-    if has_cve_only and has_harden:
-        print("raptor-sca fix: --cve-only and --harden are mutually exclusive",
+    if (has_cve_only or has_findings) and has_harden:
+        print("raptor-sca fix: --cve-only/--findings and --harden are mutually exclusive",
               file=sys.stderr)
         return 2
 

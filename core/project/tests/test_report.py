@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 from core.project.project import Project
 from core.project.report import (
+    _finding_fingerprint,
     generate_project_report,
     render_grouped_findings_markdown,
 )
@@ -260,6 +261,27 @@ class TestRenderGroupedFindingsMarkdownSca(unittest.TestCase):
         md = render_grouped_findings_markdown(
             [], "proj", sca_findings=[_sca_row("react-helper")])
         self.assertNotIn("escalated:", md)
+
+
+    def test_finding_fingerprint_line_start_fallback(self):
+        """Findings with line_start instead of line must produce the same
+        fingerprint as those with line set to the same value."""
+        base = {"id": "F-1", "file": "a.c", "function": "f", "type": "cwe-120"}
+        with_line = {**base, "line": 42}
+        with_line_start = {**base, "line_start": 42}
+        self.assertEqual(
+            _finding_fingerprint(with_line),
+            _finding_fingerprint(with_line_start),
+        )
+
+    def test_finding_fingerprint_prefers_line_over_line_start(self):
+        base = {"id": "F-1", "file": "a.c", "function": "f", "type": "cwe-120"}
+        both = {**base, "line": 42, "line_start": 99}
+        line_only = {**base, "line": 42}
+        self.assertEqual(
+            _finding_fingerprint(both),
+            _finding_fingerprint(line_only),
+        )
 
 
 if __name__ == "__main__":

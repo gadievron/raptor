@@ -214,5 +214,97 @@ class TestSarifHelpers(unittest.TestCase):
         self.assertIn("valid", rules)
 
 
+class TestFindingsByTool(unittest.TestCase):
+    """generate_scan_metrics populates findings_by_tool from SARIF driver names."""
+
+    def test_findings_by_tool_from_sarif_driver_names(self):
+        from core.sarif.parser import generate_scan_metrics
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sem = Path(tmpdir) / "sem.sarif"
+            sem.write_text(json.dumps({"runs": [{
+                "tool": {"driver": {"name": "Semgrep OSS"}},
+                "results": [{"ruleId": "r1"}, {"ruleId": "r2"}],
+            }]}))
+            cocci = Path(tmpdir) / "cocci.sarif"
+            cocci.write_text(json.dumps({"runs": [{
+                "tool": {"driver": {"name": "coccinelle"}},
+                "results": [{"ruleId": "r3"}],
+            }]}))
+            cql = Path(tmpdir) / "cql.sarif"
+            cql.write_text(json.dumps({"runs": [{
+                "tool": {"driver": {"name": "CodeQL"}},
+                "results": [{"ruleId": "cpp/r4"}, {"ruleId": "cpp/r5"}, {"ruleId": "cpp/r6"}],
+            }]}))
+            metrics = generate_scan_metrics([str(sem), str(cocci), str(cql)])
+
+        by_tool = metrics["findings_by_tool"]
+        self.assertEqual(by_tool["semgrep"], 2)
+        self.assertEqual(by_tool["coccinelle"], 1)
+        self.assertEqual(by_tool["codeql"], 3)
+
+    def test_normalise_tool_name(self):
+        from core.sarif.parser import _normalise_tool_name
+
+        self.assertEqual(_normalise_tool_name("Semgrep OSS"), "semgrep")
+        self.assertEqual(_normalise_tool_name("CodeQL"), "codeql")
+        self.assertEqual(_normalise_tool_name("coccinelle"), "coccinelle")
+        self.assertEqual(_normalise_tool_name("CustomTool"), "customtool")
+
+
+class TestNullPhysicalLocation(unittest.TestCase):
+    """SARIF allows explicit null values for location fields."""
+
+    def test_null_physical_location_does_not_crash(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        sarif = {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "test", "rules": []}},
+                "results": [{
+                    "ruleId": "test-rule",
+                    "message": {"text": "finding"},
+                    "locations": [{
+                        "physicalLocation": None,
+                    }],
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "null-loc.sarif"
+            path.write_text(json.dumps(sarif))
+            findings = parse_sarif_findings(path)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["rule_id"], "test-rule")
+        self.assertIsNone(findings[0]["file"])
+
+    def test_null_artifact_location_does_not_crash(self):
+        from core.sarif.parser import parse_sarif_findings
+
+        sarif = {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "test", "rules": []}},
+                "results": [{
+                    "ruleId": "test-rule",
+                    "message": {"text": "finding"},
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": None,
+                            "region": None,
+                        },
+                    }],
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "null-artifact.sarif"
+            path.write_text(json.dumps(sarif))
+            findings = parse_sarif_findings(path)
+        self.assertEqual(len(findings), 1)
+        self.assertIsNone(findings[0]["file"])
+
+
 if __name__ == "__main__":
     unittest.main()

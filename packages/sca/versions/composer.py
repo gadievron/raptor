@@ -16,8 +16,11 @@ Reference: https://getcomposer.org/doc/articles/versions.md
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import List, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 _STABILITY_RANK = {
@@ -74,13 +77,14 @@ def _split(version: str) -> Tuple[List[int], int, int]:
     s = version.strip()
     m = _STAB_RE.match(s)
     if not m:
-        return [0], _STABILITY_RANK["stable"], 0
+        raise ValueError(f"unparseable Composer version: {version!r}")
     base = m.group("base").lstrip("v")
     nums: List[int] = []
     for piece in base.split("."):
         try:
             nums.append(int(piece))
         except ValueError:
+            logger.debug("composer: non-numeric segment %r in %r, treating as 0", piece, version)
             nums.append(0)
     stab_word = (m.group("stab") or "").lower()
     rank = _STABILITY_RANK.get(stab_word, _STABILITY_RANK["stable"])

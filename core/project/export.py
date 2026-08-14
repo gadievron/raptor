@@ -240,10 +240,10 @@ def export_project(project_output_dir: Path, dest_path: Path,
             for fname in filenames:
                 item = Path(dirpath, fname)
                 if item.is_symlink():
-                    logger.debug(f"Skipping symlink in export: {item}")
+                    logger.debug("Skipping symlink in export: %s", item)
                     continue
                 if _is_transient_artefact(item):
-                    logger.debug(f"Skipping transient artefact: {item}")
+                    logger.debug("Skipping transient artefact: %s", item)
                     continue
                 arcname = f"{project_output_dir.name}/{item.relative_to(project_output_dir)}"
                 zf.write(item, arcname)
@@ -252,7 +252,7 @@ def export_project(project_output_dir: Path, dest_path: Path,
             zf.write(project_json_path, f"{project_output_dir.name}/.project.json")
 
     sha256 = sha256_file(dest_path)
-    logger.info(f"Exported project to {dest_path} (sha256: {sha256})")
+    logger.info("Exported project to %s (sha256: %s)", dest_path, sha256)
     return {"path": str(dest_path), "sha256": sha256}
 
 
@@ -353,6 +353,8 @@ def import_project(zip_path: Path, projects_dir: Path,
                 project_name = first_part
             try:
                 embedded_meta = json.loads(zf.read(meta_path))
+                if not isinstance(embedded_meta, dict):
+                    raise ValueError("Corrupt .project.json in archive")
                 if embedded_meta.get("name"):
                     project_name = embedded_meta["name"]
             except (json.JSONDecodeError, KeyError):
@@ -379,12 +381,11 @@ def import_project(zip_path: Path, projects_dir: Path,
             orphaned_output = None
             if existing and force:
                 old_output_path = Path(existing.output_dir).resolve()
-                if output_dir.exists():
-                    shutil.rmtree(output_dir)
+                shutil.rmtree(output_dir, ignore_errors=True)
                 mgr.delete(project_name, purge=False)
                 if old_output_path != output_dir.resolve() and old_output_path.exists():
                     orphaned_output = str(old_output_path)
-                logger.info(f"Removed existing project '{project_name}' (force=True)")
+                logger.info("Removed existing project '%s' (force=True)", project_name)
 
             # --- Extract output data ---
             #
@@ -475,8 +476,7 @@ def import_project(zip_path: Path, projects_dir: Path,
                         )
             except Exception:
                 # Clean up partial extraction
-                if output_dir.exists():
-                    shutil.rmtree(output_dir)
+                shutil.rmtree(output_dir, ignore_errors=True)
                 raise
 
     except zipfile.BadZipFile:
@@ -494,7 +494,7 @@ def import_project(zip_path: Path, projects_dir: Path,
     if notes:
         mgr.update_notes(project_name, notes)
 
-    logger.info(f"Imported project '{project_name}' to {output_dir}")
+    logger.info("Imported project '%s' to %s", project_name, output_dir)
     result = {"name": project_name, "output_dir": str(output_dir)}
     if orphaned_output:
         result["orphaned_output"] = orphaned_output

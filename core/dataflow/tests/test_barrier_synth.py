@@ -454,7 +454,6 @@ def test_refine_loop_returns_sound_on_successful_refinement(tmp_path: Path):
     state = {"after_returned": False}
 
     def stub(cmd, **_):
-        from core.dataflow.barrier_synth import CodeQLRunError      # noqa: F401
         # The runner returns 0 (success) when an `--output` arg matches one of
         # our DBs.  We construct SARIF with the count we want for the current
         # cycle by writing a file at the SARIF path.

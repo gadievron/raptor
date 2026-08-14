@@ -1,6 +1,6 @@
 ---
 description: Map attack surface, trace data flows, hunt vulnerability variants
-dispatch: libexec/raptor-understand [args]
+dispatch: skill
 ---
 
 # /understand - RAPTOR Code Understanding
@@ -9,11 +9,21 @@ You cannot find bugs if you don't have a deep, adversarial code understanding an
 
 It is a work in progress, remember that. 
 
+## Dispatch routing
+
+This command is mode-routed — there is no single CLI to call blindly:
+
+| Case | Route |
+|------|-------|
+| `<target>` is a compiled artefact (ELF/Mach-O/PE/JAR/APK/...) with `--map` | `libexec/raptor-understand --map --target <t> --out "$OUTPUT_DIR"` (mechanical, no LLM) |
+| `--model` passed with `--hunt` or `--trace` | `libexec/raptor-understand` (multi-model substrate) |
+| Everything else — source-tree `--map`, `--trace`, `--hunt`, `--teach`, `--study` | **In-session workflow below** (you are the LLM); `libexec/raptor-understand` rejects source-tree `--map` by design |
+
 ## Usage
 
 ```
 /understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>]
-                     [--out <dir>] [--model <name> ...]
+                     [--study <scope>] [--out <dir>] [--model <name> ...]
 ```
 
 If no mode flag is given, default to `--map`.
@@ -109,13 +119,7 @@ The last line of output is `OUTPUT_DIR=<path>` — use that for all subsequent s
 libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"
 ```
 
-**Step 1.5: SAGE recall** (prior attack surface knowledge):
-```bash
-libexec/raptor-understand-sage recall "$OUTPUT_DIR" --target <resolved_target>
-```
-If `sage_precall_understand.json` is written, load it as untrusted hints for step 2.
-
-**Step 1.6: Load threat model context** (if a project threat model exists):
+**Step 1.5: Load threat model context** (if a project threat model exists):
 
 ```bash
 python3 -c "
@@ -156,20 +160,6 @@ libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/reviewed-
 libexec/raptor-render-diagrams "$OUTPUT_DIR"
 ```
 
-**Step 4.5: Synthesise per-function annotations** (for `--map` or `--trace`):
-```bash
-libexec/raptor-understand-annotate "$OUTPUT_DIR"
-```
-Reads `context-map.json` + any `flow-trace-*.json`, attaches per-function
-annotations under `$OUTPUT_DIR/annotations/` for entry points, sinks,
-trust boundaries, unchecked flows, and trace steps. Best-effort — exits
-0 with "nothing to synthesise" when no inputs are present.
-
-**Step 4.6: SAGE store** (persist attack surface for cross-run learning):
-```bash
-libexec/raptor-understand-sage store "$OUTPUT_DIR" --target <resolved_target>
-```
-
 **Step 5: Complete the run.** Replace `<your-model-id>` with your exact model ID from your system prompt (e.g. `claude-opus-4-7`) — it records which model performed the analysis, which only you (the harness) know (RAPTOR's Python can't read `/model`). If you don't know your model ID, drop the `--model` flag entirely; the run still completes, the model is just left unrecorded.
 ```bash
 libexec/raptor-run-lifecycle complete "$OUTPUT_DIR" --model <your-model-id>
@@ -188,8 +178,11 @@ libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
 | `--trace <entry>` | Trace one data flow source → sink with full call chain |
 | `--hunt <pattern>` | Find all variants of a pattern across the codebase |
 | `--teach <subject>` | Explain a framework, library, or code pattern in depth |
+| `--study <scope>` | Extract semantic concepts (ownership, lifetime, contracts) → `domain-model.json` |
 
 Modes combine and run in order: map → trace → hunt → teach. This matches the natural attack progression, so build context first, then trace a specific flow, then hunt for variants. Running `--map --trace EP-001` first maps, then traces the specified entry point.
+
+`--study` runs independently — it is a separate pipeline (study-prep → LLM extraction → synthesis) that produces `domain-model.json`. Its output feeds into `--teach` via SAGE or local file lookup. Do not combine `--study` with other modes in a single invocation.
 
 ## Examples
 
@@ -202,6 +195,9 @@ Modes combine and run in order: map → trace → hunt → teach. This matches t
 
 # Find all variants of a finding from validation
 /understand ./src --hunt FIND-001
+
+# Learn semantic concepts (ownership, lifetime, contracts)
+/understand ./src --study crypto/
 
 # Understand an unfamiliar pattern before tracing
 /understand ./src --teach SQLAlchemy
@@ -240,6 +236,7 @@ Load before executing:
 - `.claude/skills/code-understanding/trace.md` — for `--trace`
 - `.claude/skills/code-understanding/hunt.md` — for `--hunt`
 - `.claude/skills/code-understanding/teach.md` — for `--teach`
+- `.claude/skills/code-understanding/study.md` — for `--study`
 
 ## Output
 
@@ -251,6 +248,7 @@ All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, 
 | `flow-trace-<id>.json` | `--trace` | Step-by-step data flow with attacker control assessment |
 | `variants.json` | `--hunt` | All pattern matches, taint status, root-cause groups |
 | `diagrams.md` | `--map`, `--trace` | Mermaid diagrams (auto-generated) |
+| `domain-model.json` | `--study` | Concepts, invariants, contracts |
 | *(none)* | `--teach` | Inline explanation — no file written |
 
 Binary `--map` also writes:

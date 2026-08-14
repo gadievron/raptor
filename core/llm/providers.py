@@ -10,10 +10,12 @@ JSON-in-prompt fallback for providers that lack native structured support.
 
 import json
 import os
+import random
 import re
+import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from inspect import isclass
 from typing import Dict, Optional, Any, Tuple, Type, Union, TYPE_CHECKING
 from dataclasses import dataclass
@@ -30,6 +32,7 @@ from .tool_use.types import (
     CacheControl,
     Message,
     StopReason,
+    StreamChunk,
     TextBlock,
     ToolCall,
     ToolDef,
@@ -38,6 +41,14 @@ from .tool_use.types import (
 )
 
 logger = get_logger()
+
+_ZERO_PRICE_WARNED: set[str] = set()
+
+# Instructor resilience: allow this many consecutive failures before
+# permanently disabling tool-use structured output for a provider.
+# A single transient error (dispatcher startup race, network hiccup)
+# won't kill Instructor for the rest of the session.
+_INSTRUCTOR_MAX_CONSEC_FAILURES = 3
 
 _TEMPERATURE_DEPRECATED_FROM = (4, 7)
 _CLAUDE_VERSION_RE = re.compile(r"claude-[a-z]+-(\d+)-(\d+)")
@@ -307,6 +318,14 @@ class LLMProvider(ABC):
         if response.cost_usd is not None:
             return response.cost_usd
         in_per_m, out_per_m = self.price_per_million()
+        if in_per_m == 0.0 and out_per_m == 0.0 and (response.input_tokens or response.output_tokens):
+            if self.config.model_name not in _ZERO_PRICE_WARNED:
+                _ZERO_PRICE_WARNED.add(self.config.model_name)
+                logger.warning(
+                    "no pricing for model %s — cost tracking disabled, "
+                    "max_cost_usd budget cap will not trigger",
+                    self.config.model_name,
+                )
         return (
             response.input_tokens * in_per_m
             + response.output_tokens * out_per_m
@@ -333,6 +352,59 @@ class LLMProvider(ABC):
             f"check ``supports_tool_use()`` before calling ``turn()``"
         )
 
+    def supports_streaming(self) -> bool:
+        """``True`` when ``turn_stream()`` yields real-time chunks
+        from the provider's API rather than wrapping ``turn()``."""
+        return False
+
+    def turn_stream(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> Iterator[StreamChunk]:
+        """Streaming variant of :meth:`turn`.
+
+        Default implementation wraps ``turn()`` — all chunks arrive
+        in one burst with no real-time benefit. Providers with native
+        streaming override both this and :meth:`supports_streaming`.
+        """
+        response = self.turn(
+            messages, tools, system=system,
+            max_tokens=max_tokens, cache_control=cache_control,
+            **provider_specific,
+        )
+        for block in response.content:
+            if isinstance(block, TextBlock):
+                yield StreamChunk(type="text_delta", text=block.text)
+            elif isinstance(block, ToolCall):
+                yield StreamChunk(
+                    type="tool_call_start",
+                    tool_call_id=block.id,
+                    tool_call_name=block.name,
+                )
+                if block.input:
+                    yield StreamChunk(
+                        type="tool_call_delta",
+                        tool_call_id=block.id,
+                        tool_call_input_delta=json.dumps(block.input),
+                    )
+                yield StreamChunk(
+                    type="tool_call_end", tool_call_id=block.id,
+                )
+        yield StreamChunk(
+            type="usage",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cache_read_tokens=response.cache_read_tokens,
+            cache_write_tokens=response.cache_write_tokens,
+        )
+        yield StreamChunk(type="done", stop_reason=response.stop_reason)
+
     def track_usage(self, tokens: int, cost: float,
                     input_tokens: int = 0, output_tokens: int = 0,
                     duration: float = 0.0,
@@ -348,7 +420,7 @@ class LLMProvider(ABC):
             self.total_cost += (cost or 0.0)
             self.call_count += 1
             self.total_duration += duration
-        logger.debug(f"LLM usage: {tokens} tokens, ${(cost or 0.0):.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
+        logger.debug("LLM usage: %s tokens, $%.4f (total: %s tokens, $%.4f)", tokens, cost or 0.0, self.total_tokens, self.total_cost)
 
     def _calculate_cost_split(self, input_tokens: int, output_tokens: int,
                               thinking_tokens: int = 0,
@@ -410,12 +482,14 @@ class LLMProvider(ABC):
     # provider instances per request (a common pattern in the agentic
     # dispatch path).
     _warned_unknown_models: set = set()
+    _warned_unknown_models_lock = threading.Lock()
 
     @classmethod
     def _warn_unknown_model_once(cls, model_name: str) -> None:
-        if model_name in cls._warned_unknown_models:
-            return
-        cls._warned_unknown_models.add(model_name)
+        with cls._warned_unknown_models_lock:
+            if model_name in cls._warned_unknown_models:
+                return
+            cls._warned_unknown_models.add(model_name)
         logger.warning(
             f"cost tracking: model {model_name!r} not in MODEL_COSTS "
             f"and no cost_per_1k_tokens set — every call records $0. "
@@ -433,13 +507,16 @@ class LLMProvider(ABC):
         Usage is tracked by self.generate() — no double counting.
         """
         schema_json = json.dumps(schema, indent=2)
-        augmented_prompt = (
-            f"{prompt}\n\n"
+        schema_block = (
+            f"\n\n## Output format\n"
             f"Respond with JSON matching this schema:\n"
             f"```json\n{schema_json}\n```\n"
             f"Return ONLY valid JSON, no other text."
         )
-        response = self.generate(augmented_prompt, system_prompt)
+        augmented_system = (
+            (system_prompt or "") + schema_block
+        )
+        response = self.generate(prompt, augmented_system)
         if response.finish_reason in ("max_tokens", "length"):
             raise json.JSONDecodeError(
                 "Response truncated (output token limit reached)",
@@ -450,10 +527,19 @@ class LLMProvider(ABC):
             content = response.content.strip()
             # Strip markdown fences: ```json\n...\n``` or ```\n...\n```
             if content.startswith("```") and content.endswith("```"):
-                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                if "\n" in content:
+                    content = content.split("\n", 1)[1]
+                else:
+                    content = content[3:]
+                    # Single-line: strip language tag (e.g. "json", "ql")
+                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
                 content = content.rsplit("```", 1)[0]
             elif content.startswith("```"):
-                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                if "\n" in content:
+                    content = content.split("\n", 1)[1]
+                else:
+                    content = content[3:]
+                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
             content = content.strip()
             parsed = json.loads(content)
             parsed = _coerce_to_schema(parsed, _normalize_schema(schema))
@@ -654,14 +740,17 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
             continue
 
         value = coerced[field_name]
-        field_type = field_spec.get("type", "string")
+        raw_type = field_spec.get("type", "string")
 
         # Handle nullable types: ["string", "null"] or ["boolean", "null"]
-        if isinstance(field_type, list):
-            if value is None and "null" in field_type:
+        nullable = isinstance(raw_type, list) and "null" in raw_type
+        if isinstance(raw_type, list):
+            if value is None and nullable:
                 continue  # null is valid
             # Use the non-null type for coercion
-            field_type = next((t for t in field_type if t != "null"), "string")
+            field_type = next((t for t in raw_type if t != "null"), "string")
+        else:
+            field_type = raw_type
 
         if field_type == "boolean" and not isinstance(value, bool):
             if isinstance(value, str):
@@ -678,7 +767,15 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
             try:
                 coerced[field_name] = float(value)
             except (ValueError, TypeError):
-                coerced[field_name] = 0.0
+                if nullable:
+                    coerced[field_name] = None
+                else:
+                    logger.debug(
+                        "_coerce_to_schema: unparseable number for "
+                        "field %r, value %r — defaulting to 0.0",
+                        field_name, value,
+                    )
+                    coerced[field_name] = 0.0
 
         elif field_type == "integer" and (
             # Pre-fix the check was just `not isinstance(value, int)`.
@@ -705,10 +802,36 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
             try:
                 coerced[field_name] = int(value)
             except (ValueError, TypeError):
-                coerced[field_name] = 0
+                if nullable:
+                    coerced[field_name] = None
+                else:
+                    logger.debug(
+                        "_coerce_to_schema: unparseable integer for "
+                        "field %r, value %r — defaulting to 0",
+                        field_name, value,
+                    )
+                    coerced[field_name] = 0
 
         elif field_type == "string" and value is None:
             coerced[field_name] = ""
+
+        # Recurse into nested objects
+        if field_type == "object" and "properties" in field_spec and isinstance(value, dict):
+            coerced[field_name] = _coerce_to_schema(value, field_spec)
+
+        # Recurse into array items that are objects
+        if (
+            field_type == "array"
+            and isinstance(value, list)
+            and "items" in field_spec
+            and isinstance(field_spec["items"], dict)
+            and "properties" in field_spec["items"]
+        ):
+            coerced[field_name] = [
+                _coerce_to_schema(item, field_spec["items"])
+                if isinstance(item, dict) else item
+                for item in value
+            ]
 
     return coerced
 
@@ -740,9 +863,15 @@ def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         field_type = parts[0].strip() if parts else "string"
         field_type = type_aliases.get(field_type, field_type)
 
+        desc_lower = field_desc_str.lower()
         # Detect nullable: "string or null", "float or null"
-        if " or null" in field_desc_str.lower():
+        if " or null" in desc_lower:
             prop = {"type": [field_type, "null"]}
+        elif desc_lower.startswith("null or "):
+            # "null or string" — extract the actual type from the second word
+            actual = parts[2].strip() if len(parts) > 2 else "string"
+            actual = type_aliases.get(actual, actual)
+            prop = {"type": [actual, "null"]}
         else:
             prop = {"type": field_type}
 
@@ -758,7 +887,15 @@ def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
 
         properties[field_name] = prop
 
-    return {"properties": properties, "required": list(schema.keys())}
+    required = []
+    for field_name, field_desc in schema.items():
+        if isinstance(field_desc, dict):
+            required.append(field_name)
+            continue
+        desc_lower = str(field_desc).lower()
+        if "optional" not in desc_lower and "or null" not in desc_lower:
+            required.append(field_name)
+    return {"properties": properties, "required": required}
 
 
 def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -804,7 +941,7 @@ def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
+def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']], _model_name: str = 'DynamicSchema'):
     """
     Convert dict schema or Pydantic model to Pydantic model class.
 
@@ -872,7 +1009,28 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
             non_null = [t for t in field_type if t != "null"]
             field_type = non_null[0] if non_null else "string"
 
-        python_type = type_map.get(field_type, str)
+        enum_values = field_spec.get("enum")
+        if enum_values:
+            from typing import Literal
+            python_type = Literal[tuple(enum_values)]
+        elif field_type == "object" and "properties" in field_spec:
+            nested_name = f"{_model_name}_{field_name.title().replace('_', '')}"
+            python_type = _dict_schema_to_pydantic(field_spec, _model_name=nested_name)
+        elif field_type == "array":
+            items_spec = field_spec.get("items", {})
+            if items_spec.get("type") == "object" and "properties" in items_spec:
+                item_name = f"{_model_name}_{field_name.title().replace('_', '')}Item"
+                item_type = _dict_schema_to_pydantic(items_spec, _model_name=item_name)
+            elif items_spec.get("enum"):
+                from typing import Literal
+                item_type = Literal[tuple(items_spec["enum"])]
+            else:
+                item_type = type_map.get(items_spec.get("type", "string"), str)
+            from typing import List
+            python_type = List[item_type]
+        else:
+            python_type = type_map.get(field_type, str)
+
         if nullable:
             from typing import Optional as Opt
             python_type = Opt[python_type]
@@ -882,8 +1040,9 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
 
         # Determine if field is required:
         # - If schema has "required" key: only those fields are required
-        # - If no "required" key: all fields are required (default JSON Schema behavior)
-        is_required = (not has_required_key) or (field_name in required_fields)
+        # - If no "required" key: all fields optional (JSON Schema default;
+        #   LLMs routinely omit sub-fields of optional nested objects)
+        is_required = has_required_key and (field_name in required_fields)
 
         # If field is not required and has no default, make it Optional
         if not is_required and default_value is ...:
@@ -909,7 +1068,7 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
             field_definitions[field_name] = (python_type, default_value)
 
     # Create and return Pydantic model
-    model = create_model('DynamicSchema', **field_definitions)
+    model = create_model(_model_name, **field_definitions)
     return model
 
 
@@ -998,17 +1157,33 @@ class OpenAICompatibleProvider(LLMProvider):
             self.client = make_openai_client(timeout=config.timeout)
             logger.debug("OpenAICompatibleProvider: routing via credential-isolation dispatcher")
         else:
+            _client_kwargs = {}
+            # Loopback gateways (Ollama, vLLM, LM Studio): the SDK's
+            # default httpx client honours proxy env (trust_env), so
+            # on mandatory-proxy hosts whose NO_PROXY lacks loopback,
+            # every localhost call detours through the corporate
+            # proxy and fails. Pin a trust_env=False transport for
+            # loopback bases; remote bases keep proxy-env behaviour.
+            from core.llm.egress import url_is_loopback
+            if config.api_base and url_is_loopback(config.api_base):
+                import httpx as _httpx
+                _client_kwargs["http_client"] = _httpx.Client(
+                    timeout=config.timeout, trust_env=False,
+                )
             self.client = OpenAI(
                 api_key=config.api_key or "unused",
                 base_url=config.api_base,
                 timeout=config.timeout,
+                **_client_kwargs,
             )
             logger.debug(
                 f"OpenAICompatibleProvider: direct SDK (no dispatcher) provider={config.provider}"
             )
 
         self.instructor_client = None
-        self._instructor_warned = False
+        self._instructor_consec_failures = 0
+        self._instructor_lock = threading.Lock()
+        self._instructor_backed = None  # stashed client during backoff
         if INSTRUCTOR_AVAILABLE:
             self.instructor_client = instructor.from_openai(self.client)
         else:
@@ -1026,7 +1201,7 @@ class OpenAICompatibleProvider(LLMProvider):
         # persisted — a fresh process re-detects on first turn.
         self._tool_use_unsupported = False
 
-        logger.debug(f"Initialized OpenAICompatibleProvider: {config.model_name} (base_url={config.api_base})")
+        logger.debug("Initialized OpenAICompatibleProvider: %s (base_url=%s)", config.model_name, config.api_base)
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  **kwargs) -> LLMResponse:
@@ -1097,8 +1272,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 tokens_used, cost, input_tokens, output_tokens, duration,
                 cache_read_tokens=cache_read_tokens,
             )
-            logger.debug(f"[OpenAI] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s"
-                         + (f", thinking={thinking_tokens}" if thinking_tokens else ""))
+            logger.debug("[OpenAI] model=%s, tokens=%s, cost=$%.4f, duration=%.2fs%s",
+                         self.config.model_name, tokens_used, cost, duration,
+                         (", thinking=%d" % thinking_tokens) if thinking_tokens else "")
 
             return LLMResponse(
                 content=content,
@@ -1193,6 +1369,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     cache_read_tokens=cache_read_tokens,
                 )
 
+                with self._instructor_lock:
+                    self._instructor_consec_failures = 0
                 return StructuredResponse(
                     result=result_dict,
                     raw=full_response,
@@ -1200,14 +1378,25 @@ class OpenAICompatibleProvider(LLMProvider):
                 )
 
             except Exception as e:
-                if not self._instructor_warned:
-                    logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
-                    self._instructor_warned = True
-                else:
-                    from core.security.log_sanitisation import escape_nonprintable as _esc
-                    logger.debug("Instructor fallback (repeat): %s", _esc(str(e)))
-                # Disable Instructor for this provider — same error will repeat
-                self.instructor_client = None
+                with self._instructor_lock:
+                    self._instructor_consec_failures += 1
+                    consec = self._instructor_consec_failures
+                from core.security.log_sanitisation import escape_nonprintable as _esc
+                logger.warning(
+                    "Instructor structured generation failed for %s/%s (%d/%d). "
+                    "Exception (%s): %s",
+                    self.config.provider, self.config.model_name,
+                    consec, _INSTRUCTOR_MAX_CONSEC_FAILURES,
+                    type(e).__name__, _esc(str(e))[:512],
+                )
+                if consec >= _INSTRUCTOR_MAX_CONSEC_FAILURES:
+                    logger.warning(
+                        "Instructor disabled for %s/%s after %d consecutive failures",
+                        self.config.provider, self.config.model_name,
+                        consec,
+                    )
+                    self._instructor_backed = self.instructor_client
+                    self.instructor_client = None
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
@@ -1333,6 +1522,8 @@ class OpenAICompatibleProvider(LLMProvider):
                         system=system, max_tokens=max_tokens,
                         cache_control=cache_control,
                     )
+                if is_credit_exhausted(exc):
+                    raise  # let callers fail fast
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
@@ -1352,7 +1543,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         output_tokens=0,
                         error_message=err_msg,
                     )
-                delay = backoff_factor ** attempt
+                delay = (backoff_factor ** attempt) * (0.5 + random.random())
                 logger.info(
                     f"OpenAICompatibleProvider.turn: transient error attempt "
                     f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
@@ -1441,6 +1632,188 @@ class OpenAICompatibleProvider(LLMProvider):
             duration=duration,
         )
         return turn_response
+
+    def supports_streaming(self) -> bool:
+        return not self._tool_use_unsupported
+
+    def turn_stream(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        max_retries: int = 3,
+        **_unused: Any,
+    ) -> Iterator[StreamChunk]:
+        """Streaming turn via OpenAI ``stream=True``."""
+        if _unused:
+            logger.debug(
+                "OpenAICompatibleProvider.turn_stream: ignoring "
+                "unrecognised kwargs: %s", sorted(_unused),
+            )
+
+        if self._tool_use_unsupported and tools:
+            yield from LLMProvider.turn_stream(
+                self, messages, tools, system=system,
+                max_tokens=max_tokens, cache_control=cache_control,
+            )
+            return
+
+        # ---- tools (same as turn) ----------------------------------------
+        tool_schemas: list[Dict[str, Any]] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                },
+            }
+            for t in tools
+        ]
+
+        # ---- messages ----------------------------------------------------
+        wire_messages: list[Dict[str, Any]] = []
+        if system:
+            wire_messages.append({"role": "system", "content": system})
+        for m in messages:
+            wire_messages.extend(_message_to_openai_wire(m))
+
+        # ---- dispatch with stream=True -----------------------------------
+        kwargs: Dict[str, Any] = {
+            "model": self.config.model_name,
+            "messages": wire_messages,
+            "stream": True,
+            **_openai_sampling_kwargs(self.config.model_name, max_tokens),
+        }
+        if tool_schemas:
+            kwargs["tools"] = tool_schemas
+
+        from openai import (                                    # type: ignore[import-not-found]
+            APIConnectionError,
+            APIStatusError,
+        )
+        t_start = time.monotonic()
+        resp = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = self.client.chat.completions.create(**kwargs)
+                break
+            except (APIConnectionError, APIStatusError) as exc:
+                if (
+                    tools
+                    and isinstance(exc, APIStatusError)
+                    and _is_tool_use_unsupported_error(exc)
+                ):
+                    self._tool_use_unsupported = True
+                    yield from LLMProvider.turn_stream(
+                        self, messages, tools, system=system,
+                        max_tokens=max_tokens,
+                        cache_control=cache_control,
+                    )
+                    return
+                if is_credit_exhausted(exc):
+                    raise  # let callers fail fast
+                if _is_rate_limit(exc):
+                    from core.llm.throttle import broadcast_rate_limit
+                    broadcast_rate_limit()
+                if not _is_transient_openai(exc) or attempt >= max_retries:
+                    from core.security.log_sanitisation import (
+                        escape_nonprintable,
+                    )
+                    logger.warning(
+                        "OpenAICompatibleProvider.turn_stream: %s",
+                        escape_nonprintable(str(exc)),
+                    )
+                    yield StreamChunk(
+                        type="done", stop_reason=StopReason.ERROR,
+                    )
+                    return
+                time.sleep(2.0 ** attempt)
+
+        if resp is None:
+            yield StreamChunk(type="done", stop_reason=StopReason.ERROR)
+            return
+
+        # ---- consume stream ----------------------------------------------
+        tool_calls_seen: Dict[int, str] = {}
+        input_tokens = output_tokens = 0
+        stop = StopReason.ERROR
+
+        try:
+            for chunk in resp:
+                if not chunk.choices:
+                    if chunk.usage:
+                        input_tokens = (
+                            getattr(chunk.usage, "prompt_tokens", 0) or 0
+                        )
+                        output_tokens = (
+                            getattr(chunk.usage, "completion_tokens", 0) or 0
+                        )
+                    continue
+
+                choice = chunk.choices[0]
+                delta = choice.delta
+
+                if delta and getattr(delta, "content", None):
+                    yield StreamChunk(
+                        type="text_delta", text=delta.content,
+                    )
+
+                if delta and getattr(delta, "tool_calls", None):
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if tc.id:
+                            tool_calls_seen[idx] = tc.id
+                            yield StreamChunk(
+                                type="tool_call_start",
+                                tool_call_id=tc.id,
+                                tool_call_name=(
+                                    getattr(tc.function, "name", "") or ""
+                                ),
+                            )
+                        if (
+                            tc.function
+                            and getattr(tc.function, "arguments", None)
+                        ):
+                            yield StreamChunk(
+                                type="tool_call_delta",
+                                tool_call_id=tool_calls_seen.get(idx, ""),
+                                tool_call_input_delta=tc.function.arguments,
+                            )
+
+                if choice.finish_reason:
+                    stop = _OPENAI_FINISH_REASON_MAP.get(
+                        choice.finish_reason, StopReason.ERROR,
+                    )
+                    for idx in sorted(tool_calls_seen):
+                        yield StreamChunk(
+                            type="tool_call_end",
+                            tool_call_id=tool_calls_seen[idx],
+                        )
+        finally:
+            resp.close()
+
+        duration = time.monotonic() - t_start
+
+        yield StreamChunk(
+            type="usage",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+        cost = self._calculate_cost_split(input_tokens, output_tokens)
+        self.track_usage(
+            tokens=input_tokens + output_tokens,
+            cost=cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            duration=duration,
+        )
+
+        yield StreamChunk(type="done", stop_reason=stop)
 
 
 # ---------------------------------------------------------------------------
@@ -1638,7 +2011,9 @@ class AnthropicProvider(LLMProvider):
             logger.debug("AnthropicProvider: direct SDK (no dispatcher)")
 
         self.instructor_client = None
-        self._instructor_warned = False
+        self._instructor_consec_failures = 0
+        self._instructor_lock = threading.Lock()
+        self._instructor_backed = None  # stashed client during backoff
         if INSTRUCTOR_AVAILABLE:
             self.instructor_client = instructor.from_anthropic(self.client)
         else:
@@ -1655,7 +2030,7 @@ class AnthropicProvider(LLMProvider):
         # but doesn't honor it). See ``_maybe_warn_silent_cache_failure``.
         self._caching_warning_emitted = False
 
-        logger.debug(f"Initialized AnthropicProvider: {config.model_name}")
+        logger.debug("Initialized AnthropicProvider: %s", config.model_name)
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  **kwargs) -> LLMResponse:
@@ -1722,7 +2097,7 @@ class AnthropicProvider(LLMProvider):
                 cache_read_tokens=cache_read_tokens,
                 cache_write_tokens=cache_write_tokens,
             )
-            logger.debug(f"[Anthropic] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s")
+            logger.debug("[Anthropic] model=%s, tokens=%s, cost=$%.4f, duration=%.2fs", self.config.model_name, tokens_used, cost, duration)
 
             return LLMResponse(
                 content=content,
@@ -1815,6 +2190,8 @@ class AnthropicProvider(LLMProvider):
                     cache_write_tokens=cache_write_tokens,
                 )
 
+                with self._instructor_lock:
+                    self._instructor_consec_failures = 0
                 return StructuredResponse(
                     result=result_dict,
                     raw=full_response,
@@ -1822,14 +2199,25 @@ class AnthropicProvider(LLMProvider):
                 )
 
             except Exception as e:
-                if not self._instructor_warned:
-                    logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
-                    self._instructor_warned = True
-                else:
-                    from core.security.log_sanitisation import escape_nonprintable as _esc
-                    logger.debug("Instructor fallback (repeat): %s", _esc(str(e)))
-                # Disable Instructor for this provider — same error will repeat
-                self.instructor_client = None
+                with self._instructor_lock:
+                    self._instructor_consec_failures += 1
+                    consec = self._instructor_consec_failures
+                from core.security.log_sanitisation import escape_nonprintable as _esc
+                logger.warning(
+                    "Instructor structured generation failed for %s/%s (%d/%d). "
+                    "Exception (%s): %s",
+                    self.config.provider, self.config.model_name,
+                    consec, _INSTRUCTOR_MAX_CONSEC_FAILURES,
+                    type(e).__name__, _esc(str(e))[:512],
+                )
+                if consec >= _INSTRUCTOR_MAX_CONSEC_FAILURES:
+                    logger.warning(
+                        "Instructor disabled for %s/%s after %d consecutive failures",
+                        self.config.provider, self.config.model_name,
+                        consec,
+                    )
+                    self._instructor_backed = self.instructor_client
+                    self.instructor_client = None
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
@@ -1994,6 +2382,8 @@ class AnthropicProvider(LLMProvider):
                 resp = create_fn(**send_kwargs)
                 break
             except (APIConnectionError, APIStatusError, APIError) as exc:
+                if is_credit_exhausted(exc):
+                    raise  # let callers fail fast
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
@@ -2011,7 +2401,7 @@ class AnthropicProvider(LLMProvider):
                         output_tokens=0,
                         error_message=err_msg,
                     )
-                delay = backoff_factor ** attempt
+                delay = (backoff_factor ** attempt) * (0.5 + random.random())
                 logger.info(
                     f"AnthropicProvider.turn: transient error attempt "
                     f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
@@ -2141,6 +2531,176 @@ class AnthropicProvider(LLMProvider):
         )
         self._caching_warning_emitted = True
 
+    def supports_streaming(self) -> bool:
+        return True
+
+    def turn_stream(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **_unused: Any,
+    ) -> Iterator[StreamChunk]:
+        """Streaming turn via ``client.messages.stream()``.
+
+        Same argument construction as :meth:`turn` but yields
+        :class:`StreamChunk` objects as the API response arrives.
+        Does not support the task-budget beta endpoint (use
+        non-streaming :meth:`turn` for that).
+        """
+        if _unused:
+            logger.debug(
+                "AnthropicProvider.turn_stream: ignoring unrecognised "
+                "kwargs: %s", sorted(_unused),
+            )
+
+        # ---- system block (same as turn) --------------------------------
+        system_arg: Optional[Union[str, list]]
+        if system:
+            if cache_control.system:
+                system_arg = [{
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                system_arg = system
+        else:
+            system_arg = None
+
+        # ---- tools -------------------------------------------------------
+        tool_schemas: list[Dict[str, Any]] = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            for t in tools
+        ]
+        if cache_control.tools and tool_schemas:
+            last = dict(tool_schemas[-1])
+            last["cache_control"] = {"type": "ephemeral"}
+            tool_schemas[-1] = last
+
+        # ---- messages ----------------------------------------------------
+        wire_messages = [_message_to_anthropic_wire(m) for m in messages]
+        if (
+            cache_control.history_through_index is not None
+            and 0 <= cache_control.history_through_index < len(wire_messages)
+        ):
+            _attach_anthropic_cache_marker(
+                wire_messages[cache_control.history_through_index],
+            )
+
+        # ---- build send_kwargs -------------------------------------------
+        kwargs: Dict[str, Any] = {
+            "model": self.config.model_name,
+            "max_tokens": max_tokens,
+            "messages": wire_messages,
+            "tools": tool_schemas if tool_schemas else None,
+        }
+        if system_arg is not None:
+            kwargs["system"] = system_arg
+        send_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+        # ---- stream ------------------------------------------------------
+        t_start = time.monotonic()
+        current_tool_id = ""
+        input_tokens = output_tokens = cache_read = cache_write = 0
+        stop = StopReason.ERROR
+
+        with self.client.messages.stream(**send_kwargs) as stream:
+            for event in stream:
+                event_type = getattr(event, "type", "")
+
+                if event_type == "content_block_start":
+                    cb = getattr(event, "content_block", None)
+                    if cb and getattr(cb, "type", "") == "tool_use":
+                        current_tool_id = getattr(cb, "id", "")
+                        yield StreamChunk(
+                            type="tool_call_start",
+                            tool_call_id=current_tool_id,
+                            tool_call_name=getattr(cb, "name", ""),
+                        )
+                elif event_type == "text":
+                    yield StreamChunk(
+                        type="text_delta",
+                        text=getattr(event, "text", ""),
+                    )
+                elif event_type == "input_json":
+                    yield StreamChunk(
+                        type="tool_call_delta",
+                        tool_call_id=current_tool_id,
+                        tool_call_input_delta=getattr(
+                            event, "partial_json", "",
+                        ),
+                    )
+                elif event_type == "content_block_stop":
+                    if current_tool_id:
+                        yield StreamChunk(
+                            type="tool_call_end",
+                            tool_call_id=current_tool_id,
+                        )
+                        current_tool_id = ""
+                elif event_type == "message_start":
+                    msg = getattr(event, "message", None)
+                    if msg:
+                        u = getattr(msg, "usage", None)
+                        if u:
+                            input_tokens = (
+                                getattr(u, "input_tokens", 0) or 0
+                            )
+                            cache_read = (
+                                getattr(u, "cache_read_input_tokens", 0)
+                                or 0
+                            )
+                            cache_write = (
+                                getattr(u, "cache_creation_input_tokens", 0)
+                                or 0
+                            )
+                elif event_type == "message_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta:
+                        sr = getattr(delta, "stop_reason", "")
+                        stop = _ANTHROPIC_STOP_REASON_MAP.get(
+                            sr or "", StopReason.ERROR,
+                        )
+                    u = getattr(event, "usage", None)
+                    if u:
+                        output_tokens = (
+                            getattr(u, "output_tokens", 0) or 0
+                        )
+
+        duration = time.monotonic() - t_start
+
+        yield StreamChunk(
+            type="usage",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+        )
+
+        cost = self.compute_cost(TurnResponse(
+            content=[], stop_reason=stop,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+        ))
+        self.track_usage(
+            tokens=input_tokens + output_tokens,
+            cost=cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            duration=duration,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+        )
+
+        yield StreamChunk(type="done", stop_reason=stop)
+
 
 # ---------------------------------------------------------------------------
 # Anthropic tool-use helpers (module-level — used by
@@ -2187,6 +2747,37 @@ def _is_rate_limit(exc: BaseException) -> bool:
     also covers 5xx and connection errors.
     """
     return getattr(exc, "status_code", None) == 429
+
+
+def is_credit_exhausted(exc: BaseException) -> bool:
+    """``True`` when ``exc`` indicates the API account has run out of
+    credit or has a billing problem that no amount of retrying will fix.
+
+    Provider-agnostic: checks the exception message for credit/billing
+    keywords across Anthropic (400 ``credit balance is too low``),
+    OpenAI (429 ``exceeded your current quota``), and generic shims.
+    """
+    status = getattr(exc, "status_code", None)
+    # Only 400/401/402/403/429 carry billing errors — 5xx never does.
+    if status is not None and status >= 500:
+        return False
+    text = str(exc).lower()
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error", body)
+        if isinstance(err, dict):
+            text += " " + str(err.get("message", "")).lower()
+        elif isinstance(err, str):
+            text += " " + err.lower()
+    return any(phrase in text for phrase in (
+        "credit balance is too low",
+        "exceeded your current quota",
+        "insufficient_quota",
+        "billing hard limit",
+        "account has been deactivated",
+        "billing not active",
+        "reached your specified api usage limits",
+    ))
 
 
 def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
@@ -2251,36 +2842,62 @@ class GeminiProvider(LLMProvider):
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         if not GENAI_SDK_AVAILABLE:
-            raise RuntimeError("google-genai SDK not installed: pip install google-genai")
+            raise RuntimeError(
+                "google-genai SDK not installed: pip install google-genai"
+            )
 
         import threading
-        self._local = threading.local()
-        logger.debug(f"Initialized GeminiProvider: {config.model_name}")
+        self._clients_lock = threading.Lock()
+        # {thread_id: Client} — bounded by live-thread reaping.
+        self._clients: Dict[int, Any] = {}
+        logger.debug(
+            f"Initialized GeminiProvider: {config.model_name}"
+        )
 
     @property
     def client(self):
-        """Per-thread client — google-genai is not guaranteed thread-safe."""
-        if not hasattr(self._local, 'client'):
-            # Phase B: dispatcher-route when ``RAPTOR_LLM_SOCKET`` set.
-            # google-genai 1.70+ accepts a custom ``base_url`` and
-            # ``httpx_client`` via ``HttpOptions`` — :func:`make_gemini_base_url`
-            # returns the (base_url, http_client) pair the SDK needs.
-            if os.environ.get("RAPTOR_LLM_SOCKET"):
-                from core.llm.dispatcher.client import make_gemini_base_url
-                from google.genai.types import HttpOptions
-                base_url, http_client = make_gemini_base_url()
-                self._local.client = _genai_module.Client(
-                    api_key="dummy-not-used",
-                    http_options=HttpOptions(
-                        base_url=base_url,
-                        httpx_client=http_client,
-                    ),
-                )
-                logger.debug("GeminiProvider: routing via credential-isolation dispatcher")
-            else:
-                self._local.client = _genai_module.Client(api_key=self.config.api_key)
-                logger.debug("GeminiProvider: direct SDK (no dispatcher)")
-        return self._local.client
+        """Per-thread client -- google-genai is not thread-safe."""
+        import threading
+        tid = threading.get_ident()
+        with self._clients_lock:
+            c = self._clients.get(tid)
+            if c is not None:
+                return c
+            # Reap clients for dead threads to prevent leaks.
+            alive = {t.ident for t in threading.enumerate()}
+            dead = [k for k in self._clients if k not in alive]
+            for k in dead:
+                self._clients.pop(k, None)
+        # Build client outside the lock (may do I/O).
+        if os.environ.get("RAPTOR_LLM_SOCKET"):
+            from core.llm.dispatcher.client import (
+                make_gemini_base_url,
+            )
+            from google.genai.types import HttpOptions
+            base_url, http_client = make_gemini_base_url()
+            new_client = _genai_module.Client(
+                api_key="dummy-not-used",
+                http_options=HttpOptions(
+                    base_url=base_url,
+                    httpx_client=http_client,
+                ),
+            )
+            logger.debug(
+                "GeminiProvider: routing via "
+                "credential-isolation dispatcher"
+            )
+        else:
+            new_client = _genai_module.Client(
+                api_key=self.config.api_key,
+            )
+            logger.debug(
+                "GeminiProvider: direct SDK (no dispatcher)"
+            )
+        with self._clients_lock:
+            # Another thread may have raced us for same tid (not
+            # possible in CPython, but harmless to check).
+            self._clients.setdefault(tid, new_client)
+            return self._clients[tid]
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  **kwargs) -> LLMResponse:
@@ -2333,8 +2950,8 @@ class GeminiProvider(LLMProvider):
             cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
 
             self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
-            logger.debug(f"[Gemini] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, "
-                         f"duration={duration:.2f}s, thinking={thinking_tokens}")
+            logger.debug("[Gemini] model=%s, tokens=%s, cost=$%.4f, duration=%.2fs, thinking=%s",
+                         self.config.model_name, tokens_used, cost, duration, thinking_tokens)
 
             return LLMResponse(
                 content=content,
@@ -2370,7 +2987,7 @@ class GeminiProvider(LLMProvider):
         normalized = _normalize_schema(schema)
         pydantic_model = _dict_schema_to_pydantic(normalized)
 
-        max_out = self.config.max_tokens
+        max_out = kwargs.pop("max_tokens", None) or self.config.max_tokens
         config_kwargs = {
             "temperature": kwargs.get("temperature", self.config.temperature),
             "max_output_tokens": max_out,
@@ -2407,22 +3024,6 @@ class GeminiProvider(LLMProvider):
             response = self.client.models.generate_content(**generate_kwargs)
             duration = time.monotonic() - t_start
 
-            content = (response.text or "").strip()
-            if content.startswith("```") and content.endswith("```"):
-                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
-                content = content.rsplit("```", 1)[0].strip()
-            elif content.startswith("```"):
-                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
-                content = content.strip()
-            parsed = json.loads(content)
-            if not parsed:
-                # Gemini sometimes returns {} in structured mode — fall back to text
-                raise ValueError("Gemini returned empty object in structured mode")
-            parsed = _coerce_to_schema(parsed, normalized)
-            validated = pydantic_model.model_validate(parsed)
-            result_dict = validated.model_dump()
-            full_response = json.dumps(result_dict, indent=2)
-
             input_tokens = 0
             output_tokens = 0
             thinking_tokens = 0
@@ -2435,8 +3036,43 @@ class GeminiProvider(LLMProvider):
             cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
             self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
 
-            logger.debug(f"[Gemini] structured model={self.config.model_name}, tokens={tokens_used}, "
-                         f"cost=${cost:.4f}, duration={duration:.2f}s, thinking={thinking_tokens}")
+            logger.debug("[Gemini] structured model=%s, tokens=%s, cost=$%.4f, duration=%.2fs, thinking=%s",
+                         self.config.model_name, tokens_used, cost, duration, thinking_tokens)
+
+            finish_reason = "complete"
+            if response.candidates and response.candidates[0].finish_reason:
+                fr = response.candidates[0].finish_reason
+                finish_reason = getattr(fr, 'name', str(fr)).lower()
+
+            if finish_reason in ("max_tokens", "length"):
+                raise RuntimeError(
+                    "Gemini native structured response truncated "
+                    f"(finish_reason={finish_reason}, "
+                    f"output_tokens={output_tokens})"
+                )
+
+            content = (response.text or "").strip()
+            if content.startswith("```") and content.endswith("```"):
+                if "\n" in content:
+                    content = content.split("\n", 1)[1]
+                else:
+                    content = content[3:]
+                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
+                content = content.rsplit("```", 1)[0].strip()
+            elif content.startswith("```"):
+                if "\n" in content:
+                    content = content.split("\n", 1)[1]
+                else:
+                    content = content[3:]
+                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
+                content = content.strip()
+            parsed = json.loads(content)
+            if not parsed:
+                raise ValueError("Gemini returned empty object in structured mode")
+            parsed = _coerce_to_schema(parsed, normalized)
+            validated = pydantic_model.model_validate(parsed)
+            result_dict = validated.model_dump()
+            full_response = json.dumps(result_dict, indent=2)
 
             return StructuredResponse(
                 result=result_dict,
@@ -2446,7 +3082,7 @@ class GeminiProvider(LLMProvider):
 
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             # Schema/parsing error — native mode incompatible, fall back to JSON-in-prompt
-            logger.warning(f"Gemini native structured generation failed (falling back): {e}")
+            logger.warning("Gemini native structured generation failed (falling back): %s", e)
             return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
         except Exception:
             # Auth, network, quota — don't waste a second call
@@ -2591,12 +3227,22 @@ class ClaudeCodeLLMProvider(LLMProvider):
         config: ModelConfig,
         *,
         claude_bin: Optional[str] = None,
-        budget_usd: str = "1.00",
+        # Per-CALL abort ceiling (claude -p --max-budget-usd), not a
+        # run budget — orchestrators cap total spend via --max-cost.
+        # Audit-sized structured reviews (system prompt + context
+        # slice + schema) measure $0.9-1.3 per call on Opus-class
+        # models; the old "1.00" default aborted them mid-response
+        # with subtype error_max_budget_usd.
+        budget_usd: str = "5.00",
         timeout_s: Optional[int] = None,
+        resumable: bool = False,
     ) -> None:
         super().__init__(config)
         self._claude_bin = claude_bin or "claude"
         self._budget_usd = budget_usd
+        self._resumable = resumable
+        self._session_id: Optional[str] = None
+        self._messages_seen: int = 0
         # Per-call timeout: prefer explicit kwarg, then ModelConfig.timeout,
         # then a generous default (Claude Code subprocess + tool-use can
         # take several minutes on real workloads).
@@ -2615,23 +3261,65 @@ class ClaudeCodeLLMProvider(LLMProvider):
         else:
             self._timeout_s = 600
 
+    def reset_session(self) -> None:
+        """Discard resume state so the next ``turn()`` starts fresh."""
+        self._session_id = None
+        self._messages_seen = 0
+
+    def context_window(self) -> int:
+        return self.config.max_context
+
+    def _cli_model(self) -> Optional[str]:
+        """Model name to pass as ``claude -p --model``.
+
+        ``None`` (omit the flag; the subprocess inherits the CLI
+        session's own default model) when the config carries the
+        claudecode fallback sentinel rather than an operator-chosen
+        name — a hardcoded name breaks backends (Bedrock/Vertex)
+        that don't serve bare Anthropic model IDs.
+        """
+        from .config import CLAUDECODE_SESSION_MODEL
+        if self.config.model_name == CLAUDECODE_SESSION_MODEL:
+            return None
+        return self.config.model_name
+
+    def _effective_timeout_s(
+        self, override: Optional[int],
+    ) -> Optional[int]:
+        """Resolve the timeout for one call.
+
+        ``override`` is the per-call ``timeout_s`` kwarg — callers
+        whose call class is known to outlive the provider default
+        (e.g. checker synthesis: huge system prompt + JSON-schema
+        output, measured >600s on Bedrock-backed CLIs) pass their
+        own ceiling. Same ``<= 0`` = "no timeout" sentinel as
+        ``__init__``; ``None`` means "not overridden".
+        """
+        if override is None:
+            return self._timeout_s
+        return None if override <= 0 else override
+
     def generate(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """Dispatch a prompt to ``claude -p`` and parse the JSON envelope."""
+        """Dispatch a prompt to ``claude -p`` via stream-json and parse
+        the response."""
         from .cc_adapter import (
-            CCDispatchConfig, build_cc_command, parse_cc_freeform,
+            CCDispatchConfig,
+            build_cc_command,
+            run_cc_streaming,
         )
         import subprocess
         import time as _time
 
+        call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
+
         # Pass the user prompt as-is and route the system prompt
         # through CC's `--system-prompt` flag (see CCDispatchConfig.system_prompt
         # comment for the prompt-injection rationale).
-        full_prompt = prompt
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,
             # Used as a pure-LLM substrate: disable CC's internal tools
@@ -2640,80 +3328,67 @@ class ClaudeCodeLLMProvider(LLMProvider):
             # us via _tool_use_fallback's JSON-protocol synthesis.
             tools="",
             budget_usd=self._budget_usd,
-            timeout_s=self._timeout_s,
-            capture_json_envelope=True,
+            timeout_s=call_timeout,
+            capture_json_envelope=False,
+            stream_json=True,
             system_prompt=system_prompt,
+            model=self._cli_model(),
         )
         cmd = build_cc_command(cc_config)
 
-        # Pass safe env to the cc subprocess. Pre-fix
-        # `subprocess.run(cmd, ...)` inherited the parent's
-        # full environment, including HTTPS_PROXY, BASH_ENV,
-        # PYTHONSTARTUP, and any other variable a poisoned
-        # operator dotfile might set. Use RaptorConfig.get_
-        # safe_env() to strip DANGEROUS_ENV_VARS + proxy
-        # vars so cc runs with a clean baseline. See
-        # the long-form rationale at the first cc subprocess.
-        from core.config import RaptorConfig as _RaptorConfig
-        _cc_env = _RaptorConfig.get_safe_env()
+        # Sanitised baseline (get_safe_env strips shell-evaluated
+        # vars a poisoned dotfile might set) + the backend env
+        # families (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) the CLI needs
+        # to reach its provider — a bare get_safe_env() left a
+        # Bedrock-backed CLI child with no credentials/model
+        # mapping, hanging every call until timeout. See
+        # cc_subprocess_env's docstring.
+        from .cc_adapter import cc_subprocess_env
+        _cc_env = cc_subprocess_env()
 
         # monotonic() — wall clock can jump under NTP/DST, producing
         # negative durations on long CC calls.
         start = _time.monotonic()
         try:
-            proc = subprocess.run(
-                cmd,
-                input=full_prompt,
-                text=True,
-                capture_output=True,
-                timeout=self._timeout_s,
-                env=_cc_env,
+            sr = run_cc_streaming(
+                cmd, prompt, env=_cc_env, timeout_s=call_timeout,
             )
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"claude -p timed out after {self._timeout_s}s"
-            ) from e
+            raise RuntimeError(f"claude -p timed out after {call_timeout}s") from e
         duration = _time.monotonic() - start
 
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"claude -p exited with status {proc.returncode}: "
-                f"{_safe_subprocess_stderr(proc.stderr)}"
-            )
+        if sr.error:
+            raise RuntimeError(sr.error)
 
-        parsed = parse_cc_freeform(proc.stdout, proc.stderr)
-        content = parsed.get("content", "") or ""
-        cost = _safe_float(parsed.get("cost_usd"), default=0.0)
-        tokens = _safe_int(parsed.get("_tokens"), default=0)
-
-        # Best-effort token split: cc_adapter only surfaces total tokens;
-        # if the envelope had separate input/output we'd carry them, but
-        # parse_cc_freeform sums them. Attribute everything to output to
-        # avoid silently zeroing the counter.
+        total_tokens = sr.input_tokens + sr.output_tokens
         self.track_usage(
-            tokens=tokens, cost=cost,
-            input_tokens=0, output_tokens=tokens,
+            tokens=total_tokens,
+            cost=sr.cost_usd,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
+            cache_read_tokens=sr.cache_read_tokens,
+            cache_write_tokens=sr.cache_creation_tokens,
             duration=duration,
         )
 
-        # The claude-code harness reports the model it used in `analysed_by`;
-        # treat that as the resolved snapshot. But cc_adapter may set it to a
-        # comma-joined list (main + tool-routing helper) — that's not a single
-        # snapshot, so leave resolved_model None rather than emit a bogus
-        # multi-value "version" into the manifest/scorecard.
-        analysed_by = parsed.get("analysed_by")
-        resolved = analysed_by if (analysed_by and "," not in analysed_by) else None
+        # The claude-code harness reports the model it used in the
+        # stream-json output; treat that as the resolved snapshot. But
+        # CC may set it to a comma-joined list (main + tool-routing
+        # helper) — that's not a single snapshot, so leave
+        # resolved_model None rather than emit a bogus multi-value
+        # "version" into the manifest/scorecard.
+        resolved = sr.model if (sr.model and "," not in sr.model) else None
 
         return LLMResponse(
-            content=content,
-            model=parsed.get("analysed_by", self.config.model_name),
+            content=sr.content,
+            model=sr.model or self.config.model_name,
             provider="claudecode",
-            tokens_used=tokens,
-            cost=cost,
+            tokens_used=total_tokens,
+            cost=sr.cost_usd,
             finish_reason="stop",
             resolved_model=resolved,
-            input_tokens=0,
-            output_tokens=tokens,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
             duration=duration,
         )
 
@@ -2724,13 +3399,16 @@ class ClaudeCodeLLMProvider(LLMProvider):
         system_prompt: Optional[str] = None,
         **kwargs,
     ) -> Tuple[Dict[str, Any], str]:
-        """Dispatch with ``--json-schema`` for structured output.
+        """Dispatch with ``--json-schema`` for structured output via
+        stream-json.
 
         Accepts and ignores ``**kwargs`` — `claude` CLI has no
         temperature flag (see ClaudeCodeProvider.generate_structured).
         """
         from .cc_adapter import (
-            CCDispatchConfig, build_cc_command, parse_cc_structured,
+            CCDispatchConfig,
+            build_cc_command,
+            run_cc_streaming,
         )
         import subprocess
         import time as _time
@@ -2756,86 +3434,64 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # the user content; system_prompt routes through
         # CCDispatchConfig.system_prompt (which build_cc_command
         # converts into a `--system-prompt` flag).
-        full_prompt = prompt
+        call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
+
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,
             tools="",                                # see generate() comment
             budget_usd=self._budget_usd,
-            timeout_s=self._timeout_s,
+            timeout_s=call_timeout,
             json_schema=schema,
-            capture_json_envelope=True,
+            capture_json_envelope=False,
+            stream_json=True,
             system_prompt=system_prompt,
+            model=self._cli_model(),
         )
         cmd = build_cc_command(cc_config)
 
-        # Pass safe env to the cc subprocess. Pre-fix
-        # `subprocess.run(cmd, ...)` inherited the parent's
-        # full environment, including HTTPS_PROXY, BASH_ENV,
-        # PYTHONSTARTUP, and any other variable a poisoned
-        # operator dotfile might set. Use RaptorConfig.get_
-        # safe_env() to strip DANGEROUS_ENV_VARS + proxy
-        # vars so cc runs with a clean baseline. See
-        # the long-form rationale at the first cc subprocess.
-        from core.config import RaptorConfig as _RaptorConfig
-        _cc_env = _RaptorConfig.get_safe_env()
+        # Sanitised baseline (get_safe_env strips shell-evaluated
+        # vars a poisoned dotfile might set) + the backend env
+        # families (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) the CLI needs
+        # to reach its provider — a bare get_safe_env() left a
+        # Bedrock-backed CLI child with no credentials/model
+        # mapping, hanging every call until timeout. See
+        # cc_subprocess_env's docstring.
+        from .cc_adapter import cc_subprocess_env
+        _cc_env = cc_subprocess_env()
 
-        # monotonic() — wall clock can jump under NTP/DST, producing
-        # negative durations on long CC calls.
         start = _time.monotonic()
         try:
-            proc = subprocess.run(
-                cmd,
-                input=full_prompt,
-                text=True,
-                capture_output=True,
-                timeout=self._timeout_s,
-                env=_cc_env,
+            sr = run_cc_streaming(
+                cmd, prompt, env=_cc_env, timeout_s=call_timeout,
             )
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"claude -p timed out after {self._timeout_s}s"
-            ) from e
+            raise RuntimeError(f"claude -p timed out after {call_timeout}s") from e
         duration = _time.monotonic() - start
 
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"claude -p exited with status {proc.returncode}: "
-                f"{_safe_subprocess_stderr(proc.stderr)}"
-            )
+        if sr.error:
+            raise RuntimeError(sr.error)
 
-        result = parse_cc_structured(proc.stdout, proc.stderr)
-        if "error" in result and result["error"]:
+        result = self._parse_stream_content(sr.content)
+        if isinstance(result, dict) and "error" in result and result["error"]:
             raise RuntimeError(f"claude -p structured parse failed: {result['error']}")
 
-        # Track usage so structured calls show up alongside generate() in
-        # provider stats. cost/_tokens are set by extract_envelope_metadata
-        # inside parse_cc_structured when the envelope carries them.
-        cost = _safe_float(result.pop("cost_usd", None), default=0.0)
-        tokens = _safe_int(result.pop("_tokens", None), default=0)
-        result.pop("duration_seconds", None)
-        result.pop("analysed_by", None)
-        # parse_cc_structured injects ``finding_id`` (default "unknown")
-        # via setdefault — a CVE-aware behaviour leaking from
-        # cc_adapter's other consumers. Strip it so the consumer's
-        # schema isn't polluted with a field they didn't ask for.
-        result.pop("finding_id", None)
+        total_tokens = sr.input_tokens + sr.output_tokens
         self.track_usage(
-            tokens=tokens, cost=cost,
-            input_tokens=0, output_tokens=tokens,
+            tokens=total_tokens,
+            cost=sr.cost_usd,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
+            cache_read_tokens=sr.cache_read_tokens,
+            cache_write_tokens=sr.cache_creation_tokens,
             duration=duration,
         )
 
-        # Return ``StructuredResponse`` so callers (notably ``turn()``)
-        # can read per-call cost / tokens directly without racing on
-        # shared instance state. ``__iter__`` keeps the existing
-        # ``result, raw = client.generate_structured(...)`` tuple-
-        # unpack pattern working.
         return StructuredResponse(
             result=result,
             raw=json.dumps(result, indent=2),
-            cost=cost,
-            tokens_used=tokens,
-            model=self.config.model_name,
+            cost=sr.cost_usd,
+            tokens_used=total_tokens,
+            model=sr.model or self.config.model_name,
             provider="claudecode",
             duration=duration,
         )
@@ -2905,7 +3561,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
         if not tools:
             rendered = LLMProvider._render_messages_as_prompt(messages)
             response = self.generate(
-                rendered, system_prompt=system, max_tokens=max_tokens,
+                rendered,
+                system_prompt=system,
+                max_tokens=max_tokens,
             )
             cost = getattr(response, "cost", None)
             return TurnResponse(
@@ -2916,6 +3574,19 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 cost_usd=float(cost) if cost is not None else None,
             )
 
+        if self._resumable:
+            return self._turn_resumable(messages, tools, system=system)
+
+        return self._turn_stateless(messages, tools, system=system)
+
+    def _turn_stateless(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+    ) -> TurnResponse:
+        """Original per-subprocess turn with no session state."""
         schema = self._build_turn_schema(tools)
         sys_combined = self._build_turn_system_prompt(tools, extra=system)
         rendered_history = self._render_history_for_cc(messages)
@@ -2932,35 +3603,196 @@ class ClaudeCodeLLMProvider(LLMProvider):
             return TurnResponse(
                 content=[],
                 stop_reason=StopReason.ERROR,
-                input_tokens=0, output_tokens=0,
+                input_tokens=0,
+                output_tokens=0,
                 error_message=err_msg,
             )
 
-        # Per-call cost / tokens come from the response directly so
-        # concurrent loops on the same provider don't race on shared
-        # ``self.total_cost`` state. ``StructuredResponse`` carries
-        # the values; the legacy ``(result, raw)`` tuple-unpack still
-        # works via ``__iter__``.
         if isinstance(response, StructuredResponse):
             result = response.result
             cost_usd = response.cost
             tokens = response.tokens_used
         else:
-            # Defensive: a future provider might still return a tuple.
             result, _ = response
             cost_usd = 0.0
             tokens = 0
 
         return self._parse_turn_structured_result(
-            result, tools,
+            result,
+            tools,
             cost_usd=cost_usd,
-            # ``tokens_used`` from cc_adapter's envelope is already the
-            # input+output sum; we don't have a clean split, so attribute
-            # everything to output (consistent with ``generate()``'s
-            # behaviour for CC — see ``ClaudeCodeLLMProvider.generate``).
             input_tokens=0,
             output_tokens=tokens,
         )
+
+    def _turn_resumable(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        _retry: bool = False,
+    ) -> TurnResponse:
+        """Resume-based turn: CC preserves conversation state across
+        subprocess invocations via ``--resume <session_id>``.
+
+        Turn 1 sends the full system prompt, tool catalogue, and message
+        history. Subsequent turns send only the new messages (typically
+        the tool result from the previous call). Prompt caching gives
+        near-zero input cost on turn 2+.
+
+        Uses ``--output-format stream-json`` for streaming responses
+        and proper input/output token accounting.
+        """
+        from .cc_adapter import (
+            CCDispatchConfig,
+            build_cc_command,
+            run_cc_streaming,
+        )
+        import subprocess
+        import time as _time
+
+        schema = self._build_turn_schema(tools)
+        first_turn = self._session_id is None
+
+        if first_turn:
+            sys_combined = self._build_turn_system_prompt(tools, extra=system)
+            prompt = self._render_history_for_cc(messages)
+        else:
+            sys_combined = None
+            new_msgs = messages[self._messages_seen :]
+            prompt = self._render_history_for_cc(new_msgs) if new_msgs else ""
+
+        cc_config = CCDispatchConfig(
+            claude_bin=self._claude_bin,
+            tools="",
+            budget_usd=self._budget_usd,
+            timeout_s=self._timeout_s,
+            json_schema=schema,
+            capture_json_envelope=False,
+            stream_json=True,
+            system_prompt=sys_combined,
+            model=self._cli_model(),
+            session_id=self._session_id,
+            persist_session=True,
+        )
+        cmd = build_cc_command(cc_config)
+
+        from .cc_adapter import cc_subprocess_env
+
+        _cc_env = cc_subprocess_env()
+
+        start = _time.monotonic()
+        try:
+            sr = run_cc_streaming(
+                cmd, prompt, env=_cc_env, timeout_s=self._timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            err_msg = f"claude -p timed out after {self._timeout_s}s"
+            logger.warning(f"ClaudeCodeLLMProvider._turn_resumable: {err_msg}")
+            return TurnResponse(
+                content=[],
+                stop_reason=StopReason.ERROR,
+                input_tokens=0,
+                output_tokens=0,
+                error_message=err_msg,
+            )
+        duration = _time.monotonic() - start
+
+        if sr.error:
+            err_msg = sr.error
+            logger.warning(f"ClaudeCodeLLMProvider._turn_resumable: {err_msg}")
+            if first_turn and sr.session_id:
+                self._session_id = sr.session_id
+            if (
+                not first_turn
+                and not _retry
+                and "deferred tool marker" in err_msg.lower()
+            ):
+                logger.info(
+                    "CC resume marker stale — resetting session and "
+                    "retrying as fresh turn",
+                )
+                self.reset_session()
+                return self._turn_resumable(
+                    messages, tools, system=system, _retry=True,
+                )
+            return TurnResponse(
+                content=[],
+                stop_reason=StopReason.ERROR,
+                input_tokens=0,
+                output_tokens=0,
+                error_message=err_msg,
+            )
+
+        self._messages_seen = len(messages)
+
+        if first_turn and sr.session_id:
+            self._session_id = sr.session_id
+            logger.info(
+                "CC resume session established: %s", self._session_id,
+            )
+
+        content_text = sr.content
+        if not content_text:
+            return TurnResponse(
+                content=[],
+                stop_reason=StopReason.ERROR,
+                input_tokens=sr.input_tokens,
+                output_tokens=sr.output_tokens,
+                error_message="empty response from stream-json",
+            )
+
+        self.track_usage(
+            tokens=sr.input_tokens + sr.output_tokens,
+            cost=sr.cost_usd,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
+            cache_read_tokens=sr.cache_read_tokens,
+            cache_write_tokens=sr.cache_creation_tokens,
+            duration=duration,
+        )
+
+        result = self._parse_stream_content(content_text)
+        if isinstance(result, dict) and "error" in result and result["error"]:
+            return TurnResponse(
+                content=[],
+                stop_reason=StopReason.ERROR,
+                input_tokens=sr.input_tokens,
+                output_tokens=sr.output_tokens,
+                error_message=f"structured parse: {result['error']}",
+            )
+
+        return self._parse_turn_structured_result(
+            result,
+            tools,
+            cost_usd=sr.cost_usd,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
+        )
+
+    @staticmethod
+    def _parse_stream_content(text: str) -> dict[str, Any]:
+        """Extract the structured JSON object from stream-json content text."""
+        from .cc_adapter import strip_json_fences
+        import json
+
+        text = strip_json_fences(text.strip())
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        try:
+            decoder = json.JSONDecoder()
+            idx = text.index("{")
+            obj, _ = decoder.raw_decode(text, idx)
+            if isinstance(obj, dict):
+                return obj
+        except (ValueError, json.JSONDecodeError):
+            pass
+        return {"error": f"unparseable stream content: {text[:200]}"}
 
     # ------------------------------------------------------------------
     # turn() helpers
@@ -3144,6 +3976,12 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         LLMProvider instance
     """
     provider = config.provider.lower()
+    if provider in (
+        "claudecode-resumable",
+        "claude_code_resumable",
+        "claude-code-resumable",
+    ):
+        return ClaudeCodeLLMProvider(config, resumable=True)
     if provider in ("claudecode", "claude_code", "claude-code"):
         return ClaudeCodeLLMProvider(config)
     if provider == "bedrock":

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from core.analysis.reach_audit import audit_corpus, classify_reachability
+from core.analysis.reach_audit import audit_corpus, classify_reachability, set_joern_server
 
 
 def _write(root: Path, rel: str, body: str) -> None:
@@ -174,3 +174,76 @@ def test_classify_sound_witness_beats_build_excluded():
     }]}
     assert classify_reachability(
         inv, "go/m.go", "sink", 4, "go.m") == "module_aborts"
+
+
+class _FakeJoernServer:
+    def __init__(self, raw_output="", errors=None, alive=True):
+        self._raw_output = raw_output
+        self._errors = errors or []
+        self._alive = alive
+
+    def is_alive(self):
+        return self._alive
+
+    def query(self, cpgql, *, timeout=30, validate=False):
+        class _Result:
+            pass
+        r = _Result()
+        r.raw_output = self._raw_output
+        r.errors = self._errors
+        return r
+
+
+class TestJoernCallerOverride:
+    """When Joern finds callers for a not_called function, the verdict
+    should be 'called' instead of 'not_called'."""
+
+    def _make_inventory(self, tmp_path):
+        _write(tmp_path, "src/handler.py", (
+            "def dispatch():\n"
+            "    pass\n"
+            "\n"
+            "def orphan():\n"
+            "    pass\n"
+        ))
+        import tempfile
+        from core.inventory.builder import build_inventory
+        with tempfile.TemporaryDirectory() as td:
+            return build_inventory(str(tmp_path), td)
+
+    def test_not_called_without_joern(self, tmp_path):
+        inv = self._make_inventory(tmp_path)
+        verdict = classify_reachability(
+            inv, "src/handler.py", "orphan", 4, "src.handler",
+        )
+        assert verdict in ("not_called", "uncertain")
+
+    def test_joern_override_rescues_not_called(self, tmp_path):
+        inv = self._make_inventory(tmp_path)
+        stdout = 'JOERN_CALLER:{"caller":"main","file":"src/main.py","line":10,"code":"orphan()"}'
+        server = _FakeJoernServer(raw_output=stdout)
+        set_joern_server(server)
+        try:
+            verdict = classify_reachability(
+                inv, "src/handler.py", "orphan", 4, "src.handler",
+            )
+            assert verdict == "called"
+        finally:
+            set_joern_server(None)
+
+    def test_joern_no_callers_stays_not_called(self, tmp_path):
+        inv = self._make_inventory(tmp_path)
+        server = _FakeJoernServer(raw_output="")
+        set_joern_server(server)
+        try:
+            verdict = classify_reachability(
+                inv, "src/handler.py", "orphan", 4, "src.handler",
+            )
+            assert verdict in ("not_called", "uncertain")
+        finally:
+            set_joern_server(None)
+
+    def test_set_clear_lifecycle(self):
+        server = _FakeJoernServer()
+        set_joern_server(server)
+        set_joern_server(None)

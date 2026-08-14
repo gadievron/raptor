@@ -72,3 +72,38 @@ def test_spawn_worker_env_none_defaults_to_safe_env(fake_dispatcher):
     # And the dispatcher vars must still be set.
     assert captured_env.get("RAPTOR_LLM_SOCKET") == "./fake.sock"
     assert captured_env.get("RAPTOR_LLM_TOKEN_FD") == "99"
+
+
+def test_spawn_worker_env_none_preserves_operator_proxy(
+    fake_dispatcher, monkeypatch,
+):
+    """Mandatory-egress-proxy hosts: workers are RAPTOR's own scripts
+    whose egress proxies / `claude` CLI grandchildren resolve the
+    upstream route from the worker's env. env=None must therefore
+    carry the operator's launch-time proxy vars through, not strip
+    them with the bare get_safe_env() default.
+    """
+    from core.llm.dispatcher import spawn as spawn_mod
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+    monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+    monkeypatch.setenv("NO_PROXY", "169.254.169.254")
+
+    captured_env: dict[str, str] = {}
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+
+    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+            patch("os.close"):
+        spawn_mod.spawn_worker(
+            fake_dispatcher,
+            ["/bin/true"],
+            label="test-worker",
+            env=None,
+        )
+
+    assert captured_env.get("HTTPS_PROXY") == "http://proxy.corp:3128"
+    assert captured_env.get("https_proxy") == "http://proxy.corp:3128"
+    assert captured_env.get("NO_PROXY") == "169.254.169.254"

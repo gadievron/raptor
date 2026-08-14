@@ -450,9 +450,14 @@ def generate_binary_harness(
     elif linked_parser_boundaries:
         family = "runtime_extracted_parser"
         top_boundary = linked_parser_boundaries[0]
+        boundary_name = top_boundary.get('boundary_function_name')
+        if not boundary_name:
+            raise ValueError(
+                "linked_parser_boundaries entry missing 'boundary_function_name'"
+            )
         status = "parser_boundary_candidate"
         reason = (
-            f"RAPTOR recovered {top_boundary['boundary_function_name']} as a bounded "
+            f"RAPTOR recovered {boundary_name} as a bounded "
             f"parser boundary behind this ingress."
         )
         unknowns = [

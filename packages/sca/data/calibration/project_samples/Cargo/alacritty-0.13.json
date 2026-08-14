@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:53:59Z",
+    "fetched_at": "2026-08-01T08:26:33Z",
     "git_ref": "v0.13.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.13",
@@ -142,7 +142,7 @@
         ],
         "id": "RUSTSEC-2024-0404",
         "informational": "unsound",
-        "modified": "2025-10-28T06:29:22.585074+00:00",
+        "modified": "2026-07-17T16:00:04.561210+00:00",
         "published": "2024-09-08T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/anstream",
@@ -222,7 +222,7 @@
       "dep_name": "bytes",
       "dep_version": "1.5.0",
       "ecosystem": "Cargo",
-      "epss": 0.00559,
+      "epss": 0.00552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -233,7 +233,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.5.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.5.0",
-      "raptor_risk_estimate": 9.910856765910943,
+      "raptor_risk_estimate": 9.909976439052972,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -248,10 +248,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402152577,
+        "epss_multiplier": 0.40211685599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.910856765910943,
+        "final": 9.909976439052972,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -391,6 +391,139 @@
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.331,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.41.0"
+        ],
+        "id": "RUSTSEC-2026-0194",
+        "modified": "2026-07-02T08:00:03.849273+00:00",
+        "published": "2026-06-29T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/quick-xml",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0194.html",
+          "https://github.com/tafia/quick-xml/issues/969",
+          "https://github.com/tafia/quick-xml/pull/971",
+          "https://github.com/tafia/quick-xml/commit/07f3db8343cf152f5bc3483ef5b3164582489bea"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Quadratic run time when checking a start tag for duplicate attribute names"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "quick-xml",
+      "dep_version": "0.30.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:quick-xml:0.30.0:RUSTSEC-2026-0194",
+      "in_kev": false,
+      "purl": "pkg:cargo/quick-xml@0.30.0",
+      "raptor_risk_estimate": 10.51953254365781,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use quick-xml` / `extern crate quick-xml` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.51953254365781,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.41.0"
+        ],
+        "id": "RUSTSEC-2026-0195",
+        "modified": "2026-07-02T09:00:04.037478+00:00",
+        "published": "2026-06-29T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/quick-xml",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0195.html",
+          "https://github.com/tafia/quick-xml/issues/970",
+          "https://github.com/tafia/quick-xml/commit/7ca25266e94987210daa864889ab15c9332c8a2a"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "quick-xml",
+      "dep_version": "0.30.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:quick-xml:0.30.0:RUSTSEC-2026-0195",
+      "in_kev": false,
+      "purl": "pkg:cargo/quick-xml@0.30.0",
+      "raptor_risk_estimate": 10.51953254365781,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use quick-xml` / `extern crate quick-xml` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.51953254365781,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",

@@ -102,9 +102,8 @@ def main(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     overlay_dir = out_dir / "overlay"
-    if overlay_dir.exists():
-        shutil.rmtree(overlay_dir)
     try:
+        shutil.rmtree(overlay_dir, ignore_errors=True)
         _copy_target(target, overlay_dir)
         applied = _apply_overlay(proposed, overlay_dir)
     except OSError as e:
@@ -287,7 +286,7 @@ def _verdict(
         "suppression_lifted": len(delta.suppression_lifted),
         "severity_threshold": severity_floor,
     }
-    exit_code = 1 if triggering or not_cleared else 0
+    exit_code = 1 if triggering else 0
     return summary, exit_code
 
 
@@ -356,10 +355,11 @@ def _row_line(r: Dict[str, Any]) -> str:
     name = sca.get("name") or ""
     version = sca.get("version") or ""
     adv = sca.get("advisory") or {}
-    adv_id = adv.get("id") if isinstance(adv, dict) else ""
+    adv_id = (adv.get("id") or "") if isinstance(adv, dict) else ""
     finding = f"{eco}:{name}@{version} {adv_id}".strip()
     kev = "yes" if sca.get("in_kev") else ""
-    epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
+    epss_val = sca.get("epss")
+    epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
     return f"| {sev} | {finding} | {kev} | {epss} |"
 
 

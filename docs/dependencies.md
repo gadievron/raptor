@@ -20,6 +20,7 @@ function-definition time, which is a syntax error on 3.9 and earlier.
 | Semgrep | Yes | Static analysis scanning | `pip install semgrep` |
 | Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
+| Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — **v4.0.458 or newer** (first 2026 release; needs a JVM) |
 | AFL++ | No | Coverage-guided binary fuzzing | `apt install afl++` or `brew install afl++` |
 | GDB | No | Crash analysis (Linux) | `apt install gdb` (pre-installed on most distros) |
 | LLDB | No | Crash analysis (macOS) | Pre-installed with Xcode CLT |
@@ -60,6 +61,10 @@ Pinned versions are in `requirements.txt`. Install with
 | google-genai | Apache 2.0 | Google Gemini native SDK |
 | botocore | Apache 2.0 | AWS Bedrock SigV4 signing (parent-only, not needed for bearer-token auth) |
 | beautifulsoup4 | MIT | HTML parsing (web scanning) |
+| orjson | Apache 2.0 / MIT | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
+| pwntools | MIT | Binary exploit analysis (ELF parsing, gadget search) — used if present, not in requirements.txt |
+| r2pipe | LGPL v3 | Python bridge for radare2 |
+| atheris | Apache 2.0 | Coverage-guided Python fuzzing engine |
 | z3-solver | MIT | SMT-based constraint analysis (one-gadget feasibility, path validation) |
 | tree-sitter + grammars | MIT | Rich inventory metadata (decorators, typed params) |
 | sage-agent-sdk | -- | SAGE persistent memory |
@@ -82,3 +87,18 @@ their use case:
 
 Python packages carry their own licences (see the table above). All core
 dependencies are MIT or Apache 2.0.
+
+## Proxied hosts
+
+RAPTOR is proxy-aware end to end on hosts behind a mandatory egress
+proxy: set the conventional `https_proxy` / `http_proxy` (or
+`all_proxy`) and `no_proxy` variables before launching. The sandbox
+egress chokepoint chains upstream through them, JVM children get
+matching `java.net` sysprops injected, `core.http` clients honour them,
+and loopback sidecars (SAGE, Ollama, Joern) are exempted automatically.
+
+Operator-side installs of external tools (joern, AFL++, frida-server,
+jadx) happen outside RAPTOR — export the same proxy variables in the
+installing shell. Note that JVM-based installers (e.g. coursier for
+joern) ignore proxy env vars and need
+`JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"`.

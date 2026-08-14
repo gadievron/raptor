@@ -8,6 +8,7 @@
 //
 // CWE-20: Improper Input Validation
 // CWE-190: Integer Overflow (strtol overflow not detected)
+// @role: verification
 
 // Match strtol family in both assignment (V = strtol(...)) and
 // declaration-initialiser (T V = strtol(...)) contexts.

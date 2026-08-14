@@ -1211,3 +1211,10 @@ def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
     spec = sb.ValidatorSpec("charset", "x", charset, "+...", 0)
     v = sb.prove_neutralizes(spec, sink_class)
     assert v.sound is expect_sound
+
+
+def test_prove_empty_charset_is_sound():
+    """An empty character class rejects all input — trivially sound."""
+    spec = sb.ValidatorSpec("charset", "x", "", "+...", 0)
+    v = sb.prove_neutralizes(spec, "cmdi")
+    assert v.sound is True

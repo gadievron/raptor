@@ -696,6 +696,7 @@ def discover_sinks_for_target(
     max_depth: int = 10,
     framework_threshold: int = 5,
     framework_min_files: int = 3,
+    scope_dirs: Optional[list] = None,
 ) -> SinkDiscoveryResult:
     """Convenience: build call graphs for a target directory and run discovery.
 
@@ -724,7 +725,16 @@ def discover_sinks_for_target(
     # Language → extractor function
     extractors = _get_call_graph_extractors()
 
+    scope_prefixes = (
+        tuple(str(Path(s).resolve()) for s in scope_dirs)
+        if scope_dirs else None
+    )
+
     for source_file in _iter_source_files(target):
+        if scope_prefixes and not str(
+            source_file.resolve()
+        ).startswith(scope_prefixes):
+            continue
         try:
             rel = str(source_file.relative_to(target))
         except ValueError:

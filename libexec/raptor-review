@@ -1,0 +1,719 @@
+#!/usr/bin/env python3
+"""Unified operator CLI for reviewing audit state across all layers.
+
+Assembles mechanical coverage, review journal, context-map roles, and
+operator annotations into a single view.  Degrades gracefully when any
+layer is absent.
+
+Usage:
+  raptor-review [show] <file> [function]   # unified per-function view
+  raptor-review findings                   # all findings across runs
+  raptor-review gaps                       # what needs review, and why
+  raptor-review coverage [file]            # mechanical tool coverage
+  raptor-review note <file> <fn> -m "..."  # add operator note
+  raptor-review edit <file> <fn>           # edit note in $EDITOR
+  raptor-review stale                      # source-drifted operator notes
+  raptor-review notes                      # list all operator notes
+  raptor-review history <file> <fn>        # all reviews over time
+  raptor-review stats                      # entry counts, costs, coverage %
+  raptor-review compact                    # compact project journal index
+
+Common options:
+  --out DIR       Run output directory (default: active project's latest)
+  --project DIR   Project directory (default: from .active symlink)
+  --target DIR    Source tree root (for stale detection)
+  --raw           Output raw JSON instead of formatted text
+"""
+from __future__ import annotations
+
+import argparse
+import faulthandler
+import json
+import signal
+import sys
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check ───
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ───
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+# ── Layer loaders ────────────────────────────────────────────────────
+
+def _resolve_project_dir(explicit: str | None = None) -> Path | None:
+    """Find the active project directory.
+
+    When *explicit* is given (from ``--project``), use it directly.
+    Otherwise fall back to the ``.active`` symlink.
+    """
+    if explicit:
+        p = Path(explicit)
+        if p.is_dir():
+            return p
+        return None
+    raptor_dir = Path(__file__).resolve().parents[1]
+    active = raptor_dir / ".active"
+    if active.is_symlink() or active.exists():
+        target = active.resolve()
+        if target.is_dir():
+            return target
+    return None
+
+
+def _resolve_out_dir(args) -> Path | None:
+    """Resolve output directory: explicit --out, or latest in project."""
+    if getattr(args, "out", None):
+        return Path(args.out)
+    project = _resolve_project_dir(getattr(args, "project", None))
+    if not project:
+        return None
+    runs = sorted(
+        [d for d in project.iterdir() if d.is_dir() and (d / ".raptor-run.json").is_file()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    return runs[0] if runs else None
+
+
+def _load_context_map(out_dir: Path | None) -> dict | None:
+    if not out_dir:
+        return None
+    cm_path = out_dir / "context-map.json"
+    if not cm_path.is_file():
+        return None
+    try:
+        return json.loads(cm_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _load_journal_entries(out_dir: Path | None):
+    if not out_dir:
+        return []
+    try:
+        from core.audit.journal import load_entries
+        return load_entries(out_dir)
+    except Exception:
+        return []
+
+
+def _load_journal_index(project_dir: Path | None):
+    if not project_dir:
+        return {}
+    try:
+        from core.audit.journal import load_index
+        return load_index(project_dir)
+    except Exception:
+        return {}
+
+
+def _load_coverage_store(project_dir: Path | None):
+    if not project_dir:
+        return None
+    cov_path = project_dir / "coverage.json"
+    if not cov_path.is_file():
+        return None
+    try:
+        from core.coverage.store import CoverageStore
+        return CoverageStore(cov_path)
+    except Exception:
+        return None
+
+
+def _load_annotation(ann_dir: Path | None, file: str, function: str):
+    if not ann_dir or not ann_dir.is_dir():
+        return None
+    try:
+        from core.annotations.storage import read_annotation
+        return read_annotation(ann_dir, file, function)
+    except Exception:
+        return None
+
+
+def _annotations_dir(out_dir: Path | None) -> Path | None:
+    if not out_dir:
+        return None
+    run_marker = out_dir / ".raptor-run.json"
+    if run_marker.is_file():
+        ann = out_dir.parent / "annotations"
+    else:
+        ann = out_dir / "annotations"
+    return ann if ann.is_dir() else None
+
+
+def _context_map_role(cm: dict | None, file: str, function: str) -> str | None:
+    """Extract the structural role of a function from context-map.json."""
+    if not cm:
+        return None
+    key = f"{file}:{function}"
+    for section, role in [
+        ("entry_points", "entry_point"),
+        ("sink_details", "sink"),
+        ("boundary_details", "trust_boundary"),
+    ]:
+        for item in cm.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            item_file = item.get("file", "")
+            item_name = item.get("name", item.get("function", ""))
+            if item_file == file and item_name == function:
+                return role
+            if item_file.endswith(f"/{file}") or file.endswith(f"/{item_file}"):
+                if item_name == function:
+                    return role
+    return None
+
+
+# ── Subcommands ──────────────────────────────────────────────────────
+
+def cmd_show(args):
+    """Show unified view for a file or function."""
+    out_dir = _resolve_out_dir(args)
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    cm = _load_context_map(out_dir)
+    ann_dir = _annotations_dir(out_dir)
+
+    entries = _load_journal_entries(out_dir)
+    if not entries:
+        index = _load_journal_index(project_dir)
+    else:
+        index = {}
+
+    if args.function:
+        _show_function(args.file, args.function, cm, entries, index, ann_dir, args)
+    else:
+        _show_file(args.file, cm, entries, index, ann_dir, args)
+
+
+def _show_function(file, function, cm, entries, index, ann_dir, args):
+    key = f"{file}:{function}"
+    role = _context_map_role(cm, file, function)
+    ann = _load_annotation(ann_dir, file, function)
+
+    journal_entry = None
+    for e in reversed(entries):
+        if e.key == key:
+            journal_entry = e
+            break
+    if not journal_entry and key in index:
+        journal_entry = index[key]
+
+    if getattr(args, "raw", False) and journal_entry:
+        print(json.dumps(journal_entry.to_dict(), indent=2))
+        return
+
+    header = f"─── {file} :: {function} "
+    print(header + "─" * max(0, 60 - len(header)))
+    print()
+
+    if role:
+        print(f"  Role:     {role}")
+
+    if journal_entry:
+        conf = f" ({journal_entry.confidence})" if journal_entry.confidence else ""
+        model = journal_entry.model or "unknown"
+        ts_short = journal_entry.ts[:10] if journal_entry.ts else ""
+        print(f"  Verdict:  {journal_entry.verdict}{conf} — {model}, {ts_short}")
+        if journal_entry.strategy_id or journal_entry.strategies:
+            strats = ", ".join(journal_entry.strategies) if journal_entry.strategies else ""
+            sid = journal_entry.strategy_id or ""
+            print(f"  Strategy: {sid} [{strats}]" if sid else f"  Strategy: [{strats}]")
+    else:
+        print("  Verdict:  (no review recorded)")
+
+    if journal_entry and journal_entry.hypotheses:
+        print()
+        print("  Hypotheses:")
+        for h in journal_entry.hypotheses:
+            status = h.get("status", "?")
+            mark = {"confirmed": "+", "disproven": "x", "exploring": "?"}.get(status, "?")
+            print(f"    {mark} {status:<12} {h.get('claim', '')}")
+
+    if journal_entry and journal_entry.reading_list_items:
+        print()
+        print("  Unresolved questions:")
+        for q in journal_entry.reading_list_items:
+            print(f"    - {q}")
+
+    if ann:
+        print()
+        print("  Operator note:")
+        body = getattr(ann, "body", "")
+        if body:
+            for line in body.strip().splitlines():
+                print(f"    {line}")
+    print()
+
+
+def _show_file(file, cm, entries, index, ann_dir, args):
+    all_entries = {}
+    for e in entries:
+        if e.file == file:
+            existing = all_entries.get(e.function)
+            if not existing or e.ts > existing.ts:
+                all_entries[e.function] = e
+    for key, e in index.items():
+        if e.file == file and e.function not in all_entries:
+            all_entries[e.function] = e
+
+    count = len(all_entries)
+    header = f"─── {file} ({count} reviewed functions) "
+    print(header + "─" * max(0, 60 - len(header)))
+    print()
+
+    roles = {"entry_point": 0, "sink": 0, "trust_boundary": 0}
+    if cm:
+        for section, role in [("entry_points", "entry_point"), ("sink_details", "sink"), ("boundary_details", "trust_boundary")]:
+            for item in cm.get(section) or []:
+                if isinstance(item, dict):
+                    f = item.get("file", "")
+                    if f == file or f.endswith(f"/{file}") or file.endswith(f"/{f}"):
+                        roles[role] += 1
+        role_parts = [f"{v} {k.replace('_', ' ')}s" for k, v in roles.items() if v]
+        if role_parts:
+            print(f"  Roles:    {', '.join(role_parts)}")
+
+    findings = [e for e in all_entries.values() if e.verdict == "finding"]
+    if findings:
+        print(f"  Findings: {len(findings)}")
+    else:
+        print("  Findings: 0")
+
+    if all_entries:
+        print()
+        print("  Reviews:")
+        for fn in sorted(all_entries):
+            e = all_entries[fn]
+            conf = f" ({e.confidence})" if e.confidence else ""
+            model = (e.model or "")[:12]
+            print(f"    {fn:<30} {e.verdict}{conf}  {model}")
+    print()
+
+
+def cmd_findings(args):
+    """List all findings across runs."""
+    out_dir = _resolve_out_dir(args)
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+
+    entries = _load_journal_entries(out_dir)
+    index = _load_journal_index(project_dir)
+
+    all_findings = {}
+    for e in entries:
+        if e.verdict in ("finding", "suspicious"):
+            existing = all_findings.get(e.key)
+            if not existing or e.ts > existing.ts:
+                all_findings[e.key] = e
+    for key, e in index.items():
+        if e.verdict in ("finding", "suspicious") and key not in all_findings:
+            all_findings[key] = e
+
+    if getattr(args, "raw", False):
+        print(json.dumps([e.to_dict() for e in all_findings.values()], indent=2))
+        return
+
+    if not all_findings:
+        print("  No findings.")
+        return
+
+    print(f"  {len(all_findings)} finding(s)")
+    print()
+    for key in sorted(all_findings):
+        e = all_findings[key]
+        cwe = e.cwe or ""
+        model = (e.model or "")[:12]
+        ts_short = e.ts[:10] if e.ts else ""
+        print(f"  {e.file}:{e.function:<20} {cwe:<10} {e.verdict:<10} {model}  {ts_short}")
+
+
+def cmd_gaps(args):
+    """Show what needs review and why."""
+    out_dir = _resolve_out_dir(args)
+    if not out_dir:
+        print("  No output directory found. Run an audit first.", file=sys.stderr)
+        sys.exit(1)
+
+    gaps_path = out_dir / "gaps.json"
+    if not gaps_path.is_file():
+        print("  No gaps.json found in output directory.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        data = json.loads(gaps_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("  Failed to read gaps.json.", file=sys.stderr)
+        sys.exit(1)
+
+    gaps = data.get("gaps", [])
+    if not gaps:
+        print("  No gaps — all functions reviewed.")
+        return
+
+    if getattr(args, "raw", False):
+        print(json.dumps(gaps, indent=2))
+        return
+
+    print(f"  {len(gaps)} function(s) need review")
+    print()
+    print(f"  {'Priority':<10} {'File':<30} {'Function':<25} {'Strategies'}")
+    print(f"  {'─' * 9:<10} {'─' * 29:<30} {'─' * 24:<25} {'─' * 20}")
+    for g in gaps[:50]:
+        strats = ", ".join(g.get("strategies", [])[:3])
+        pri = g.get('priority', 0)
+        fn = g.get('file', '')
+        nm = g.get('name', '')
+        print(f"  {pri:<10} {fn:<30} {nm:<25} {strats}")
+
+
+def cmd_history(args):
+    """Show all reviews of a function over time."""
+    out_dir = _resolve_out_dir(args)
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    key = f"{args.file}:{args.function}"
+
+    entries = [e for e in _load_journal_entries(out_dir) if e.key == key]
+
+    idx = _load_journal_index(project_dir)
+    if key in idx and not any(e.ts == idx[key].ts for e in entries):
+        entries.append(idx[key])
+
+    entries.sort(key=lambda e: e.ts)
+
+    if not entries:
+        print(f"  No reviews recorded for {key}")
+        return
+
+    if getattr(args, "raw", False):
+        print(json.dumps([e.to_dict() for e in entries], indent=2))
+        return
+
+    for e in entries:
+        ts_short = e.ts[:16].replace("T", " ") if e.ts else "?"
+        conf = f" ({e.confidence})" if e.confidence else ""
+        model = (e.model or "?")[:12]
+        strats = ", ".join(e.strategies[:3]) if e.strategies else ""
+        print(f"  {ts_short}  {e.verdict}{conf:<8} {model:<14} {strats}")
+
+
+def cmd_stats(args):
+    """Show entry counts, costs, coverage percentages."""
+    out_dir = _resolve_out_dir(args)
+    entries = _load_journal_entries(out_dir)
+
+    if not entries:
+        print("  No journal entries found.")
+        return
+
+    verdicts: dict[str, int] = {}
+    total_cost = 0.0
+    total_duration = 0.0
+    models: set[str] = set()
+    for e in entries:
+        verdicts[e.verdict] = verdicts.get(e.verdict, 0) + 1
+        total_cost += e.cost_usd or 0.0
+        total_duration += e.duration_s or 0.0
+        if e.model:
+            models.add(e.model)
+
+    print(f"  Entries:  {len(entries)}")
+    print(f"  Models:   {', '.join(sorted(models)) or '(none)'}")
+    print(f"  Cost:     ${total_cost:.2f}")
+    print(f"  Duration: {total_duration:.0f}s ({total_duration / 60:.1f}m)")
+    print()
+    print("  Verdicts:")
+    for v in sorted(verdicts):
+        print(f"    {v:<15} {verdicts[v]}")
+
+
+def cmd_notes(args):
+    """List all operator annotations."""
+    out_dir = _resolve_out_dir(args)
+    ann_dir = _annotations_dir(out_dir)
+    if not ann_dir or not ann_dir.is_dir():
+        print("  No annotations directory found.")
+        return
+
+    try:
+        from core.annotations.storage import iter_all_annotations
+    except ImportError:
+        print("  Annotation storage not available.", file=sys.stderr)
+        return
+
+    count = 0
+    for ann in iter_all_annotations(ann_dir):
+        if ann.metadata.get("source") != "human":
+            continue
+        status = ann.metadata.get("status", "")
+        body_preview = (ann.body or "")[:60].replace("\n", " ")
+        print(f"  {ann.file}:{ann.function:<25} {status:<12} {body_preview}")
+        count += 1
+
+    if count == 0:
+        print("  No operator notes found.")
+
+
+def cmd_note(args):
+    """Add an operator note (delegates to raptor-annotate)."""
+    import subprocess
+    libexec = Path(__file__).resolve().parent
+    cmd = [
+        sys.executable, str(libexec / "raptor-annotate"),
+        "add", args.file, args.function,
+    ]
+    if args.body:
+        cmd.extend(["-m", args.body])
+    if getattr(args, "status", None):
+        cmd.extend(["--status", args.status])
+    env = os.environ.copy()
+    env["_RAPTOR_TRUSTED"] = "1"
+    sys.exit(subprocess.call(cmd, env=env))
+
+
+def cmd_edit(args):
+    """Edit an operator note (delegates to raptor-annotate)."""
+    import subprocess
+    libexec = Path(__file__).resolve().parent
+    cmd = [
+        sys.executable, str(libexec / "raptor-annotate"),
+        "edit", args.file, args.function,
+    ]
+    env = os.environ.copy()
+    env["_RAPTOR_TRUSTED"] = "1"
+    sys.exit(subprocess.call(cmd, env=env))
+
+
+def cmd_stale(args):
+    """List stale reviews.
+
+    ``--source`` selects which store to check:
+      * ``annotation`` (default) — human operator notes (delegates
+        to ``raptor-annotate stale``).
+      * ``journal`` — LLM review entries in the project-level
+        journal index. Recomputes each entry's source hash and
+        lists entries where the current source differs from the
+        recorded hash (source drift since the review).
+      * ``both`` — run both.
+    """
+    source = getattr(args, "source", None) or "annotation"
+
+    if source in ("annotation", "both"):
+        import subprocess
+        libexec = Path(__file__).resolve().parent
+        cmd = [sys.executable, str(libexec / "raptor-annotate"), "stale"]
+        if getattr(args, "target", None):
+            cmd.extend(["--target", args.target])
+        env = os.environ.copy()
+        env["_RAPTOR_TRUSTED"] = "1"
+        rc = subprocess.call(cmd, env=env)
+        if source == "annotation":
+            sys.exit(rc)
+
+    if source in ("journal", "both"):
+        _stale_journal(args)
+
+
+def _stale_journal(args):
+    """List journal entries whose source hash no longer matches the
+    file on disk.
+
+    Amendment §6 (Phase 3.5): symmetric to ``/annotate stale``.
+    Operators previously had no way to find stale LLM reviews —
+    this closes that gap.
+    """
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    if not project_dir:
+        print("  No active project.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.audit.journal import load_index
+    from core.audit.record import _compute_hash
+
+    target = getattr(args, "target", None)
+    target_path = Path(target) if target else project_dir
+
+    try:
+        entries = load_index(project_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Corrupt journal index: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    stale = []
+    for entry in entries.values():
+        if not entry.source_hash:
+            continue
+        current = _compute_hash(
+            target_path, entry.file, entry.line_start,
+            entry.line_end,
+        )
+        if current and current != entry.source_hash:
+            stale.append((entry, current))
+
+    if not stale:
+        print(f"  {len(entries)} journal entries, 0 stale.")
+        return
+
+    print(f"  {len(entries)} journal entries, {len(stale)} stale:")
+    for entry, current in sorted(stale, key=lambda e: (e[0].file, e[0].function)):
+        print(
+            f"    {entry.file}:{entry.function}  "
+            f"verdict={entry.verdict}  "
+            f"was={entry.source_hash[:12]}...  "
+            f"now={current[:12]}..."
+        )
+
+
+def cmd_coverage(args):
+    """Show mechanical tool coverage for a project run."""
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    store = _load_coverage_store(project_dir)
+    if store is None:
+        print("  No coverage data found.")
+        return
+
+    file_filter = getattr(args, "file", None)
+    all_files = store.files()
+    if file_filter:
+        all_files = [f for f in all_files if file_filter in f]
+        if not all_files:
+            print(f"  No coverage records matching '{file_filter}'.")
+            return
+
+    for path in all_files:
+        cov = store.file_coverage(path)
+        print(f"  {path}: {cov:.0f}%")
+
+    print(f"\n  {len(all_files)} file(s) with coverage data.")
+
+
+def cmd_compact(args):
+    """Compact the project journal index."""
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    if not project_dir:
+        print("  No active project.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.audit.journal import INDEX_FILENAME
+    index_path = project_dir / INDEX_FILENAME
+    if not index_path.is_file():
+        print("  No journal index to compact.")
+        return
+
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("  Corrupt index.", file=sys.stderr)
+        sys.exit(1)
+
+    count = len(data.get("entries", {}))
+    print(f"  Index has {count} entries.")
+
+
+# ── Argument parsing ─────────────────────────────────────────────────
+
+def main():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--out", default=None, help="Output directory")
+    common.add_argument("--project", default=None, help="Project directory")
+    common.add_argument("--raw", action="store_true", help="JSON output")
+
+    parser = argparse.ArgumentParser(
+        prog="raptor-review",
+        description="Unified review CLI — queries all layers.",
+        parents=[common],
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    p_show = sub.add_parser("show", parents=[common], help="Unified view for file/function")
+    p_show.add_argument("file")
+    p_show.add_argument("function", nargs="?", default=None)
+
+    sub.add_parser("findings", parents=[common], help="All findings across runs")
+    sub.add_parser("gaps", parents=[common], help="What needs review")
+
+    p_hist = sub.add_parser("history", parents=[common], help="Review history for a function")
+    p_hist.add_argument("file")
+    p_hist.add_argument("function")
+
+    sub.add_parser("stats", parents=[common], help="Entry counts, costs")
+    sub.add_parser("notes", parents=[common], help="List operator annotations")
+
+    p_note = sub.add_parser("note", parents=[common], help="Add operator note")
+    p_note.add_argument("file")
+    p_note.add_argument("function")
+    p_note.add_argument("-m", "--body", default=None)
+    p_note.add_argument("--status", default=None)
+
+    p_edit = sub.add_parser("edit", parents=[common], help="Edit operator note")
+    p_edit.add_argument("file")
+    p_edit.add_argument("function")
+
+    p_stale = sub.add_parser(
+        "stale", parents=[common],
+        help="Find stale reviews (--source annotation|journal|both)",
+    )
+    p_stale.add_argument("--target", default=None)
+    p_stale.add_argument(
+        "--source", default="annotation",
+        choices=["annotation", "journal", "both"],
+        help="Which store to check for staleness (default: annotation)",
+    )
+
+    sub.add_parser("compact", parents=[common], help="Compact project journal index")
+
+    p_cov = sub.add_parser("coverage", parents=[common], help="Mechanical tool coverage")
+    p_cov.add_argument("file", nargs="?", default=None)
+
+    known_commands = {
+        "show", "findings", "gaps", "history", "stats", "notes",
+        "note", "edit", "stale", "compact", "coverage",
+    }
+    argv_rest = sys.argv[1:]
+    first_positional = next((a for a in argv_rest if not a.startswith("-")), None)
+
+    if first_positional and first_positional not in known_commands:
+        argv_rest = ["show"] + argv_rest
+    args = parser.parse_args(argv_rest)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    dispatch = {
+        "show": cmd_show,
+        "findings": cmd_findings,
+        "gaps": cmd_gaps,
+        "history": cmd_history,
+        "stats": cmd_stats,
+        "notes": cmd_notes,
+        "note": cmd_note,
+        "edit": cmd_edit,
+        "stale": cmd_stale,
+        "compact": cmd_compact,
+        "coverage": cmd_coverage,
+    }
+
+    handler = dispatch.get(args.command)
+    if handler:
+        handler(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

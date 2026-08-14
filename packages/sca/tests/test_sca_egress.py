@@ -178,7 +178,7 @@ class TestRunScaSubprocess:
 
         assert captured_kwargs.get("use_egress_proxy") is True
         proxy_hosts = captured_kwargs.get("proxy_hosts", [])
-        assert set(proxy_hosts) == set(SCA_ALLOWED_HOSTS)
+        assert set(SCA_ALLOWED_HOSTS) <= set(proxy_hosts)
         assert captured_kwargs.get("caller_label") == "sca-agent"
 
     def test_passes_sandbox_args(self, tmp_path):

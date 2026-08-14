@@ -450,7 +450,7 @@ def _build_strategy_block(
     except Exception as e:
         # Best-effort — analysis must continue even if strategy
         # rendering fails for an exotic input.
-        logger.debug(f"strategy block render failed: {e}", exc_info=True)
+        logger.debug("strategy block render failed: %s", e, exc_info=True)
         return ""
 
     return (
@@ -492,7 +492,7 @@ def _build_verified_exemplar_block(
         finding = {"id": rule_id, "cwe_id": cwe_id, "file": file_path}
         return render_verified_exemplars(finding, outcomes)
     except Exception as e:
-        logger.debug(f"verified-exemplar block render failed: {e}", exc_info=True)
+        logger.debug("verified-exemplar block render failed: %s", e, exc_info=True)
         return ""
 
 
@@ -662,20 +662,6 @@ def build_analysis_prompt_bundle(
                 kind="surrounding-context",
                 origin=file_path,
             ))
-
-    # SAGE historical context is prior LLM output —
-    # propagated trust label is "untrusted".
-    try:
-        from core.sage.hooks import enrich_analysis_prompt
-        sage_context = enrich_analysis_prompt(rule_id, file_path, repo_path=repo_path)
-        if sage_context:
-            blocks.append(UntrustedBlock(
-                content=sage_context,
-                kind="sage-historical-context",
-                origin="sage:cross-run-learning",
-            ))
-    except Exception:
-        pass
 
     # Caller-supplied extra blocks (e.g. RetryTask prior-reasoning + contradictions).
     # All extras are untrusted by definition (callers cannot pass trusted content here).

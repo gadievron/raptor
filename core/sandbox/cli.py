@@ -59,7 +59,7 @@ def set_cli_profile(profile: str) -> None:
     or target repo content — to keep the sandbox unescapable by prompt
     injection.
     """
-    logger.warning(f"Sandbox profile forced to {profile!r} by CLI --sandbox flag")
+    logger.warning("Sandbox profile forced to %r by CLI --sandbox flag", profile)
     _set_cli_state(profile)
 
 

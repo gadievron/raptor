@@ -317,6 +317,15 @@ def _go_find_matching_brace(source: str, open_pos: int) -> Optional[int]:
     n = len(source)
     while i < n and depth > 0:
         c = source[i]
+        if c == "/" and i + 1 < n:
+            if source[i + 1] == "/":
+                nl = source.find("\n", i + 2)
+                i = nl + 1 if nl != -1 else n
+                continue
+            if source[i + 1] == "*":
+                end = source.find("*/", i + 2)
+                i = end + 2 if end != -1 else n
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -385,7 +394,7 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
 
 
 _RUST_COMPILE_ERROR = re.compile(
-    r"^\s*compile_error\s*!\s*\(", re.MULTILINE,
+    r"^[ \t]*compile_error\s*!\s*\(", re.MULTILINE,
 )
 
 

@@ -528,6 +528,17 @@ def _compute_one_summary(
         if not changed:
             break
 
+    # Pre-compute return-node line numbers and call-site AST nodes by
+    # line so the collection loop below does O(1) lookups instead of
+    # walking the full function AST at every CFG node.
+    _return_linenos: Set[int] = set()
+    _calls_by_line: Dict[int, List[ast.Call]] = {}
+    for ast_n in ast.walk(fn_ast):
+        if isinstance(ast_n, ast.Return) and hasattr(ast_n, "lineno"):
+            _return_linenos.add(ast_n.lineno)
+        elif isinstance(ast_n, ast.Call) and hasattr(ast_n, "lineno"):
+            _calls_by_line.setdefault(ast_n.lineno, []).append(ast_n)
+
     # Collect return_effects and call_arg_taint.
     return_effects: Set[Tuple[int, str, int]] = set()
     call_arg_taint: Set[Tuple[str, int, int]] = set()
@@ -535,7 +546,7 @@ def _compute_one_summary(
     for n in cfg.nodes():
         # Returns: walk the return value's AST and produce its
         # TaintState; the contributing atoms feed return_effects.
-        if _is_return_node(n, fn_ast):
+        if n.kind == "stmt" and n.lineno in _return_linenos:
             return_value = _find_return_value_at(fn_ast, n.lineno)
             if return_value is None:
                 # bare ``return`` (None) — no contribution
@@ -558,11 +569,7 @@ def _compute_one_summary(
         # Call sites: walk each ``ast.Call`` at this line and record
         # positional args' contributions.
         if n.call_sites:
-            for ast_n in ast.walk(fn_ast):
-                if not isinstance(ast_n, ast.Call):
-                    continue
-                if getattr(ast_n, "lineno", 0) != n.lineno:
-                    continue
+            for ast_n in _calls_by_line.get(n.lineno, ()):
                 callable_name = _attribute_chain_str(ast_n.func)
                 if callable_name is None:
                     continue

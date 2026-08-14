@@ -227,8 +227,9 @@ class CostTracker:
         with self._lock:
             projected = self._total_cost + estimate
         if projected > self._max_cost * cutoff_ratio:
-            logger.info(f"Skipping {phase_name} — estimated ${estimate:.2f} "
-                        f"would push total to ${projected:.2f} (budget: ${self._max_cost:.2f})")
+            logger.info("Skipping %s — estimated $%.2f "
+                        "would push total to $%.2f (budget: $%.2f)",
+                        phase_name, estimate, projected, self._max_cost)
             return True
         return False
 
@@ -279,8 +280,8 @@ def _finalize_results_for_emit(results: list) -> None:
     * ``repo_path`` is an absolute filesystem path on the operator's
       machine (``/home/alice/projects/my-target``,
       ``/tmp/raptor/foo``); stamping it onto each finding earlier in
-      the pipeline (line ~303) is necessary for SAGE enrichment
-      scoping, but leaking it into the persisted report exposes
+      the pipeline (line ~303) is necessary for prompt builders,
+      but leaking it into the persisted report exposes
       operator filesystem layout downstream (username, project
       naming, runner tmp-dir hierarchy). Strip AFTER all internal
       consumers have used it (judge, consensus, aggregation) and
@@ -447,6 +448,12 @@ def build_llm_config_from_flags(
             # fast-tier models are still auto-seeded by __post_init__ from the
             # primary's OWN provider, so they stay same-provider (cheap).
             llm_config = LLMConfig(primary_model=primary_mc, fallback_models=[])
+            # Pin the operator's --model process-wide so any sub-consumer
+            # deep in the run that constructs ``LLMConfig()`` no-arg
+            # honours the operator's choice instead of silently falling
+            # through to a models.json-configured "thinking model".
+            from core.llm.config import set_operator_primary_override
+            set_operator_primary_override(primary_mc)
             for extra in models[1:]:
                 mc = _resolve_model(extra, "analysis")
                 if mc:
@@ -654,11 +661,11 @@ def orchestrate(
     try:
         report = load_json(prep_report_path, strict=True)
     except Exception as e:
-        logger.error(f"Failed to read Phase 3 report: {e}")
+        logger.error("Failed to read Phase 3 report: %s", e)
         print(f"\n  ✗ Failed to read analysis report: {e}", file=sys.stderr)
         return None
     if report is None:
-        logger.error(f"Phase 3 report not found: {prep_report_path}")
+        logger.error("Phase 3 report not found: %s", prep_report_path)
         print(f"\n  ✗ Phase 3 report not found: {prep_report_path}", file=sys.stderr)
         return None
 
@@ -684,9 +691,7 @@ def orchestrate(
     from core.security import prompt_telemetry as _pt
     _pt.defense_telemetry.reset()
 
-    # Stamp repo_path so build_analysis_prompt_bundle_from_finding forwards it to
-    # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
-    # the enrichment a no-op for every finding on the dispatch path.
+    # Stamp repo_path so downstream prompt builders can resolve file paths.
     for f in findings:
         f.setdefault("repo_path", str(repo_path))
 
@@ -703,21 +708,8 @@ def orchestrate(
     except Exception as e:  # noqa: BLE001
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
 
-    precall_path = Path(out_dir) / "sage_precall_scan.json"
-    if precall_path.is_file():
-        try:
-            precall_raw = load_json(precall_path)
-            mems = (precall_raw or {}).get("memories") or []
-            from core.sage.hooks import format_sage_memories_for_prompt
-            precall_txt = format_sage_memories_for_prompt(mems)
-            if precall_txt:
-                for f in findings:
-                    f.setdefault("_sage_precall_scan_context", precall_txt)
-        except Exception as e:
-            logger.debug("SAGE precall for orchestration skipped: %s", e)
-
     if max_findings > 0 and len(findings) > max_findings:
-        logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
+        logger.info("Capping at %d findings (of %d)", max_findings, len(findings))
         findings = findings[:max_findings]
 
     # Resolve model roles
@@ -1102,13 +1094,11 @@ def orchestrate(
             # path was running with weaker defences than the
             # primary path even though the same Claude model was
             # behind it.
-            _external_failures = list(analysis_results)
             analysis_results = dispatch_task(
                 AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
         findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
-            analysis_results = _external_failures + analysis_results
 
     # A non-empty dispatch batch with no usable response is materially
     # different from an empty scan or a partial failure. Keep the report so
@@ -1747,7 +1737,7 @@ def orchestrate(
         save_json(out_dir / "aggregation.json", aggregation)
     out_path = out_dir / "orchestrated_report.json"
     save_json(out_path, merged)
-    logger.info(f"Orchestrated report saved to {out_path}")
+    logger.info("Orchestrated report saved to %s", out_path)
 
     # Summary
     orch = merged["orchestration"]
@@ -2208,6 +2198,7 @@ def _merge_results(
         if not _is_tp and _is_exp:
             _is_exp = False
         finding["exploitable"] = _is_exp
+        finding["is_exploitable"] = _is_exp
         finding["exploitability_score"] = cc.get("exploitability_score", 0)
 
         if finding["exploitable"]:

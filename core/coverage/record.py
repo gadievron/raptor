@@ -557,10 +557,3 @@ def load_records(run_dir: Path) -> List[Dict[str, Any]]:
 def load_record(run_dir: Path) -> Optional[Dict[str, Any]]:
     """Load a coverage record from a run directory. Legacy single-file API."""
     return load_json(Path(run_dir) / COVERAGE_RECORD_FILE)
-
-
-def cleanup_manifest(run_dir: Path) -> None:
-    """Remove the reads manifest after converting to a coverage record."""
-    manifest = Path(run_dir) / READS_MANIFEST
-    if manifest.exists():
-        manifest.unlink(missing_ok=True)

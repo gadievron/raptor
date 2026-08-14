@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import pytest
+
+pytestmark = pytest.mark.slow
 
 from packages.llm_analysis.checker_followup import (
     CHECKER_MATCHES_FILE,

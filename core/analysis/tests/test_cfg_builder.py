@@ -196,15 +196,13 @@ def test_break_targets_loop_successor():
         "    return 0\n"
     )
     cfg = _cfg(src)
-    nodes = {n.lineno: n for n in cfg.nodes() if n.kind == "stmt"}
-    # The break statement's successor should be the loop's after-loop
-    # target (header in our model, since there's no orelse).
     break_node = next(
         n for n in cfg.nodes() if "break" in n.label
     )
-    header = nodes[2]
-    # break links to header (the after-loop pseudo-target)
-    assert header in cfg.successors(break_node)
+    exit_node = next(
+        n for n in cfg.nodes() if "while-exit" in n.label
+    )
+    assert exit_node in cfg.successors(break_node)
 
 
 def test_continue_targets_loop_header():

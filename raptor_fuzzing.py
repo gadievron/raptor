@@ -29,12 +29,9 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sage.hooks import (
-    format_sage_memories_for_prompt,
     infer_afl_fuzz_flags_from_sage_recall_row,
     pick_strongest_recall_row,
-    recall_context_for_crash_analysis,
     recall_context_for_fuzzing_strategy,
-    store_crash_analysis_pattern,
     store_fuzzing_strategy_outcome,
 )
 from packages.fuzzing import AFLRunner, CrashCollector
@@ -224,7 +221,7 @@ Examples:
         try:
             manifest = prepare_builtin_seed_corpus(seed_out, profile=args.seed_profile)
         except Exception as e:
-            logger.error(f"Failed to export built-in seed corpus: {e}")
+            logger.error("Failed to export built-in seed corpus: %s", e)
             sys.exit(1)
 
         print("Built-in seed corpus exported")
@@ -253,7 +250,7 @@ Examples:
                 )
             )
         except Exception as e:
-            logger.error(f"Failed to prepare seed corpus: {e}")
+            logger.error("Failed to prepare seed corpus: %s", e)
             sys.exit(1)
 
         print("Seed corpus prepared")
@@ -272,7 +269,7 @@ Examples:
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():
-        logger.error(f"Binary not found: {binary_path}")
+        logger.error("Binary not found: %s", binary_path)
         sys.exit(1)
 
     corpus_dir = Path(args.corpus) if args.corpus else None
@@ -319,7 +316,7 @@ Examples:
                     "libFuzzer/radare2 present."
                 )
         except Exception as e:
-            logger.debug(f"Capability probe failed, falling back to legacy: {e}")
+            logger.debug("Capability probe failed, falling back to legacy: %s", e)
 
     if use_orchestrator:
         from packages.fuzzing import FuzzingOrchestrator
@@ -365,7 +362,7 @@ Examples:
             print("\nCampaign interrupted by user.")
             sys.exit(130)
         except Exception as e:
-            logger.error(f"Campaign failed: {e}", exc_info=True)
+            logger.error("Campaign failed: %s", e, exc_info=True)
             sys.exit(1)
 
         print()
@@ -387,17 +384,17 @@ Examples:
     logger.info("=" * 70)
     logger.info("RAPTOR FUZZING WORKFLOW STARTED")
     logger.info("=" * 70)
-    logger.info(f"Binary: {binary_path.name}")
-    logger.info(f"Full path: {binary_path}")
-    logger.info(f"Output: {out_dir}")
-    logger.info(f"Duration: {args.duration}s ({args.duration/60:.1f} minutes)")
-    logger.info(f"Max crashes to analyse: {args.max_crashes}")
-    logger.info(f"Input mode: {args.input_mode}")
+    logger.info("Binary: %s", binary_path.name)
+    logger.info("Full path: %s", binary_path)
+    logger.info("Output: %s", out_dir)
+    logger.info("Duration: %ds (%.1f minutes)", args.duration, args.duration / 60)
+    logger.info("Max crashes to analyse: %d", args.max_crashes)
+    logger.info("Input mode: %s", args.input_mode)
     if args.dict:
-        logger.info(f"Dictionary: {args.dict}")
-    logger.info(f"Sanitizer check: {'enabled' if args.check_sanitizers else 'disabled'}")
-    logger.info(f"Recompile guide: {'will be shown' if args.recompile_guide else 'disabled'}")
-    logger.info(f"Coverage analysis: {'enabled' if args.use_showmap else 'disabled'}")
+        logger.info("Dictionary: %s", args.dict)
+    logger.info("Sanitizer check: %s", "enabled" if args.check_sanitizers else "disabled")
+    logger.info("Recompile guide: %s", "will be shown" if args.recompile_guide else "disabled")
+    logger.info("Coverage analysis: %s", "enabled" if args.use_showmap else "disabled")
     # Pre-fix this block had DUPLICATE log lines for input_mode,
     # dict, check_sanitizers, recompile_guide, use_showmap (5
     # lines repeated immediately after the first set). Operators
@@ -459,7 +456,7 @@ Examples:
         except (OSError, RuntimeError):
             resolved_memory_path = memory_file
         if resolved_memory_path is not None:
-            logger.info(f"Fuzzing memory path: {resolved_memory_path}")
+            logger.info("Fuzzing memory path: %s", resolved_memory_path)
 
         # Initialize exploit validator
         exploit_validator = ExploitValidator(work_dir=out_dir / "validation")
@@ -469,17 +466,16 @@ Examples:
             goal_planner = GoalPlanner()
             goal = goal_planner.create_goal_from_user_input(args.goal)
             goal_planner.set_goal(goal)
-            logger.info(f"Goal-directed fuzzing enabled: {goal.description}")
+            logger.info("Goal-directed fuzzing enabled: %s", goal.description)
 
         # Log memory statistics
         stats = memory.get_statistics()
-        logger.info(f"Loaded fuzzing memory: {stats['total_knowledge']} knowledge entries")
-        logger.info(f"Past campaigns: {stats['total_campaigns']}")
+        logger.info("Loaded fuzzing memory: %d knowledge entries", stats['total_knowledge'])
+        logger.info("Past campaigns: %d", stats['total_campaigns'])
         if stats['total_knowledge'] > 0:
-            logger.info(f"Average confidence: {stats['average_confidence']:.2f}")
+            logger.info("Average confidence: %.2f", stats['average_confidence'])
 
         # Check for past strategies for this binary + SAGE cross-run priors
-        sage_strategy_text = format_sage_memories_for_prompt(sage_strategy_rows)
         if sage_strategy_rows:
             top = pick_strongest_recall_row(sage_strategy_rows, min_confidence=0.0)
             top_c = float(top.get("confidence") or 0) if top else 0.0
@@ -491,15 +487,10 @@ Examples:
                 )
         best_strategy = memory.get_best_strategy(binary_hash)
         if best_strategy:
-            logger.info(f"✨ Found best strategy from memory: {best_strategy}")
-        elif sage_strategy_text:
-            logger.info(
-                "No local FuzzingMemory strategy entry; using SAGE recall as planning context."
-            )
+            logger.info("Found best strategy from memory: %s", best_strategy)
 
         planner = FuzzingPlanner(
             memory=memory,
-            sage_planning_notes=sage_strategy_text or None,
             sage_strategy_rows=sage_strategy_rows,
         )
 
@@ -520,7 +511,7 @@ Examples:
             )
 
             corpus_dir = autonomous_corpus_dir
-            logger.info(f"✨ Autonomous corpus generated: {num_seeds} intelligent seeds")
+            logger.info("Autonomous corpus generated: %d intelligent seeds", num_seeds)
 
     # ========================================================================
     # PHASE 1: FUZZING WITH AFL++
@@ -588,8 +579,13 @@ Examples:
                 pass
             sys.exit(0)
 
+    except SandboxSetupError as e:
+        logger.error("Sandbox setup failed: %s", e)
+        print(f"\n✗ Sandbox setup failed: {e}", file=sys.stderr)
+        print("  Re-run without sandboxing or fix the sandbox configuration.", file=sys.stderr)
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
-        logger.error(f"Fuzzing failed: {e}")
+        logger.error("Fuzzing failed: %s", e)
         print(f"\n✗ Fuzzing failed: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -701,17 +697,9 @@ Examples:
                 input_file=crash.input_file,
                 signal=crash.signal or "unknown",
             )
-            sage_crash_rows = recall_context_for_crash_analysis(
-                repo_path=str(binary_path.parent),
-                binary_fingerprint=binary_hash,
-                signal=crash_context.signal,
-                function_name=crash_context.function_name,
-            )
-            sage_crash_text = format_sage_memories_for_prompt(sage_crash_rows)
-
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
-                logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
+                logger.info("Skipping duplicate crash (stack hash: %s)", crash_context.stack_hash)
                 print("⊘ Duplicate crash - same stack trace as previous crash")
                 skipped_duplicates += 1
                 continue
@@ -721,18 +709,7 @@ Examples:
 
             # Classify crash type
             crash_context.crash_type = crash_analyser.classify_crash_type(crash_context)
-            logger.info(f"Crash type (heuristic): {crash_context.crash_type}")
-            # Persist coarse crash pattern outcome into SAGE for cross-run recall.
-            store_crash_analysis_pattern(
-                repo_path=str(binary_path.parent),
-                binary_path=str(binary_path),
-                signal=crash_context.signal,
-                function_name=crash_context.function_name or "unknown",
-                crash_type=crash_context.crash_type,
-                source_location=crash_context.source_location,
-                stack_hash=crash_context.stack_hash,
-                exploitability_hint=crash_context.exploitability,
-            )
+            logger.info("Crash type (heuristic): %s", crash_context.crash_type)
 
             # LLM analysis - use multi-turn if autonomous mode
             if args.autonomous and multi_turn:
@@ -740,9 +717,8 @@ Examples:
                 deep_analysis = multi_turn.analyse_crash_deeply(
                     crash_context,
                     max_turns=3,
-                    sage_prior_recall=sage_crash_text or None,
                 )
-                logger.info(f"Multi-turn analysis confidence: {deep_analysis['confidence']:.2f}")
+                logger.info("Multi-turn analysis confidence: %.2f", deep_analysis['confidence'])
 
                 # Update crash context with deep analysis
                 crash_context.vulnerability_type = deep_analysis.get('vulnerability_type', crash_context.crash_type)
@@ -766,7 +742,6 @@ Examples:
                 # Standard single-shot analysis
                 if llm_agent.analyse_crash(
                     crash_context,
-                    sage_prior_recall=sage_crash_text or None,
                 ):
                     analysed += 1
 
@@ -780,7 +755,7 @@ Examples:
                                 getattr(crash_context, 'crash_type', None)
                     viable, reason = exploit_validator.check_mitigations(binary_path, vuln_type)
                     if not viable:
-                        logger.warning(f"Mitigation check: {reason}")
+                        logger.warning("Mitigation check: %s", reason)
                         logger.warning("Exploit generation may fail - proceeding anyway")
 
                 # Generate exploit
@@ -809,7 +784,7 @@ Examples:
                             if success and refined_code:
                                 refined_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit_validated.c"
                                 refined_file.write_text(refined_code, encoding="utf-8")
-                                logger.info(f"✓ Validated exploit saved: {refined_file}")
+                                logger.info("Validated exploit saved: %s", refined_file)
 
                                 # Update memory with success
                                 if memory:
@@ -823,7 +798,7 @@ Examples:
                                 # Refinement attempted but failed - save best attempt
                                 refined_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit_best_attempt.c"
                                 refined_file.write_text(refined_code, encoding="utf-8")
-                                logger.warning(f"⚠ Best attempt exploit saved: {refined_file}")
+                                logger.warning("Best attempt exploit saved: %s", refined_file)
 
                                 # Update memory with failure
                                 if memory:
@@ -853,7 +828,7 @@ Examples:
         print(f"  - Exploits generated: {exploits_generated}")
 
     except Exception as e:
-        logger.error(f"Crash analysis failed: {e}")
+        logger.error("Crash analysis failed: %s", e)
         print(f"\n✗ Analysis failed: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)

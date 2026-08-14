@@ -72,6 +72,11 @@ def set_failure_mode(
             f"The record may be corrupt or the path may be a stale "
             f"symlink — investigate before retrying."
         ) from None
+    if not isinstance(blob, dict):
+        raise ValueError(
+            f"set_failure_mode: {record_path} contains "
+            f"{type(blob).__name__}, expected a JSON object"
+        )
     blob["failure_mode"] = mode.value if mode is not None else None
     # Construct first to validate; reject before any write.
     updated = LabeledAttempt.from_dict(blob)

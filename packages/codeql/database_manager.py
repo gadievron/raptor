@@ -63,7 +63,8 @@ class DatabaseMetadata:
 
     @staticmethod
     def from_dict(data: dict):
-        return DatabaseMetadata(**data)
+        fields = {f.name for f in __import__('dataclasses').fields(DatabaseMetadata)}
+        return DatabaseMetadata(**{k: v for k, v in data.items() if k in fields})
 
 
 @dataclass
@@ -106,8 +107,8 @@ class DatabaseManager:
         if not self.codeql_cli:
             raise RuntimeError("CodeQL CLI not found. Set CODEQL_CLI environment variable or install CodeQL.")
 
-        logger.info(f"Database manager initialized: {self.db_root}")
-        logger.info(f"CodeQL CLI: {self.codeql_cli}")
+        logger.info("Database manager initialized: %s", self.db_root)
+        logger.info("CodeQL CLI: %s", self.codeql_cli)
 
     def _sandbox_tool_paths(self) -> list:
         """Mount-ns bind dirs needed for codeql to run. See QueryRunner
@@ -183,7 +184,7 @@ class DatabaseManager:
                 return result.stdout.strip().split('\n')[0] or None
             return None
         except Exception as e:
-            logger.warning(f"Failed to get CodeQL version: {e}")
+            logger.warning("Failed to get CodeQL version: %s", e)
             return None
 
     def compute_repo_hash(self, repo_path: Path) -> str:
@@ -291,7 +292,7 @@ class DatabaseManager:
                     except OSError:
                         pass
         except Exception as e:
-            logger.debug(f"Error hashing repository: {e}")
+            logger.debug("Error hashing repository: %s", e)
 
         return hasher.hexdigest()[:16]
 
@@ -315,7 +316,7 @@ class DatabaseManager:
         try:
             return DatabaseMetadata.from_dict(data)
         except Exception as e:
-            logger.warning(f"Failed to load metadata: {e}")
+            logger.warning("Failed to load metadata: %s", e)
             return None
 
     def save_metadata(self, metadata: DatabaseMetadata):
@@ -326,7 +327,7 @@ class DatabaseManager:
         try:
             save_json(metadata_path, metadata.to_dict())
         except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
+            logger.error("Failed to save metadata: %s", e)
 
     def get_cached_database(
         self,
@@ -354,7 +355,7 @@ class DatabaseManager:
 
         # Check if database is valid
         if not metadata.success:
-            logger.debug(f"Cached database marked as failed: {language}")
+            logger.debug("Cached database marked as failed: %s", language)
             return None
 
         # Check age
@@ -366,18 +367,18 @@ class DatabaseManager:
                 created_at = created_at.replace(tzinfo=timezone.utc)
             age = datetime.now(timezone.utc) - created_at
             if age > timedelta(days=max_age_days):
-                logger.debug(f"Cached database too old: {age.days} days")
+                logger.debug("Cached database too old: %s days", age.days)
                 return None
         except Exception as e:
-            logger.debug(f"Failed to parse database age: {e}")
+            logger.debug("Failed to parse database age: %s", e)
             return None
 
         # Validate database integrity
         if not self.validate_database(db_path):
-            logger.warning(f"Cached database failed validation: {language}")
+            logger.warning("Cached database failed validation: %s", language)
             return None
 
-        logger.info(f"✓ Using cached database for {language}: {db_path}")
+        logger.info("✓ Using cached database for %s: %s", language, db_path)
         return db_path
 
     # Concurrent-write safety: build-in-staging + atomic-promote pattern.
@@ -511,7 +512,7 @@ class DatabaseManager:
                     created_at = created_at.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) - created_at > timedelta(days=max_age_days):
                     evict = True
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 # Malformed metadata can't come from an in-flight writer
                 # because save_metadata uses atomic temp-rename — readers
                 # see either the old or the new metadata, never partial.
@@ -586,9 +587,9 @@ class DatabaseManager:
         repo_path = Path(repo_path).resolve()
         errors = []
 
-        logger.info(f"{'=' * 70}")
-        logger.info(f"Creating CodeQL database for {language}")
-        logger.info(f"{'=' * 70}")
+        logger.info("%s", '=' * 70)
+        logger.info("Creating CodeQL database for %s", language)
+        logger.info("%s", '=' * 70)
 
         # Trust check: target-repo codeql-pack.yml / qlpack.yml /
         # codeql-config.yml can declare custom extractors, build hooks
@@ -651,7 +652,7 @@ class DatabaseManager:
         # reader keeps its inode references intact (see _evict_stale_canonical
         # docstring for the POSIX semantics).
         if force and canonical_path.exists():
-            logger.info(f"Force rebuild: evicting cached database for {language}")
+            logger.info("Force rebuild: evicting cached database for %s", language)
             try:
                 marker = canonical_path.with_name(self._stale_marker_name(canonical_path))
                 os.rename(canonical_path, marker)
@@ -678,8 +679,7 @@ class DatabaseManager:
 
         # Cleanup any prior leftover staging from this same process (e.g.,
         # from a previous crashed run with the same PID after PID reuse).
-        if staging_path.exists():
-            shutil.rmtree(staging_path, ignore_errors=True)
+        shutil.rmtree(staging_path, ignore_errors=True)
 
         # Build the codeql command — point at staging, not canonical, so
         # readers of canonical never see a partial DB.
@@ -793,13 +793,13 @@ class DatabaseManager:
                     build_script = None
                     raise
                 cmd.extend(["--command", str(build_script)])
-            logger.info(f"Build command: {build_system.command}")
-            logger.info(f"Working directory: {working_dir}")
+            logger.info("Build command: %s", build_system.command)
+            logger.info("Working directory: %s", working_dir)
         else:
             logger.info("No build command (interpreted language or no-build mode)")
 
-        logger.info(f"Executing: {' '.join(cmd)}")
-        logger.info(f"Timeout: {RaptorConfig.CODEQL_TIMEOUT}s")
+        logger.info("Executing: %s", ' '.join(cmd))
+        logger.info("Timeout: %ss", RaptorConfig.CODEQL_TIMEOUT)
 
         # Execute database creation in sandbox (network blocked — packs pre-fetched)
         try:
@@ -842,7 +842,7 @@ class DatabaseManager:
                 errors.append(f"Database creation failed with exit code {result.returncode}")
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
-                logger.error(f"✗ Database creation failed for {language}")
+                logger.error("✗ Database creation failed for %s", language)
                 logger.error((result.stderr or "")[:500])
                 # Cleanup partial staging on build failure — no point keeping
                 # broken DBs around to confuse future cache lookups (they
@@ -896,7 +896,7 @@ class DatabaseManager:
                             str(canonical_path),
                         )
                     os.rename(staging_path, canonical_path)
-                    logger.info(f"✓ Database promoted to canonical: {canonical_path}")
+                    logger.info("✓ Database promoted to canonical: %s", canonical_path)
                     did_promote = True
                 except OSError as e:
                     if e.errno in (errno.ENOTEMPTY, errno.EEXIST):
@@ -906,8 +906,7 @@ class DatabaseManager:
                         # to us as success=True pointing at garbage.
                         if self.validate_database(canonical_path):
                             logger.info(
-                                f"✓ Database promoted by sibling; using cached "
-                                f"{canonical_path}"
+                                "✓ Database promoted by sibling; using cached %s", canonical_path
                             )
                             shutil.rmtree(staging_path, ignore_errors=True)
                             used_cached = True
@@ -925,8 +924,8 @@ class DatabaseManager:
                             # gets evicted (this run's lost-race branch on
                             # the next attempt, or _gc_stale_markers).
                             logger.warning(
-                                f"Canonical {canonical_path} exists but failed "
-                                f"validation; evicting and retrying promote"
+                                "Canonical %s exists but failed validation; evicting and retrying promote",
+                                canonical_path
                             )
                             try:
                                 marker = canonical_path.with_name(
@@ -938,9 +937,8 @@ class DatabaseManager:
                             try:
                                 os.rename(staging_path, canonical_path)
                                 logger.info(
-                                    f"✓ Database promoted to canonical "
-                                    f"(after evicting broken sibling copy): "
-                                    f"{canonical_path}"
+                                    "✓ Database promoted to canonical (after evicting broken sibling copy): %s",
+                                    canonical_path
                                 )
                                 did_promote = True
                             except OSError:
@@ -953,8 +951,7 @@ class DatabaseManager:
                         # to using staging directly so the caller's analysis
                         # can still proceed. Future runs will rebuild.
                         logger.warning(
-                            f"Could not promote staging to canonical "
-                            f"({e}); using staging path"
+                            "Could not promote staging to canonical (%s); using staging path", e
                         )
                         final_path = staging_path
 
@@ -1011,7 +1008,7 @@ class DatabaseManager:
 
         except subprocess.TimeoutExpired:
             errors.append(f"Database creation timed out after {RaptorConfig.CODEQL_TIMEOUT}s")
-            logger.error(f"✗ Database creation timed out for {language}")
+            logger.error("✗ Database creation timed out for %s", language)
 
             return DatabaseResult(
                 success=False,
@@ -1028,7 +1025,7 @@ class DatabaseManager:
 
         except Exception as e:
             errors.append(f"Unexpected error: {str(e)}")
-            logger.error(f"✗ Database creation failed with exception: {e}")
+            logger.error("✗ Database creation failed with exception: %s", e)
 
             return DatabaseResult(
                 success=False,
@@ -1056,7 +1053,7 @@ class DatabaseManager:
                 try:
                     build_script.unlink(missing_ok=True)
                 except OSError as _bs_err:
-                    logger.debug(f"build_script unlink failed: {_bs_err}")
+                    logger.debug("build_script unlink failed: %s", _bs_err)
             # Belt-and-braces staging cleanup for timeout / unhandled exception
             # paths that bypass the success/failure cleanup branches above.
             # Skip if we ended up using staging as final_path (the fallback
@@ -1093,7 +1090,11 @@ class DatabaseManager:
         max_workers = max_workers or RaptorConfig.MAX_CODEQL_WORKERS
         results = {}
 
-        logger.info(f"Creating {len(language_build_map)} databases in parallel (max workers: {max_workers})")
+        logger.info(
+            "Creating %d databases in parallel (max workers: %s)",
+            len(language_build_map),
+            max_workers
+        )
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
@@ -1116,11 +1117,11 @@ class DatabaseManager:
                     result = future.result()
                     results[lang] = result
                     if result.success:
-                        logger.info(f"✓ {lang} database completed")
+                        logger.info("✓ %s database completed", lang)
                     else:
-                        logger.error(f"✗ {lang} database failed")
+                        logger.error("✗ %s database failed", lang)
                 except Exception as e:
-                    logger.error(f"✗ {lang} database raised exception: {e}")
+                    logger.error("✗ %s database raised exception: %s", lang, e)
                     results[lang] = DatabaseResult(
                         success=False,
                         language=lang,
@@ -1150,7 +1151,7 @@ class DatabaseManager:
         essential_files = ["codeql-database.yml"]
         for file_name in essential_files:
             if not (db_path / file_name).exists():
-                logger.debug(f"Missing essential file: {file_name}")
+                logger.debug("Missing essential file: %s", file_name)
                 return False
 
         # Pre-fix `codeql-database.yml` existence was the only
@@ -1168,7 +1169,7 @@ class DatabaseManager:
             db_subdirs = [d for d in db_path.iterdir()
                           if d.is_dir() and d.name.startswith("db-")]
             if not db_subdirs:
-                logger.debug(f"No db-* subdir in {db_path}")
+                logger.debug("No db-* subdir in %s", db_path)
                 return False
             # At least one db-* subdir must hold > 100KB of data
             # (the smallest realistic codeql DB observed in
@@ -1180,12 +1181,11 @@ class DatabaseManager:
                 if total_size > 100 * 1024:
                     return True
             logger.debug(
-                f"db-* subdirs present but trivially small in {db_path} "
-                f"(likely aborted build)",
+                "db-* subdirs present but trivially small in %s (likely aborted build)", db_path
             )
             return False
         except OSError as e:
-            logger.debug(f"validate_database couldn't stat {db_path}: {e}")
+            logger.debug("validate_database couldn't stat %s: %s", db_path, e)
             return False
 
     def _count_database_files(self, db_path: Path) -> int:
@@ -1216,7 +1216,7 @@ class DatabaseManager:
         Returns:
             List of deleted database paths
         """
-        logger.info(f"Cleaning up databases older than {days} days...")
+        logger.info("Cleaning up databases older than %s days...", days)
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         deleted = []
 
@@ -1263,14 +1263,14 @@ class DatabaseManager:
                             if not dry_run:
                                 shutil.rmtree(db_path)
                                 metadata_file.unlink()
-                                logger.info(f"Deleted old database: {db_path}")
+                                logger.info("Deleted old database: %s", db_path)
                             else:
-                                logger.info(f"Would delete: {db_path}")
+                                logger.info("Would delete: %s", db_path)
                             deleted.append(str(db_path))
                 except Exception as e:
-                    logger.warning(f"Error processing {metadata_file}: {e}")
+                    logger.warning("Error processing %s: %s", metadata_file, e)
 
-        logger.info(f"Cleaned up {len(deleted)} databases")
+        logger.info("Cleaned up %d databases", len(deleted))
         return deleted
 
 

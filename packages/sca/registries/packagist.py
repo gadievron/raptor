@@ -119,6 +119,8 @@ def _extract_versions(data: dict, name: str) -> List[str]:
           }
         }
     """
+    if not isinstance(data, dict):
+        return []
     packages = data.get("packages") or {}
     if not isinstance(packages, dict):
         return []

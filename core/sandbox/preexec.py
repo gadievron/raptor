@@ -154,6 +154,7 @@ def _load_user_limits() -> dict:
                         continue
                     cleaned[k] = v
                 state._user_limits_cache = cleaned
+                state._user_limits_cache_decided_at = time.time()
                 return state._user_limits_cache
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
             logger.warning(

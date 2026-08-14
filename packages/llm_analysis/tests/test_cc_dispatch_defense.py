@@ -413,9 +413,9 @@ class TestAdversarialFindingFields:
         assert 'kind="surrounding-context"' in user
         nonce_match = re.search(r'<untrusted-([a-f0-9]{16})', user)
         nonce = nonce_match.group(1)
-        # Fake tag is neutralized (< escaped to &lt;), not rendered verbatim
+        # Fake tag is neutralized (ZWSP after <), not rendered verbatim
         assert "</untrusted-0000000000000000>" not in user
-        assert "&lt;/untrusted-0000000000000000>" in user
+        assert "<​/untrusted-0000000000000000>" in user
         assert f"</untrusted-{nonce}>" in user
 
     def test_adversarial_metadata_quarantined(self):
@@ -518,9 +518,9 @@ class TestNonceIsolation:
         user = _usr(bundle)
         real_tag = f"<untrusted-{bundle.nonce}"
         assert user.count(real_tag) >= 2  # opening tags for message + code blocks
-        # Fake tags are neutralized — the raw < is replaced with &lt;
+        # Fake tags are neutralized — ZWSP inserted after <
         assert "<untrusted-0000000000000000" not in user
-        assert "&lt;/untrusted-0000000000000000>" in user
+        assert "<​/untrusted-0000000000000000>" in user
 
 
 # ============================================================

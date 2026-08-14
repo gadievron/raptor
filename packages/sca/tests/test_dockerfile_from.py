@@ -737,3 +737,21 @@ def test_at_tag_ref_demoted_to_debug(tmp_path: Path, caplog) -> None:
         f"@<tag> noise should be at DEBUG, not WARNING; got "
         f"{[r.getMessage() for r in warning_records]}"
     )
+
+
+def test_gitlab_ci_default_section_extracted():
+    from packages.sca.dockerfile_from import _walk_gitlab_image_refs
+
+    data = {
+        "default": {
+            "image": "ruby:3.2",
+        },
+        "stages": ["test"],
+        "test_job": {
+            "stage": "test",
+            "script": ["echo hi"],
+        },
+    }
+    refs = list(_walk_gitlab_image_refs(data))
+    images = [img for img, _label in refs]
+    assert "ruby:3.2" in images

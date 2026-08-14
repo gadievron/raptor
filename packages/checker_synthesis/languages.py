@@ -65,6 +65,23 @@ def detect_engine(file_path: str) -> Optional[str]:
     return None
 
 
+def fallback_engine(primary: str, file_path: str = "") -> Optional[str]:
+    """Return the alternative engine to try if *primary* fails.
+
+    For C sources, both Coccinelle and Semgrep work — they're
+    complementary (Coccinelle excels at temporal patterns like
+    double-free; Semgrep at structural exclusion like missing
+    null checks).  For other languages only Semgrep is available.
+    """
+    if primary == "coccinelle":
+        return "semgrep"
+    if primary == "semgrep":
+        suffix = Path(file_path).suffix.lower() if file_path else ""
+        if suffix in _COCCINELLE_EXTS:
+            return "coccinelle"
+    return None
+
+
 def supported_engines() -> tuple[str, ...]:
     """The engines this package can synthesise rules for."""
     return ("semgrep", "coccinelle")

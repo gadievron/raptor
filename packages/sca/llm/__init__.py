@@ -150,7 +150,10 @@ def run_stage(
         _json.dumps(resp.result) if isinstance(resp.result, dict) else raw_text
     )
 
+    _retry_fired = [False]
+
     def _retry():
+        _retry_fired[0] = True
         r2 = client.generate_structured(
             prompt=user_prompt + "\n\nYour previous response did not match "
                    "the required JSON schema. Please try again, returning "
@@ -174,7 +177,7 @@ def run_stage(
         nonce=getattr(bundle, "nonce", ""),
         raw_response=raw_text,
         schema_accepted=validated is not None,
-        schema_retried=False,
+        schema_retried=_retry_fired[0],
     )
 
     return StageResult(
@@ -242,7 +245,13 @@ def cross_family_check(
     checker_verdict = getattr(checker_result.model, verdict_field, None)
     if checker_verdict == primary_verdict:
         logger.info("sca.llm: cross-family check agreed: %s", primary_verdict)
-        return primary_result
+        return StageResult(
+            model=primary_result.model,
+            raw=primary_result.raw,
+            preflight_hit=primary_result.preflight_hit,
+            confidence_haircut=primary_result.confidence_haircut,
+            cost=primary_result.cost + checker_result.cost,
+        )
 
     logger.info(
         "sca.llm: cross-family disagreement: primary=%s checker=%s "
@@ -262,7 +271,13 @@ def cross_family_check(
             confidence_haircut=primary_result.confidence_haircut,
             cost=primary_result.cost + checker_result.cost,
         )
-    return primary_result
+    return StageResult(
+        model=primary_result.model,
+        raw=primary_result.raw,
+        preflight_hit=primary_result.preflight_hit,
+        confidence_haircut=primary_result.confidence_haircut,
+        cost=primary_result.cost + checker_result.cost,
+    )
 
 
 def _select_checker(client) -> Optional[str]:

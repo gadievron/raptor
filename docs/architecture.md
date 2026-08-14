@@ -1,7 +1,6 @@
 # RAPTOR Modular Architecture
 
-**Version**: 3.1
-**Date**: 2026-07-22
+**Updated**: 2026-08-13
 
 See also: [README](README.md), [security](security.md), [sandbox](sandbox.md).
 
@@ -27,7 +26,18 @@ See also: [README](README.md), [security](security.md), [sandbox](sandbox.md).
 
 ## Overview
 
-RAPTOR (Recursive Autonomous Penetration Testing and Observation Robot) is a security testing framework that uses LLMs to autonomously analyse code for vulnerabilities, generate exploits, and create patches. The framework operates in three distinct modes:
+RAPTOR (Recursive Autonomous Penetration Testing and Observation Robot) is a security testing framework that uses LLMs to autonomously analyse code for vulnerabilities, generate exploits, and create patches.
+
+### Authorship
+
+RAPTOR is mostly AI-generated code. The humans set direction, review output,
+and make design decisions; the AI writes the implementation. Mechanical
+verification (tests, static analysis, corpus calibration) keeps the quality
+bar where it needs to be regardless of who — or what — wrote the code.
+
+### Modes
+
+The framework operates in three distinct modes:
 
 1. **Source Code Analysis Mode**: Static analysis of source code using Semgrep (`raptor_agentic.py`)
 2. **Deep CodeQL Analysis Mode**: Advanced static analysis with dataflow validation (`raptor_codeql.py`)
@@ -82,32 +92,33 @@ raptor/
 │   ├── raptor-threat-model        # Threat model management
 │   ├── raptor-tune                # LLM tuning helpers
 │   ├── raptor-understand          # Code understanding workflow
-│   ├── raptor-understand-annotate # Understanding annotation synthesis
-│   ├── raptor-understand-sage     # Understanding SAGE integration
 │   ├── raptor-validate-schema     # Schema validation
 │   ├── raptor-validation-helper   # Validation pipeline helper
 │   ├── raptor-verified-outcomes   # Verified outcome tracking
 │   └── raptor-zkpox               # Zero-knowledge proof of exploitation
 ├── core/                  # Shared infrastructure
 │   ├── analysis/          # Reasoning about code (reachability, CFG, taint, binary oracle)
-│   ├── annotations/       # Per-function prose annotations (manual + LLM-emitted)
+│   ├── annotations/       # Per-function prose annotations (human-only)
 │   ├── archive/           # Archive extraction and handling
 │   ├── ast/               # AST enrichment helpers
 │   ├── atomic_fs/         # Atomic filesystem operations (tempfile + rename)
+│   ├── audit/             # Hypothesis-driven code audit (orchestrator, strategies, gates)
 │   ├── binary/            # Binary analysis primitives (ELF parsing, symbol lookup)
 │   ├── build/             # Build-system detection + toolchain probes
 │   ├── config/            # RaptorConfig (paths, settings)
 │   ├── coverage/          # Read-coverage tracking + summary
 │   ├── cve/               # CVE data structures and lookups
+│   ├── concepts/          # Concept compiler (invariants → mechanical rules)
 │   ├── dataflow/          # Dataflow analysis primitives
+│   ├── dispatch/          # Dispatch broker (multi-model routing)
 │   ├── dockerfile/        # Dockerfile parsing helpers
-│   ├── dynamic/           # Dynamic analysis support (Frida integration)
 │   ├── evidence/          # Evidence collection and management
 │   ├── function_taxonomy/ # Function classification (source, sink, sanitiser)
 │   ├── git/               # Sandbox-routed clone + URL allowlist
 │   ├── hash/              # SHA-256 helpers
 │   ├── http/              # EgressClient + per-host allowlists
 │   ├── inventory/         # Source inventory (file enumeration, extractors, call graph)
+│   ├── iris/              # Checker synthesis and specification inference
 │   ├── json/              # BOM-tolerant JSON utils + cache helpers
 │   ├── labeled_attempts/  # Labeled attempt tracking for iterative workflows
 │   ├── license/           # Licence detection and analysis
@@ -159,6 +170,7 @@ raptor/
 │   ├── exploitation/      # Exploit generation engine
 │   ├── frida/             # Frida dynamic instrumentation
 │   ├── hypothesis_validation/# Hypothesis-driven validation
+│   ├── joern/             # Joern CPG server lifecycle + queries
 │   ├── nvd/               # NVD (National Vulnerability Database) queries
 │   ├── osv/               # OSV (Open Source Vulnerabilities) queries
 │   ├── recon/             # Reconnaissance and enumeration
@@ -343,7 +355,6 @@ python3 packages/codeql/agent.py \
 **Components**:
 - `agent.py` - Main CodeQL workflow orchestrator
 - `autonomous_analyzer.py` - LLM-powered CodeQL analysis
-- `build_detector.py` - Automatic build system detection
 - `database_manager.py` - CodeQL database creation and management
 - `dataflow_validator.py` - Validates dataflow paths from CodeQL results
 - `dataflow_visualizer.py` - Generates visual dataflow diagrams
@@ -722,27 +733,14 @@ python3 packages/web/scanner.py \
 - Loaded when errors occur during analysis
 
 #### `tiers/personas/`
-Expert persona specifications for specialised analysis:
-- `binary_exploitation_specialist.md` - Binary exploitation expertise
-- `codeql_analyst.md` - CodeQL query development
-- `codeql_finding_analyst.md` - CodeQL finding analysis
-- `crash_analyst.md` - Crash analysis and triage
-- `exploit_developer.md` - Exploit development
-- `fuzzing_strategist.md` - Fuzzing strategy development
-- `patch_engineer.md` - Secure patch development
-- `penetration_tester.md` - Penetration testing methodology
-- `security_researcher.md` - General security research
+Expert persona specifications for specialised analysis.  Seven personas
+covering crash analysis, exploit development, security research, patch
+engineering, penetration testing, fuzzing strategy, and binary
+exploitation.  The methodology loader (`core/llm/methodology.py`)
+injects persona content into LLM system prompts automatically.
 
-#### `tiers/specialists/`
-- Additional specialist knowledge bases
-- Domain-specific security expertise
-
-**Usage**:
-- Loaded on-demand by `raptor.py` (Claude Code integration)
-- Provides specialised context for different security testing phases
-- Enables persona-based LLM prompting for improved analysis quality
-
-**Design Rationale**: Progressive loading reduces initial context size while providing deep expertise when needed. Persona-based approach allows for specialised prompting tailored to specific security tasks.
+Loaded on-demand -- progressive loading reduces initial context size
+while providing deep expertise when needed.
 
 
 ## Entry Points
@@ -1080,7 +1078,7 @@ export OPENAI_API_KEY=your_key_here
 
 ### Cost Considerations
 
-We think it useful to include such costings, just so people understand how much it might cost to generate code. It will vary
+We think it useful to include such costings, just so people understand how much it might cost to generate code. Costs will vary by provider, model, and the complexity of the target.
 
 
 **Frontier Models**:

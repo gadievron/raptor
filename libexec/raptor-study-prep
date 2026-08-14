@@ -1,0 +1,2891 @@
+#!/usr/bin/env python3
+"""Phase 1 mechanical prep for /understand --study.
+
+Extracts study items from target source files: struct/union/enum
+definitions, refcount fields, paired operations (get_X/put_X,
+alloc_X/free_X), doc comments, and include-resolved definitions.
+
+Writes ``study-list.json`` to the output directory.
+
+Usage:
+    raptor-study-prep <target> <output_dir> [--root <source_root>]
+
+The target is the study scope (e.g. crypto/).
+The root is the search space for include resolution (defaults to
+detecting the top-level source root from the target path).
+"""
+import bisect
+import faulthandler
+import json
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check ───
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ───
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+import argparse  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+
+from core.concepts.model import StudyItem  # noqa: E402
+
+# ------------------------------------------------------------------
+# Patterns
+# ------------------------------------------------------------------
+
+_REFCOUNT_PATTERNS = re.compile(
+    r"(?:_refcount|_count|refcnt|kref|atomic_t|AtomicInteger"
+    r"|AtomicUsize|Arc<|Rc<|ref_count|use_count|nrefs|_ref$)",
+)
+
+_ALLOC_PREFIXES = ("alloc_", "new_", "create_", "init_", "open_")
+_FREE_PREFIXES = ("free_", "destroy_", "release_", "close_", "put_")
+_GET_PREFIX = "get_"
+_PUT_PREFIX = "put_"
+_SET_PREFIX = "set_"
+
+_C_EXTENSIONS = frozenset((".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx"))
+
+# ------------------------------------------------------------------
+# Structural signal patterns
+# ------------------------------------------------------------------
+
+_LOCK_NAMES = frozenset({
+    # kernel spinlocks
+    "spin_lock", "spin_lock_irq", "spin_lock_irqsave",
+    "spin_lock_bh", "spin_lock_nested",
+    "spin_trylock", "spin_trylock_irq", "spin_trylock_irqsave",
+    "spin_unlock", "spin_unlock_irq", "spin_unlock_irqrestore",
+    "spin_unlock_bh",
+    # kernel mutexes / rwsems
+    "mutex_lock", "mutex_lock_interruptible", "mutex_lock_killable",
+    "mutex_lock_nested", "mutex_trylock", "mutex_unlock",
+    "down_read", "down_read_trylock", "up_read",
+    "down_write", "down_write_trylock", "up_write",
+    # kernel rwlocks
+    "read_lock", "read_lock_irq", "read_lock_irqsave",
+    "read_unlock", "read_unlock_irq", "read_unlock_irqrestore",
+    "write_lock", "write_lock_irq", "write_lock_irqsave",
+    "write_unlock", "write_unlock_irq", "write_unlock_irqrestore",
+    "raw_spin_lock", "raw_spin_lock_irq", "raw_spin_lock_irqsave",
+    "raw_spin_unlock", "raw_spin_unlock_irq", "raw_spin_unlock_irqrestore",
+    "spin_lock_init", "mutex_init", "rwlock_init",
+    "ipc_lock_object", "ipc_unlock_object",
+    # POSIX threads
+    "pthread_mutex_lock", "pthread_mutex_trylock", "pthread_mutex_unlock",
+    "pthread_mutex_init", "pthread_mutex_destroy",
+    "pthread_rwlock_rdlock", "pthread_rwlock_wrlock", "pthread_rwlock_unlock",
+    "pthread_rwlock_init", "pthread_rwlock_destroy",
+    "pthread_spin_lock", "pthread_spin_trylock", "pthread_spin_unlock",
+    "pthread_cond_wait", "pthread_cond_timedwait",
+    "pthread_cond_signal", "pthread_cond_broadcast",
+    # POSIX semaphores
+    "sem_wait", "sem_trywait", "sem_timedwait", "sem_post",
+    # C11 threads
+    "mtx_lock", "mtx_trylock", "mtx_timedlock", "mtx_unlock",
+    "cnd_wait", "cnd_timedwait", "cnd_signal", "cnd_broadcast",
+    # stdio locking
+    "flockfile", "ftrylockfile", "funlockfile",
+    # Library-specific locking (OpenSSL CRYPTO_THREAD etc.) discovered by Layer 1.
+})
+
+_LOCK_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_LOCK_NAMES, key=len, reverse=True)) + r")\s*\(",
+)
+
+_RCU_NAMES = frozenset({
+    "rcu_read_lock", "rcu_read_unlock",
+    "rcu_dereference", "rcu_dereference_protected",
+    "rcu_dereference_check", "rcu_dereference_raw",
+    "rcu_assign_pointer",
+    "call_rcu", "kfree_rcu", "kvfree_rcu",
+    "list_for_each_entry_rcu", "hlist_for_each_entry_rcu",
+    "list_add_rcu", "list_del_rcu",
+    "synchronize_rcu", "rcu_barrier",
+    "srcu_read_lock", "srcu_read_unlock",
+})
+
+_RCU_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_RCU_NAMES, key=len, reverse=True)) + r")\b",
+)
+
+_ORDERING_NAMES = frozenset({
+    # kernel barriers
+    "smp_store_release", "smp_load_acquire",
+    "smp_mb", "smp_mb__before_atomic", "smp_mb__after_atomic",
+    "smp_rmb", "smp_wmb",
+    "READ_ONCE", "WRITE_ONCE", "data_race",
+    "smp_acquire__after_ctrl_dep",
+    "__smp_store_release", "__smp_load_acquire",
+    # C11 atomics
+    "atomic_load", "atomic_load_explicit",
+    "atomic_store", "atomic_store_explicit",
+    "atomic_exchange", "atomic_exchange_explicit",
+    "atomic_compare_exchange_strong", "atomic_compare_exchange_weak",
+    "atomic_compare_exchange_strong_explicit",
+    "atomic_compare_exchange_weak_explicit",
+    "atomic_fetch_add", "atomic_fetch_sub",
+    "atomic_fetch_or", "atomic_fetch_and",
+    "atomic_thread_fence", "atomic_signal_fence",
+    # GCC/Clang builtins
+    "__atomic_load_n", "__atomic_store_n",
+    "__atomic_exchange_n", "__atomic_compare_exchange_n",
+    "__atomic_add_fetch", "__atomic_sub_fetch",
+    "__atomic_thread_fence",
+    "__sync_synchronize",
+    "__sync_val_compare_and_swap", "__sync_bool_compare_and_swap",
+    "__sync_fetch_and_add", "__sync_fetch_and_sub",
+})
+
+_ORDERING_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_ORDERING_NAMES, key=len, reverse=True)) + r")\b",
+)
+
+_BOUNDS_NAMES = frozenset({
+    # kernel user-copy
+    "array_index_nospec",
+    "access_ok", "copy_from_user", "copy_to_user",
+    "get_user", "put_user", "__get_user", "__put_user",
+    "check_object_size", "strnlen_user", "strncpy_from_user",
+    # userspace bounded string ops
+    "strlcpy", "strlcat", "strncpy", "strncat", "strnlen", "strndup",
+    "snprintf", "vsnprintf",
+    # C11 Annex K bounds-checking
+    "memcpy_s", "memmove_s", "strcpy_s", "strncpy_s", "strcat_s",
+    "strncat_s", "sprintf_s", "snprintf_s",
+    # POSIX safe reads
+    "fgets", "getline",
+})
+
+_BOUNDS_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_BOUNDS_NAMES, key=len, reverse=True)) + r")\b",
+)
+
+_ERROR_GOTO_PATTERN = re.compile(r"\bgoto\s+(\w+)\s*;")
+
+_CLAMP_NAMES = frozenset({
+    "clamp", "clamp_t", "clamp_val", "min_t", "max_t",
+})
+
+_CLAMP_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_CLAMP_NAMES, key=len, reverse=True)) + r")\s*\(",
+)
+
+_RESOURCE_LIFECYCLE_NAMES = frozenset({
+    "open", "close", "fopen", "fclose", "fdopen", "freopen",
+    "socket", "accept", "connect", "bind", "listen", "shutdown",
+    "pipe", "pipe2", "socketpair",
+    "dup", "dup2", "dup3", "fcntl",
+    "opendir", "closedir", "fdopendir",
+    "dlopen", "dlclose",
+    "popen", "pclose",
+    "tmpfile", "mkstemp", "mkdtemp",
+    "epoll_create", "epoll_create1", "epoll_ctl",
+    "eventfd", "signalfd", "timerfd_create",
+    "inotify_init", "inotify_init1", "inotify_add_watch",
+})
+
+_RESOURCE_LIFECYCLE_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_RESOURCE_LIFECYCLE_NAMES, key=len, reverse=True)) + r")\s*\(",
+)
+
+_OWNED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\s*\*")
+_REFERENCED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\b")
+
+_FLEX_ARRAY_PATTERN = re.compile(r"(\w+)\s+(\w+)\s*\[\s*(?:0|1)?\s*\]\s*;")
+
+_FLAG_CHECK_PATTERN = re.compile(
+    r"\bif\s*\([^)]*\b(\w+)\s*&\s*(\w+)",
+)
+
+_ALLOC_NAMES = frozenset({
+    # kernel allocators
+    "kmalloc", "kzalloc", "kcalloc", "kvmalloc", "kvzalloc",
+    "vmalloc", "vzalloc",
+    "alloc_pages", "alloc_page", "__get_free_pages", "__get_free_page",
+    "kmem_cache_alloc", "kmem_cache_zalloc",
+    "devm_kmalloc", "devm_kzalloc",
+    "krealloc", "kvrealloc",
+    # libc
+    "malloc", "calloc", "realloc", "reallocarray", "aligned_alloc",
+    "posix_memalign", "memalign", "valloc", "pvalloc",
+    "strdup", "strndup", "asprintf", "vasprintf",
+    "mmap",
+    # Library-specific allocators (OpenSSL, GLib, cURL, FFmpeg) are
+    # discovered transitively by Layer 1 from these seeds.
+})
+
+_FREE_NAMES = frozenset({
+    # kernel
+    "kfree", "kvfree", "vfree",
+    "free_pages", "free_page", "__free_pages",
+    "kmem_cache_free",
+    "devm_kfree",
+    "put_page", "release_pages",
+    # libc
+    "free", "munmap",
+    # Library-specific deallocators discovered by Layer 1.
+})
+
+_ALLOC_FREE_PATTERN = re.compile(
+    r"\b(" + "|".join(
+        sorted(_ALLOC_NAMES | _FREE_NAMES, key=len, reverse=True),
+    ) + r")\s*[\(;]",
+)
+
+# State machine signals
+_STATE_TRANSITION_PATTERN = re.compile(
+    r"(\w+)->(\w+)\s*=\s*(?!NULL\b|0\b|false\b)(\w+)",
+)
+
+_GATE_CHECK_PATTERN = re.compile(
+    r"(?:"
+    r"err\s*=\s*(\w+_check_\w+)\s*\("          # err = check_key(...)
+    r"|if\s*\(\s*!?\s*(\w+)->(\w+)\s*\)\s*\{?"  # if (!obj->field) { return/goto
+    r"|if\s*\(\s*atomic_read\s*\(&(\w+)->(\w+)\)"  # if (atomic_read(&obj->field))
+    r")",
+)
+
+_DISPATCH_TABLE_PATTERN = re.compile(
+    r"static\s+(?:const\s+)?struct\s+(\w+_ops)\s+(\w+)\s*=\s*\{",
+)
+
+# Value constraint signals
+_NULL_GUARD_PATTERN = re.compile(
+    r"if\s*\(\s*!(\w+(?:->\w+)*)\s*\)\s*\{?\s*\n\s*"
+    r"(?:return\s+(-\w+)|goto\s+(\w+))",
+)
+
+_VALIDATION_BOUND_PATTERN = re.compile(
+    r"if\s*\(\s*(\w+(?:->\w+)*)\s*([><!]=?)\s*(\w+(?:->\w+|\([^)]*\))*)\s*\)"
+    r"\s*\{?\s*\n?\s*return\s+(-\w+)",
+)
+
+_ALLOC_THEN_CHECK_PATTERN = re.compile(
+    r"(\w+(?:->\w+)*)\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]*\)\s*;"
+    r"\s*\n\s*if\s*\(\s*!(?:\1)\s*\)",
+)
+
+_INFRA_TYPES = frozenset({
+    # kernel infrastructure
+    "list_head", "hlist_node", "hlist_head",
+    "rcu_head", "callback_head",
+    "rb_node", "rb_root",
+    "work_struct", "delayed_work",
+    "timer_list", "hrtimer",
+    "kobject", "kref", "module",
+    "dentry", "inode",
+    # POSIX / libc infrastructure
+    "sockaddr", "sockaddr_in", "sockaddr_in6", "sockaddr_un",
+    "addrinfo", "hostent",
+    "iovec", "msghdr", "cmsghdr",
+    "pollfd", "epoll_event", "fd_set",
+    "sigaction", "sigset_t", "siginfo_t",
+    "timespec", "timeval", "tm",
+    "stat", "dirent",
+    # GLib
+    "GList", "GSList", "GHashTable", "GString", "GArray",
+})
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _build_newline_index(source: str) -> list[int]:
+    """Return sorted list of newline offsets for O(log n) line lookup."""
+    return [i for i, ch in enumerate(source) if ch == "\n"]
+
+
+def _offset_to_line(newline_index: list[int], offset: int) -> int:
+    """Convert a byte offset to a 1-based line number."""
+    return bisect.bisect_right(newline_index, offset) + 1
+
+
+def _find_block_end(source: str, open_brace: int) -> int | None:
+    """Find the matching closing brace, skipping comments and strings."""
+    depth = 0
+    i = open_brace
+    n = len(source)
+    while i < n:
+        ch = source[i]
+        if ch == "/" and i + 1 < n:
+            nxt = source[i + 1]
+            if nxt == "/":
+                end = source.find("\n", i + 2)
+                i = end + 1 if end != -1 else n
+                continue
+            if nxt == "*":
+                end = source.find("*/", i + 2)
+                i = end + 2 if end != -1 else n
+                continue
+        if ch == '"' or ch == "'":
+            i += 1
+            while i < n and source[i] != ch:
+                if source[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
+# ------------------------------------------------------------------
+# Structural signal extraction
+# ------------------------------------------------------------------
+
+def _extract_structural_signals(body: str) -> dict:
+    """Extract structural signals from a function body."""
+    flag_checks = sorted({
+        f"{m.group(1)} & {m.group(2)}"
+        for m in _FLAG_CHECK_PATTERN.finditer(body)
+    })
+
+    state_transitions = sorted({
+        f"{m.group(1)}->{m.group(2)} = {m.group(3)}"
+        for m in _STATE_TRANSITION_PATTERN.finditer(body)
+    })
+
+    gate_checks_raw: set[str] = set()
+    for m in _GATE_CHECK_PATTERN.finditer(body):
+        if m.group(1):
+            gate_checks_raw.add(m.group(1))
+        elif m.group(2) and m.group(3):
+            gate_checks_raw.add(f"{m.group(2)}->{m.group(3)}")
+        elif m.group(4) and m.group(5):
+            gate_checks_raw.add(f"atomic_read({m.group(4)}->{m.group(5)})")
+
+    dispatch_tables = sorted({
+        f"{m.group(1)} {m.group(2)}"
+        for m in _DISPATCH_TABLE_PATTERN.finditer(body)
+    })
+
+    null_guards = sorted({
+        f"!{m.group(1)} → {m.group(2) or 'goto ' + (m.group(3) or '')}"
+        for m in _NULL_GUARD_PATTERN.finditer(body)
+    })
+
+    validation_bounds = sorted({
+        f"{m.group(1)} {m.group(2)} {m.group(3)} → {m.group(4)}"
+        for m in _VALIDATION_BOUND_PATTERN.finditer(body)
+    })
+
+    alloc_checks = sorted({
+        f"{m.group(1)} = {m.group(2)}() → NULL check"
+        for m in _ALLOC_THEN_CHECK_PATTERN.finditer(body)
+    })
+    null_guards.extend(alloc_checks)
+
+    return {
+        "lock_sites": sorted(set(_LOCK_PATTERN.findall(body))),
+        "rcu_usage": sorted(set(_RCU_PATTERN.findall(body))),
+        "ordering_annotations": sorted(set(_ORDERING_PATTERN.findall(body))),
+        "bounds_guards": sorted(set(_BOUNDS_PATTERN.findall(body))),
+        "error_gotos": sorted(set(_ERROR_GOTO_PATTERN.findall(body))),
+        "clamping_patterns": sorted(set(_CLAMP_PATTERN.findall(body))),
+        "flag_checks": flag_checks,
+        "alloc_frees": sorted(set(_ALLOC_FREE_PATTERN.findall(body))),
+        "resource_lifecycle": sorted(set(_RESOURCE_LIFECYCLE_PATTERN.findall(body))),
+        "state_transitions": state_transitions,
+        "gate_checks": sorted(gate_checks_raw),
+        "dispatch_tables": dispatch_tables,
+        "null_guards": null_guards,
+        "validation_bounds": validation_bounds,
+    }
+
+
+def _has_signals(signals: dict) -> bool:
+    """Return True if any signal category is non-empty."""
+    return any(signals.values())
+
+
+def _extract_owned_types(definition: str) -> list[str]:
+    """Extract struct types referenced via pointer fields."""
+    found = set()
+    for m in _OWNED_TYPE_PATTERN.finditer(definition):
+        name = m.group(1)
+        if name not in _INFRA_TYPES:
+            found.add(name)
+    return sorted(found)
+
+
+def _extract_flexible_arrays(definition: str) -> list[str]:
+    """Detect trailing flexible array members ([0], [1], or [])."""
+    matches = list(_FLEX_ARRAY_PATTERN.finditer(definition))
+    if not matches:
+        return []
+    last = matches[-1]
+    closing_brace = definition.find("}", last.end())
+    between = definition[last.end():closing_brace] if closing_brace != -1 else ""
+    if re.search(r"\w+\s+\w+\s*[;\[]", between):
+        return []
+    return [last.group(2)]
+
+
+# ------------------------------------------------------------------
+# Include resolution
+# ------------------------------------------------------------------
+
+def _resolve_include(
+    include_path: str,
+    search_dirs: list[Path],
+    source_root: Path,
+) -> Path | None:
+    for d in search_dirs:
+        candidate = (d / include_path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(source_root):
+            return candidate
+    return None
+
+
+def _extract_includes(source: str) -> list[str]:
+    """Extract #include paths from C/C++ source."""
+    results = []
+    for m in re.finditer(r'#\s*include\s*[<"]([^>"]+)[>"]', source):
+        results.append(m.group(1))
+    return results
+
+
+# ------------------------------------------------------------------
+# Struct / union / enum extraction (regex-based, fast)
+# ------------------------------------------------------------------
+
+_STRUCT_RE = re.compile(
+    r"^(?:typedef\s+)?(?:struct|union|enum)\s+(\w+)\s*\{",
+    re.MULTILINE,
+)
+
+
+def _extract_struct_blocks(
+    source: str,
+    filepath: str,
+    _nl_index: list[int] | None = None,
+) -> list[dict]:
+    """Extract struct/union/enum definitions with their fields."""
+    nl_index = _nl_index if _nl_index is not None else _build_newline_index(source)
+    results = []
+    for m in _STRUCT_RE.finditer(source):
+        name = m.group(1)
+        start = m.start()
+        line = _offset_to_line(nl_index, start)
+
+        open_brace = source.find("{", m.start())
+        if open_brace == -1:
+            continue
+        end = _find_block_end(source, open_brace)
+        if end is None:
+            continue
+
+        block = source[m.start():end]
+        fields = _extract_fields(block)
+        refcount_fields = _detect_refcount_fields(fields, block)
+
+        doc = _extract_doc_comment(source, start)
+        owned = _extract_owned_types(block)
+        flex = _extract_flexible_arrays(block)
+
+        results.append({
+            "name": name,
+            "file": filepath,
+            "line": line,
+            "kind": "struct",
+            "definition": block[:2000],
+            "fields": fields,
+            "refcount_fields": refcount_fields,
+            "doc_comment": doc,
+            "owned_types": owned,
+            "flexible_arrays": flex,
+        })
+    return results
+
+
+def _extract_fields(block: str) -> list[str]:
+    """Extract field names from a struct/union block."""
+    fields = []
+    for line in block.split("\n"):
+        line = line.strip()
+        if line.startswith("//") or line.startswith("/*") or line.startswith("*"):
+            continue
+        fm = re.search(r"(\w+)\s*(?:\[[\w\s]*\])?\s*(?::\s*\d+)?\s*;", line)
+        if fm:
+            fields.append(fm.group(1))
+    return fields
+
+
+_REFCOUNT_COMMENT_RE = re.compile(
+    r"ref(?:erence)?\s*count", re.IGNORECASE,
+)
+
+
+def _detect_refcount_fields(fields: list[str], block: str) -> list[str]:
+    """Detect refcount fields by name pattern OR inline comment."""
+    result = []
+    for f in fields:
+        if _REFCOUNT_PATTERNS.search(f):
+            result.append(f)
+            continue
+        line_re = re.compile(
+            r"^\s*\w[\w\s\*]*\b" + re.escape(f) + r"\b[^;]*;[^\n]*$",
+            re.MULTILINE,
+        )
+        lm = line_re.search(block)
+        if lm and _REFCOUNT_COMMENT_RE.search(lm.group(0)):
+            result.append(f)
+    return result
+
+
+def _extract_doc_comment(source: str, pos: int) -> str:
+    """Extract doc comment preceding a definition."""
+    before = source[:pos].rstrip()
+    lines = before.split("\n")
+    doc_lines: list[str] = []
+    in_block = False
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.endswith("*/"):
+            in_block = True
+            doc_lines.append(stripped)
+            if stripped.startswith("/*"):
+                in_block = False
+            continue
+        if in_block:
+            doc_lines.append(stripped)
+            if stripped.startswith("/*"):
+                in_block = False
+            continue
+        if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
+            doc_lines.append(stripped)
+        elif stripped == "":
+            if doc_lines:
+                break
+        else:
+            break
+    if not doc_lines:
+        return ""
+    doc_lines.reverse()
+    return "\n".join(doc_lines)[:1000]
+
+
+# ------------------------------------------------------------------
+# Function extraction
+# ------------------------------------------------------------------
+
+_C_FUNC_RE = re.compile(
+    r"^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?"
+    r"(?:struct\s+\w+(?:\s+\*\s*|\s+)|enum\s+\w+\s+|union\s+\w+(?:\s+\*\s*|\s+)|"
+    r"\w+(?:\s+\*\s*|\s+))"
+    r"(\w+)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_functions(
+    source: str,
+    filepath: str,
+    _nl_index: list[int] | None = None,
+) -> list[dict]:
+    """Extract function definitions (name, line, signature, structural signals)."""
+    nl_index = _nl_index if _nl_index is not None else _build_newline_index(source)
+    results = []
+    seen = set()
+    for m in _C_FUNC_RE.finditer(source):
+        name = m.group(1)
+        if name in seen:
+            continue
+        seen.add(name)
+        line = _offset_to_line(nl_index, m.start())
+        sig_end = source.find(")", m.end())
+        sig = source[m.start():sig_end + 1] if sig_end != -1 else source[m.start():m.start() + 200]
+
+        doc = _extract_doc_comment(source, m.start())
+
+        signals: dict = {}
+        body: str = ""
+        if sig_end != -1:
+            open_brace = source.find("{", sig_end + 1)
+            if (
+                open_brace != -1
+                and open_brace - sig_end < 100
+                and ";" not in source[sig_end + 1:open_brace]
+            ):
+                body_end = _find_block_end(source, open_brace)
+                if body_end is not None:
+                    body = source[open_brace:body_end]
+                    signals = _extract_structural_signals(body)
+
+        clean_sig = sig.strip()[:500]
+        results.append({
+            "name": name,
+            "file": filepath,
+            "line": line,
+            "signature": clean_sig,
+            "param_types": _parse_param_types_regex(clean_sig),
+            "return_type": _parse_return_type_regex(clean_sig),
+            "doc_comment": doc,
+            "signals": signals,
+            "body": body,
+        })
+    return results
+
+
+# ------------------------------------------------------------------
+# Prototype extraction (tree-sitter)
+# ------------------------------------------------------------------
+
+def _get_ts_parser():
+    """Lazily initialise a tree-sitter C parser. Returns None if unavailable."""
+    try:
+        import tree_sitter
+        import tree_sitter_c
+        lang = tree_sitter.Language(tree_sitter_c.language())
+        return tree_sitter.Parser(lang)
+    except Exception:
+        return None
+
+
+def _node_text(node) -> str:
+    return node.text.decode("utf-8", errors="replace")
+
+
+def _extract_type_from_node(node) -> str | None:
+    """Extract the type name from a type node (type_identifier, struct_specifier, etc.)."""
+    if node.type == "type_identifier":
+        return _node_text(node)
+    if node.type == "sized_type_specifier":
+        return _node_text(node)
+    if node.type == "primitive_type":
+        return _node_text(node)
+    if node.type in ("struct_specifier", "union_specifier", "enum_specifier"):
+        prefix = node.type.split("_")[0]  # "struct", "union", or "enum"
+        for child in node.children:
+            if child.type == "type_identifier":
+                return prefix + " " + _node_text(child)
+    return None
+
+
+def _collect_declarations(node) -> list:
+    """Recursively collect declaration nodes, descending into preproc and linkage blocks."""
+    decls = []
+    for child in node.children:
+        if child.type == "declaration":
+            decls.append(child)
+        elif child.type in (
+            "preproc_ifdef", "preproc_if", "preproc_else",
+            "preproc_elif", "preproc_ifndef",
+            "linkage_specification", "declaration_list",
+        ):
+            decls.extend(_collect_declarations(child))
+    return decls
+
+
+def _extract_prototypes_ts(
+    source_bytes: bytes,
+    filepath: str,
+    parser,
+) -> list[dict]:
+    """Extract function prototypes (declarations without bodies) via tree-sitter."""
+    tree = parser.parse(source_bytes)
+    results = []
+
+    for node in _collect_declarations(tree.root_node):
+        if node.type != "declaration":
+            continue
+
+        func_decl = None
+        return_type = None
+        for child in node.children:
+            if child.type in (
+                "type_identifier", "primitive_type",
+                "sized_type_specifier", "struct_specifier",
+                "union_specifier", "enum_specifier",
+            ):
+                return_type = _extract_type_from_node(child)
+            if child.type == "function_declarator":
+                func_decl = child
+            elif child.type == "pointer_declarator":
+                inner = child
+                while inner.type == "pointer_declarator":
+                    for c in inner.children:
+                        if c.type != "*":
+                            inner = c
+                            break
+                    else:
+                        break
+                if inner.type == "function_declarator":
+                    func_decl = inner
+
+        if func_decl is None:
+            continue
+
+        name = None
+        param_types: list[str] = []
+        for child in func_decl.children:
+            if child.type == "identifier":
+                name = _node_text(child)
+            elif child.type == "parameter_list":
+                for param in child.children:
+                    if param.type == "parameter_declaration":
+                        for pc in param.children:
+                            t = _extract_type_from_node(pc)
+                            if t:
+                                param_types.append(t)
+                                break
+
+        if not name:
+            continue
+
+        line = node.start_point[0] + 1
+        sig = _node_text(node).rstrip(";").strip()
+
+        results.append({
+            "name": name,
+            "file": filepath,
+            "line": line,
+            "signature": sig[:500],
+            "return_type": return_type,
+            "param_types": param_types,
+            "doc_comment": "",
+            "signals": {},
+            "body": "",
+        })
+
+    return results
+
+
+def _extract_prototypes_regex(
+    source: str,
+    filepath: str,
+    _nl_index: list[int] | None = None,
+) -> list[dict]:
+    """Fallback prototype extraction when tree-sitter is unavailable."""
+    nl_index = _nl_index if _nl_index is not None else _build_newline_index(source)
+    proto_re = re.compile(
+        r"^(?:extern\s+)?(?:const\s+)?(?:unsigned\s+)?"
+        r"(?:struct\s+\w+(?:\s+\*\s*|\s+)|enum\s+\w+\s+|"
+        r"\w+(?:\s+\*\s*|\s+))"
+        r"(\w+)\s*\([^)]*\)\s*;",
+        re.MULTILINE,
+    )
+    results = []
+    seen = set()
+    for m in proto_re.finditer(source):
+        name = m.group(1)
+        if name in seen:
+            continue
+        seen.add(name)
+        line = _offset_to_line(nl_index, m.start())
+        sig = m.group(0).rstrip(";").strip()
+        param_types = _parse_param_types_regex(sig)
+        ret_type = _parse_return_type_regex(sig)
+        results.append({
+            "name": name,
+            "file": filepath,
+            "line": line,
+            "signature": sig[:500],
+            "return_type": ret_type,
+            "param_types": param_types,
+            "doc_comment": "",
+            "signals": {},
+            "body": "",
+        })
+    return results
+
+
+_QUALIFIERS = frozenset((
+    "const", "volatile", "static", "register", "restrict",
+    "inline", "__inline", "__inline__", "__always_inline",
+    "__attribute__", "_Atomic", "__restrict", "__volatile",
+    "extern", "__extern_inline", "__forceinline",
+))
+
+
+def _parse_param_types_regex(sig: str) -> list[str]:
+    """Best-effort parameter type extraction from a signature string."""
+    paren = sig.find("(")
+    if paren == -1:
+        return []
+    params_str = sig[paren + 1:].rstrip(")")
+    types = []
+    for param in params_str.split(","):
+        param = param.strip()
+        if not param or param == "void":
+            continue
+        tokens = param.replace("*", " ").split()
+        # Strip leading qualifiers
+        while tokens and tokens[0] in _QUALIFIERS:
+            tokens.pop(0)
+        if not tokens:
+            continue
+        if tokens[0] in ("struct", "union", "enum") and len(tokens) >= 2:
+            types.append(tokens[0] + " " + tokens[1])
+        else:
+            types.append(tokens[0])
+    return types
+
+
+def _parse_return_type_regex(sig: str) -> str | None:
+    """Best-effort return type extraction from a signature string."""
+    paren = sig.find("(")
+    if paren == -1:
+        return None
+    before = sig[:paren].strip()
+    tokens = before.replace("*", " ").split()
+    # Strip qualifiers — keep only type and function name
+    tokens = [t for t in tokens if t not in _QUALIFIERS]
+    if len(tokens) >= 2:
+        return tokens[-2]
+    return None
+
+
+# ------------------------------------------------------------------
+# Type-reference index
+# ------------------------------------------------------------------
+
+def _classify_type_usage(fn: dict, type_name: str, lang: str = "c") -> str:
+    """Classify how a function uses a type: 'writer', 'reader', or 'passthru'.
+
+    Dispatches to language-specific patterns so each function only runs
+    the relevant checks.  *lang* is one of: c, java, python, go, rust, js.
+
+    Writer: the parameter (or its fields) appears in a write context.
+    Reader: the parameter's fields are accessed but not written.
+    Passthru: parameter is only forwarded as an argument to callees.
+    """
+    body = fn.get("body", "")
+    if not body:
+        return "passthru"
+
+    sig = fn.get("signature", "")
+    param_names = _extract_param_names(sig, type_name, lang)
+    if not param_names:
+        return "passthru"
+
+    classify = _LANG_CLASSIFIERS.get(lang, _classify_dotlang)
+    return classify(body, param_names)
+
+
+def _extract_param_names(sig: str, type_name: str, lang: str) -> list[str]:
+    """Pull parameter names that carry the target type from a signature."""
+    bare = type_name.replace("_t", "").replace("struct ", "")
+    if lang == "c":
+        pat = re.compile(
+            rf"\b(?:const\s+)?(?:struct\s+)?(?:{re.escape(type_name)}|{re.escape(bare)})"
+            rf"\s*\*\s*(\w+)",
+        )
+    elif lang in ("java", "go", "rust", "js", "python"):
+        pat = re.compile(
+            rf"\b(?:{re.escape(type_name)}|{re.escape(bare)})"
+            rf"\s*[*&]?\s*(\w+)",
+        )
+    else:
+        pat = re.compile(
+            rf"\b(?:{re.escape(type_name)}|{re.escape(bare)})"
+            rf"\s*[*&]?\s*(\w+)",
+        )
+    return pat.findall(sig)
+
+
+def _classify_c(body: str, param_names: list[str]) -> str:
+    """C/C++ classifier: -> and * patterns."""
+    for pname in param_names:
+        pe = re.escape(pname)
+        if re.search(rf"\b{pe}\s*->\s*\w+\s*[+\-|&^]?=", body):
+            return "writer"
+        if re.search(rf"\b{pe}\s*->\s*\w+\s*(\+\+|--)", body):
+            return "writer"
+        if re.search(rf"\*\s*{pe}\s*=", body):
+            return "writer"
+        if re.search(rf"->\s*\w+\s*=\s*{pe}\b", body):
+            return "writer"
+    for pname in param_names:
+        pe = re.escape(pname)
+        if re.search(rf"\b{pe}\s*->", body):
+            return "reader"
+    return "passthru"
+
+
+def _classify_dotlang(body: str, param_names: list[str]) -> str:
+    """Dot-access languages (Java, Python, Go, JS, Rust): . patterns."""
+    for pname in param_names:
+        pe = re.escape(pname)
+        if re.search(rf"\b{pe}\s*\.\s*\w+\s*[+\-|&^]?=", body):
+            return "writer"
+        if re.search(rf"\b{pe}\s*\[[^\]]*\]\s*[+\-|&^]?=", body):
+            return "writer"
+        if re.search(rf"\.\s*\w+\s*=\s*{pe}\b", body):
+            return "writer"
+    for pname in param_names:
+        pe = re.escape(pname)
+        if re.search(rf"\b{pe}\s*\.\s*\w+", body):
+            return "reader"
+    return "passthru"
+
+
+_LANG_CLASSIFIERS = {
+    "c": _classify_c,
+    "java": _classify_dotlang,
+    "python": _classify_dotlang,
+    "go": _classify_dotlang,
+    "rust": _classify_dotlang,
+    "js": _classify_dotlang,
+}
+
+
+def _build_type_reference_index(
+    prototypes: list[dict],
+    functions: list[dict],
+    lang: str = "c",
+) -> dict[str, list[tuple[str, str]]]:
+    """Map type_name → list of (function_name, usage_class) pairs.
+
+    Usage classes: 'writer' (assigns to struct fields), 'reader'
+    (reads struct fields), 'passthru' (only forwards the pointer).
+    """
+    # Build a name→fn lookup for functions (which have bodies)
+    fn_by_name: dict[str, dict] = {f["name"]: f for f in functions}
+
+    index: dict[str, set[str]] = {}
+    for fn in prototypes + functions:
+        fn_name = fn["name"]
+        types_seen: set[str] = set()
+        ret = fn.get("return_type")
+        if ret:
+            types_seen.add(ret)
+        for pt in fn.get("param_types", []):
+            types_seen.add(pt)
+        if not types_seen:
+            sig = fn.get("signature", "")
+            for tok in re.findall(r"\b(\w+_t)\b", sig):
+                types_seen.add(tok)
+        for t in types_seen:
+            index.setdefault(t, set()).add(fn_name)
+
+    # Classify usage for each function
+    result: dict[str, list[tuple[str, str]]] = {}
+    for type_name, fn_names in index.items():
+        classified: list[tuple[str, str]] = []
+        for fn_name in sorted(fn_names):
+            fn = fn_by_name.get(fn_name)
+            if fn:
+                usage = _classify_type_usage(fn, type_name, lang)
+            else:
+                usage = "passthru"
+            classified.append((fn_name, usage))
+        result[type_name] = classified
+    return result
+
+
+_CALL_SITE_RE = re.compile(r"\b(\w+)\s*\(")
+
+
+# ------------------------------------------------------------------
+# Layer 1: transitive wrapper discovery
+# ------------------------------------------------------------------
+
+_RESOURCE_OPENER_NAMES = frozenset({
+    "open", "fopen", "socket", "accept", "pipe", "pipe2",
+    "socketpair", "dup", "dup2", "dup3", "epoll_create",
+    "epoll_create1", "eventfd", "signalfd", "timerfd_create",
+    "inotify_init", "inotify_init1", "mkstemp",
+})
+
+_LOCK_PARAM_RE = re.compile(
+    r"\b(?:pthread_mutex_t|pthread_rwlock_t|pthread_spinlock_t|"
+    r"mtx_t|sem_t|mutex|spinlock_t|rwlock_t|CRYPTO_RWLOCK"
+    r"|spinlock|rwsem|semaphore)\b",
+)
+
+
+def _param_paren_pos(sig: str) -> int:
+    """Find the opening paren of the parameter list, skipping __attribute__((...))."""
+    i = 0
+    while i < len(sig):
+        p = sig.find("(", i)
+        if p == -1:
+            return -1
+        prefix = sig[:p].rstrip()
+        if prefix.endswith("__attribute__"):
+            depth = 1
+            j = p + 1
+            while j < len(sig) and depth > 0:
+                if sig[j] == "(":
+                    depth += 1
+                elif sig[j] == ")":
+                    depth -= 1
+                j += 1
+            i = j
+            continue
+        return p
+    return -1
+
+
+def _returns_pointer(sig: str) -> bool:
+    paren = _param_paren_pos(sig)
+    if paren == -1:
+        return False
+    return "*" in sig[:paren]
+
+
+def _returns_void(sig: str) -> bool:
+    paren = _param_paren_pos(sig)
+    if paren == -1:
+        return False
+    before = sig[:paren].strip()
+    return "void" in before.split() and "*" not in before
+
+
+def _returns_int(sig: str) -> bool:
+    paren = _param_paren_pos(sig)
+    if paren == -1:
+        return False
+    before = sig[:paren].strip()
+    return "int" in before.split() and "*" not in before
+
+
+_MAX_WRAPPER_DISTINCT_CALLS = 4
+
+
+def _is_thin_wrapper(body: str, calls: set[str]) -> bool:
+    """True if body looks like a thin wrapper (few statements, few call sites)."""
+    stmts = [s.strip() for s in body.split(";") if s.strip()]
+    if len(stmts) > 6:
+        return False
+    if len(calls) > _MAX_WRAPPER_DISTINCT_CALLS:
+        return False
+    return True
+
+
+def _discover_project_patterns(
+    functions: list[dict],
+    *,
+    max_passes: int = 2,
+) -> dict[str, str]:
+    """Discover project-specific wrapper patterns via transitive analysis.
+
+    Starting from known primitives (_ALLOC_NAMES, _FREE_NAMES, etc.),
+    discovers functions that wrap known allocators, deallocators, lock
+    primitives, or resource-lifecycle calls.  Transitive: if my_alloc
+    wraps malloc, then pool_alloc wrapping my_alloc is also discovered.
+
+    Only thin wrappers qualify — functions with >6 statements or >4
+    distinct call sites are skipped (builders, not wrappers).
+
+    Returns {function_name: role} where role is one of:
+    allocator, deallocator, lock_wrapper, resource_wrapper.
+    """
+    known_alloc = set(_ALLOC_NAMES)
+    known_dealloc = set(_FREE_NAMES)
+    known_lock = set(_LOCK_NAMES)
+    known_resource = set(_RESOURCE_OPENER_NAMES)
+
+    fn_calls: dict[str, set[str]] = {}
+    fn_sigs: dict[str, str] = {}
+    fn_bodies: dict[str, str] = {}
+    for f in functions:
+        name = f["name"]
+        fn_sigs[name] = f.get("signature", "")
+        body = f.get("body", "")
+        fn_bodies[name] = body
+        if body:
+            fn_calls[name] = {m.group(1) for m in _CALL_SITE_RE.finditer(body)}
+        else:
+            fn_calls[name] = set()
+
+    discovered: dict[str, str] = {}
+
+    for _pass_num in range(max_passes):
+        new_found = 0
+        for f in functions:
+            name = f["name"]
+            if name in discovered:
+                continue
+
+            calls = fn_calls.get(name, set())
+            if not calls:
+                continue
+
+            body = fn_bodies.get(name, "")
+            if not _is_thin_wrapper(body, calls):
+                continue
+
+            sig = fn_sigs.get(name, "")
+
+            if calls & known_alloc and _returns_pointer(sig):
+                discovered[name] = "allocator"
+                known_alloc.add(name)
+                new_found += 1
+                continue
+
+            if calls & known_dealloc and _returns_void(sig):
+                discovered[name] = "deallocator"
+                known_dealloc.add(name)
+                new_found += 1
+                continue
+
+            if calls & known_lock and _LOCK_PARAM_RE.search(sig):
+                discovered[name] = "lock_wrapper"
+                known_lock.add(name)
+                new_found += 1
+                continue
+
+            if calls & known_resource and _returns_int(sig):
+                discovered[name] = "resource_wrapper"
+                known_resource.add(name)
+                new_found += 1
+                continue
+
+        if new_found == 0:
+            break
+
+    return discovered
+
+
+def _find_reading_list_anchors(
+    functions: list[dict],
+    identifiers: list[str],
+) -> set[str]:
+    """Layer 2: find functions that reference reading-list identifiers.
+
+    A function is an anchor if its name matches an identifier, or its
+    body or signature references one (word-boundary match).  Returns
+    the set of function names.
+    """
+    if not identifiers:
+        return set()
+
+    ident_set: set[str] = set()
+    patterns: list[re.Pattern[str]] = []
+    for ident in identifiers:
+        bare = re.sub(r"^(?:struct|union|enum)\s+", "", ident.strip())
+        if not bare:
+            continue
+        ident_set.add(bare)
+        ident_set.add(bare.lower())
+        patterns.append(re.compile(r"\b" + re.escape(bare) + r"\b"))
+
+    anchors: set[str] = set()
+    for f in functions:
+        name = f["name"]
+        if name in ident_set or name.lower() in ident_set:
+            anchors.add(name)
+            continue
+        sig = f.get("signature", "")
+        body = f.get("body", "")
+        text = sig + " " + body
+        for pat in patterns:
+            if pat.search(text):
+                anchors.add(name)
+                break
+
+    return anchors
+
+
+def _expand_via_call_graph(
+    seed_names: set[str],
+    call_graph: dict[str, list[str]],
+    *,
+    max_depth: int = 2,
+    max_fan: int = 5,
+) -> set[str]:
+    """Layer 3: expand seed set by walking callees in the call graph.
+
+    BFS from seed_names, following at most max_fan callees per function,
+    up to max_depth levels.  Returns the expanded set (includes seeds).
+    """
+    expanded = set(seed_names)
+    frontier = set(seed_names)
+
+    for _depth in range(max_depth):
+        next_frontier: set[str] = set()
+        for fn in frontier:
+            callees = call_graph.get(fn, [])
+            for callee in callees[:max_fan]:
+                if callee not in expanded:
+                    expanded.add(callee)
+                    next_frontier.add(callee)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    return expanded
+
+
+def _build_call_graph(functions: list[dict]) -> dict[str, list[str]]:
+    """Build forward call graph: for each function, which known functions it calls."""
+    known_names = {f["name"] for f in functions}
+    if not known_names:
+        return {f["name"]: [] for f in functions}
+
+    graph: dict[str, list[str]] = {}
+    for f in functions:
+        body = f.get("body", "")
+        if not body:
+            graph[f["name"]] = []
+            continue
+        candidates = {m.group(1) for m in _CALL_SITE_RE.finditer(body)}
+        called = sorted((candidates & known_names) - {f["name"]})
+        graph[f["name"]] = called
+    return graph
+
+
+# ------------------------------------------------------------------
+# Paired operations
+# ------------------------------------------------------------------
+
+_SUFFIX_PAIRS = [
+    ("hold", "free"),
+    ("hold", "rele"),
+    ("ref", "unref"),
+    ("acquire", "release"),
+    ("lock", "unlock"),
+    ("get", "put"),
+    ("inc", "dec"),
+]
+
+
+def _find_paired_operations(functions: list[dict]) -> list[tuple[str, str]]:
+    """Find paired operations by prefix and suffix patterns."""
+    names = {f["name"] for f in functions}
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(a: str, b: str) -> None:
+        key = (min(a, b), max(a, b))
+        if key not in seen:
+            seen.add(key)
+            pairs.append((a, b))
+
+    for name in sorted(names):
+        if name.startswith(_GET_PREFIX):
+            suffix = name[len(_GET_PREFIX):]
+            for partner_pfx in (_PUT_PREFIX, _SET_PREFIX):
+                partner = partner_pfx + suffix
+                if partner in names:
+                    _add(name, partner)
+
+    for alloc_pfx in _ALLOC_PREFIXES:
+        for name in sorted(names):
+            if name.startswith(alloc_pfx):
+                suffix = name[len(alloc_pfx):]
+                for free_pfx in _FREE_PREFIXES:
+                    partner = free_pfx + suffix
+                    if partner in names:
+                        _add(name, partner)
+                        break
+
+    for acq_sfx, rel_sfx in _SUFFIX_PAIRS:
+        for name in sorted(names):
+            if name.endswith(acq_sfx):
+                stem = name[: -len(acq_sfx)]
+                partner = stem + rel_sfx
+                if partner in names and partner != name:
+                    _add(name, partner)
+
+    return pairs
+
+
+# ------------------------------------------------------------------
+# Build study items
+# ------------------------------------------------------------------
+
+def _build_study_items(
+    structs: list[dict],
+    functions: list[dict],
+    pairs: list[tuple[str, str]],
+    type_ref_index: dict[str, list[tuple[str, str]]] | None = None,
+    *,
+    scoped: bool = False,
+    discovered_patterns: dict[str, str] | None = None,
+    anchor_names: set[str] | None = None,
+) -> list[StudyItem]:
+    call_graph = _build_call_graph(functions)
+    type_ref_index = type_ref_index or {}
+    discovered_patterns = discovered_patterns or {}
+    discovered_names = set(discovered_patterns.keys())
+    anchor_names = anchor_names or set()
+
+    def _type_ref_names(type_name: str) -> set[str]:
+        """Extract just the function names for a type from the index."""
+        return {fn for fn, _cls in type_ref_index.get(type_name, [])}
+
+    # Build fn_name → best usage_class lookup (writer > reader > passthru)
+    _usage_rank = {"writer": 2, "reader": 1, "passthru": 0}
+    _fn_usage: dict[str, str] = {}
+    for entries in type_ref_index.values():
+        for fn_name, usage in entries:
+            prev = _fn_usage.get(fn_name, "passthru")
+            if _usage_rank.get(usage, 0) > _usage_rank.get(prev, 0):
+                _fn_usage[fn_name] = usage
+
+    fn_loc: dict[str, tuple[str, int | None]] = {}
+    for f in functions:
+        if f["name"] not in fn_loc:
+            fn_loc[f["name"]] = (f["file"], f.get("line"))
+
+    reverse_graph: dict[str, list[str]] = {}
+    for caller, callees in call_graph.items():
+        for callee in callees:
+            reverse_graph.setdefault(callee, []).append(caller)
+
+    items: list[StudyItem] = []
+    seen_ids: set[str] = set()
+
+    for s in structs:
+        item_id = f"struct_{s['name']}"
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+
+        type_name = s["name"]
+        typedef_name = type_name + "_t"
+        all_fns = _type_ref_names(type_name)
+        all_fns.update(_type_ref_names(typedef_name))
+        all_fns.update(_type_ref_names("struct " + type_name))
+
+        items.append(StudyItem(
+            id=item_id,
+            kind="struct",
+            name=type_name,
+            file=s["file"],
+            line=s["line"],
+            definition=s["definition"],
+            fields=s["fields"],
+            refcount_fields=s.get("refcount_fields", []),
+            doc_comment=s.get("doc_comment", ""),
+            callees=list(all_fns)[:40],
+            owned_types=s.get("owned_types", []),
+            flexible_arrays=s.get("flexible_arrays", []),
+        ))
+
+    paired_names = set()
+    for a, b in pairs:
+        item_id = f"paired_{a}_{b}"
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        paired_names.add(a)
+        paired_names.add(b)
+
+        loc = fn_loc.get(a, ("", None))
+        items.append(StudyItem(
+            id=item_id,
+            kind="paired_ops",
+            name=f"{a}/{b}",
+            file=loc[0],
+            line=loc[1],
+            paired_with=[b] if a else [],
+        ))
+
+    for s in structs:
+        if s["refcount_fields"]:
+            for f in s["refcount_fields"]:
+                item_id = f"refcount_{s['name']}_{f}"
+                if item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+                items.append(StudyItem(
+                    id=item_id,
+                    kind="struct",
+                    name=s["name"],
+                    file=s["file"],
+                    line=s["line"],
+                    definition=s["definition"],
+                    fields=s["fields"],
+                    refcount_fields=s["refcount_fields"],
+                    doc_comment=s.get("doc_comment", ""),
+                    related_items=[f"struct_{s['name']}"],
+                ))
+
+    all_paired = set()
+    for a, b in pairs:
+        all_paired.add(a)
+        all_paired.add(b)
+
+    type_ref_fns: set[str] = set()
+    for entries in type_ref_index.values():
+        type_ref_fns.update(fn for fn, _cls in entries)
+
+    for f in functions:
+        signals = f.get("signals", {})
+        doc = f.get("doc_comment", "")
+        calls = call_graph.get(f["name"], [])
+        callers = reverse_graph.get(f["name"], [])
+        flag_checks = signals.get("flag_checks", [])
+        alloc_frees = signals.get("alloc_frees", [])
+        has_type_info = bool(f.get("return_type") or f.get("param_types"))
+        has_content = (
+            _has_signals(signals)
+            or doc
+            or calls
+            or callers
+            or flag_checks
+            or alloc_frees
+            or has_type_info
+            or f["name"] in all_paired
+            or f["name"] in type_ref_fns
+            or f["name"] in discovered_names
+            or f["name"] in anchor_names
+        )
+        if not scoped and not has_content:
+            continue
+        item_id = f"func_{f['name']}"
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        body = f.get("body", "")
+        if body:
+            defn = f["signature"] + " " + body
+        else:
+            defn = f["signature"]
+        items.append(StudyItem(
+            id=item_id,
+            kind="function",
+            name=f["name"],
+            file=f["file"],
+            line=f["line"],
+            definition=defn[:4000],
+            doc_comment=doc,
+            calls=calls[:50],
+            callers=callers[:50],
+            lock_sites=signals.get("lock_sites", []),
+            rcu_usage=signals.get("rcu_usage", []),
+            ordering_annotations=signals.get("ordering_annotations", []),
+            bounds_guards=signals.get("bounds_guards", []),
+            error_gotos=signals.get("error_gotos", []),
+            clamping_patterns=signals.get("clamping_patterns", []),
+            flag_checks=flag_checks,
+            alloc_frees=alloc_frees,
+            resource_lifecycle=signals.get("resource_lifecycle", []),
+            usage_class=_fn_usage.get(f["name"]),
+        ))
+
+    if discovered_patterns:
+        disc_alloc = {n for n, r in discovered_patterns.items()
+                      if r == "allocator"}
+        disc_dealloc = {n for n, r in discovered_patterns.items()
+                        if r == "deallocator"}
+        disc_lock = {n for n, r in discovered_patterns.items()
+                     if r == "lock_wrapper"}
+        disc_resource = {n for n, r in discovered_patterns.items()
+                         if r == "resource_wrapper"}
+        for item in items:
+            if item.kind != "function":
+                continue
+            item_calls = set(item.calls)
+            for name in sorted(item_calls & disc_alloc):
+                if name not in item.alloc_frees:
+                    item.alloc_frees.append(name)
+            for name in sorted(item_calls & disc_dealloc):
+                if name not in item.alloc_frees:
+                    item.alloc_frees.append(name)
+            for name in sorted(item_calls & disc_lock):
+                if name not in item.lock_sites:
+                    item.lock_sites.append(name)
+            for name in sorted(item_calls & disc_resource):
+                if name not in item.resource_lifecycle:
+                    item.resource_lifecycle.append(name)
+
+    return items
+
+
+def _reinject_referenced_types(
+    items: list[StudyItem],
+    pre_filter_index: dict[str, StudyItem],
+    infra_types: set[str],
+) -> list[StudyItem]:
+    """Re-include struct definitions referenced by surviving items.
+
+    Types that the surviving items reference via pointer fields or body
+    usage may have been dropped at tier 3.  This finds those definitions
+    in the pre-filter index and adds them back as tier-2 context items
+    so the LLM doesn't need a follow-up pass to ask "what is struct X?".
+    """
+    surviving = {it.name.lower() for it in items}
+    infra_lower = {t.lower() for t in infra_types}
+    referenced: set[str] = set()
+
+    # Only scan tier 0-1 (focus) items — tier 2 context items are already
+    # secondary; pulling in THEIR deps inflates without helping the LLM
+    # understand the primary identifiers.
+    focus = [it for it in items if (it.relevance_tier or 0) <= 1]
+    for it in focus:
+        for t in it.owned_types:
+            referenced.add(t.lower())
+        if it.definition:
+            pat = (_REFERENCED_TYPE_PATTERN if it.kind == "function"
+                   else _OWNED_TYPE_PATTERN)
+            for m in pat.finditer(it.definition):
+                name = m.group(1).lower()
+                if name not in infra_lower:
+                    referenced.add(name)
+
+    n_readded = 0
+    newly_added: list[StudyItem] = []
+    for type_name in sorted(referenced - surviving):
+        dep = pre_filter_index.get(type_name)
+        if dep is not None:
+            dep.relevance_tier = 2
+            items.append(dep)
+            newly_added.append(dep)
+            surviving.add(type_name)
+            n_readded += 1
+
+    # Second pass: scan newly-reinjected struct definitions for
+    # embedded struct members (e.g. skcipher_walk embeds scatter_walk).
+    for dep in newly_added:
+        if dep.kind != "struct" or not dep.definition:
+            continue
+        for m in _REFERENCED_TYPE_PATTERN.finditer(dep.definition):
+            name = m.group(1).lower()
+            if name in surviving or name in infra_lower:
+                continue
+            embed = pre_filter_index.get(name)
+            if embed is not None:
+                embed.relevance_tier = 2
+                items.append(embed)
+                surviving.add(name)
+                n_readded += 1
+
+    if n_readded:
+        print(f"study-prep: re-included {n_readded} referenced "
+              f"type definitions as context", file=sys.stderr)
+    return items
+
+
+# ------------------------------------------------------------------
+# Source root detection
+# ------------------------------------------------------------------
+
+def _detect_source_root(target: Path) -> Path:
+    """Walk up from target looking for the project root.
+
+    Prefers .git (definitive VCS root) over build files that may exist
+    at every level in mono-repos or kernel trees.  Falls back to the
+    highest directory containing any build-system indicator.
+    """
+    _VCS_ROOTS = (".git",)
+    _BUILD_INDICATORS = (
+        "Makefile", "Kbuild", "Kconfig", "CMakeLists.txt",
+        "setup.py", "pyproject.toml", "Cargo.toml", "go.mod",
+        "pom.xml", "build.gradle", "package.json",
+    )
+    current = target if target.is_dir() else target.parent
+    highest_build: Path | None = None
+    while current != current.parent:
+        if any((current / vcs).exists() for vcs in _VCS_ROOTS):
+            return current
+        if any((current / ind).exists() for ind in _BUILD_INDICATORS):
+            highest_build = current
+        current = current.parent
+    return highest_build or (target if target.is_dir() else target.parent)
+
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+_HEADER_EXTENSIONS = frozenset((".h", ".hpp", ".hxx"))
+_SOURCE_EXTENSIONS = frozenset((".c", ".cc", ".cpp", ".cxx"))
+_DOC_EXTENSIONS = frozenset((".rst", ".md", ".txt"))
+_DOC_DIRS = ("Documentation", "doc", "docs", "man")
+
+
+_ts_local = threading.local()
+
+
+def _get_ts_parser_for_thread():
+    """Thread-local tree-sitter parser (Parser is not thread-safe)."""
+    if not hasattr(_ts_local, "parser"):
+        _ts_local.parser = _get_ts_parser()
+    return _ts_local.parser
+
+
+def _scan_file_result(
+    sf: Path,
+    source_root: Path,
+    use_ts: bool,
+    search_dirs: list[Path] | None,
+    *,
+    extract_protos: bool = False,
+    concept_filter: frozenset[str] | None = None,
+) -> tuple[list[dict], list[dict], list[dict], dict[str, str]]:
+    """Extract from one file, returning (structs, functions, protos, includes).
+
+    When concept_filter is set, bail early if none of the terms appear in the
+    file content — avoids the expensive extraction on irrelevant files.
+    """
+    try:
+        content = sf.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return [], [], [], {}
+
+    if concept_filter and not any(term in content for term in concept_filter):
+        return [], [], [], {}
+
+    rel = str(sf.relative_to(source_root)) if sf.is_relative_to(source_root) else str(sf)
+    nl_index = _build_newline_index(content)
+    structs = _extract_struct_blocks(content, rel, _nl_index=nl_index)
+    functions = _extract_functions(content, rel, _nl_index=nl_index)
+
+    protos: list[dict] = []
+    if extract_protos:
+        parser = _get_ts_parser_for_thread() if use_ts else None
+        if parser is not None:
+            protos = _extract_prototypes_ts(
+                content.encode("utf-8", errors="replace"), rel, parser,
+            )
+        else:
+            protos = _extract_prototypes_regex(content, rel, _nl_index=nl_index)
+
+    includes: dict[str, str] = {}
+    if search_dirs is not None:
+        for inc in _extract_includes(content):
+            resolved = _resolve_include(inc, search_dirs, source_root)
+            if resolved:
+                includes[inc] = str(resolved)
+
+    return structs, functions, protos, includes
+
+
+_IDENT_RE = re.compile(r"\b([a-zA-Z_]\w+_t)\b")
+_CONTEXT_NAME_RE = re.compile(r"(?:Unresolved|Dependency)\s+\w+:\s+(\S+)")
+
+
+def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
+    """Extract pending items from reading-list.json, partitioned by resolution.
+
+    Returns (identifiers, concepts) — identifiers feed the mechanical
+    grep filter; concepts need LLM seeding first.
+    """
+    if not path.is_file():
+        return [], []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    seen: set[str] = set()
+    identifiers: list[str] = []
+    concepts: list[str] = []
+    for item in raw.get("items", []):
+        if item.get("resolved"):
+            continue
+        resolution = item.get("resolution", "identifier")
+        if resolution == "concept":
+            q = item.get("question", "").strip()
+            if q and q not in seen:
+                seen.add(q)
+                concepts.append(q)
+            continue
+        # source_function is the strongest anchor — always include it
+        src_fn = (item.get("source_function") or "").strip()
+        if src_fn and src_fn not in seen:
+            seen.add(src_fn)
+            identifiers.append(src_fn)
+        ctx = item.get("context") or ""
+        m = _CONTEXT_NAME_RE.search(ctx)
+        if m:
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                identifiers.append(name)
+            continue
+        for m2 in _IDENT_RE.finditer(item.get("question", "")):
+            name = m2.group(1)
+            if name not in seen:
+                seen.add(name)
+                identifiers.append(name)
+    return identifiers, concepts
+
+
+def _scope_from_reading_list(
+    rl_path: Path,
+    source_root: Path,
+    search_dirs: list[Path],
+    *,
+    max_depth: int = 2,
+) -> list[Path] | None:
+    """Build a targeted file set by chasing includes from reading-list source files.
+
+    Starts from the source_file entries in reading-list.json, resolves
+    their #include directives against search_dirs, and recurses up to
+    max_depth levels.  Returns the scoped file list, or None if the
+    reading list has no source_file entries (fall back to full rglob).
+    """
+    if not rl_path.is_file():
+        return None
+    try:
+        raw = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    seed_files: set[str] = set()
+    for item in raw.get("items", []):
+        sf = item.get("source_file", "")
+        if sf:
+            seed_files.add(sf)
+    if not seed_files:
+        return None
+
+    collected: set[Path] = set()
+    frontier: set[Path] = set()
+    for sf in seed_files:
+        p = (source_root / sf).resolve()
+        if p.is_file():
+            frontier.add(p)
+
+    for _depth in range(max_depth + 1):
+        if not frontier:
+            break
+        new_frontier: set[Path] = set()
+        for fpath in frontier:
+            if fpath in collected:
+                continue
+            collected.add(fpath)
+            try:
+                src = fpath.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for inc in _extract_includes(src):
+                resolved = _resolve_include(inc, search_dirs, source_root)
+                if resolved and resolved not in collected:
+                    new_frontier.add(resolved)
+        frontier = new_frontier
+
+    return sorted(collected) if collected else None
+
+
+def _grep_scope(
+    source_files: list[Path],
+    identifier_arg: str,
+    target: Path,
+) -> list[Path]:
+    """Narrow a large file set to those containing identifier hits.
+
+    When the target tree has >500 files and --identifier is set, a full
+    AST parse is too slow.  Instead, grep for the identifiers and only
+    parse files with hits (plus their direct includes, added later in
+    the external-header pass).
+    """
+    terms = {t.strip() for t in identifier_arg.split(",") if t.strip()}
+    if not terms:
+        return source_files
+    pattern = "|".join(re.escape(t) for t in sorted(terms))
+    hit_files: list[Path] = []
+    regex = re.compile(pattern)
+    for sf in source_files:
+        try:
+            text = sf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if regex.search(text):
+            hit_files.append(sf)
+    print(
+        f"study-prep: grep-scoped {len(source_files)} -> {len(hit_files)} "
+        f"files ({len(terms)} identifiers)",
+        file=sys.stderr,
+    )
+    return hit_files if hit_files else source_files
+
+
+def _llm_seed_concepts_from_names(
+    semantic_concepts: list[str],
+    all_names: list[str],
+    model: str | None = None,
+) -> list[str]:
+    """Ask LLM to map semantic concepts to concrete identifiers.
+
+    Takes an in-memory name list and returns identifier strings that the
+    LLM considers relevant to the given concepts.
+    """
+    if not all_names:
+        return []
+    try:
+        from packages.llm_analysis import get_client
+        if model:
+            from core.llm.config import LLMConfig
+            cfg = LLMConfig()
+            mc = cfg.config_for_model(model)
+            if mc.api_key:
+                client = get_client(config=LLMConfig(
+                    primary_model=mc, fallback_models=[]))
+            else:
+                client = get_client()
+        else:
+            client = get_client()
+    except Exception:
+        print("study-prep: WARNING: no LLM available for concept seeding",
+              file=sys.stderr)
+        return []
+    if client is None:
+        print("study-prep: WARNING: no LLM available for concept seeding",
+              file=sys.stderr)
+        return []
+
+    names_block = "\n".join(all_names[:3000])
+    concepts_block = "\n".join(f"- {c}" for c in semantic_concepts)
+    prompt = (
+        "You are selecting items from a C codebase study list.\n\n"
+        "Semantic concepts to research:\n"
+        f"{concepts_block}\n\n"
+        "Available identifiers (struct names, function names, type names):\n"
+        f"{names_block}\n\n"
+        "Return ONLY a JSON array of identifier strings from the list above "
+        "that are relevant to the semantic concepts.  Include types, structs, "
+        "and functions that implement, enforce, or participate in the concept.  "
+        "Return 20-80 identifiers.  No explanation, just the JSON array."
+    )
+    try:
+        resp = client.generate(prompt, max_tokens=4096)
+        text = resp.content if isinstance(resp.content, str) else str(resp.content)
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        seeded = json.loads(text)
+        if isinstance(seeded, list):
+            name_set = set(all_names)
+            return [s for s in seeded if isinstance(s, str) and s in name_set]
+    except Exception as exc:
+        print(f"study-prep: WARNING: concept seeding failed: {exc}",
+              file=sys.stderr)
+    return []
+
+
+def _llm_seed_concepts(
+    semantic_concepts: list[str],
+    study_list_path: Path,
+    model: str | None = None,
+) -> list[str]:
+    """Wrapper: reads names from study-list.json, then delegates to _from_names."""
+    if not study_list_path.is_file():
+        return []
+    try:
+        data = json.loads(study_list_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    all_names = sorted({item["name"] for item in data.get("items", [])})
+    return _llm_seed_concepts_from_names(semantic_concepts, all_names, model=model)
+
+
+def _discover_docs(
+    source_root: Path,
+    ident_stems: set[str],
+) -> list[dict[str, str]]:
+    """Find documentation files relevant to the study identifiers.
+
+    Searches known doc directories under source_root for files whose
+    name or content references the target type.  Returns paths + a
+    one-line reason for inclusion.
+    """
+    results: list[dict[str, str]] = []
+    if not ident_stems:
+        return results
+
+    # Candidate directories
+    doc_roots: list[Path] = []
+    for dname in _DOC_DIRS:
+        for candidate in source_root.rglob(dname):
+            if candidate.is_dir() and not candidate.is_symlink():
+                doc_roots.append(candidate)
+                if len(doc_roots) >= 20:
+                    break
+        if len(doc_roots) >= 20:
+            break
+
+    # Also check source_root itself for top-level docs
+    doc_roots.append(source_root)
+
+    seen: set[Path] = set()
+    stems_lower = {s.replace("_t", "").replace("_", "") for s in ident_stems}
+    stems_lower |= ident_stems
+
+    for doc_root in doc_roots:
+        pattern = "*" if doc_root == source_root else "**/*"
+        for doc_file in doc_root.glob(pattern):
+            if doc_file.suffix not in _DOC_EXTENSIONS:
+                continue
+            if not doc_file.is_file() or doc_file.is_symlink():
+                continue
+            if doc_file in seen:
+                continue
+            seen.add(doc_file)
+
+            # Check filename first (cheap)
+            fname_lower = doc_file.stem.lower().replace("-", "").replace("_", "")
+            name_match = any(s.replace("_", "") in fname_lower for s in stems_lower)
+            if name_match:
+                results.append({
+                    "file": str(doc_file),
+                    "reason": "filename matches study target",
+                })
+                continue
+
+            # Check first 4KB of content — require struct/type context
+            # for short stems to avoid false positives (e.g. "page" matches
+            # everything in mm/ docs)
+            try:
+                snippet = doc_file.read_text(encoding="utf-8", errors="ignore")[:4096]
+            except OSError:
+                continue
+            snippet_lower = snippet.lower()
+            # Extract document title from RST heading
+            doc_title = ""
+            lines = snippet.split("\n")
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if (not stripped
+                        or stripped.startswith(("#", "..", ":"))):
+                    continue
+                # Overline format: =====\nTitle\n=====
+                if (all(c in "=-~^" for c in stripped)
+                        and len(stripped) >= 3
+                        and i + 2 < len(lines)
+                        and lines[i + 1].strip()
+                        and lines[i + 2].strip()
+                        and all(c in "=-~^"
+                                for c in lines[i + 2].strip())):
+                    doc_title = lines[i + 1].strip()
+                    break
+                # Underline-only format: Title\n=====
+                if (i + 1 < len(lines)
+                        and lines[i + 1].strip()
+                        and all(c in "=-~^" for c in
+                                lines[i + 1].strip())):
+                    doc_title = stripped
+                break
+            for stem in ident_stems:
+                if len(stem) <= 5:
+                    # Short stems: require type-qualified reference
+                    if (f"struct {stem}" in snippet_lower
+                            or f"{stem}_t" in snippet_lower
+                            or f"``{stem}``" in snippet_lower):
+                        reason = doc_title or (
+                            f"references type '{stem}' in content")
+                        results.append({
+                            "file": str(doc_file),
+                            "reason": reason,
+                        })
+                        break
+                elif stem in snippet_lower:
+                    reason = doc_title or (
+                        f"references '{stem}' in content")
+                    results.append({
+                        "file": str(doc_file),
+                        "reason": reason,
+                    })
+                    break
+
+            if len(results) >= 30:
+                break
+        if len(results) >= 30:
+            break
+
+    return results
+
+
+def _chase_reading_list_definitions(
+    rl_path: Path,
+    source_root: Path,
+    target: Path,
+) -> list[Path]:
+    """Find files outside target that define reading-list identifiers.
+
+    When the reading list references types/functions defined outside the
+    study target (e.g. scatterlist.h when target is crypto/), this finds
+    their definitions so the LLM can study them.  Uses subprocess grep
+    for speed.
+    """
+    if not rl_path.is_file():
+        return []
+    try:
+        raw = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    # Collect concrete identifiers from unresolved items
+    _CTX_FULL_RE = re.compile(
+        r"(?:Unresolved|Dependency)\s+\w+:\s+"
+        r"(?:(?:struct|union|enum)\s+)?([A-Za-z_]\w+)"
+    )
+    idents: set[str] = set()
+    for item in raw.get("items", []):
+        if item.get("resolved"):
+            continue
+        ctx = item.get("context") or ""
+        q = item.get("question") or ""
+        # "Unresolved type: struct scatterlist" → scatterlist
+        m = _CTX_FULL_RE.search(ctx)
+        if m:
+            name = m.group(1)
+            if len(name) >= 3:
+                idents.add(name)
+            continue
+        # Backtick-quoted in question
+        for bm in re.finditer(r"`([A-Za-z_]\w+)`", q):
+            name = bm.group(1)
+            if len(name) >= 3:
+                idents.add(name)
+
+    if not idents:
+        return []
+
+    target_resolved = target.resolve()
+    candidates: set[Path] = set()
+
+    def _collect_grep(dest: set[Path]) -> None:
+        """Find files containing struct/function/typedef definitions."""
+        def_patterns: list[str] = []
+        for ident in sorted(idents):
+            escaped = re.escape(ident)
+            def_patterns.append(rf"struct\s+{escaped}\s*\{{")
+            def_patterns.append(rf"\}}\s+{escaped}\s*;")
+            def_patterns.append(rf"^[A-Za-z_].*\b{escaped}\s*\(")
+        if not def_patterns:
+            return
+        combined = "|".join(def_patterns[:300])
+        try:
+            proc = subprocess.run(
+                ["grep", "-rlE", "--include=*.c", "--include=*.h",
+                 combined, str(source_root)],
+                capture_output=True, text=True, timeout=60,
+            )
+            for line in proc.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                p = Path(line).resolve()
+                if p.is_file() and not p.is_relative_to(target_resolved):
+                    dest.add(p)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    def _collect_find(dest: set[Path]) -> None:
+        """Find files named after reading-list identifiers."""
+        long_idents = [i for i in idents if len(i) >= 6]
+        if not long_idents:
+            return
+        name_args: list[str] = []
+        for ident in long_idents:
+            il = ident.lower()
+            if name_args:
+                name_args.append("-o")
+            name_args.extend(["-name", f"{il}.*"])
+            name_args.extend(["-o", "-name", f"*_{il}.*"])
+            name_args.extend(["-o", "-name", f"{il}_*.*"])
+        try:
+            proc = subprocess.run(
+                ["find", str(source_root), "-type", "f", "("]
+                + name_args + [")"],
+                capture_output=True, text=True, timeout=30,
+            )
+            for line in proc.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                p = Path(line).resolve()
+                if p.suffix in (".c", ".h") \
+                        and not p.is_relative_to(target_resolved):
+                    dest.add(p)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    _collect_grep(candidates)
+    _collect_find(candidates)
+
+    # Prioritise definition locations over consumers:
+    # include/, lib/ before drivers/, arch/, tools/, etc.
+    def _priority(p: Path) -> int:
+        for part in p.parts:
+            if part == "include":
+                return 0
+            if part == "lib":
+                return 1
+            if part in ("kernel", "mm", "net", "fs", "security"):
+                return 2
+        return 3
+
+    if candidates:
+        print(f"study-prep: chased {len(candidates)} external definition files "
+              f"for {len(idents)} reading-list identifiers",
+              file=sys.stderr)
+
+    return sorted(candidates, key=_priority)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        prog="raptor-study-prep",
+        description="Phase 1 mechanical prep for /understand --study.",
+    )
+    ap.add_argument("target", help="Study scope (directory or file).")
+    ap.add_argument("output_dir", help="Where to write study-list.json.")
+    ap.add_argument("--root", default=None,
+                    help="Source root for include resolution (auto-detected if omitted).")
+    ap.add_argument("--identifier", default=None,
+                    help="Mechanical filter: grep for these type/function names (comma-separated).")
+    ap.add_argument("--concept", default=None,
+                    help="Semantic filter: LLM seeds identifiers from natural-language concepts (comma-separated).")
+    ap.add_argument("--correlate", default=None,
+                    help="Identifiers to correlate (comma-separated or +-separated). "
+                         "The study pipeline examines the relationship between these identifiers.")
+    ap.add_argument("--reading-list", default=None, metavar="PATH",
+                    help="Path to reading-list.json; pending items feed --identifier or --concept by resolution tag.")
+    ap.add_argument("--include-dir", action="append", default=None, dest="include_dirs",
+                    metavar="DIR", help="Additional include search directories (repeatable).")
+    ap.add_argument("--narrow", action="store_true",
+                    help="Narrow extraction: skip API-from-header and stem expansion. "
+                         "Use for follow-up passes where only the named identifiers matter.")
+    ap.add_argument("--threads", type=int, default=None,
+                    help="Worker threads for file extraction (default: cpu_count).")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override for concept seeding.")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-run even if study-list.json already exists.")
+    parsed, _extras = ap.parse_known_args(sys.argv[1:])
+
+    target = Path(parsed.target).resolve()
+    output_dir = Path(parsed.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    study_list_cache = output_dir / "study-list.json"
+    if study_list_cache.is_file() and not getattr(parsed, "force", False):
+        print("study-prep: reusing cached study-list.json", file=sys.stderr)
+        return 0
+
+    if parsed.root:
+        source_root = Path(parsed.root).resolve()
+    else:
+        source_root = _detect_source_root(target)
+
+    print(f"study-prep: target={target}", file=sys.stderr)
+    print(f"study-prep: source_root={source_root}", file=sys.stderr)
+
+    ts_parser = _get_ts_parser()
+    if ts_parser:
+        print("study-prep: tree-sitter available — using AST prototype extraction",
+              file=sys.stderr)
+
+    search_dirs = [source_root]
+    # Auto-detect include directories: find all dirs named "include" or "inc"
+    # within 2 levels of source_root.  Avoids vendor/third-party noise by
+    # excluding directories whose path contains common vendor markers.
+    _VENDOR_MARKERS = frozenset(("vendor", "third_party", "third-party",
+                                 "node_modules", "external", ".git"))
+    _INC_NAMES = frozenset(("include", "inc"))
+    try:
+        for depth1 in source_root.iterdir():
+            try:
+                if not depth1.is_dir() or depth1.name.startswith("."):
+                    continue
+            except OSError:
+                continue
+            if depth1.name in _INC_NAMES and depth1 not in search_dirs:
+                search_dirs.append(depth1)
+                continue
+            if depth1.name.lower() in _VENDOR_MARKERS:
+                continue
+            try:
+                for depth2 in depth1.iterdir():
+                    try:
+                        if depth2.is_dir() and depth2.name in _INC_NAMES:
+                            if depth2 not in search_dirs:
+                                search_dirs.append(depth2)
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+    except OSError:
+        pass
+    # Also check target-relative includes if target != source_root
+    if target != source_root:
+        try:
+            for child in target.iterdir():
+                try:
+                    if child.is_dir() and child.name in _INC_NAMES:
+                        if child not in search_dirs:
+                            search_dirs.append(child)
+                except OSError:
+                    continue
+        except OSError:
+            pass
+    if parsed.include_dirs:
+        for d in parsed.include_dirs:
+            p = Path(d).resolve()
+            if p.is_dir() and p not in search_dirs:
+                search_dirs.append(p)
+
+    is_scoped = False
+    if target.is_file():
+        source_files = [target]
+        is_scoped = True
+    else:
+        scoped = None
+        if parsed.reading_list:
+            scoped = _scope_from_reading_list(
+                Path(parsed.reading_list), source_root, search_dirs,
+            )
+        if scoped is not None:
+            is_scoped = True
+            source_files = [
+                f for f in scoped
+                if f.suffix in _C_EXTENSIONS and f.is_file()
+            ]
+            print(
+                f"study-prep: scoped to {len(source_files)} files "
+                f"via include-chase from reading-list",
+                file=sys.stderr,
+            )
+        else:
+            source_files = sorted(
+                f for f in target.rglob("*")
+                if f.suffix in _C_EXTENSIONS and f.is_file()
+                and not f.is_symlink()
+            )
+            if len(source_files) > 500 and parsed.identifier:
+                source_files = _grep_scope(
+                    source_files, parsed.identifier, target,
+                )
+
+        # Chase reading-list identifiers to their definitions outside target.
+        # This pulls in files like include/linux/scatterlist.h and
+        # lib/scatterlist.c when the reading list references scatterlist.
+        if parsed.reading_list and source_root != target:
+            ext_defs = _chase_reading_list_definitions(
+                Path(parsed.reading_list), source_root, target,
+            )
+            if ext_defs:
+                existing = {f.resolve() for f in source_files}
+                added = [f for f in ext_defs
+                         if f.suffix in _C_EXTENSIONS and f.resolve() not in existing]
+                if added:
+                    is_scoped = True
+                    source_files.extend(added)
+                    print(f"study-prep: added {len(added)} external definition "
+                          f"files to study scope",
+                          file=sys.stderr)
+
+    headers = [f for f in source_files if f.suffix in _HEADER_EXTENSIONS]
+    c_files = [f for f in source_files if f.suffix in _SOURCE_EXTENSIONS]
+
+    print(f"study-prep: {len(headers)} headers + {len(c_files)} source files in scope",
+          file=sys.stderr)
+
+    all_structs: list[dict] = []
+    all_functions: list[dict] = []
+    all_prototypes: list[dict] = []
+    resolved_includes: dict[str, str] = {}
+
+    use_ts = ts_parser is not None
+    max_workers = parsed.threads or os.cpu_count() or 4
+    n_workers = min(max_workers, len(headers) or 1)
+    t0 = time.monotonic()
+
+    # Pass 1: headers — parallel extraction of structs, prototypes, type graph
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = [
+            pool.submit(_scan_file_result, sf, source_root, use_ts,
+                        search_dirs, extract_protos=True)
+            for sf in headers
+        ]
+        for fut in futures:
+            structs, functions, protos, includes = fut.result()
+            all_structs.extend(structs)
+            all_functions.extend(functions)
+            all_prototypes.extend(protos)
+            resolved_includes.update(includes)
+
+    # Dedup: prototypes win over bodyless regex function matches
+    proto_names = {p["name"] for p in all_prototypes}
+    fns_with_body = {f["name"] for f in all_functions if f.get("body")}
+    all_functions[:] = [
+        f for f in all_functions
+        if f["name"] not in proto_names or f["name"] in fns_with_body
+    ]
+    all_prototypes[:] = [
+        p for p in all_prototypes if p["name"] not in fns_with_body
+    ]
+
+    t1 = time.monotonic()
+    print(f"study-prep: pass 1 (headers, {n_workers} threads): "
+          f"{len(all_structs)} structs, {len(all_prototypes)} prototypes "
+          f"[{t1 - t0:.1f}s]", file=sys.stderr)
+
+    # Pass 1.5: external headers — resolve includes from target files that
+    # point outside the target directory, then scan those that define the
+    # study identifier (e.g. include/linux/scatterlist.h when target is
+    # crypto/).
+    ext_ident_arg = parsed.identifier
+    if ext_ident_arg and search_dirs:
+        ext_terms = set()
+        for ident in ext_ident_arg.split(","):
+            ident = ident.strip()
+            bare = re.sub(r"^(?:struct|union|enum)\s+", "", ident.lower())
+            ext_terms.add(bare)
+            ext_terms.add(ident.lower())
+
+        # Collect all #include paths from already-scanned files
+        all_includes: set[str] = set()
+        for sf in source_files:
+            try:
+                content = sf.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            all_includes.update(_extract_includes(content))
+
+        # Resolve against search_dirs WITHOUT the source_root constraint
+        scanned_paths = {str(f.resolve()) for f in source_files}
+        ext_headers: list[Path] = []
+        for inc_path in all_includes:
+            for d in search_dirs:
+                candidate = (d / inc_path).resolve()
+                if not candidate.is_file():
+                    continue
+                if candidate.suffix not in _HEADER_EXTENSIONS:
+                    continue
+                if str(candidate) in scanned_paths:
+                    break
+                try:
+                    snippet = candidate.read_text(
+                        encoding="utf-8", errors="ignore")[:8192]
+                except OSError:
+                    break
+                if any(term in snippet.lower() for term in ext_terms):
+                    ext_headers.append(candidate)
+                    scanned_paths.add(str(candidate))
+                break
+
+        if ext_headers:
+            ext_workers = min(max_workers, len(ext_headers))
+            with ThreadPoolExecutor(max_workers=ext_workers) as pool:
+                futures = [
+                    pool.submit(_scan_file_result, sf, source_root, use_ts,
+                                search_dirs, extract_protos=True)
+                    for sf in ext_headers
+                ]
+                for fut in futures:
+                    structs, _functions, _protos, _incs = fut.result()
+                    all_structs.extend(structs)
+
+            print(f"study-prep: pass 1.5: {len(ext_headers)} external headers "
+                  f"scanned (identifier-relevant includes)",
+                  file=sys.stderr)
+
+    # Assemble identifiers from --identifier, --concept (LLM-seeded), --reading-list
+    ident_arg = parsed.identifier
+    identifiers = [c.strip() for c in ident_arg.split(",") if c.strip()] if ident_arg else []
+    concept_arg = parsed.concept
+    semantic_concepts = [c.strip() for c in concept_arg.split(",") if c.strip()] if concept_arg else []
+
+    if parsed.reading_list:
+        rl_idents, rl_concepts = _load_reading_list(Path(parsed.reading_list))
+        if rl_idents:
+            identifiers.extend(rl_idents)
+            print(f"study-prep: reading list added {len(rl_idents)} identifiers: "
+                  f"{', '.join(rl_idents[:5])}"
+                  f"{' ...' if len(rl_idents) > 5 else ''}",
+                  file=sys.stderr)
+        if rl_concepts:
+            semantic_concepts.extend(rl_concepts)
+            print(f"study-prep: reading list added {len(rl_concepts)} semantic concepts",
+                  file=sys.stderr)
+
+    _deferred_concepts = semantic_concepts if semantic_concepts else []
+    if semantic_concepts:
+        study_list_path = output_dir / "study-list.json"
+        if not study_list_path.is_file():
+            print("study-prep: no prior study-list.json — will seed concepts "
+                  "from in-memory items after extraction", file=sys.stderr)
+        else:
+            seeded = _llm_seed_concepts(semantic_concepts, study_list_path, model=parsed.model)
+            if seeded:
+                identifiers.extend(seeded)
+                _deferred_concepts = []
+                print(f"study-prep: LLM seeded {len(seeded)} identifiers from "
+                      f"{len(semantic_concepts)} semantic concepts",
+                      file=sys.stderr)
+
+    cf: frozenset[str] | None = None
+    if identifiers and c_files:
+        partial_type_ref = _build_type_reference_index(all_prototypes, all_functions)
+        search_terms: set[str] = set()
+        for one_ident in identifiers:
+            bare = re.sub(r"^(?:struct|union|enum)\s+", "", one_ident.lower())
+            bare_no_t = bare[:-2] if bare.endswith("_t") else bare
+            search_terms.add(one_ident)
+            search_terms.add(bare)
+            for key in (one_ident, bare, bare_no_t, bare_no_t + "_t",
+                        "struct " + bare):
+                for fn_name, _cls in partial_type_ref.get(key, []):
+                    if bare_no_t in fn_name.lower():
+                        search_terms.add(fn_name)
+        cf = frozenset(search_terms)
+        label = ",".join(identifiers) if len(identifiers) <= 3 else f"{len(identifiers)} identifiers"
+        print(f"study-prep: identifier filter ({label}): {len(cf)} search terms",
+              file=sys.stderr)
+
+    # Pass 2: .c files — parallel extraction of function bodies and signals
+    n_workers_p2 = min(max_workers, len(c_files) or 1)
+    matched_p2 = 0
+    with ThreadPoolExecutor(max_workers=n_workers_p2) as pool:
+        futures = [
+            pool.submit(_scan_file_result, sf, source_root, False,
+                        search_dirs, extract_protos=False, concept_filter=cf)
+            for sf in c_files
+        ]
+        for fut in futures:
+            structs, functions, _protos, includes = fut.result()
+            if structs or functions:
+                matched_p2 += 1
+            all_structs.extend(structs)
+            all_functions.extend(functions)
+            resolved_includes.update(includes)
+
+    t2 = time.monotonic()
+    if cf:
+        skipped = len(c_files) - matched_p2
+        print(f"study-prep: pass 2 ({matched_p2}/{len(c_files)} files matched, "
+              f"{skipped} skipped, {n_workers_p2} threads) [{t2 - t1:.1f}s]",
+              file=sys.stderr)
+    else:
+        print(f"study-prep: pass 2 ({len(c_files)} files, {n_workers_p2} threads) "
+              f"[{t2 - t1:.1f}s]", file=sys.stderr)
+
+    # Pass 3: resolved includes not already scanned (few files, sequential).
+    # Files outside the target directory contribute struct definitions only
+    # — their functions/prototypes stay out of the study-item pool to avoid
+    # scope explosion when source_root is wider than target.
+    target_resolved = target.resolve()
+    seen_files = {sf.resolve() for sf in source_files}
+    for _inc_path, resolved_path in resolved_includes.items():
+        rp = Path(resolved_path)
+        if not rp.is_file() or rp.resolve() in seen_files:
+            continue
+        seen_files.add(rp.resolve())
+        is_header = rp.suffix in _HEADER_EXTENSIONS
+        is_external = not rp.resolve().is_relative_to(target_resolved)
+        structs, functions, protos, _incs = _scan_file_result(
+            rp, source_root, use_ts, None,
+            extract_protos=is_header and not is_external,
+        )
+        all_structs.extend(structs)
+        if not is_external:
+            all_functions.extend(functions)
+            all_prototypes.extend(protos)
+
+    t3 = time.monotonic()
+
+    # Final dedup: prototypes extracted in pass 1 may now have body
+    # versions from pass 2/3.  Remove those prototypes so they don't
+    # overwrite call-graph entries in _build_call_graph (dict-last-wins).
+    fns_with_body = {f["name"] for f in all_functions if f.get("body")}
+    all_prototypes[:] = [
+        p for p in all_prototypes if p["name"] not in fns_with_body
+    ]
+
+    # Build type-reference index from prototypes + functions
+    combined_fns = all_functions + all_prototypes
+    type_ref_index = _build_type_reference_index(all_prototypes, all_functions)
+
+    # Layer 1: discover project-specific wrapper patterns
+    discovered_patterns = _discover_project_patterns(all_functions)
+    if discovered_patterns:
+        by_role: dict[str, int] = {}
+        for _r in discovered_patterns.values():
+            by_role[_r] = by_role.get(_r, 0) + 1
+        role_summary = ", ".join(f"{r}={c}" for r, c in sorted(by_role.items()))
+        print(f"study-prep: layer 1 discovered {len(discovered_patterns)} "
+              f"patterns ({role_summary})", file=sys.stderr)
+
+    # Layer 2: reading-list anchored function inclusion
+    rl_anchors: set[str] = set()
+    if identifiers:
+        rl_anchors = _find_reading_list_anchors(all_functions, identifiers)
+
+    # Layer 3: call-graph expansion from anchors
+    expanded_anchors: set[str] = set()
+    if rl_anchors:
+        preliminary_cg = _build_call_graph(combined_fns)
+        expanded_anchors = _expand_via_call_graph(
+            rl_anchors, preliminary_cg, max_depth=2, max_fan=5,
+        )
+        n_expanded = len(expanded_anchors) - len(rl_anchors)
+        print(f"study-prep: layer 2+3: {len(rl_anchors)} reading-list anchors"
+              f"{f', +{n_expanded} via call-graph expansion' if n_expanded else ''}",
+              file=sys.stderr)
+
+    pairs = _find_paired_operations(combined_fns)
+    items = _build_study_items(
+        all_structs, combined_fns, pairs, type_ref_index,
+        scoped=is_scoped,
+        discovered_patterns=discovered_patterns,
+        anchor_names=expanded_anchors,
+    )
+    t4 = time.monotonic()
+    print(f"study-prep: reduce (type-ref + pairs + items) [{t4 - t3:.1f}s]"
+          f"{' [scoped — has_content gate bypassed]' if is_scoped else ''}",
+          file=sys.stderr)
+
+    # Deferred concept seeding: when --concept was passed without a prior
+    # study-list.json, use the in-memory items to seed identifiers now.
+    if _deferred_concepts and items:
+        all_item_names = sorted({it.name for it in items})
+        seeded = _llm_seed_concepts_from_names(
+            _deferred_concepts, all_item_names, model=parsed.model)
+        if seeded:
+            identifiers.extend(seeded)
+            print(f"study-prep: deferred concept seeding: {len(seeded)} identifiers "
+                  f"from {len(_deferred_concepts)} concepts (in-memory)",
+                  file=sys.stderr)
+
+    # Merge --correlate identifiers early so the relevance filter and doc
+    # discovery see them (previously this ran after both, so standalone
+    # --correlate produced an empty filter set).
+    correlate_identifiers = None
+    if parsed.correlate:
+        correlate_identifiers = [
+            s.strip() for s in re.split(r"[,+]", parsed.correlate)
+            if s.strip()
+        ]
+        if len(correlate_identifiers) < 2:
+            correlate_identifiers = None
+        else:
+            print(f"study-prep: correlation requested for {correlate_identifiers}",
+                  file=sys.stderr)
+            if not identifiers:
+                identifiers = list(correlate_identifiers)
+            else:
+                for ci in correlate_identifiers:
+                    if ci not in identifiers:
+                        identifiers.append(ci)
+
+    if identifiers:
+        # ident_exact: names that match tier 0 exactly (struct defs)
+        # ident_stems: names eligible for stem-in-name tier 1 promotion
+        ident_exact: set[str] = set()
+        ident_stems: set[str] = set()
+        ident_type_fns: set[str] = set()
+        for one_ident in identifiers:
+            low = one_ident.lower()
+            # Strip struct/union/enum prefix to get the bare name
+            bare = re.sub(r"^(?:struct|union|enum)\s+", "", low)
+            # Strip _t suffix (as suffix, not char-set)
+            bare_no_t = bare[:-2] if bare.endswith("_t") else bare
+            ident_exact.add(bare)
+            ident_exact.add(bare_no_t)
+            # Only use stem matching for unqualified identifiers
+            # (e.g. cred_t → stem "cred" matches "crhold").
+            # Qualified identifiers like "struct page" get exact match
+            # only — stem matching "page" is too noisy.
+            if low == bare:
+                ident_stems.add(bare)
+                ident_stems.add(bare_no_t)
+            for key in (one_ident, bare, bare_no_t, bare_no_t + "_t",
+                        "struct " + bare):
+                ident_type_fns.update(
+                    fn for fn, _cls in type_ref_index.get(key, [])
+                )
+
+        # Build the API set: functions prototyped in the same header as
+        # a tier-0 struct.  In C, the header IS the API declaration — if
+        # the developer put crhold() next to struct cred in cred.h, that's
+        # their explicit statement that crhold belongs to the cred API.
+        api_fns: set[str] = set()
+        if not parsed.narrow:
+            tier0_headers: set[str] = set()
+            for it in items:
+                if it.name.lower() in ident_exact and it.file.endswith(
+                    tuple(_HEADER_EXTENSIONS)
+                ):
+                    tier0_headers.add(it.file)
+
+            fn_declared_in: dict[str, set[str]] = {}
+            for p in all_prototypes:
+                fn_declared_in.setdefault(p["name"], set()).add(p["file"])
+            for f in all_functions:
+                if f.get("file", "").endswith(tuple(_HEADER_EXTENSIONS)):
+                    fn_declared_in.setdefault(f["name"], set()).add(f["file"])
+
+            for fn_name, headers in fn_declared_in.items():
+                if headers & tier0_headers:
+                    api_fns.add(fn_name)
+
+        # All declared items for return-type and param-dominance checks
+        all_declared = list(all_prototypes) + list(all_functions)
+
+        # Functions that return the target type — factories/accessors,
+        # part of the API regardless of which header declares them.
+        returns_type: set[str] = set()
+        for p in all_declared:
+            rt = p.get("return_type", "")
+            if rt:
+                rt_bare = re.sub(r"^(?:struct|union|enum)\s+", "", rt.lower())
+                if rt_bare in ident_exact:
+                    returns_type.add(p["name"])
+
+        # Parameter dominance: functions where the target type is >=50%
+        # of params (or appears >=2 times).  Works for lifecycle types
+        # (cred, inode, dentry) — the type dominates the signature.
+        param_dominant: set[str] = set()
+        for p in all_declared:
+            pts = p.get("param_types", [])
+            if not pts:
+                continue
+            hits = sum(
+                1 for pt in pts
+                if re.sub(r"^(?:struct|union|enum)\s+", "", pt.lower()) in ident_exact
+            )
+            if hits >= 2 or (hits and hits / len(pts) >= 0.5):
+                param_dominant.add(p["name"])
+
+        # Body-mention: functions whose body references the target type.
+        # Catches consumers that access the type through casts/dereferences
+        # rather than declaring it in their signature.
+        body_mentions: set[str] = set()
+        body_terms = ident_exact | {f"struct {b}" for b in ident_exact}
+        for f in all_functions:
+            body = f.get("body", "")
+            if not body:
+                continue
+            body_low = body.lower()
+            if any(term in body_low for term in body_terms):
+                body_mentions.add(f["name"])
+
+        # Pre-compile word-boundary patterns for short stems
+        _stem_patterns = {
+            stem: re.compile(r"(?:^|_)" + re.escape(stem) + r"(?:$|_|s$)")
+            for stem in ident_stems if len(stem) <= 5
+        }
+
+        def _stem_match(name: str) -> bool:
+            """Check if any stem appears in the name (word-boundary for short)."""
+            if not ident_stems:
+                return False
+            for stem in ident_stems:
+                if len(stem) <= 5:
+                    if _stem_patterns[stem].search(name):
+                        return True
+                elif stem in name:
+                    return True
+            return False
+
+        def _relevance(item: StudyItem) -> int:
+            name = item.name.lower()
+            if name in ident_exact:
+                return 0
+            if not parsed.narrow and _stem_match(name):
+                return 1
+            if item.name in api_fns:
+                return 1
+            # In narrow mode, returns-type and param-dominant are context
+            # (tier 2), not focus — for fundamental types these can produce
+            # dozens of functions, inflating batch count.
+            tier = 1 if not parsed.narrow else 2
+            if item.name in returns_type:
+                return tier
+            if item.name in param_dominant:
+                return tier
+            if not parsed.narrow and item.name in ident_type_fns:
+                return 2
+            if not parsed.narrow and item.name in body_mentions:
+                return 2
+            return 3
+
+        total_before = len(items)
+        pre_filter_index = {it.name.lower(): it for it in items}
+        items = [it for it in items if _relevance(it) <= 2]
+        for it in items:
+            it.relevance_tier = _relevance(it)
+        items.sort(key=_relevance)
+
+        # Types referenced by surviving items may have been dropped
+        # at tier 3.  Re-include their definitions as tier-2 context
+        # so the LLM doesn't need a follow-up pass.
+        items = _reinject_referenced_types(
+            items, pre_filter_index, _INFRA_TYPES)
+
+        # Co-file struct promotion: if a struct in a header is tier 0,
+        # other structs in the same file are likely core types too
+        # (e.g. sg_table defined alongside scatterlist in the same .h).
+        # Promote them to at most tier 2 so they appear in the study.
+        tier0_files = {
+            it.file for it in items
+            if it.kind == "struct" and (it.relevance_tier or 0) == 0
+        }
+        if tier0_files:
+            surviving_names = {it.name.lower() for it in items}
+            cofile_promoted = 0
+            for it in list(pre_filter_index.values()):
+                if it.file not in tier0_files:
+                    continue
+                if it.kind != "struct":
+                    continue
+                if it.name.lower() in surviving_names:
+                    continue
+                it.relevance_tier = 2
+                items.append(it)
+                surviving_names.add(it.name.lower())
+                cofile_promoted += 1
+            if cofile_promoted:
+                print(
+                    f"study-prep: co-file struct promotion: "
+                    f"{cofile_promoted} structs from tier-0 headers",
+                    file=sys.stderr,
+                )
+
+        api_promoted = sum(1 for it in items
+                          if it.relevance_tier == 1
+                          and it.name in api_fns)
+        pd_promoted = sum(1 for it in items
+                         if it.relevance_tier == 1
+                         and it.name in param_dominant
+                         and it.name not in api_fns
+                         and it.name not in returns_type)
+        print(f"study-prep: identifier focus: {len(items)}/{total_before} items "
+              f"retained (tiers 0-2, {api_promoted} API from header"
+              f"{f', {pd_promoted} param-dominant' if pd_promoted else ''})",
+              file=sys.stderr)
+
+    # Documentation discovery — find relevant .rst/.md/.txt docs
+    related_docs: list[dict[str, str]] = []
+    if identifiers:
+        related_docs = _discover_docs(source_root, ident_exact)
+        if related_docs:
+            print(f"study-prep: {len(related_docs)} related docs found",
+                  file=sys.stderr)
+
+    print(f"study-prep: {len(all_structs)} structs, {len(combined_fns)} functions "
+          f"({len(all_prototypes)} from prototypes), "
+          f"{len(pairs)} paired ops, {len(items)} study items", file=sys.stderr)
+    if type_ref_index:
+        usage_counts = {"writer": 0, "reader": 0, "passthru": 0}
+        for entries in type_ref_index.values():
+            for _, cls in entries:
+                usage_counts[cls] = usage_counts.get(cls, 0) + 1
+        print(f"study-prep: type-reference index covers {len(type_ref_index)} types "
+              f"(writers={usage_counts['writer']}, readers={usage_counts['reader']}, "
+              f"passthru={usage_counts['passthru']})",
+              file=sys.stderr)
+
+    out_path = output_dir / "study-list.json"
+    out_data = {
+        "target": str(target),
+        "source_root": str(source_root),
+        "file_count": len(source_files),
+        "resolved_includes": len(resolved_includes),
+        "identifiers": ",".join(identifiers) if identifiers else None,
+        "semantic_concepts": ",".join(semantic_concepts) if semantic_concepts else None,
+        "correlate_identifiers": correlate_identifiers,
+        "related_docs": related_docs,
+        "items": [asdict(item) for item in items],
+    }
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(output_dir), suffix=".tmp", prefix="study-list-",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(out_data, f, indent=2)
+            f.write("\n")
+        Path(tmp_name).rename(out_path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    print(f"study-prep: wrote {out_path} ({len(items)} items)", file=sys.stderr)
+
+    if discovered_patterns:
+        patterns_path = output_dir / "patterns.json"
+        patterns_data = {
+            "target": str(target),
+            "source_root": str(source_root),
+            "patterns": {
+                name: {"role": role}
+                for name, role in sorted(discovered_patterns.items())
+            },
+        }
+        fd2, tmp2 = tempfile.mkstemp(
+            dir=str(output_dir), suffix=".tmp", prefix="patterns-",
+        )
+        try:
+            with os.fdopen(fd2, "w", encoding="utf-8") as f2:
+                json.dump(patterns_data, f2, indent=2)
+                f2.write("\n")
+            Path(tmp2).rename(patterns_path)
+        except BaseException:
+            Path(tmp2).unlink(missing_ok=True)
+            raise
+        print(f"study-prep: wrote {patterns_path} "
+              f"({len(discovered_patterns)} patterns)", file=sys.stderr)
+
+        _promote_to_project_concepts(patterns_path, output_dir)
+
+
+def _is_under_projects_base(directory: Path) -> bool:
+    try:
+        from core.project.project import DEFAULT_OUTPUT_BASE
+
+        directory.resolve().relative_to(DEFAULT_OUTPUT_BASE.resolve())
+        return True
+    except (ValueError, Exception):
+        return False
+
+
+def _promote_to_project_concepts(src: Path, output_dir: Path) -> None:
+    """Copy a file to ``<project>/concepts/`` if inside a project."""
+    import shutil
+
+    project_dir = output_dir.parent
+    if not (
+        (project_dir / "project.json").is_file()
+        or _is_under_projects_base(project_dir)
+    ):
+        return
+
+    concepts_dir = project_dir / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    canonical = concepts_dir / src.name
+
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(
+            dir=str(concepts_dir), suffix=".tmp", prefix=f"{src.stem}-",
+        )
+        os.close(fd)
+        shutil.copy2(str(src), tmp)
+        Path(tmp).rename(canonical)
+        print(f"study-prep: promoted {src.name} to {canonical}",
+              file=sys.stderr)
+    except OSError as exc:
+        print(f"study-prep: promotion failed: {exc}", file=sys.stderr)
+        if tmp:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+if __name__ == "__main__":
+    main()

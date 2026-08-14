@@ -679,7 +679,7 @@ def validate_dataflow_claims(
             # which defeats the breakdown's purpose.
             cwe = (
                 (finding.get("cwe_id") or "").strip()
-                or (analysis or {}).get("cwe_id", "").strip()
+                or ((analysis or {}).get("cwe_id") or "").strip()
             ).upper() or "UNKNOWN"
             metrics["path_conditions_by_cwe"][cwe] = (
                 metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
@@ -2027,7 +2027,7 @@ def _any_match_at_finding_location(
             m_line = int(m.get("line") or 0)
         except (ValueError, TypeError):
             m_line = 0
-        if target_line == 0 or abs(m_line - target_line) <= 5:
+        if target_line == 0 or m_line == 0 or abs(m_line - target_line) <= 5:
             return True
     return False
 
@@ -2044,6 +2044,7 @@ def _finding_language(finding: Dict) -> Optional[str]:
         ".java": "java", ".kt": "java",
         ".c":  "cpp", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp",
         ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+        ".hh": "cpp", ".c++": "cpp", ".h++": "cpp", ".tcc": "cpp",
         ".js": "javascript", ".jsx": "javascript",
         ".ts": "javascript", ".tsx": "javascript",
         ".go": "go",

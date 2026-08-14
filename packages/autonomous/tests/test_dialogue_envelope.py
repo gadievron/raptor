@@ -170,4 +170,4 @@ class TestMessagesToContextDefangs:
         out = analyser._messages_to_context(msgs)
         # Forged close tag is defanged.
         assert "</untrusted-NONCE>" not in out
-        assert "&lt;/untrusted-NONCE>" in out
+        assert "<​/untrusted-NONCE>" in out

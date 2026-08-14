@@ -16,7 +16,7 @@ from its in-memory secret store.
 from __future__ import annotations
 
 import subprocess
-from typing import Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
 
 from .server import LLMDispatcher
 
@@ -26,7 +26,7 @@ def spawn_worker(
     cmd: Sequence[str],
     *,
     label: str,
-    env: Optional[Mapping[str, str]] = None,
+    env: Mapping[str, str] | None = None,
     pass_fds: Sequence[int] = (),
     **popen_kwargs,
 ) -> subprocess.Popen:
@@ -60,18 +60,21 @@ def spawn_worker(
     # The dispatcher's whole point is credential isolation — API keys
     # are injected per-request from the in-memory secret store, not
     # passed via env — so get_safe_env() is the right baseline.
+    # preserve_proxy: workers are RAPTOR's own scripts; non-LLM
+    # outbound traffic (registry fetches, git) and any `claude` CLI
+    # grandchild resolve the upstream proxy from the worker's env.
     if env is not None:
         base_env = dict(env)
     else:
         from core.config import RaptorConfig
-        base_env = RaptorConfig.get_safe_env()
+        base_env = RaptorConfig.get_safe_env(preserve_proxy=True)
     base_env["RAPTOR_LLM_SOCKET"] = socket_path
     base_env["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
 
     proc = subprocess.Popen(
         list(cmd),
         env=base_env,
-        pass_fds=tuple(set([token_fd, *pass_fds])),
+        pass_fds=tuple({token_fd, *pass_fds}),
         **popen_kwargs,
     )
     # Once Popen has handed the FD to the child, the parent's copy

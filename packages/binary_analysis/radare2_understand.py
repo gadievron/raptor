@@ -423,11 +423,11 @@ class BinaryUnderstand:
     _MAX_METHODS_PER_CLASS = 512
     _MAX_FIELDS_PER_CLASS = 256
 
-    # Transitive-call BFS hop limit. The motivating CVE pattern is
-    # "parser builds struct → 2-3 internal helpers → strcpy" — depth
-    # 3 catches that without an explosion of false-positive hub
-    # functions (anything is 5+ hops from anything in a large binary).
-    _TRANSITIVE_MAX_DEPTH = 3
+    # Transitive-call BFS hop limit. Real-world CVE chains often span
+    # 4-5 hops (e.g. NiRClientHandle → NiRExRouteCon → NiRRouteRepl →
+    # NiBufIRouteToTable → memcpy). Depth 5 catches these without the
+    # combinatorial explosion that depth 7+ causes in large binaries.
+    _TRANSITIVE_MAX_DEPTH = 5
 
     def analyse(
         self,
@@ -632,12 +632,21 @@ class BinaryUnderstand:
             logger.debug(f"exports extraction failed: {e}")
             ctx.exports = []
 
+    _MAX_FUNCTIONS = 10_000
+
     def _extract_functions(self, r2, ctx: BinaryContextMap) -> None:
         try:
             fns = json.loads(self._cmd_t(r2, "aflj", self._T_QUERY) or "[]")
         except Exception as e:
             logger.warning("function list extraction failed: %s", e)
             return
+
+        if len(fns) > self._MAX_FUNCTIONS:
+            logger.warning(
+                "function list capped: %d -> %d",
+                len(fns), self._MAX_FUNCTIONS,
+            )
+            fns = fns[:self._MAX_FUNCTIONS]
 
         for raw in fns:
             name = str(raw.get("name", ""))
@@ -811,8 +820,12 @@ class BinaryUnderstand:
 
     def _extract_strings(self, r2, ctx: BinaryContextMap, limit: int) -> None:
         try:
-            strings_raw = json.loads(self._cmd_t(r2, "izj", self._T_QUERY) or "[]")
+            strings_raw = json.loads(
+                self._cmd_t(r2, "izj", self._T_QUERY) or "[]",
+            )
         except Exception:
+            strings_raw = []
+        if not isinstance(strings_raw, list):
             strings_raw = []
         strings = []
         for s in strings_raw[:limit * 2]:
@@ -882,10 +895,20 @@ class BinaryUnderstand:
             fn.direct_callees = sorted(direct_callees)
 
         # Tag dangerous sinks from the imported-functions bucket.
-        # Pre-PR this walked interesting_functions filtering on
-        # is_imported; the split into imported_functions makes the
-        # iteration's intent explicit at the loop site.
         for fn in ctx.imported_functions:
+            hit = _match_dangerous(fn.name)
+            if hit:
+                ctx.dangerous_sinks.append(fn)
+
+        # Also tag statically-linked dangerous functions (e.g. memcpy
+        # resolved as a local symbol rather than a dynamic import).
+        # Without this, binaries that statically link libc or have
+        # compiler-inlined copies of memcpy/strcpy are invisible to
+        # the sink map and the transitive-caller BFS.
+        seen_sink_addrs = {fn.address for fn in ctx.dangerous_sinks}
+        for fn in ctx.interesting_functions:
+            if fn.address in seen_sink_addrs:
+                continue
             hit = _match_dangerous(fn.name)
             if hit:
                 ctx.dangerous_sinks.append(fn)
@@ -914,28 +937,31 @@ class BinaryUnderstand:
         transitive_distance=1.
         """
         # 1. Pull the whole call graph in one shot.
-        try:
-            callgraph = json.loads(
-                self._cmd_t(r2, "aflcj", self._T_CALLGRAPH) or "[]"
-            )
-        except Exception as e:
-            logger.debug(f"aflcj call-graph fetch failed: {e}; "
-                         f"skipping transitive analysis")
-            return
+        #    aflcj returns per-function call-ref data on some r2 builds
+        #    but returns a bare integer count on others. Fall back to
+        #    afllj (which includes callrefs in its richer per-function
+        #    record) when aflcj doesn't give us a usable list.
+        callgraph = None
+        for cmd in ("aflcj", "afllj"):
+            try:
+                raw = json.loads(
+                    self._cmd_t(r2, cmd, self._T_CALLGRAPH) or "[]"
+                )
+            except Exception as e:
+                logger.debug("call-graph %s failed: %s", cmd, e)
+                continue
+            # Defensive: some r2 builds wrap the list as
+            # {"functions": [...]} or {"data": [...]} rather than a
+            # bare list. Unwrap so the per-entry loop sees a list.
+            if isinstance(raw, dict):
+                raw = raw.get("functions") or raw.get("data") or []
+            if isinstance(raw, list) and raw:
+                callgraph = raw
+                break
 
-        # Defensive: some r2 builds wrap aflcj output as
-        # {"functions": [...]} or {"data": [...]} rather than a bare
-        # list. Unwrap so the per-entry loop below sees a list. If
-        # we can't find a known wrapper key, leave callgraph as-is
-        # and the per-entry loop will get the right type-error fast.
-        if isinstance(callgraph, dict):
-            callgraph = (
-                callgraph.get("functions")
-                or callgraph.get("data")
-                or []
-            )
-
-        if not callgraph or not isinstance(callgraph, list):
+        if not callgraph:
+            logger.debug("call-graph fetch failed (aflcj/afllj); "
+                         "skipping transitive analysis")
             return
 
         # 2. Build forward + reverse adjacency by function name.
@@ -943,6 +969,24 @@ class BinaryUnderstand:
         #    field names depending on r2 version: `callrefs` (5.x),
         #    `imports` (some older builds), `calls` (variant). Union
         #    them defensively so the analysis works across versions.
+        #
+        #    Some r2 builds emit callrefs with addresses only (no name
+        #    field). Build an addr→name index so we can resolve those
+        #    to function names; without this the reverse BFS never
+        #    matches named sinks and transitive reachability is zero.
+        addr_to_name: Dict[str, str] = {}
+        for entry in callgraph:
+            ename = str(entry.get("name", ""))
+            eaddr = entry.get("addr")
+            if eaddr is None:
+                eaddr = entry.get("offset")
+            if ename and eaddr is not None:
+                addr_to_name[str(eaddr)] = ename
+        for fn in ctx.imported_functions:
+            addr_to_name[str(fn.address)] = fn.name
+        for fn in ctx.interesting_functions:
+            addr_to_name[str(fn.address)] = fn.name
+
         callees: Dict[str, set] = {}
         for entry in callgraph:
             name = str(entry.get("name", ""))
@@ -953,7 +997,11 @@ class BinaryUnderstand:
                 refs = entry.get(ref_field) or []
                 for ref in refs:
                     if isinstance(ref, dict):
-                        target = ref.get("name") or ref.get("addr")
+                        target = ref.get("name")
+                        if not target:
+                            raw_addr = ref.get("addr")
+                            if raw_addr is not None:
+                                target = addr_to_name.get(str(raw_addr), str(raw_addr))
                     else:
                         target = ref
                     if target:
@@ -1236,7 +1284,9 @@ class BinaryUnderstand:
         ]
         # Annotate the FunctionInfo objects with rationale
         rationale_by_name = {
-            p["function"]: p.get("reason", "") for p in ctx.fuzz_priorities
+            p["function"]: p.get("reason", "")
+            for p in ctx.fuzz_priorities
+            if isinstance(p.get("function"), str)
         }
         for fn in ctx.interesting_functions:
             if fn.name in rationale_by_name:

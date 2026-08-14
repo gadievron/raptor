@@ -310,7 +310,6 @@ Techniques evaluated for RAPTOR applicability:
 |-----------|---------|-----------|
 | Spotlighting datamarking (Hines et al.) | Adopted | Interleave per-call nonce through whitespace; cheap, model-agnostic |
 | SecAlign / StruQ (Chen et al.) | Model-profile entry | Meta SecAlign 70B available for Ollama; model-trained delimiters when available |
-| CaMeL (Debenedetti et al., DeepMind) | Architectural reference | Cited as reference architecture; RAPTOR's planner-reader split aligns |
 | Dual-LLM / Plan-Then-Execute patterns | Adopted (vocabulary) | RAPTOR's existing structure mapped to these design patterns |
 | Rule of Two (Meta) | Adopted | Audit column on the capability matrix |
 | Cross-family checker | Adopted | Validator dispatches to different provider than producer |

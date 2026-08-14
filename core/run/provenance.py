@@ -596,7 +596,9 @@ def aggregate_provenance(
         if not md:
             continue
         summary["runs"] += 1
-        m = md.get("manifest") or {}
+        m = md.get("manifest")
+        if not isinstance(m, dict):
+            m = {}
         if not m or m.get("provenance") == "unavailable":
             if m.get("provenance") == "unavailable":
                 summary["unavailable"] += 1

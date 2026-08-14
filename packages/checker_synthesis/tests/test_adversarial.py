@@ -367,6 +367,7 @@ class TestRuleTooLooseWarning:
         assert not any("too loose" in e for e in result.errors)
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(_SEMGREP is None, reason="semgrep not on PATH")
 class TestRealSemgrepIntegration:
     """Drive the actual semgrep adapter end-to-end. Catches shape
@@ -454,6 +455,7 @@ class TestRealSemgrepIntegration:
 _SPATCH = shutil.which("spatch")
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(_SPATCH is None, reason="spatch not on PATH")
 class TestRealCoccinelleIntegration:
     """Drive the actual Coccinelle adapter end-to-end. Catches shape

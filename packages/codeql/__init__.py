@@ -12,6 +12,7 @@ from typing import Optional
 
 from .language_detector import LanguageDetector, LanguageInfo
 from core.build.build_detector import BuildDetector, BuildSystem
+from core.config import RaptorConfig
 from .database_manager import DatabaseManager, DatabaseResult, DatabaseMetadata
 from .query_runner import QueryRunner, QueryResult
 from .tunables import CodeQLTunables
@@ -36,6 +37,7 @@ def version() -> Optional[str]:
         out = subprocess.run(
             [cli, "version", "--format=terse"],
             capture_output=True, text=True, timeout=10,
+            env=RaptorConfig.get_safe_env(),
         )
         return out.stdout.strip() or None
     except (OSError, subprocess.TimeoutExpired):

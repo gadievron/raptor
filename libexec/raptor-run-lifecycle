@@ -25,7 +25,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -52,7 +52,7 @@ def _merge_journal_index(out_dir: Path) -> None:
     journal_path = out_dir / "review-journal.jsonl"
     if not journal_path.is_file():
         return
-    active = Path(".active")
+    active = Path.home() / ".raptor" / "projects" / ".active"
     if not active.is_symlink() and not active.exists():
         return
     try:
@@ -199,10 +199,14 @@ def main():
                 entry = harness_model_entry(model)
                 if entry:
                     manifest = {"models": [entry]}
-            complete_run(Path(sys.argv[2]), manifest=manifest)
-            # Merge review journal into project-level index (no-op when
-            # no journal exists or no active project).
+            # Merge review journal into project-level index FIRST so
+            # ``complete_run``'s coverage-store snapshot (which
+            # imports the journal index via ``import_journal``) sees
+            # this run's entries. Pre-fix the merge ran AFTER
+            # complete_run, so the coverage-store snapshot missed
+            # every fresh /audit entry from the just-finished run.
             _merge_journal_index(Path(sys.argv[2]))
+            complete_run(Path(sys.argv[2]), manifest=manifest)
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)

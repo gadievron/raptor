@@ -7,6 +7,7 @@
 // the object, causing use-after-free or stale reads.
 //
 // Covers CWE-416 / CWE-362: use-after-free via race condition.
+// @role: detection
 
 // spin_lock / spin_unlock variant
 @spin_use_after@
@@ -21,7 +22,7 @@ spin_lock(lock)
 ptr->fld2
 ... when any
 spin_unlock(lock)
-...
+... when != return ...;
 ptr->fld@p_use
 
 @script:python@
@@ -51,7 +52,7 @@ mutex_lock(lock)
 ptr->fld2
 ... when any
 mutex_unlock(lock)
-...
+... when != return ...;
 ptr->fld@p_use
 
 @script:python@

@@ -321,7 +321,7 @@ def _vuln_card(f: VulnFinding) -> str:
     badges: list = []
     if f.in_kev:
         badges.append("<span class=\"badge kev\">KEV</span>")
-    if f.epss is not None and f.epss > 0:
+    if f.epss is not None and f.epss >= 0.01:
         badges.append(
             f"<span class=\"badge epss\">EPSS {f.epss:.2f}</span>"
         )
@@ -335,7 +335,7 @@ def _vuln_card(f: VulnFinding) -> str:
     if ev is not None and ev.has_any:
         if ev.edb_ids:
             edb_links = ", ".join(
-                f"<a href=\"https://www.exploit-db.com/exploits/{i}\">{i}</a>"
+                f"<a href=\"https://www.exploit-db.com/exploits/{escape(str(i))}\">{escape(str(i))}</a>"
                 for i in ev.edb_ids[:3]
             )
             extra = (f" (+{len(ev.edb_ids) - 3} more)"

@@ -150,7 +150,10 @@ class TestSkipLogging:
 
         LanguageDetector(tmp_path).detect_languages()
 
-        warning_calls = [c.args[0] for c in mock_logger.warning.call_args_list]
+        warning_calls = [
+            c.args[0] % c.args[1:] if c.args[1:] else c.args[0]
+            for c in mock_logger.warning.call_args_list
+        ]
         assert any(
             "Skipping ruby" in msg for msg in warning_calls
         ), f"expected ruby-skip WARN; got warnings: {warning_calls}"
@@ -246,7 +249,10 @@ class TestFloorFallback:
 
         LanguageDetector(tmp_path).detect_languages_floor(floor=2)
 
-        warns = [c.args[0] for c in mock_logger.warning.call_args_list]
+        warns = [
+            c.args[0] % c.args[1:] if c.args[1:] else c.args[0]
+            for c in mock_logger.warning.call_args_list
+        ]
         assert any(
             "Floor-tier include python" in w for w in warns
         ), f"expected loud floor-include WARN for python; got: {warns}"

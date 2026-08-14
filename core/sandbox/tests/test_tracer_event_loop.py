@@ -229,11 +229,11 @@ class TestSeccompTraceEvent:
         """Budget cap drops further records but still resumes the
         tracee on every event. Uses a small AuditBudget for speed."""
         from core.sandbox import audit_budget
-        # openat → file-read-metadata category. Cap that category at
+        # openat → file-open category. Cap that category at
         # 2 with no refill so the third dispatch drops.
         budget = audit_budget.AuditBudget(
-            category_caps={"file-read-metadata": 2},
-            refill_rates={"file-read-metadata": 0.0},
+            category_caps={"file-open": 2},
+            refill_rates={"file-open": 0.0},
             sampling_rates={},
         )
         traced = {1000}
@@ -246,7 +246,7 @@ class TestSeccompTraceEvent:
         # 2 records persisted (cap), but ptrace_cont fired all 5 times.
         assert len(fake_helpers["calls"]["write_record"]) == 2
         assert len(fake_helpers["calls"]["ptrace_cont"]) == 5
-        assert budget.dropped_by_category["file-read-metadata"] == 3
+        assert budget.dropped_by_category["file-open"] == 3
 
     def test_read_regs_failure_skips_record_but_resumes(
             self, arch_info):

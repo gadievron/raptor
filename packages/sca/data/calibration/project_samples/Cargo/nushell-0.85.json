@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:54:23Z",
+    "fetched_at": "2026-08-01T08:26:59Z",
     "git_ref": "0.85.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nushell-0.85",
@@ -142,7 +142,7 @@
         ],
         "id": "RUSTSEC-2024-0404",
         "informational": "unsound",
-        "modified": "2025-10-28T06:29:22.585074+00:00",
+        "modified": "2026-07-17T16:00:04.561210+00:00",
         "published": "2024-09-08T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/anstream",
@@ -590,7 +590,7 @@
       "dep_name": "bytes",
       "dep_version": "1.4.0",
       "ecosystem": "Cargo",
-      "epss": 0.00559,
+      "epss": 0.00552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -601,7 +601,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.4.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.4.0",
-      "raptor_risk_estimate": 14.60722599583036,
+      "raptor_risk_estimate": 14.605928516342129,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -609,7 +609,7 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/lib.rs:29"
+          "crates/nu-command/src/lib.rs:30"
         ],
         "verdict": "imported"
       },
@@ -618,15 +618,76 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402152577,
+        "epss_multiplier": 0.40211685599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.60722599583036,
+        "final": 14.605928516342129,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.9.20"
+        ],
+        "id": "RUSTSEC-2026-0204",
+        "modified": "2026-07-06T22:30:04.159269+00:00",
+        "published": "2026-07-06T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/crossbeam-epoch",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0204.html",
+          "https://github.com/crossbeam-rs/crossbeam/pull/1276"
+        ],
+        "severity": null,
+        "summary": "Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid"
+      },
+      "cvss_score": null,
+      "dep_name": "crossbeam-epoch",
+      "dep_version": "0.9.15",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:crossbeam-epoch:0.9.15:RUSTSEC-2026-0204",
+      "in_kev": false,
+      "purl": "pkg:cargo/crossbeam-epoch@0.9.15",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use crossbeam-epoch` / `extern crate crossbeam-epoch` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -1491,7 +1552,7 @@
       "dep_name": "idna",
       "dep_version": "0.4.0",
       "ecosystem": "Cargo",
-      "epss": 0.00194,
+      "epss": 0.00201,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1502,7 +1563,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.4.0:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.4.0",
-      "raptor_risk_estimate": 9.864954008316772,
+      "raptor_risk_estimate": 9.86583433517474,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1517,10 +1578,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400289982,
+        "epss_multiplier": 0.400325703,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.864954008316772,
+        "final": 9.86583433517474,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2416,7 +2477,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use number-prefix` / `extern crate number-prefix` found"
+          "reason": "no `use number_prefix` / `extern crate number_prefix` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -2529,7 +2590,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00294,
+      "epss": 0.00251,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2540,7 +2601,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-8c75-8mhr-p7r9",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.908498649181949,
+      "raptor_risk_estimate": 4.905811358283058,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2555,10 +2616,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400800282,
+        "epss_multiplier": 0.400580853,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.908498649181949,
+        "final": 4.905811358283058,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2594,7 +2655,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00373,
+      "epss": 0.00359,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2605,7 +2666,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-ghm9-cr32-g9qj",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.913435765019445,
+      "raptor_risk_estimate": 4.912560833098877,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2620,10 +2681,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401203419,
+        "epss_multiplier": 0.401131977,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.913435765019445,
+        "final": 4.912560833098877,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2659,7 +2720,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00412,
+      "epss": 0.0028,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2670,7 +2731,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-hppc-g8h3-xhp3",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.915873075369602,
+      "raptor_risk_estimate": 4.90762371726138,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2685,10 +2746,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401402436,
+        "epss_multiplier": 0.40072884,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.915873075369602,
+        "final": 4.90762371726138,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2721,7 +2782,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": null,
+      "epss": 0.00134,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2732,7 +2793,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-phqj-4mhp-q6mq",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 8.014881938024999,
+      "raptor_risk_estimate": 4.898499427232589,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2747,10 +2808,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.399983802,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.014881938024999,
+        "final": 4.898499427232589,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2786,7 +2847,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00298,
+      "epss": 0.00285,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2797,7 +2858,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-pqf5-4pqq-29f5",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.908748629730684,
+      "raptor_risk_estimate": 4.9079361929472975,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2812,10 +2873,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400820694,
+        "epss_multiplier": 0.400754355,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.908748629730684,
+        "final": 4.9079361929472975,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2921,7 +2982,7 @@
       "dep_name": "openssl",
       "dep_version": "0.10.55",
       "ecosystem": "Cargo",
-      "epss": 0.00623,
+      "epss": 0.00656,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2932,7 +2993,7 @@
       "finding_id": "sca:vuln:Cargo:openssl:0.10.55:GHSA-rpmj-rpgj-qmpm",
       "in_kev": false,
       "purl": "pkg:cargo/openssl@0.10.55",
-      "raptor_risk_estimate": 4.929059549315321,
+      "raptor_risk_estimate": 4.931121888842376,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2947,10 +3008,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40247916899999997,
+        "epss_multiplier": 0.402647568,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.929059549315321,
+        "final": 4.931121888842376,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3468,6 +3529,143 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.41.0"
+        ],
+        "id": "RUSTSEC-2026-0194",
+        "modified": "2026-07-02T08:00:03.849273+00:00",
+        "published": "2026-06-29T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/quick-xml",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0194.html",
+          "https://github.com/tafia/quick-xml/issues/969",
+          "https://github.com/tafia/quick-xml/pull/971",
+          "https://github.com/tafia/quick-xml/commit/07f3db8343cf152f5bc3483ef5b3164582489bea"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Quadratic run time when checking a start tag for duplicate attribute names"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "quick-xml",
+      "dep_version": "0.30.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:quick-xml:0.30.0:RUSTSEC-2026-0194",
+      "in_kev": false,
+      "purl": "pkg:cargo/quick-xml@0.30.0",
+      "raptor_risk_estimate": 15.504329531249997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "crates/nu-command/src/formats/to/xml.rs:10"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.504329531249997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.41.0"
+        ],
+        "id": "RUSTSEC-2026-0195",
+        "modified": "2026-07-02T09:00:04.037478+00:00",
+        "published": "2026-06-29T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/quick-xml",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0195.html",
+          "https://github.com/tafia/quick-xml/issues/970",
+          "https://github.com/tafia/quick-xml/commit/7ca25266e94987210daa864889ab15c9332c8a2a"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "quick-xml",
+      "dep_version": "0.30.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:quick-xml:0.30.0:RUSTSEC-2026-0195",
+      "in_kev": false,
+      "purl": "pkg:cargo/quick-xml@0.30.0",
+      "raptor_risk_estimate": 15.504329531249997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "crates/nu-command/src/formats/to/xml.rs:10"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.504329531249997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
@@ -3510,11 +3708,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/filters/shuffle.rs:6",
-          "crates/nu-command/src/filters/shuffle.rs:7",
-          "crates/nu-command/src/random/decimal.rs:7",
-          "crates/nu-command/src/random/float.rs:7",
+          "crates/nu-command/src/random/bool.rs:7",
           "crates/nu-command/src/random/dice.rs:7",
+          "crates/nu-command/src/random/float.rs:7",
+          "crates/nu-command/src/random/chars.rs:7",
+          "crates/nu-command/src/random/decimal.rs:7",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3550,7 +3748,7 @@
         ],
         "id": "RUSTSEC-2026-0097",
         "informational": "unsound",
-        "modified": "2026-04-17T16:17:26.292227+00:00",
+        "modified": "2026-07-17T16:00:04.554426+00:00",
         "published": "2026-04-09T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/rand",
@@ -3583,11 +3781,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/filters/shuffle.rs:6",
-          "crates/nu-command/src/filters/shuffle.rs:7",
-          "crates/nu-command/src/random/decimal.rs:7",
-          "crates/nu-command/src/random/float.rs:7",
+          "crates/nu-command/src/random/bool.rs:7",
           "crates/nu-command/src/random/dice.rs:7",
+          "crates/nu-command/src/random/float.rs:7",
+          "crates/nu-command/src/random/chars.rs:7",
+          "crates/nu-command/src/random/decimal.rs:7",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -4222,6 +4420,207 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-35358"
+        ],
+        "fixed_versions": [
+          "0.7.0"
+        ],
+        "id": "GHSA-8vrf-r662-2w2v",
+        "modified": "2026-07-06T20:31:25.822149+00:00",
+        "published": "2026-07-06T20:21:18+00:00",
+        "references": [
+          "https://github.com/uutils/coreutils/security/advisories/GHSA-8vrf-r662-2w2v",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-35358",
+          "https://github.com/uutils/coreutils/issues/9746",
+          "https://github.com/uutils/coreutils/pull/11163",
+          "https://github.com/uutils/coreutils/commit/e6a3bb596f149628ba973eec3d099f3bb69f2464"
+        ],
+        "severity": {
+          "score": 4.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:L"
+        },
+        "summary": "cp: -R reads device nodes as streams, destroying device semantics"
+      },
+      "cvss_score": 4.4,
+      "dep_name": "uu_cp",
+      "dep_version": "0.0.21",
+      "ecosystem": "Cargo",
+      "epss": 0.00178,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:uu_cp:0.0.21:GHSA-8vrf-r662-2w2v",
+      "in_kev": false,
+      "purl": "pkg:cargo/uu_cp@0.0.21",
+      "raptor_risk_estimate": 5.562295530099,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "crates/nu-command/src/filesystem/ucp.rs:9"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 44.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400208334,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.562295530099,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.6.0"
+        ],
+        "id": "GHSA-fqf6-gxhh-2xhw",
+        "modified": "2026-07-07T19:45:19.172217+00:00",
+        "published": "2026-07-07T19:36:17+00:00",
+        "references": [
+          "https://github.com/uutils/coreutils/security/advisories/GHSA-fqf6-gxhh-2xhw",
+          "https://github.com/uutils/coreutils/pull/9741",
+          "https://github.com/uutils/coreutils"
+        ],
+        "severity": null,
+        "summary": "uutils coreutils: cp/install/mv/ln --suffix alone does not enable backup mode (silent data loss vs GNU)"
+      },
+      "cvss_score": null,
+      "dep_name": "uucore",
+      "dep_version": "0.0.21",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:uucore:0.0.21:GHSA-fqf6-gxhh-2xhw",
+      "in_kev": false,
+      "purl": "pkg:cargo/uucore@0.0.21",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use uucore` / `extern crate uucore` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-35362"
+        ],
+        "fixed_versions": [
+          "0.6.0"
+        ],
+        "id": "GHSA-w6xc-g9qj-vp32",
+        "modified": "2026-07-06T20:31:26.484328+00:00",
+        "published": "2026-07-06T20:25:15+00:00",
+        "references": [
+          "https://github.com/uutils/coreutils/security/advisories/GHSA-w6xc-g9qj-vp32",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-35362",
+          "https://github.com/uutils/coreutils/pull/9792",
+          "https://github.com/uutils/coreutils/commit/30239e69a328e76d2377f2a0bc02fbde61c34280",
+          "https://github.com/uutils/coreutils"
+        ],
+        "severity": {
+          "score": 3.6,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
+        },
+        "summary": "uucore: safe_traversal TOCTOU protection only enabled on Linux"
+      },
+      "cvss_score": 3.6,
+      "dep_name": "uucore",
+      "dep_version": "0.0.21",
+      "ecosystem": "Cargo",
+      "epss": 0.0018,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:uucore:0.0.21:GHSA-w6xc-g9qj-vp32",
+      "in_kev": false,
+      "purl": "pkg:cargo/uucore@0.0.21",
+      "raptor_risk_estimate": 3.0878657482321086,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use uucore` / `extern crate uucore` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 36.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40021854,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.0878657482321086,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

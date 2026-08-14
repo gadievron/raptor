@@ -248,10 +248,10 @@ class BuildDetector:
         Returns:
             BuildSystem object or None if no build system detected
         """
-        logger.info(f"Detecting build system for {language} in: {self.repo_path}")
+        logger.info("Detecting build system for %s in: %s", language, self.repo_path)
 
         if language not in self.BUILD_SYSTEMS:
-            logger.warning(f"No build system detection for language: {language}")
+            logger.warning("No build system detection for language: %s", language)
             return None
 
         # Get build systems for this language
@@ -265,13 +265,13 @@ class BuildDetector:
                 detected.append(result)
 
         if not detected:
-            logger.warning(f"No build system detected for {language}")
+            logger.warning("No build system detected for %s", language)
             return None
 
         # Return highest priority (lowest priority number)
         best = min(detected, key=lambda x: self.BUILD_SYSTEMS[language][x.type]["priority"])
-        logger.info(f"✓ Detected {best.type} build system for {language}")
-        logger.info(f"  Command: {best.command}")
+        logger.info("✓ Detected %s build system for %s", best.type, language)
+        logger.info("  Command: %s", best.command)
         return best
 
     def _check_build_system(self, language: str, build_type: str, config: Dict) -> Optional[BuildSystem]:
@@ -586,7 +586,7 @@ class BuildDetector:
             scripts = data.get("scripts", {})
             return "build" in scripts
         except Exception as e:
-            logger.debug(f"Error parsing package.json: {e}")
+            logger.debug("Error parsing package.json: %s", e)
             return False
 
     def detect_all_build_systems(self, languages: List[str]) -> Dict[str, Optional[BuildSystem]]:
@@ -693,18 +693,18 @@ class BuildDetector:
             )
             success = result.returncode == 0
             if success:
-                logger.debug(f"✓ Validated {build_system.type} is available")
+                logger.debug("✓ Validated %s is available", build_system.type)
             else:
-                logger.warning(f"✗ {build_system.type} validation failed")
+                logger.warning("✗ %s validation failed", build_system.type)
             return success
         except FileNotFoundError:
-            logger.warning(f"✗ {build_system.type} not found in PATH")
+            logger.warning("✗ %s not found in PATH", build_system.type)
             return False
         except subprocess.TimeoutExpired:
-            logger.warning(f"✗ {build_system.type} validation timed out")
+            logger.warning("✗ %s validation timed out", build_system.type)
             return False
         except Exception as e:
-            logger.warning(f"✗ Error validating {build_system.type}: {e}")
+            logger.warning("✗ Error validating %s: %s", build_system.type, e)
             return False
 
     # Languages that require compilation for CodeQL database creation.
@@ -746,7 +746,7 @@ class BuildDetector:
             if all(self._SAFE_FLAG_TOKEN.match(t) for t in tokens):
                 safe.extend(tokens)
             else:
-                logger.warning(f"Rejected unsafe compiler flag: {flag}")
+                logger.warning("Rejected unsafe compiler flag: %s", flag)
         return safe
 
     def synthesise_build_command(self, language: str) -> Optional[BuildSystem]:
@@ -860,8 +860,8 @@ class BuildDetector:
         except BaseException:
             _cleanup_on_failure()
             raise
-        logger.info(f"Synthesised build script for {language}: {script_path}")
-        logger.info(f"  Source files: {len(source_files)}")
+        logger.info("Synthesised build script for %s: %s", language, script_path)
+        logger.info("  Source files: %d", len(source_files))
 
         failures = self._dry_run(script_path, language=language)
         build_type = "synthesised"
@@ -878,7 +878,7 @@ class BuildDetector:
             )
         elif failures:
             heuristic_ok = len(source_files) - len(failures)
-            logger.info(f"  Dry-run: {heuristic_ok}/{len(source_files)} compiled, {len(failures)} failed")
+            logger.info("  Dry-run: %d/%d compiled, %d failed", heuristic_ok, len(source_files), len(failures))
 
             cc_flags = self._cc_suggest_flags(failures, language)
             if cc_flags:
@@ -893,7 +893,7 @@ class BuildDetector:
                 else:
                     cc_ok = len(source_files) - len(cc_failures)
                     if cc_ok > heuristic_ok:
-                        logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
+                        logger.info("  CC improved: %d → %d compiled", heuristic_ok, cc_ok)
                         build_type = "synthesised-cc"
                     else:
                         logger.info("  CC didn't improve, using heuristic")
@@ -1251,12 +1251,12 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 # whole stderr if there's only one line.
                 stderr_lines = [line for line in (result.stderr or "").split("\n") if line.strip()]
                 tail = stderr_lines[-1] if stderr_lines else "(no stderr)"
-                logger.warning(f"Build script crashed: {tail}")
+                logger.warning("Build script crashed: %s", tail)
                 return None
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
         except (subprocess.TimeoutExpired, Exception) as e:
-            logger.warning(f"Build script never ran ({e!r}) — treating as 'didn't run'")
+            logger.warning("Build script never ran (%r) — treating as 'didn't run'", e)
             return None
 
         # Parse gcc/g++ errors from stderr
@@ -1363,7 +1363,10 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 
         try:
             logger.info("  Asking Claude Code for additional compiler flags...")
-            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command, strip_json_fences
+            from core.llm.cc_adapter import (
+                CCDispatchConfig, build_cc_command, cc_subprocess_env,
+                strip_json_fences,
+            )
             config = CCDispatchConfig(
                 claude_bin=claude_bin,
                 tools="Read,Grep,Glob",
@@ -1382,9 +1385,13 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             # custom-endpoint setups. The downstream client is
             # ``claude`` either way, so the policy is identical.
             from core.llm.cc_proxy_hosts import proxy_hosts_for_cc_dispatch
+            # env: backend overlay (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) so a
+            # Bedrock/Vertex-backed CLI child can authenticate; the
+            # sandbox's proxy env still overrides HTTPS_PROXY.
             result = _sandbox_run(
                 build_cc_command(config),
                 target=repo_path, output=repo_path,
+                env=cc_subprocess_env(),
                 use_egress_proxy=True,
                 proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="codeql-build-detect",
@@ -1466,13 +1473,13 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             defines = self._validate_flags(data.get("defines") or [])
 
             if includes or defines:
-                logger.info(f"  CC suggested {len(includes)} includes, {len(defines)} defines")
+                logger.info("  CC suggested %d includes, %d defines", len(includes), len(defines))
                 return {"includes": includes, "defines": defines}
 
         except subprocess.TimeoutExpired:
             logger.info("  CC flag suggestion timed out (180s)")
         except Exception as e:
-            logger.debug(f"CC flag suggestion failed: {e}")
+            logger.debug("CC flag suggestion failed: %s", e)
 
         return None
 
@@ -1486,7 +1493,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         Returns:
             BuildSystem configured for no-build mode
         """
-        logger.info(f"Using no-build mode for {language}")
+        logger.info("Using no-build mode for %s", language)
 
         return BuildSystem(
             type="no-build",

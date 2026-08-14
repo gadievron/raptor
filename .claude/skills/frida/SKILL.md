@@ -130,4 +130,4 @@ run_dir = auto_observe("/path/to/binary", search_dirs=[out_dir])
 
 ## Status
 
-Alpha. Three templates ship (`api-trace`, `bb-coverage`, `ssl-unpin`); richer set in progress (collab with @Splinters-io). Integration into `/validate` (automatic) and `/crash-analysis` on macOS is planned. The autonomous LLM-guided mode from the abandoned PR #57 is intentionally **not** in this slice.
+Alpha. Four templates ship (`api-trace`, `bb-coverage`, `ssl-unpin`, `binary-flow-trace`); richer set in progress (collab with @Splinters-io). Integration into `/validate` is automatic (Stage B collects runtime evidence via `frida_validation_bridge`). `/crash-analysis` integration on macOS is planned. The autonomous LLM-guided mode from the abandoned PR #57 is intentionally **not** in this slice.

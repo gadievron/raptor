@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 # 64 MB is generous; anything larger is malicious or pointless.
 DEFAULT_MAX_ENTRY_BYTES = 64 * 1024 * 1024
 
+# Aggregate caps for untrusted registry layers.  The entry-count
+# cap mirrors the tar extractor's own default; the total-bytes cap
+# bounds the sum of all extracted entries (the per-member cap alone
+# doesn't prevent a bomb made of many smaller files).
+DEFAULT_MAX_ENTRY_COUNT = 50_000
+DEFAULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
 
 def extract_files_from_layer(
     layer_chunks: Iterable[bytes],
@@ -83,6 +90,9 @@ def extract_files_from_layer(
         # Early-exit once we've found everything — saves streaming
         # through the rest of the layer.
         expected_count=len(normalised_wanted),
+        # Explicit caps for untrusted registry layers.
+        max_entry_count=DEFAULT_MAX_ENTRY_COUNT,
+        max_total_bytes=DEFAULT_MAX_TOTAL_BYTES,
     )
 
 

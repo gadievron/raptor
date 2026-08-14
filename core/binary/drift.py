@@ -78,10 +78,10 @@ class FingerprintDrift:
         )
 
     def added_buckets(self) -> List[str]:
-        return sorted(self.new_buckets.keys())
+        return sorted(self.new_buckets)
 
     def removed_bucket_names(self) -> List[str]:
-        return sorted(self.removed_buckets.keys())
+        return sorted(self.removed_buckets)
 
 
 def detect_drift(

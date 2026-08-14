@@ -46,7 +46,7 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
         is_lockfile=False,
         pin_style=PinStyle.EXACT,
         direct=False,
-        purl=f"pkg:{purl_type}/{d.transitive_name}@{d.transitive_version}",
+        purl=f"pkg:{purl_type}/{d.transitive_name.replace(':', '/', 1)}@{d.transitive_version}",
         parser_confidence=Confidence(
             "high", reason="transitive_drop detector",
         ),

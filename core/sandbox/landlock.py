@@ -1,4 +1,4 @@
-"""Landlock filesystem + TCP-connect restriction.
+"""Landlock filesystem + network + scoping restriction.
 
 Landlock works without mount namespaces, without privileges, and without
 AppArmor exceptions. It restricts filesystem access via syscall filtering.
@@ -8,8 +8,10 @@ ABI levels (kernel):
 - 2 (5.19+)  : + REFER (cross-directory rename/link)
 - 3 (6.2+)   : + TRUNCATE (O_TRUNC on existing files)
 - 4 (6.7+)   : + NET_CONNECT_TCP (TCP allowlist)
+- 5 (6.10+)  : + IOCTL_DEV (device ioctl restriction)
+- 6 (6.12+)  : + scoping (signal + abstract Unix socket isolation)
 
-We build the write-access mask at runtime based on the kernel's ABI, so
+We build the access masks at runtime based on the kernel's ABI, so
 a newer kernel gives more coverage; an older one degrades cleanly.
 """
 
@@ -64,7 +66,7 @@ def check_landlock_available() -> bool:
 
         if not _LANDLOCK_ARCH_OK:
             state._landlock_cache = -1
-            logger.debug(f"Sandbox: Landlock skipped — unknown syscall table for {platform.machine()}")
+            logger.debug("Sandbox: Landlock skipped — unknown syscall table for %s", platform.machine())
             return False
 
         try:
@@ -73,7 +75,7 @@ def check_landlock_available() -> bool:
             result = libc.syscall(_SYS_LANDLOCK_CREATE, 0, 0, 1)
             if result < 0:
                 state._landlock_cache = -1
-                logger.debug(f"Sandbox: Landlock not available (errno={ctypes.get_errno()})")
+                logger.debug("Sandbox: Landlock not available (errno=%d)", ctypes.get_errno())
                 return False
             abi = int(result)
         except Exception:
@@ -97,7 +99,7 @@ def check_landlock_available() -> bool:
             return False
 
         state._landlock_cache = abi
-        logger.debug(f"Sandbox: Landlock available and functional (ABI version {abi})")
+        logger.debug("Sandbox: Landlock available and functional (ABI version %d)", abi)
         return True
 
 
@@ -302,6 +304,12 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
 
     Network (ABI v4+): if allowed_tcp_ports is set, restricts TCP connect
     to those ports only.
+
+    Device ioctl (ABI v5+): blanket-denied on all device files.
+
+    Scoping (ABI v6+): signal delivery and abstract Unix socket connections
+    restricted to processes within the same Landlock domain. Always-on
+    when the kernel supports it.
     """
     SYS_create = _SYS_LANDLOCK_CREATE
     SYS_add_rule = _SYS_LANDLOCK_ADD_RULE
@@ -335,6 +343,7 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
     MAKE_SYM = 1 << 12
     REFER = 1 << 13      # ABI v2+ (kernel 5.19) — rename/link across dirs
     TRUNCATE = 1 << 14   # ABI v3+ (kernel 6.2)
+    IOCTL_DEV = 1 << 15  # ABI v5+ (kernel 6.10) — ioctl on device files
 
     # Note: REMOVE_DIR and REMOVE_FILE excluded — unshare needs to remove
     # namespace dirs, and Python's importlib needs to unlink .pyc cache files
@@ -349,6 +358,8 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
             mask |= REFER   # Block rename/link across directories
         if _get_landlock_abi() >= 3:
             mask |= TRUNCATE
+        if _get_landlock_abi() >= 5:
+            mask |= IOCTL_DEV
         return mask
 
     def _build_read_mask():
@@ -358,12 +369,23 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
     LANDLOCK_ACCESS_NET_CONNECT_TCP = 1 << 1
     RULE_NET_PORT = 2
 
+    # Landlock scoping constants (ABI v6+, kernel 6.12). Scoping is
+    # domain-level, not per-path/per-port: a scoped sandbox can't send
+    # signals to or connect abstract Unix sockets to processes OUTSIDE
+    # its Landlock domain. No rules needed — just declare the scope bits
+    # in the ruleset and restrict_self applies them.
+    LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET = 1 << 0
+    LANDLOCK_SCOPE_SIGNAL = 1 << 1
+
     class RulesetAttr(ctypes.Structure):
-        # Always includes handled_access_net even on ABI < 4. Landlock's
-        # forward-compat design accepts extra zero bytes in the struct.
+        # Always includes handled_access_net and scoped even on older
+        # ABIs. Landlock's forward-compat design accepts extra zero
+        # bytes in the struct — the kernel uses the struct size passed
+        # to create_ruleset to determine which fields are present.
         _fields_ = [
             ("handled_access_fs", ctypes.c_uint64),
             ("handled_access_net", ctypes.c_uint64),
+            ("scoped", ctypes.c_uint64),
         ]
 
     class PathBeneathAttr(ctypes.Structure):
@@ -398,6 +420,9 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
     # bits only when restrict_reads is on; otherwise reads stay wide.
     _handled_fs = _write_access | _read_access
     _net_access = LANDLOCK_ACCESS_NET_CONNECT_TCP if (ports is not None and _abi >= 4) else 0
+    _scoped = 0
+    if _abi >= 6:
+        _scoped = LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL
 
     # Capture references to os syscalls up-front — the closure runs
     # POST-fork in the child. Doing `import os` inside the child risks
@@ -422,7 +447,8 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
             libc = _libc
 
             attr = RulesetAttr(handled_access_fs=_handled_fs,
-                               handled_access_net=_net_access)
+                               handled_access_net=_net_access,
+                               scoped=_scoped)
             fd = libc.syscall(SYS_create, ctypes.byref(attr), ctypes.sizeof(attr), 0)
             if fd < 0:
                 # Probe succeeded in the parent (check_landlock_available)

@@ -1,0 +1,1272 @@
+#!/usr/bin/env python3
+"""Study loop: prep → study → drain reading list.
+
+Two modes:
+
+1. **Overview** (no identifiers given): mechanical inventory + one LLM
+   call → print identifiers/concepts, done.
+
+2. **Study** (identifiers/concepts given, or reading list on disk):
+   drain loop — pop pending identifiers from the reading list, run
+   prep + study-run for each batch, mark studied items resolved,
+   repeat until the reading list is empty.
+
+   The reading list is the work queue.  Audit (or the operator) pushes
+   items onto it; study pops them off.  Study-run may add genuine
+   concept dependencies ("I can't explain Y without understanding X")
+   but never tangential references.
+
+Usage:
+    raptor-study-loop <target> <output_dir> [options]
+"""
+import argparse
+import faulthandler
+import json
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
+# ─── trust-marker check ───
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ───
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _run(cmd: list[str], *, verbose: bool = False) -> int:
+    env = os.environ.copy()
+    env["_RAPTOR_TRUSTED"] = "1"
+    try:
+        result = subprocess.run(
+            cmd, env=env,
+            stdout=None if verbose else subprocess.DEVNULL,
+            stderr=None,
+            timeout=3600,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"study-loop: subprocess timed out: {cmd[0]}",
+              file=sys.stderr)
+        return 1
+    return result.returncode
+
+
+def _load_pending_reading_list(output_dir: Path) -> list[dict]:
+    rl_path = output_dir / "reading-list.json"
+    if not rl_path.is_file():
+        return []
+    try:
+        raw = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [i for i in raw.get("items", []) if not i.get("resolved")]
+
+
+def _extract_rl_identifiers(pending: list[dict]) -> tuple[list[str], list[str]]:
+    """Partition pending reading-list items into identifiers and concepts."""
+    identifiers: list[str] = []
+    concepts: list[str] = []
+    seen: set[str] = set()
+    for item in pending:
+        resolution = item.get("resolution", "identifier")
+        q = item.get("question", "").strip()
+        if not q or q in seen:
+            continue
+        seen.add(q)
+        if resolution == "concept":
+            concepts.append(q)
+            continue
+        ctx = item.get("context", "")
+        m = re.search(r"`([A-Za-z_]\w*)`", ctx)
+        if m:
+            identifiers.append(m.group(1))
+            continue
+        m = re.search(r"`([A-Za-z_]\w*)`", q)
+        if m:
+            identifiers.append(m.group(1))
+            continue
+        m = re.search(r"\b(struct\s+\w+|[A-Za-z_]\w{3,}_[A-Za-z_]\w*)\b", q)
+        if m:
+            identifiers.append(m.group(1))
+            continue
+        concepts.append(q)
+    return identifiers, concepts
+
+
+def _mark_items_resolved(output_dir: Path, idents: list[str],
+                         concepts: list[str]) -> int:
+    """Mark reading-list items as resolved after studying them."""
+    rl_path = output_dir / "reading-list.json"
+    if not rl_path.is_file():
+        return 0
+    try:
+        rl_data = json.loads(rl_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+
+    ident_set = {i.lower() for i in idents}
+    concept_set = {c.strip().lower() for c in concepts}
+    resolved_count = 0
+
+    for item in rl_data.get("items", []):
+        if item.get("resolved"):
+            continue
+        q = item.get("question", "").strip()
+        if not q:
+            continue
+
+        matched = False
+        for text in (item.get("context", ""), q):
+            m = re.search(r"`([A-Za-z_]\w*)`", text)
+            if m and m.group(1).lower() in ident_set:
+                matched = True
+                break
+        if not matched:
+            m = re.search(
+                r"\b(struct\s+\w+|[A-Za-z_]\w{3,}_[A-Za-z_]\w*)\b", q)
+            if m and m.group(1).lower() in ident_set:
+                matched = True
+        if not matched and q.lower() in concept_set:
+            matched = True
+
+        if matched:
+            item["resolved"] = True
+            item["resolved_concept_id"] = "studied"
+            resolved_count += 1
+
+    if resolved_count:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(rl_path.parent), suffix=".tmp", prefix=".rl-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(rl_data, f, indent=2)
+                f.write("\n")
+            Path(tmp_name).rename(rl_path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
+        print(f"study-loop: resolved {resolved_count} reading-list items",
+              file=sys.stderr)
+
+    return resolved_count
+
+
+# ------------------------------------------------------------------
+# Project persistence
+# ------------------------------------------------------------------
+
+def _detect_concepts_dir(output_dir: Path) -> Path | None:
+    project_root = output_dir.parent
+    if (project_root / "concepts").is_dir():
+        return project_root / "concepts"
+    try:
+        parts = project_root.parts
+        if len(parts) >= 2 and parts[-2] == "projects":
+            concepts = project_root / "concepts"
+            concepts.mkdir(parents=True, exist_ok=True)
+            return concepts
+    except (IndexError, ValueError):
+        pass
+    return None
+
+
+def _load_prior_knowledge(output_dir: Path, concepts_dir: Path | None) -> None:
+    if concepts_dir is None:
+        return
+    for name in ("domain-model.json", "reading-list.json", "patterns.json"):
+        prior = concepts_dir / name
+        target = output_dir / name
+        if prior.is_file() and not target.is_file():
+            try:
+                import shutil
+                shutil.copy2(str(prior), str(target))
+                print(f"study-loop: loaded prior {name} from {concepts_dir}",
+                      file=sys.stderr)
+            except OSError as exc:
+                print(f"study-loop: WARNING: failed to load prior {name}: {exc}",
+                      file=sys.stderr)
+
+
+def _promote_to_project(output_dir: Path, concepts_dir: Path | None) -> None:
+    if concepts_dir is None:
+        return
+    for name in ("domain-model.json", "reading-list.json", "patterns.json"):
+        src = output_dir / name
+        if not src.is_file():
+            continue
+        dst = concepts_dir / name
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(concepts_dir), suffix=".tmp", prefix=f".{name}.")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(src.read_text(encoding="utf-8"))
+                Path(tmp_name).rename(dst)
+            except BaseException:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
+        except OSError as exc:
+            print(f"study-loop: WARNING: failed to promote {name}: {exc}",
+                  file=sys.stderr)
+            continue
+    print(f"study-loop: promoted domain model to {concepts_dir}",
+          file=sys.stderr)
+
+
+def _store_in_sage(output_dir: Path, target: str) -> None:
+    dm_path = output_dir / "domain-model.json"
+    if not dm_path.is_file():
+        return
+    try:
+        from core.concepts.model import DomainModel
+        from core.sage.hooks import store_study_concepts
+    except ImportError:
+        return
+    try:
+        dm = DomainModel.load(dm_path)
+    except Exception:
+        return
+    try:
+        stored = store_study_concepts(target, dm, study_scope=str(target))
+        if stored:
+            print(f"study-loop: stored {stored} concepts in SAGE",
+                  file=sys.stderr)
+    except Exception as exc:
+        print(f"study-loop: WARNING: SAGE storage failed: {exc}",
+              file=sys.stderr)
+
+
+# ------------------------------------------------------------------
+# Overview mode
+# ------------------------------------------------------------------
+
+_OVERVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject_title": {
+            "type": "string",
+            "description": (
+                "A short, descriptive title for the subsystem or "
+                "component (e.g. 'Scatter-Gather Lists (scatterlist)', "
+                "'SLAB Memory Allocator', 'VFS Inode Cache'). "
+                "Name what it IS, not the directory path."
+            ),
+        },
+        "summary": {
+            "type": "string",
+            "description": "One-paragraph summary of what this directory does.",
+        },
+        "identifiers": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Key struct/function/type names worth studying in depth. "
+                "Pick the central abstractions — the types that own "
+                "resources, the functions that enforce invariants, the "
+                "entry points that define the API. 10-30 names."
+            ),
+        },
+        "concepts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Semantic concepts worth understanding — ownership "
+                "models, lifetime rules, state machines, concurrency "
+                "protocols. Phrase as short noun phrases. 3-10 concepts."
+            ),
+        },
+    },
+    "required": ["subject_title", "identifiers", "concepts"],
+}
+
+
+def _overview_from_directory(
+    target: Path,
+    model: str | None = None,
+) -> tuple[list[str], list[str], str, str]:
+    """Cheap inventory: file names + header types + one LLM call.
+
+    Returns (identifiers, concepts, summary, subject_title).
+    """
+    c_files = sorted(target.rglob("*.[ch]"))
+    if not c_files:
+        return [], [], "", ""
+
+    file_listing = "\n".join(
+        str(f.relative_to(target)) for f in c_files[:200]
+    )
+
+    struct_names: list[str] = []
+    for h in c_files:
+        if h.suffix != ".h":
+            continue
+        try:
+            text = h.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(
+            r"\b(?:struct|union|enum|typedef)\s+([A-Za-z_]\w+)\s*\{", text,
+        ):
+            struct_names.append(m.group(1))
+    struct_names = sorted(set(struct_names))[:200]
+
+    intent_lines: list[str] = []
+    for name in ("Kconfig", "Makefile", "README", "README.md"):
+        p = target / name
+        if p.is_file():
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+                intent_lines.append(f"--- {name} (first 40 lines) ---")
+                intent_lines.extend(text.splitlines()[:40])
+            except OSError:
+                pass
+
+    prompt = (
+        f"You are examining a C/C++ directory to decide what is worth "
+        f"studying in depth.\n\n"
+        f"Directory: {target.name}/\n"
+        f"Files ({len(c_files)}):\n{file_listing}\n\n"
+    )
+    if struct_names:
+        prompt += f"Types defined in headers:\n{', '.join(struct_names)}\n\n"
+    if intent_lines:
+        prompt += "\n".join(intent_lines) + "\n\n"
+    prompt += (
+        "Based on this inventory, identify:\n"
+        "1. The key identifiers (structs, functions, types) that are "
+        "central to understanding this code — the core abstractions, "
+        "not every helper.\n"
+        "2. The semantic concepts (ownership models, state machines, "
+        "concurrency protocols) that would need to be understood to "
+        "audit this code for correctness.\n"
+    )
+
+    try:
+        from packages.llm_analysis import get_client
+        if model:
+            from core.llm.client import LLMClient
+            client = LLMClient(pinned_model=model)
+        else:
+            client = get_client()
+    except Exception:
+        print("study-loop: WARNING: no LLM available for overview",
+              file=sys.stderr)
+        return [], [], "", ""
+    if client is None:
+        print("study-loop: WARNING: no LLM available for overview",
+              file=sys.stderr)
+        return [], [], "", ""
+
+    try:
+        response = client.generate_structured(
+            prompt, _OVERVIEW_SCHEMA, max_tokens=4096,
+        )
+        result = response.result if hasattr(response, "result") else {}
+    except Exception as exc:
+        print(f"study-loop: WARNING: overview LLM call failed: {exc}",
+              file=sys.stderr)
+        return [], [], "", ""
+
+    cost = getattr(response, "cost", 0.0)
+    idents = result.get("identifiers", [])
+    concepts = result.get("concepts", [])
+    summary = result.get("summary", "")
+    subject_title = result.get("subject_title", "")
+
+    if subject_title:
+        print(f"study-loop: subject: {subject_title}", file=sys.stderr)
+    if summary:
+        print(f"study-loop: overview: {summary}", file=sys.stderr)
+    print(
+        f"study-loop: overview produced {len(idents)} identifiers, "
+        f"{len(concepts)} concepts (${cost:.4f})",
+        file=sys.stderr,
+    )
+
+    return (
+        [i for i in idents if isinstance(i, str) and len(i) >= 2],
+        [c for c in concepts if isinstance(c, str) and len(c) >= 3],
+        summary or "",
+        subject_title or "",
+    )
+
+
+# ------------------------------------------------------------------
+# Post-study synthesis (overview from learned concepts)
+# ------------------------------------------------------------------
+
+_SYNTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject_title": {
+            "type": "string",
+            "description": (
+                "A short, descriptive title for what was studied "
+                "(e.g. 'Scatter-Gather Lists (scatterlist)', "
+                "'SLAB Memory Allocator', 'VFS Inode Cache'). "
+                "Name what the subsystem IS, not the directory."
+            ),
+        },
+        "overview": {
+            "type": "string",
+            "description": (
+                "3-5 paragraphs of flowing prose summarising the "
+                "subsystem. Cover: what it does, its core design "
+                "decisions, and the key mechanisms. Write for a "
+                "security researcher who needs to understand the "
+                "code's architecture before auditing it. No bullet "
+                "points, no headers — just paragraphs."
+            ),
+        },
+        "trust_summary": {
+            "type": "string",
+            "description": (
+                "EXACTLY one sentence (max 40 words) describing "
+                "the key trust boundary: who validates inputs and "
+                "who trusts blindly. Do NOT write a paragraph. "
+                "Example: 'the scatterlist API trusts its callers "
+                "completely — no input validation; a corrupted "
+                "scatterlist gives arbitrary kernel memory "
+                "read/write.'"
+            ),
+        },
+        "architecture": {
+            "type": "object",
+            "description": (
+                "Structural properties of the codebase that "
+                "constrain which vulnerability classes are possible."
+            ),
+            "properties": {
+                "threading_model": {
+                    "type": "string",
+                    "enum": [
+                        "single_threaded",
+                        "multi_threaded",
+                        "unknown",
+                    ],
+                    "description": (
+                        "Whether the program uses threads. "
+                        "'single_threaded' = no pthreads/C11 threads; "
+                        "'multi_threaded' = uses pthreads or similar."
+                    ),
+                },
+                "event_model": {
+                    "type": "string",
+                    "description": (
+                        "How the program waits for events: "
+                        "'select_loop', 'epoll', 'kqueue', "
+                        "'callback', 'blocking_io', or 'none'."
+                    ),
+                },
+                "forks": {
+                    "type": "boolean",
+                    "description": "True if the program calls fork().",
+                },
+                "signal_handlers": {
+                    "type": "boolean",
+                    "description": (
+                        "True if the program registers signal handlers "
+                        "via signal() or sigaction()."
+                    ),
+                },
+            },
+            "required": ["threading_model"],
+        },
+    },
+    "required": ["subject_title", "overview", "trust_summary"],
+}
+
+
+def _synthesise_overview(
+    dm_data: dict,
+    model: str | None,
+) -> tuple[str, str, str, dict | None]:
+    """Generate subject_title + overview + trust_summary + architecture.
+
+    Returns (subject_title, overview_summary, trust_summary, architecture).
+    Falls back to ("", "", "", None) on any failure.
+    """
+    concepts = dm_data.get("concepts", [])
+    invariants = dm_data.get("invariants", [])
+    contracts = dm_data.get("contracts", [])
+    if not concepts:
+        return "", "", "", None
+
+    concept_lines = "\n".join(
+        f"- {c['id']}: {c.get('description', '')}" for c in concepts
+    )
+    invariant_lines = "\n".join(
+        f"- {inv['id']}: {inv.get('statement', '')}" for inv in invariants
+    )
+    contract_lines = "\n".join(
+        f"- {ct['function']}: {ct.get('input_semantics', '')}"
+        for ct in contracts
+    )
+    target = dm_data.get("target", "")
+
+    prompt = (
+        f"You have just studied the following code subsystem.\n\n"
+        f"Directory: {target}\n\n"
+        f"Concepts learned:\n{concept_lines}\n\n"
+    )
+    if invariant_lines:
+        prompt += f"Invariants:\n{invariant_lines}\n\n"
+    if contract_lines:
+        prompt += f"API contracts:\n{contract_lines}\n\n"
+    prompt += (
+        "Synthesise a descriptive title and a 3-5 paragraph prose "
+        "overview of this subsystem for a security researcher. "
+        "Focus on the architecture and design decisions, not "
+        "individual function behaviour.\n\n"
+        "Also classify the architecture: is it single-threaded or "
+        "multi-threaded? Does it use an event loop (select/poll/epoll)? "
+        "Does it fork? Does it register signal handlers? These "
+        "properties determine which vulnerability classes apply."
+    )
+
+    try:
+        from packages.llm_analysis import get_client
+        if model:
+            from core.llm.client import LLMClient
+            client = LLMClient(pinned_model=model)
+        else:
+            client = get_client()
+    except Exception:
+        return "", "", "", None
+    if client is None:
+        return "", "", "", None
+
+    try:
+        response = client.generate_structured(
+            prompt, _SYNTHESIS_SCHEMA, max_tokens=4096,
+        )
+        result = response.result if hasattr(response, "result") else {}
+    except Exception as exc:
+        print(f"study-loop: WARNING: synthesis LLM call failed: {exc}",
+              file=sys.stderr)
+        return "", "", "", None
+
+    cost = getattr(response, "cost", 0.0)
+    title = result.get("subject_title", "")
+    overview = result.get("overview", "")
+    trust = result.get("trust_summary", "")
+    arch = result.get("architecture")
+    if trust:
+        for sep in (". ", "; "):
+            if sep in trust:
+                trust = trust[: trust.index(sep) + 1]
+                break
+        if len(trust) > 200:
+            last_space = trust.rfind(" ", 0, 200)
+            if last_space > 100:
+                trust = trust[:last_space] + "."
+    if title:
+        print(f"study-loop: synthesised title: {title} (${cost:.4f})",
+              file=sys.stderr)
+    if arch:
+        tm = arch.get("threading_model", "unknown")
+        print(f"study-loop: architecture: threading={tm}",
+              file=sys.stderr)
+    return title or "", overview or "", trust or "", arch
+
+
+# ------------------------------------------------------------------
+# Key file collection
+# ------------------------------------------------------------------
+
+
+def _collect_key_files(
+    study_data: dict,
+    key_files: list[dict[str, str]],
+    seen: set[str],
+    target_str: str,
+) -> None:
+    """Extract key files from study-list data.
+
+    Three roles:
+    - header: .h files containing primary struct definitions
+    - implementation: .c files containing the main function bodies
+    - documentation: docs that are *about* the subject (not just
+      mentioning it)
+    """
+    # --- Struct definitions from tier-0 items → header role ---
+    for item in study_data.get("items", []):
+        tier = item.get("relevance_tier")
+        if tier is not None and tier > 0:
+            continue
+        kind = item.get("kind", "")
+        if kind != "struct":
+            continue
+        fpath = item.get("file", "")
+        name = item.get("name", "")
+        if not fpath or not name:
+            continue
+        if fpath in seen:
+            continue
+        seen.add(fpath)
+        key_files.append({
+            "role": "header",
+            "file": fpath,
+            "description": f"defines struct {name}",
+        })
+
+    # --- Implementation .c files from tier-0/1/2 function items ---
+    # Filter out test harnesses and consumer code that merely *uses* the
+    # subsystem (selftest.c, tcrypt.c, testmgr.c etc.) — those are not
+    # the core implementation.
+    _test_stems = {"selftest", "tcrypt", "testmgr", "test_", "selftests"}
+    c_files: set[str] = set()
+    for item in study_data.get("items", []):
+        tier = item.get("relevance_tier")
+        if tier is not None and tier > 2:
+            continue
+        if item.get("kind") != "function":
+            continue
+        fpath = item.get("file", "")
+        if not fpath or not fpath.endswith(".c"):
+            continue
+        basename = fpath.rsplit("/", 1)[-1].removesuffix(".c")
+        if any(basename.startswith(s) or basename == s for s in _test_stems):
+            continue
+        if item.get("usage_class") == "passthru":
+            continue
+        c_files.add(fpath)
+
+    # Build per-file function lists for descriptions
+    file_fns: dict[str, list[str]] = {}
+    for item in study_data.get("items", []):
+        if item.get("kind") != "function":
+            continue
+        fpath = item.get("file", "")
+        if fpath in c_files:
+            file_fns.setdefault(fpath, []).append(item.get("name", ""))
+
+    for fpath in sorted(c_files):
+        if fpath in seen:
+            continue
+        seen.add(fpath)
+        fns = file_fns.get(fpath, [])
+        desc = ", ".join(fns[:4])
+        if len(fns) > 4:
+            desc += f" (+{len(fns) - 4} more)"
+        entry: dict[str, str] = {"role": "implementation", "file": fpath}
+        if desc:
+            entry["description"] = desc
+        key_files.append(entry)
+
+    # --- Documentation: rank by relevance, keep top 3. ---
+    identifiers = set(study_data.get("identifiers", "").split(","))
+    identifiers.discard("")
+    scored_docs: list[tuple[float, dict]] = []
+    for doc in study_data.get("related_docs", []):
+        fpath = doc.get("file", "")
+        if not fpath or fpath in seen:
+            continue
+        score = _score_doc_relevance(fpath, identifiers)
+        if score > 0:
+            scored_docs.append((score, doc))
+
+    scored_docs.sort(key=lambda x: x[0], reverse=True)
+    for _, doc in scored_docs[:3]:
+        fpath = doc.get("file", "")
+        seen.add(fpath)
+        key_files.append({
+            "role": "documentation",
+            "file": fpath,
+            "description": doc.get("reason", ""),
+        })
+
+
+def _score_doc_relevance(filepath: str, identifiers: set[str]) -> float:
+    """Score how relevant a doc is to the study subject.
+
+    Returns a score >= 0.  Title/heading matches score highest,
+    body mentions add incremental weight.  A doc whose title mentions
+    an identifier scores ~100+; a doc that mentions identifiers only
+    in the body scores based on mention density.
+    """
+    try:
+        with open(filepath, encoding="utf-8", errors="replace") as f:
+            content = f.read(8192)
+    except OSError:
+        return 0.0
+
+    if not content.strip():
+        return 0.0
+
+    lines = content.split("\n")
+    score = 0.0
+
+    # Title / first heading (lines 0-5)
+    title_lines: list[str] = []
+    for line in lines[:6]:
+        stripped = line.strip()
+        if not stripped:
+            if title_lines:
+                break
+            continue
+        title_lines.append(stripped.lower())
+        if len(title_lines) >= 2:
+            break
+    title_text = " ".join(title_lines)
+
+    body_text = content.lower()
+
+    for ident in identifiers:
+        variants = {ident.lower(), ident.lower().replace("_", "")}
+        for v in variants:
+            if v in title_text:
+                score += 100.0
+            count = body_text.count(v)
+            score += min(count, 20) * 2.0
+
+    return score
+
+
+# ------------------------------------------------------------------
+# Human-readable report
+# ------------------------------------------------------------------
+
+
+def _render_study_report(output_dir: Path) -> None:
+    """Render domain-model.json as a human-readable markdown report."""
+    dm_path = output_dir / "domain-model.json"
+    if not dm_path.is_file():
+        return
+
+    try:
+        dm = json.loads(dm_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+
+    parts: list[str] = []
+    target = dm.get("target", "unknown")
+    title = dm.get("subject_title", "")
+    if not title:
+        sl_path = output_dir / "study-list.json"
+        if sl_path.is_file():
+            try:
+                sl = json.loads(sl_path.read_text(encoding="utf-8"))
+                title = sl.get("identifiers", "")
+            except (OSError, json.JSONDecodeError):
+                pass
+    if not title:
+        title = Path(target).name
+
+    parts.append(f"# {title}\n")
+
+    # --- Key files ---
+    key_files = dm.get("key_files", [])
+    if key_files:
+        headers = [kf for kf in key_files if kf.get("role") == "header"]
+        impls = [kf for kf in key_files
+                 if kf.get("role") == "implementation"]
+        docs = [kf for kf in key_files
+                if kf.get("role") == "documentation"]
+
+        if headers or impls:
+            parts.append("## Source Files\n")
+            if headers:
+                for kf in headers:
+                    desc = kf.get("description", "")
+                    desc_str = f" — {desc}" if desc else ""
+                    parts.append(f"- `{kf['file']}`{desc_str}")
+            if impls:
+                for kf in impls:
+                    desc = kf.get("description", "")
+                    desc_str = f" — studies {desc}" if desc else ""
+                    parts.append(f"- `{kf['file']}`{desc_str}")
+            parts.append("")
+
+        if docs:
+            parts.append("## Documentation\n")
+            for kf in docs:
+                desc = kf.get("description", "")
+                desc_str = f" — {desc}" if desc else ""
+                parts.append(f"- `{kf['file']}`{desc_str}")
+            parts.append("")
+
+    # --- Overview ---
+    overview_summary = dm.get("overview_summary", "")
+    concepts = dm.get("concepts", [])
+    if overview_summary or concepts:
+        parts.append("## Overview\n")
+        if overview_summary:
+            parts.append(overview_summary)
+            parts.append("")
+        else:
+            for c in concepts:
+                desc = c.get("description", "")
+                if desc:
+                    parts.append(desc)
+                parts.append("")
+
+    # --- Data Structures ---
+    struct_defs = dm.get("struct_definitions", [])
+    if struct_defs:
+        parts.append("## Data Structures\n")
+
+        # Build field annotation index: struct_name → {field: annotation}
+        field_annots: dict[str, dict[str, str]] = {}
+        for sa in dm.get("struct_annotations", []):
+            sn = sa.get("struct_name", "")
+            fn = sa.get("field_name", "")
+            if sn and fn:
+                field_annots.setdefault(sn, {})[fn] = sa.get(
+                    "annotation", "",
+                )
+
+        rendered_structs: set[str] = set()
+        for sd in struct_defs:
+            name = sd.get("name", "")
+            if name in rendered_structs:
+                continue
+            rendered_structs.add(name)
+            defn = sd.get("definition", "")
+            doc_comment = sd.get("doc_comment", "")
+            parts.append(f"### `struct {name}`\n")
+            if doc_comment:
+                parts.append(doc_comment.strip())
+                parts.append("")
+            if defn:
+                parts.append("```c")
+                parts.append(defn.rstrip())
+                parts.append("```\n")
+            # Render field annotations below the definition
+            annots = field_annots.get(name, {})
+            if annots:
+                for field_name, annotation in annots.items():
+                    parts.append(
+                        f"**`{field_name}`**: {annotation}\n")
+                parts.append("")
+
+    # --- Data Structures (contracts for structs) ---
+    contracts = dm.get("contracts", [])
+    struct_contracts = [
+        c for c in contracts
+        if c.get("file", "").endswith(".h")
+    ]
+    impl_contracts = [
+        c for c in contracts
+        if not c.get("file", "").endswith(".h")
+    ]
+
+    if struct_contracts or impl_contracts:
+        parts.append("## API Reference\n")
+        for c in struct_contracts + impl_contracts:
+            parts.append(
+                f"### `{c['function']}` "
+                f"({c.get('file', '')})\n")
+            if c.get("when"):
+                parts.append(f"**When:** {c['when']}\n")
+            if c.get("input_semantics"):
+                parts.append(f"**Input:** {c['input_semantics']}\n")
+            if c.get("output_semantics"):
+                parts.append(f"**Output:** {c['output_semantics']}\n")
+            if c.get("ownership_transfer"):
+                parts.append(
+                    f"**Ownership:** {c['ownership_transfer']}\n")
+            if c.get("implication"):
+                parts.append(
+                    f"**Implication:** {c['implication']}\n")
+            if c.get("security_note"):
+                parts.append(
+                    f"**Security:** {c['security_note']}\n")
+
+    # --- Invariants & Safety ---
+    invariants = dm.get("invariants", [])
+    if invariants:
+        parts.append("## Invariants & Safety\n")
+        for inv in invariants:
+            cwes = inv.get("relevant_cwes", [])
+            cwe_str = f" ({', '.join(cwes)})" if cwes else ""
+            parts.append(f"### {inv.get('id', '')}{cwe_str}\n")
+            parts.append(f"{inv.get('statement', '')}\n")
+            neg = inv.get("negation", "")
+            if neg:
+                parts.append(f"**Violation:** {neg}\n")
+
+    # --- Bug patterns ---
+    bug_patterns = dm.get("bug_patterns", [])
+    if bug_patterns:
+        parts.append("## Common Bug Patterns\n")
+        for i, bp in enumerate(bug_patterns, 1):
+            desc = bp.get("description", bp.get("id", ""))
+            # Use first sentence only for terse rendering
+            first_sentence = desc.split(". ")[0].rstrip(".")
+            parts.append(f"{i}. **{first_sentence}**")
+        parts.append("")
+
+    # --- State machines ---
+    state_machines = dm.get("state_machines", [])
+    if state_machines:
+        parts.append("## State Machines\n")
+        for sm in state_machines:
+            parts.append(f"### {sm.get('name', '')}\n")
+            if sm.get("description"):
+                parts.append(f"{sm['description']}\n")
+            states = sm.get("states", [])
+            if states:
+                parts.append("| State | Description |")
+                parts.append("|-------|-------------|")
+                for s in states:
+                    desc = s.get("description", "")
+                    parts.append(f"| {s.get('name', '')} | {desc} |")
+                parts.append("")
+
+    # --- Security context ---
+    sc = dm.get("security_context")
+    if sc and (sc.get("privilege_level") or sc.get("trust_summary")):
+        parts.append("## Security Context\n")
+        if sc.get("privilege_level"):
+            parts.append(
+                f"- **Privilege level:** {sc['privilege_level']}")
+        if sc.get("attack_surface"):
+            parts.append(
+                f"- **Attack surface:** {sc['attack_surface']}")
+        if sc.get("isolation"):
+            parts.append(f"- **Isolation:** {sc['isolation']}")
+        if sc.get("trust_summary"):
+            parts.append(
+                f"- **Key trust boundary:** {sc['trust_summary']}")
+        parts.append("")
+
+    report_path = output_dir / "study-report.md"
+    report_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+    print(f"\nstudy-loop: report written to {report_path}",
+          file=sys.stderr)
+
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-study-loop",
+        description="Study loop: prep → study → drain reading list.",
+    )
+    ap.add_argument("target", help="Study scope (directory or file).")
+    ap.add_argument("output_dir", help="Output directory for study artefacts.")
+    ap.add_argument("--root", default=None,
+                    help="Source root for include resolution.")
+    ap.add_argument("--identifier", default=None,
+                    help="Initial identifiers (comma-separated).")
+    ap.add_argument("--concept", default=None,
+                    help="Initial semantic concepts (comma-separated).")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override for study-run.")
+    ap.add_argument("--include-dir", action="append", default=None,
+                    dest="include_dirs", metavar="DIR",
+                    help="Additional include search directories (repeatable).")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    parsed = ap.parse_args()
+
+    target = Path(parsed.target).resolve()
+    output_dir = Path(parsed.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    concepts_dir = _detect_concepts_dir(output_dir)
+    if concepts_dir:
+        print(f"study-loop: project concepts dir: {concepts_dir}",
+              file=sys.stderr)
+    _load_prior_knowledge(output_dir, concepts_dir)
+
+    libexec_dir = Path(__file__).resolve().parent
+    prep_bin = str(libexec_dir / "raptor-study-prep")
+    run_bin = str(libexec_dir / "raptor-study-run")
+    compile_bin = str(libexec_dir / "raptor-compile-invariants")
+
+    identifiers = parsed.identifier or ""
+    concepts = parsed.concept or ""
+
+    rl_path = output_dir / "reading-list.json"
+    has_reading_list = rl_path.is_file()
+
+    # --- Overview mode ---
+    if not identifiers and not concepts and not has_reading_list:
+        print("study-loop: no identifier/concept given — running overview",
+              file=sys.stderr)
+        overview_idents, overview_concepts, overview_summary, overview_title = (
+            _overview_from_directory(target, model=parsed.model)
+        )
+        if not overview_idents and not overview_concepts:
+            print(
+                "study-loop: ERROR: overview produced nothing.\n"
+                "  Provide --identifier or --concept explicitly.",
+                file=sys.stderr,
+            )
+            return 1
+        overview = {
+            "identifiers": overview_idents,
+            "concepts": overview_concepts,
+            "summary": overview_summary,
+            "subject_title": overview_title,
+        }
+        overview_path = output_dir / "overview.json"
+        overview_path.write_text(
+            json.dumps(overview, indent=2), encoding="utf-8",
+        )
+        print("\nIdentifiers:", file=sys.stderr)
+        for ident in overview_idents:
+            print(f"  - {ident}", file=sys.stderr)
+        print("\nConcepts:", file=sys.stderr)
+        for concept in overview_concepts:
+            print(f"  - {concept}", file=sys.stderr)
+        print(
+            f"\nOverview written to {overview_path}\n"
+            "Run again with --identifier or --concept to study specific topics.",
+            file=sys.stderr,
+        )
+        return 0
+
+    # --- Single pass: prep → study-run ---
+    key_files: list[dict[str, str]] = []
+    seen_key_files: set[str] = set()
+
+    exit_code = 0
+
+    # --- Prep ---
+    prep_cmd = [sys.executable, prep_bin, str(target), str(output_dir)]
+    if parsed.root:
+        prep_cmd.extend(["--root", parsed.root])
+    if identifiers:
+        prep_cmd.extend(["--identifier", identifiers])
+    if concepts:
+        prep_cmd.extend(["--concept", concepts])
+    rl_path = output_dir / "reading-list.json"
+    if rl_path.is_file():
+        prep_cmd.extend(["--reading-list", str(rl_path)])
+    if parsed.include_dirs:
+        for d in parsed.include_dirs:
+            prep_cmd.extend(["--include-dir", d])
+    if parsed.model:
+        prep_cmd.extend(["--model", parsed.model])
+
+    rc = _run(prep_cmd, verbose=parsed.verbose)
+    if rc != 0:
+        print(f"study-loop: prep failed (exit {rc})", file=sys.stderr)
+        exit_code = rc
+
+    study_list = output_dir / "study-list.json"
+    if exit_code == 0 and not study_list.is_file():
+        print("study-loop: prep produced no study-list.json",
+              file=sys.stderr)
+        exit_code = 1
+
+    data: dict = {}
+    n_items = 0
+    if exit_code == 0:
+        try:
+            data = json.loads(study_list.read_text(encoding="utf-8"))
+            n_items = len(data.get("items", []))
+        except (OSError, json.JSONDecodeError):
+            pass
+
+        _collect_key_files(data, key_files, seen_key_files, str(target))
+
+        if n_items == 0:
+            print("study-loop: no study items — done", file=sys.stderr)
+        else:
+            # --- Study ---
+            run_cmd = [sys.executable, run_bin, str(output_dir)]
+            if parsed.model:
+                run_cmd.extend(["--model", parsed.model])
+            if parsed.verbose:
+                run_cmd.append("-v")
+
+            print(f"study-loop: studying {n_items} items...",
+                  file=sys.stderr)
+            rc = _run(run_cmd, verbose=parsed.verbose)
+            if rc != 0:
+                print(f"study-loop: study-run failed (exit {rc})",
+                      file=sys.stderr)
+                exit_code = rc
+
+    # --- Phase 3b: compile invariants into mechanical rules ---
+    dm_path_check = output_dir / "domain-model.json"
+    if exit_code == 0 and dm_path_check.is_file():
+        try:
+            dm_check = json.loads(dm_path_check.read_text(encoding="utf-8"))
+            has_invariants = any(
+                inv.get("statement") and inv.get("negation")
+                and not inv.get("mechanical_rule")
+                for inv in dm_check.get("invariants", [])
+            )
+        except (OSError, json.JSONDecodeError):
+            has_invariants = False
+
+        if has_invariants:
+            compile_cmd = [sys.executable, compile_bin, str(output_dir)]
+            if parsed.model:
+                compile_cmd.extend(["--model", parsed.model])
+            compile_cmd.extend(["--target", str(target)])
+            if parsed.verbose:
+                compile_cmd.append("-v")
+
+            print("study-loop: compiling invariants into rules...",
+                  file=sys.stderr)
+            rc = _run(compile_cmd, verbose=parsed.verbose)
+            if rc != 0:
+                print(f"study-loop: compile-invariants failed (exit {rc})",
+                      file=sys.stderr)
+
+    # --- Attach key files, overview, and struct definitions to domain model ---
+    dm_path = output_dir / "domain-model.json"
+    if dm_path.is_file():
+        try:
+            dm_data = json.loads(dm_path.read_text(encoding="utf-8"))
+            if key_files:
+                dm_data["key_files"] = key_files
+
+            # Attach overview summary and subject title if available
+            overview_path = output_dir / "overview.json"
+            if overview_path.is_file():
+                try:
+                    ov = json.loads(overview_path.read_text(encoding="utf-8"))
+                    if ov.get("summary"):
+                        dm_data["overview_summary"] = ov["summary"]
+                    if ov.get("subject_title"):
+                        dm_data["subject_title"] = ov["subject_title"]
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+            # Attach struct definitions from study-list for the report
+            study_list_path = output_dir / "study-list.json"
+            if study_list_path.is_file():
+                try:
+                    sl = json.loads(
+                        study_list_path.read_text(encoding="utf-8"),
+                    )
+                    struct_defs = []
+                    for item in sl.get("items", []):
+                        if item.get("kind") != "struct":
+                            continue
+                        tier = item.get("relevance_tier")
+                        if tier is not None and tier > 2:
+                            continue
+                        struct_defs.append({
+                            "name": item["name"],
+                            "file": item.get("file", ""),
+                            "definition": item.get("definition", ""),
+                            "fields": item.get("fields", []),
+                            "relevance_tier": tier,
+                            "doc_comment": item.get("doc_comment", ""),
+                        })
+                    if struct_defs:
+                        dm_data["struct_definitions"] = struct_defs
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+            # Attach struct annotations from LLM output
+            annots_path = output_dir / "struct-annotations.json"
+            if annots_path.is_file():
+                try:
+                    annots = json.loads(
+                        annots_path.read_text(encoding="utf-8"),
+                    )
+                    if annots:
+                        dm_data["struct_annotations"] = annots
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+            # Remove legacy fields if present from older runs
+            dm_data.pop("related_docs", None)
+            dm_data.pop("definitions", None)
+            dm_data.pop("mechanical_findings", None)
+
+            # Synthesise overview from learned concepts (one LLM call).
+            # Run when subject_title is missing OR architecture block
+            # hasn't been populated yet (architecture was added after
+            # earlier runs already cached subject_title).
+            needs_synthesis = dm_data.get("concepts") and (
+                not dm_data.get("subject_title")
+                or not dm_data.get("architecture")
+            )
+            if needs_synthesis:
+                syn_title, syn_overview, syn_trust, syn_arch = (
+                    _synthesise_overview(dm_data, parsed.model)
+                )
+                if syn_title:
+                    dm_data["subject_title"] = syn_title
+                if syn_overview:
+                    dm_data["overview_summary"] = syn_overview
+                if syn_trust:
+                    sc = dm_data.get("security_context") or {}
+                    sc["trust_summary"] = syn_trust
+                    dm_data["security_context"] = sc
+                if syn_arch and isinstance(syn_arch, dict):
+                    dm_data["architecture"] = syn_arch
+
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(output_dir), suffix=".tmp", prefix=".dm-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(dm_data, f, indent=2)
+                    f.write("\n")
+                Path(tmp_name).rename(dm_path)
+            except BaseException:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # --- Render human-readable report ---
+    _render_study_report(output_dir)
+
+    # --- Summary ---
+    if dm_path.is_file():
+        try:
+            dm = json.loads(dm_path.read_text(encoding="utf-8"))
+            print(f"\nstudy-loop: DONE — {len(dm.get('concepts', []))} concepts, "
+                  f"{len(dm.get('invariants', []))} invariants, "
+                  f"{len(dm.get('contracts', []))} contracts",
+                  file=sys.stderr)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if key_files:
+        print(f"\nKey files ({len(key_files)}):", file=sys.stderr)
+        for kf in key_files:
+            role = kf.get("role", "")
+            path = kf.get("file", "")
+            desc = kf.get("description", "")
+            label = f"  [{role}] {path}"
+            if desc:
+                label += f" — {desc}"
+            print(label, file=sys.stderr)
+
+    remaining = _load_pending_reading_list(output_dir)
+    if remaining:
+        print(f"\n{len(remaining)} unresolved reading-list items:",
+              file=sys.stderr)
+        for item in remaining:
+            q = item.get("question", "")[:100]
+            print(f"  - {q}", file=sys.stderr)
+
+    _promote_to_project(output_dir, concepts_dir)
+    _store_in_sage(output_dir, str(target))
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -32,7 +32,6 @@ from typing import Callable, Optional
 
 from core.dataflow.codeql_augmented_run import (
     DEFAULT_CODEQL_BIN,
-    CodeQLRunError,
     RunnerFn,
     analyze,
 )
@@ -562,6 +561,120 @@ def adjudicate(
     return _count_sarif_results(Path(result.sarif_path), target_uri, target_line)
 
 
+class _BarrierProposerAdapter:
+    """Wraps a BarrierProposer callable for the driver."""
+
+    def __init__(self, proposer_fn: BarrierProposer, proposal: BarrierProposal):
+        self._fn = proposer_fn
+        self._proposal = proposal
+        self._refine_count = 0
+        self._last_verdict_id: int = -1
+
+    def propose(self, context, feedback, *, prior_verdict=None):
+        error = feedback if feedback else None
+        if prior_verdict is not None and prior_verdict.evidence:
+            vid = id(prior_verdict)
+            if vid != self._last_verdict_id:
+                self._refine_count += 1
+                self._last_verdict_id = vid
+            ev = prior_verdict.evidence
+            sr = ev["synth_result"]
+            refine_ctx = RefineContext(
+                prior_query_ql=sr.query_ql,
+                after_count=sr.after_count,
+                before_count=sr.before_count,
+                failure_mode=sr.failure_mode,
+                refine_attempt=self._refine_count,
+                surviving_finding_summary=ev.get(
+                    "surviving_finding_summary", ""),
+            )
+            return self._fn(self._proposal, error, refine_context=refine_ctx)
+        return self._fn(self._proposal, error)
+
+
+class _CodeQLAdjudicationOracle:
+    """Assembles a barrier query and adjudicates on both DBs.
+
+    Exceptions from assemble/adjudicate propagate to the driver as
+    compile-retry errors.  Completed adjudications return a Verdict.
+    """
+
+    reliability_class = "decisive"
+
+    def __init__(
+        self, proposal, after_db, before_db, work_dir,
+        search_path, target_uri, target_line, codeql_bin, runner,
+    ):
+        self._proposal = proposal
+        self._after_db = after_db
+        self._before_db = before_db
+        self._work_dir = work_dir
+        self._search_path = search_path
+        self._target_uri = target_uri
+        self._target_line = target_line
+        self._codeql_bin = codeql_bin
+        self._runner = runner
+        self._call_count = 0
+
+    def judge(self, candidate, context):
+        from core.orchestration.driver import Verdict
+
+        self._call_count += 1
+        n = self._call_count
+
+        query_ql = assemble_barrier_query(
+            candidate, sink_class=self._proposal.sink_class,
+            query_id=f"raptor/synth/{self._proposal.finding_id}/{n}",
+            language=self._proposal.language,
+        )
+
+        after_dir = self._work_dir / f"after-{n}"
+        after_count = adjudicate(
+            query_ql, self._after_db,
+            work_dir=after_dir,
+            language=self._proposal.language,
+            target_uri=self._target_uri,
+            target_line=self._target_line,
+            search_path=self._search_path,
+            codeql_bin=self._codeql_bin,
+            runner=self._runner,
+        )
+        before_count = adjudicate(
+            query_ql, self._before_db,
+            work_dir=self._work_dir / f"before-{n}",
+            language=self._proposal.language,
+            target_uri=self._target_uri,
+            search_path=self._search_path,
+            codeql_bin=self._codeql_bin,
+            runner=self._runner,
+        )
+
+        sr = SynthResult(
+            query_ql=query_ql,
+            after_count=after_count,
+            before_count=before_count,
+        )
+        evidence: dict = {"synth_result": sr}
+
+        if sr.is_sound:
+            return Verdict(passed=True, evidence=evidence)
+
+        if sr.failure_mode == "suppress_fp_failed":
+            evidence["surviving_finding_summary"] = (
+                _summarise_surviving_finding(
+                    after_dir / "out.sarif",
+                    target_uri=self._target_uri,
+                    target_line=self._target_line,
+                )
+            )
+
+        return Verdict(
+            passed=False,
+            feedback=sr.failure_mode,
+            evidence=evidence,
+        )
+
+
 def run_synthesis_loop(
     proposal: BarrierProposal,
     after_db: Path,
@@ -600,104 +713,33 @@ def run_synthesis_loop(
     compile), ``attempts`` (compile budget used in the last cycle),
     and ``refine_attempts`` (soundness refinements used).
     """
-    refine_ctx: Optional[RefineContext] = None
-    refine_attempts_used = 0
-    last_compile_error: Optional[str] = None
-    last_compile_attempts = 0
+    from core.orchestration.driver import DriverConfig
+    from core.orchestration.driver import run as driver_run
 
-    while True:
-        prior_error: Optional[str] = None
-        cycle_result: Optional[SynthResult] = None
-        for attempt in range(1, max_attempts + 1):
-            last_compile_attempts = attempt
-            try:
-                # Only thread refine_context when we have one — keeps 2-arg
-                # proposers (no refinement awareness) usable at default
-                # max_refine_attempts=0.
-                if refine_ctx is not None:
-                    proposed = proposer(proposal, prior_error, refine_context=refine_ctx)
-                else:
-                    proposed = proposer(proposal, prior_error)
-                query_ql = assemble_barrier_query(
-                    proposed, sink_class=proposal.sink_class,
-                    query_id=(
-                        f"raptor/synth/{proposal.finding_id}/"
-                        f"r{refine_attempts_used}-{attempt}"
-                    ),
-                    language=proposal.language,
-                )
-                # Suppress check (after): scope to the SPECIFIC flagged
-                # finding (uri+line). Preserve check (before): file-scoped
-                # only — the pre-fix vuln is at a different line after the
-                # patch's line shifts.
-                after_count = adjudicate(
-                    query_ql, after_db,
-                    work_dir=work_dir / f"after-r{refine_attempts_used}-{attempt}",
-                    language=proposal.language, target_uri=target_uri,
-                    target_line=target_line,
-                    search_path=search_path, codeql_bin=codeql_bin, runner=runner)
-                before_count = adjudicate(
-                    query_ql, before_db,
-                    work_dir=work_dir / f"before-r{refine_attempts_used}-{attempt}",
-                    language=proposal.language, target_uri=target_uri,
-                    search_path=search_path, codeql_bin=codeql_bin, runner=runner)
-            except (ValueError, CodeQLRunError) as exc:
-                prior_error = f"{type(exc).__name__}: {exc}"
-                last_compile_error = prior_error
-                continue
-            cycle_result = SynthResult(
-                query_ql=query_ql, after_count=after_count, before_count=before_count,
-            )
-            break
+    prop_adapter = _BarrierProposerAdapter(proposer, proposal)
+    oracle = _CodeQLAdjudicationOracle(
+        proposal, after_db, before_db, work_dir,
+        search_path, target_uri, target_line, codeql_bin, runner,
+    )
 
-        if cycle_result is None:
-            # All compile attempts in this cycle failed — no_barrier.
-            if diag is not None:
-                diag["last_error"] = last_compile_error
-                diag["attempts"] = last_compile_attempts
-                diag["refine_attempts"] = refine_attempts_used
-            return None
+    dr = driver_run(
+        prop_adapter, oracle, {},
+        config=DriverConfig(
+            max_attempts=max_attempts,
+            max_refine_cycles=max_refine_attempts,
+            retry_on_failure=False,
+        ),
+    )
 
-        if cycle_result.is_sound:
-            if diag is not None:
-                diag["refine_attempts"] = refine_attempts_used
-            return cycle_result
+    if diag is not None:
+        diag["last_error"] = dr.errors[-1] if dr.errors else None
+        diag["attempts"] = dr.attempts
+        diag["refine_attempts"] = dr.refine_cycles
 
-        if refine_attempts_used >= max_refine_attempts:
-            # Exhausted refinement budget — surface the not_sound result so
-            # the caller can record it as diagnostic material.
-            if diag is not None:
-                diag["refine_attempts"] = refine_attempts_used
-            return cycle_result
+    if dr.verdict is None:
+        return None
 
-        # Refine: feed the verdict back to the proposer for another cycle.
-        refine_attempts_used += 1
-        # Counterexample-driven refinement: extract the SPECIFIC surviving
-        # finding from the after-DB's SARIF so the proposer sees the
-        # concrete flow that wasn't gated.  Only meaningful for
-        # ``suppress_fp_failed`` (the after-DB still has the FP); the
-        # ``preserve_tp_failed`` case has the after-DB clean and the
-        # before-DB SARIF is what's relevant, but the existing
-        # before-DB SARIF lives at ``before-r*`` per iteration so the
-        # same pattern would apply.  Keep scoped to the after path for
-        # now — it's the dominant failure mode.
-        surviving_summary = ""
-        if cycle_result.failure_mode == "suppress_fp_failed":
-            surviving_sarif = (
-                work_dir / f"after-r{refine_attempts_used - 1}-"
-                f"{last_compile_attempts}" / "out.sarif"
-            )
-            surviving_summary = _summarise_surviving_finding(
-                surviving_sarif, target_uri=target_uri, target_line=target_line,
-            )
-        refine_ctx = RefineContext(
-            prior_query_ql=cycle_result.query_ql,
-            after_count=cycle_result.after_count,
-            before_count=cycle_result.before_count,
-            failure_mode=cycle_result.failure_mode,
-            refine_attempt=refine_attempts_used,
-            surviving_finding_summary=surviving_summary,
-        )
+    return dr.verdict.evidence.get("synth_result")
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1177,10 @@ def _extract_ql(reply: str) -> str:
         block = text.split("```", 2)[1]
         if "\n" in block:  # drop an optional language tag on the fence line
             block = block.split("\n", 1)[1]
+        else:
+            # single-line block with no newline — strip leading language tag
+            import re as _re
+            block = _re.sub(r"^[A-Za-z]+\s*", "", block)
         text = block.strip()
     return text
 

@@ -132,6 +132,8 @@ def _extract_versions(data: dict) -> List[str]:
           }
         }
     """
+    if not isinstance(data, dict):
+        return []
     docs = (data.get("response") or {}).get("docs") or []
     if not isinstance(docs, list):
         return []

@@ -98,12 +98,25 @@ def _build_cve_index(
 
 
 def _extract_cves_from_finding(f: Dict[str, Any]) -> Set[str]:
-    """Extract CVE/GHSA IDs from an SCA finding dict."""
+    """Extract CVE/GHSA IDs from an SCA finding dict.
+
+    Real findings nest advisory data under ``sca.advisory`` (primary)
+    and ``sca.all_advisories`` (full list), each keyed by ``"id"``.
+    """
     ids: Set[str] = set()
-    for adv in f.get("advisories", []):
-        osv_id = adv.get("osv_id", "")
-        if osv_id:
-            ids.add(osv_id.upper())
+    sca = f.get("sca") or {}
+    # Primary advisory.
+    primary = sca.get("advisory") or {}
+    adv_id = primary.get("id", "")
+    if adv_id:
+        ids.add(adv_id.upper())
+    for alias in primary.get("aliases", []):
+        ids.add(alias.upper())
+    # All advisories (includes primary + siblings).
+    for adv in sca.get("all_advisories", []):
+        aid = adv.get("id", "")
+        if aid:
+            ids.add(aid.upper())
         for alias in adv.get("aliases", []):
             ids.add(alias.upper())
     return ids
@@ -135,7 +148,9 @@ def _scan_sarif_file(
     try:
         with open(path, encoding="utf-8") as fh:
             sarif = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return
+    if not isinstance(sarif, dict):
         return
 
     for run in sarif.get("runs", []):

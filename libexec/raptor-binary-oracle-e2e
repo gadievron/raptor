@@ -9,8 +9,8 @@ enrichment, chokepoint accessor (incl. tier guard + name-collision
 disambiguation), reach_audit verdict chain, verdict→witness→suppression
 mapping, shared chokepoint helper, suppressions.jsonl audit trail,
 auto-detect, hostile-ELF defense, multi-binary combine, stripped-binary
-tier fallback, corpus driver registry, annotation_synth binary_oracle
-tags, /project schema persistence, full build_inventory pipeline.
+tier fallback, corpus driver registry, /project schema persistence,
+full build_inventory pipeline.
 
 Usage::
 
@@ -21,7 +21,6 @@ from __future__ import annotations
 import faulthandler
 
 import json
-import os
 import signal
 import sys
 import tempfile
@@ -32,6 +31,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -114,7 +114,7 @@ def _build_target() -> None:
         "-Wl,--gc-sections",
         str(src / "main.c"), str(src / "api.c"), str(src / "util.c"),
         "-o", str(BINARY),
-    ], check=True)
+    ], check=True, timeout=120)
 
 
 _build_target()
@@ -365,7 +365,7 @@ hostile_src.write_text(
 )
 hostile = TARGET / "build" / "planted"
 subprocess.run(["gcc", "-O0", "-g", str(hostile_src),
-                "-o", str(hostile)], check=True)
+                "-o", str(hostile)], check=True, timeout=60)
 inv2 = {"files": [
     {"path": "src/api.c", "language": "c", "items": [
         {"name": f"api_func_{i}", "kind": "function", "line_start": i + 1}
@@ -392,7 +392,7 @@ alt_src.write_text(
 )
 alt_bin = TARGET / "build" / "alt"
 subprocess.run(["gcc", "-O0", "-g", str(alt_src), "-o", str(alt_bin)],
-               check=True)
+               check=True, timeout=60)
 inv3 = {"files": [
     {"path": "src/api.c", "language": "c", "items": [
         {"name": "api_dead_function", "kind": "function", "line_start": 1},
@@ -434,7 +434,7 @@ print("\n=== 11. Stripped-binary tier fallback ===")
 stripped = TARGET / "build" / "app_stripped"
 import shutil
 shutil.copy(BINARY, stripped)
-subprocess.run(["strip", "--strip-debug", str(stripped)], check=True)
+subprocess.run(["strip", "--strip-debug", str(stripped)], check=True, timeout=30)
 v_stripped = classify_binary_evidence(["api_open", "api_dead_function"],
                                       stripped)
 check("stripped binary verdicts present", len(v_stripped) > 0)
@@ -460,42 +460,9 @@ for name in ("synthetic", "zlib", "libsodium", "snappy", "leveldb",
 
 
 # ---------------------------------------------------------------------------
-# 13. annotation_synth — binary_oracle tag emission
+# 13. /project binaries persistence round-trip
 # ---------------------------------------------------------------------------
-print("\n=== 13. annotation_synth binary_oracle tag ===")
-from packages.code_understanding.annotation_synth import (
-    _binary_oracle_tag, _binary_oracle_body_line,
-)
-
-func_full = {"metadata": {"binary_oracle": {
-    "classification": "absent",
-    "binaries": [{"path": "/b", "classification": "absent",
-                  "tier": "full"}],
-}}}
-tag = _binary_oracle_tag(func_full)
-check("full-tier tag has classification + tier=full",
-      tag.get("binary_oracle") == "absent"
-      and tag.get("binary_oracle_tier") == "full")
-body = _binary_oracle_body_line(func_full)
-check("full-tier body line says 'in deployed binary surface'",
-      "deployed binary surface" in body, body)
-func_symonly = {"metadata": {"binary_oracle": {
-    "classification": "absent",
-    "binaries": [{"path": "/b", "classification": "absent",
-                  "tier": "symbol_only"}],
-}}}
-tag2 = _binary_oracle_tag(func_symonly)
-check("symbol_only tag has tier=symbol_only",
-      tag2.get("binary_oracle_tier") == "symbol_only")
-body2 = _binary_oracle_body_line(func_symonly)
-check("symbol_only body line says 'does NOT license suppression'",
-      "does NOT license suppression" in body2, body2)
-
-
-# ---------------------------------------------------------------------------
-# 14. /project binaries persistence round-trip
-# ---------------------------------------------------------------------------
-print("\n=== 14. /project persistence ===")
+print("\n=== 13. /project persistence ===")
 from core.project.project import Project
 
 p = Project(name="e2e", target=str(TARGET),
@@ -516,9 +483,9 @@ check("v1 back-compat: empty binaries default",
 
 
 # ---------------------------------------------------------------------------
-# 15. Inventory builder honours BINARY_ORACLE_PATHS
+# 14. Inventory builder honours BINARY_ORACLE_PATHS
 # ---------------------------------------------------------------------------
-print("\n=== 15. build_inventory + BINARY_ORACLE_PATHS ===")
+print("\n=== 14. build_inventory + BINARY_ORACLE_PATHS ===")
 from core.config import RaptorConfig
 from core.inventory.builder import build_inventory
 

@@ -103,7 +103,7 @@ class CorpusGenerator:
                     if any(ind in strings_blob for ind in indicators):
                         analysis["formats_detected"].append(format_name)
                         self.detected_formats.add(format_name)
-                        logger.info(f"Detected format: {format_name}")
+                        logger.info("Detected format: %s", format_name)
 
                 # Detect file extensions
                 extensions = [".txt", ".xml", ".json", ".conf", ".cfg", ".dat", ".bin"]
@@ -132,17 +132,17 @@ class CorpusGenerator:
                 for cmd, patterns in command_patterns.items():
                     if any(pat in strings_blob for pat in patterns):
                         self.detected_commands[cmd] = f"command_{cmd.lower()}"
-                        logger.info(f"Detected command: {cmd}")
+                        logger.info("Detected command: %s", cmd)
 
                 if self.detected_commands:
                     analysis["commands_detected"] = list(self.detected_commands.keys())
 
-                logger.info(f"Binary analysis complete: {len(analysis['formats_detected'])} formats, {len(self.detected_commands)} commands detected")
+                logger.info("Binary analysis complete: %d formats, %d commands detected", len(analysis['formats_detected']), len(self.detected_commands))
 
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
         except Exception as e:
-            logger.warning(f"Binary analysis failed: {e}")
+            logger.warning("Binary analysis failed: %s", e)
 
         if self.source_dir and self.source_dir.exists():
             source_analysis = self._analyze_source_context()
@@ -150,7 +150,7 @@ class CorpusGenerator:
                 if command not in self.detected_commands:
                     self.detected_commands[command] = f"source_command_{command.lower()}"
             if self.detected_commands:
-                analysis["commands_detected"] = sorted(self.detected_commands.keys())
+                analysis["commands_detected"] = sorted(self.detected_commands)
 
         return analysis
 
@@ -183,7 +183,7 @@ class CorpusGenerator:
 
         analysis["commands_detected"] = sorted(commands)
         if commands:
-            logger.info(f"Detected source/documented commands: {', '.join(sorted(commands))}")
+            logger.info("Detected source/documented commands: %s", ', '.join(sorted(commands)))
         return analysis
 
     def _wrap_with_commands(self, seeds: List[bytes]) -> List[bytes]:
@@ -247,7 +247,7 @@ class CorpusGenerator:
         for seed in command_seeds:
             write_seed("command", seed)
         if command_seeds:
-            logger.info(f"Generated {seeds_generated - before} command-aware seeds")
+            logger.info("Generated %s command-aware seeds", seeds_generated - before)
 
         # 1. Generate basic seeds (always useful)
         logger.info("Generating basic seed corpus...")
@@ -255,27 +255,27 @@ class CorpusGenerator:
 
         # Wrap with commands if detected
         if self.detected_commands:
-            logger.info(f"Wrapping basic seeds with {len(self.detected_commands)} detected commands")
+            logger.info("Wrapping basic seeds with %d detected commands", len(self.detected_commands))
             basic_seeds = self._wrap_with_commands(basic_seeds)
 
         before = seeds_generated
         for seed in basic_seeds:
             write_seed("basic", seed)
-        logger.info(f"Generated {seeds_generated - before} basic seeds")
+        logger.info("Generated %s basic seeds", seeds_generated - before)
 
         # 2. Generate format-specific seeds
         if self.detected_formats:
-            logger.info(f"Generating format-specific seeds for: {', '.join(self.detected_formats)}")
+            logger.info("Generating format-specific seeds for: %s", ', '.join(self.detected_formats))
             before = seeds_generated
             for format_name in self.detected_formats:
                 format_seeds = self._generate_format_seeds(format_name)
                 for seed in format_seeds[:5]:  # Max 5 per format
                     write_seed(format_name, seed)
-            logger.info(f"Generated {seeds_generated - before} format-specific seeds")
+            logger.info("Generated %s format-specific seeds", seeds_generated - before)
 
         # 3. Generate goal-directed seeds
         if self.goal:
-            logger.info(f"Generating goal-directed seeds for: {self.goal.description}")
+            logger.info("Generating goal-directed seeds for: %s", self.goal.description)
             goal_seeds = self._generate_goal_directed_seeds()
 
             # Wrap with appropriate command based on goal
@@ -292,7 +292,7 @@ class CorpusGenerator:
                         matched_cmd = "UAF"
 
                 if matched_cmd:
-                    logger.info(f"Wrapping goal-directed seeds with {matched_cmd} command")
+                    logger.info("Wrapping goal-directed seeds with %s command", matched_cmd)
                     goal_seeds = [f"{matched_cmd}:".encode() + seed for seed in goal_seeds]
                 else:
                     # Wrap with all commands if no specific match
@@ -301,7 +301,7 @@ class CorpusGenerator:
             before = seeds_generated
             for seed in goal_seeds:
                 write_seed("goal", seed)
-            logger.info(f"Generated {seeds_generated - before} goal-directed seeds")
+            logger.info("Generated %s goal-directed seeds", seeds_generated - before)
 
         # 4. Load successful seeds from memory
         if self.memory:
@@ -309,7 +309,7 @@ class CorpusGenerator:
             # In future: retrieve seeds that led to crashes in past campaigns
             # For now: placeholder
 
-        logger.info(f"✓ Autonomous corpus generation complete: {seeds_generated} seeds")
+        logger.info("✓ Autonomous corpus generation complete: %s seeds", seeds_generated)
         return seeds_generated
 
     def _generate_command_seeds(self) -> List[bytes]:
@@ -532,7 +532,7 @@ class CorpusGenerator:
                 else:
                     seen_hashes.add(content_hash)
 
-            logger.info(f"Removed {removed} duplicate seeds")
+            logger.info("Removed %s duplicate seeds", removed)
             return removed
 
         # With coverage data, remove seeds that don't add new coverage.
@@ -556,7 +556,7 @@ class CorpusGenerator:
         if not self.memory:
             return
 
-        logger.info(f"Learning from {crash_type} crash: {crash_input.name}")
+        logger.info("Learning from %s crash: %s", crash_type, crash_input.name)
 
         # Extract patterns from crashing input.
         #
@@ -599,10 +599,10 @@ class CorpusGenerator:
             }
 
             # In future: use memory to store successful patterns
-            logger.debug(f"Crash pattern: {knowledge}")
+            logger.debug("Crash pattern: %s", knowledge)
 
         except Exception as e:
-            logger.warning(f"Failed to learn from crash: {e}")
+            logger.warning("Failed to learn from crash: %s", e)
 
     def generate_mutated_seed(self, base_seed: bytes, mutation_type: str = "havoc") -> bytes:
         """

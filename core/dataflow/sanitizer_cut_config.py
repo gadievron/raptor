@@ -297,6 +297,8 @@ def load_persisted(
             payload = json.load(fh)
     except (OSError, ValueError):
         return None
+    if not isinstance(payload, dict):
+        return None
     return configure(
         payload.get("mode", "off"),
         parity_log=payload.get("parity_log_path"),

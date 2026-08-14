@@ -7,6 +7,7 @@
 // which is larger — heap buffer overflow.
 //
 // CWE-131: Incorrect Calculation of Buffer Size
+// @role: verification
 
 @wrong_container_alloc@
 identifier CONTAINER, MEMBER, FIELD;

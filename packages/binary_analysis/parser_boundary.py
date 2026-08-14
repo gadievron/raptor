@@ -19,7 +19,7 @@ import hashlib
 from collections import deque
 from typing import Any
 
-from core.evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 _MAX_PATH_DEPTH = 6
 
@@ -64,7 +64,7 @@ def extract_parser_boundaries(
     binary_path: str,
     context_map: dict[str, Any],
     max_depth: int = _MAX_PATH_DEPTH,
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     """Return xref-backed parser boundary candidates for recovered ingress."""
     functions = _function_map(context_map)
     surfaces = _surface_map(context_map)
@@ -98,7 +98,7 @@ def extract_parser_boundaries(
             runtime_parser_by_function.setdefault(function_id, []).append(flow)
 
     candidates: list[dict[str, Any]] = []
-    records: list[EvidenceRecord] = []
+    records: list[BinaryEvidenceRecord] = []
     seen: set[tuple[str, str]] = set()
     for ingress in context_map.get("external_ingress_candidates", []):
         if not isinstance(ingress, dict):

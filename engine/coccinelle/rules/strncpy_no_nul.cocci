@@ -8,6 +8,7 @@
 // CWE-170: Improper Null Termination
 // More precise than 0xdea's semgrep pattern: we track actual use as
 // a string after the copy.
+// @role: verification
 
 @strncpy_then_string_use@
 expression DST, SRC, N;

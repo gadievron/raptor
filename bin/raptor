@@ -49,7 +49,16 @@ esac
 # regardless of which language layer is enforcing.
 # RAPTOR_DIR isn't set yet (this runs before the python entry
 # point), so we resolve the strip-list path relative to this script.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../core/security/_dangerous_env_strip.sh"
+# POSIX symlink resolution — BSD readlink (macOS) lacks -f.
+_raptor_self="${BASH_SOURCE[0]}"
+while [ -L "$_raptor_self" ]; do
+    _raptor_link_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
+    _raptor_self="$(readlink "$_raptor_self")"
+    [[ "$_raptor_self" != /* ]] && _raptor_self="$_raptor_link_dir/$_raptor_self"
+done
+_raptor_self_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
+. "$_raptor_self_dir/../core/security/_dangerous_env_strip.sh"
+unset _raptor_self _raptor_link_dir _raptor_self_dir
 # Added by batch 581:
 #   * LD_DEBUG / LD_PROFILE / LD_PROFILE_OUTPUT - glibc loader
 #     diagnostic env vars that write profile data to operator-
@@ -358,6 +367,21 @@ fi
 # of claude are wrapper scripts that exec node with the right
 # args), these are the vars that influence its startup before
 # `--noprofile --norc` would help.
+# Subagent model bridge: Claude Code's internal subagents (Agent/Task
+# tool) don't automatically follow the session's model — with
+# CLAUDE_CODE_SUBAGENT_MODEL unset they fall back to a default (or an
+# agent definition's pinned model) that alternate backends may not
+# serve. Observed: on a Bedrock role authorised only for the session
+# model, a subagent defaulting to another model got a 403 on its first
+# call. When the operator pinned the session model via ANTHROPIC_MODEL
+# and made no explicit subagent choice, make subagents follow the
+# session. Operators who want a different (e.g. cheaper) subagent
+# model just export CLAUDE_CODE_SUBAGENT_MODEL themselves — we never
+# override an explicit choice.
+if [[ -n "${ANTHROPIC_MODEL:-}" && -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]]; then
+    export CLAUDE_CODE_SUBAGENT_MODEL="$ANTHROPIC_MODEL"
+fi
+
 if [[ -n "$INITIAL_PROMPT" ]]; then
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
         claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"

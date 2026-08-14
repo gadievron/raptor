@@ -7,7 +7,9 @@ Run: python3 -m pytest core/sandbox/tests/test_e2e_sandbox.py -v
 """
 
 import sys as _sys
+
 import pytest as _pytest
+
 pytestmark = [
     _pytest.mark.skipif(
         _sys.platform != "linux",
@@ -20,16 +22,18 @@ pytestmark = [
 ]
 
 
-import os  # noqa: E402
-import subprocess  # noqa: E402
-import unittest  # noqa: E402
-from pathlib import Path  # noqa: E402
-from tempfile import TemporaryDirectory  # noqa: E402
+import os
+import subprocess
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from core.sandbox import (  # noqa: E402
+from core.sandbox import (
     check_landlock_available,
     check_net_available,
     sandbox,
+)
+from core.sandbox import (
     run as sandbox_run,
 )
 
@@ -296,7 +300,7 @@ class TestE2ECrashObservability(unittest.TestCase):
             src.write_text("int main(){*(int*)0=0;return 0;}")
             binary = Path(d) / "segv"
             subprocess.run(["gcc", "-o", str(binary), str(src)],
-                           capture_output=True, timeout=10)
+                           capture_output=True, timeout=10, check=False)
 
             result = sandbox_run(
                 [str(binary)], block_network=True,
@@ -329,7 +333,7 @@ class TestE2ECrashObservability(unittest.TestCase):
             src.write_text('#include <stdlib.h>\nint main(){abort();return 0;}')
             binary = Path(d) / "abrt"
             subprocess.run(["gcc", "-o", str(binary), str(src)],
-                           capture_output=True, timeout=10)
+                           capture_output=True, timeout=10, check=False)
 
             result = sandbox_run(
                 [str(binary)], block_network=True,
@@ -402,6 +406,7 @@ class TestE2EPathHijackDefeated(unittest.TestCase):
     def test_path_hijack_defeated(self):
         import os
         import tempfile
+
         from core.sandbox import state as s
         saved_unshare = s._unshare_path_cache
         saved_prlimit = s._prlimit_path_cache
@@ -622,6 +627,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         result = subprocess.run(
             ["libexec/raptor-run-sandboxed", "echo", "hello"],
             capture_output=True, text=True, timeout=10, env=self._env,
+            check=False,
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("hello", result.stdout)
@@ -632,6 +638,7 @@ class TestE2ELibexecScript(unittest.TestCase):
              "python3", "-c",
              "import socket; s=socket.socket(); s.settimeout(2); s.connect(('1.1.1.1',80))"],
             capture_output=True, text=True, timeout=10, env=self._env,
+            check=False,
         )
         self.assertNotEqual(result.returncode, 0)
 
@@ -639,6 +646,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         result = subprocess.run(
             ["libexec/raptor-run-sandboxed"],
             capture_output=True, text=True, timeout=5, env=self._env,
+            check=False,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Usage", result.stderr)
@@ -649,6 +657,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         result = subprocess.run(
             ["libexec/raptor-run-sandboxed", "echo", "hi"],
             capture_output=True, text=True, timeout=5, env=env_no_output,
+            check=False,
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn("OUTPUT_DIR", result.stderr)
@@ -658,6 +667,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         result = subprocess.run(
             ["libexec/raptor-run-sandboxed", "--help"],
             capture_output=True, text=True, timeout=5, env=self._env,
+            check=False,
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("Usage", result.stderr)
@@ -708,7 +718,7 @@ class TestE2ELandlockBitValues(unittest.TestCase):
             bin_path = Path(d) / "probe"
             compile_result = subprocess.run(
                 ["gcc", "-O0", str(src), "-o", str(bin_path)],
-                capture_output=True, text=True,
+                capture_output=True, text=True, check=False,
             )
             if compile_result.returncode != 0:
                 # Kernel headers missing (common on minimal CI).
@@ -718,6 +728,7 @@ class TestE2ELandlockBitValues(unittest.TestCase):
                 )
             result = subprocess.run(
                 [str(bin_path)], capture_output=True, text=True, timeout=5,
+                check=False,
             )
             kernel_values = {
                 k: int(v) for k, v in
@@ -789,14 +800,20 @@ class TestE2EEgressProxy(unittest.TestCase):
         self.assertEqual(denied[0]["host"], "evil.invalid")
 
     def test_allowed_host_succeeds(self):
-        """Host in allowlist reaches the backend."""
+        """Host in allowlist reaches the backend.
+
+        github.com rather than example.com: this is the one test that
+        asserts a SUCCESSFUL live fetch, and on corporate-proxy hosts
+        the upstream proxy has its own allowlist — github.com is on
+        it everywhere RAPTOR runs (the framework's own tooling needs
+        it); example.com generally is not."""
         import shutil
         if not shutil.which("curl"):
             self.skipTest("curl not installed")
         r = sandbox_run(
-            ["curl", "-sI", "--max-time", "15", "https://example.com"],
+            ["curl", "-sI", "--max-time", "15", "https://github.com"],
             target="/tmp", output="/tmp",
-            use_egress_proxy=True, proxy_hosts=["example.com"],
+            use_egress_proxy=True, proxy_hosts=["github.com"],
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(r.returncode, 0,
@@ -805,6 +822,32 @@ class TestE2EEgressProxy(unittest.TestCase):
         allowed = [e for e in events if e["result"] == "allowed"]
         self.assertGreaterEqual(len(allowed), 1,
                                 f"expected at least 1 allowed event, got {events}")
+
+    def test_jvm_proxy_sysprops_injected(self):
+        """JVM tools (Maven/Gradle) ignore HTTP(S)_PROXY env — the
+        sandbox must also hand the child JAVA_TOOL_OPTIONS pointing
+        the java.net proxy sysprops at the loopback egress proxy,
+        with empty nonProxyHosts (mirror of NO_PROXY="")."""
+        r = sandbox_run(
+            ["/usr/bin/env"],
+            target="/tmp", output="/tmp",
+            use_egress_proxy=True, proxy_hosts=["example.com"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr[:200])
+        env_lines = dict(
+            line.split("=", 1) for line in r.stdout.splitlines()
+            if "=" in line
+        )
+        https_proxy = env_lines.get("https_proxy", "")
+        self.assertTrue(https_proxy.startswith("http://127.0.0.1:"),
+                        f"https_proxy={https_proxy!r}")
+        port = https_proxy.rsplit(":", 1)[1]
+        jto = env_lines.get("JAVA_TOOL_OPTIONS", "")
+        self.assertIn("-Dhttps.proxyHost=127.0.0.1", jto)
+        self.assertIn(f"-Dhttps.proxyPort={port}", jto)
+        self.assertIn(f"-Dhttp.proxyPort={port}", jto)
+        self.assertIn("-Dhttp.nonProxyHosts=", jto)
 
     def test_env_None_treated_as_default(self):
         """env=None must not inherit os.environ wholesale.
@@ -950,8 +993,8 @@ class TestE2EEgressProxy(unittest.TestCase):
         into operator terminal output — colour flips, title changes,
         cursor moves that forge prior log lines.
         """
-        import logging
         import io
+        import logging
         handler_buf = io.StringIO()
         handler = logging.StreamHandler(handler_buf)
         handler.setLevel(logging.DEBUG)
@@ -984,9 +1027,10 @@ class TestE2EEgressProxy(unittest.TestCase):
         otherwise inject ESC into the logger via `_interpret_result`.
         Fix is a printable-char filter; this pins it.
         """
-        import logging
         import io
+        import logging
         import subprocess
+
         from core.sandbox.observe import _interpret_result
 
         handler_buf = io.StringIO()
@@ -1026,7 +1070,8 @@ class TestE2EEgressProxy(unittest.TestCase):
         entries. The proxy rejects these at CONNECT-parse time.
         """
         import socket as _socket
-        from core.sandbox.proxy import get_proxy, _reset_for_tests
+
+        from core.sandbox.proxy import _reset_for_tests, get_proxy
         try:
             _reset_for_tests()
             p = get_proxy(["allowed.example.com"])
@@ -1132,7 +1177,7 @@ class TestE2EEgressProxy(unittest.TestCase):
         register/unregister API with a high event count and verifies
         every event survives.
         """
-        from core.sandbox.proxy import get_proxy, _reset_for_tests
+        from core.sandbox.proxy import _reset_for_tests, get_proxy
         try:
             _reset_for_tests()
             p = get_proxy(["probe.test"])
@@ -1164,7 +1209,7 @@ class TestE2EEgressProxy(unittest.TestCase):
         full copy of each event. No attribution mixing within a single
         sandbox's buffer beyond what its own registration window sees.
         """
-        from core.sandbox.proxy import get_proxy, _reset_for_tests
+        from core.sandbox.proxy import _reset_for_tests, get_proxy
         try:
             _reset_for_tests()
             p = get_proxy(["probe.test"])
@@ -1195,7 +1240,7 @@ class TestE2EEgressProxy(unittest.TestCase):
         Callers in finally blocks can call unregister_sandbox()
         unconditionally without guarding against partial registration.
         """
-        from core.sandbox.proxy import get_proxy, _reset_for_tests
+        from core.sandbox.proxy import _reset_for_tests, get_proxy
         try:
             _reset_for_tests()
             p = get_proxy(["probe.test"])
@@ -1518,9 +1563,8 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
     def test_fake_home_requires_output(self):
         """fake_home=True without output= is a config error — raise
         rather than silently skipping the feature."""
-        with self.assertRaises(ValueError) as cm:
-            with sandbox(fake_home=True):
-                pass
+        with self.assertRaises(ValueError) as cm, sandbox(fake_home=True):
+            pass
         self.assertIn("output", str(cm.exception))
 
     def test_readable_paths_extends_allowlist(self):
@@ -1924,9 +1968,12 @@ class TestE2ESandboxSummaryRecording(unittest.TestCase):
 
     def test_blocked_network_lands_in_sandbox_summary(self):
         import json as _json
-        from core.run.metadata import start_run, complete_run
+
+        from core.run.metadata import complete_run, start_run
         from core.sandbox.summary import (
-            DENIALS_FILE, SUMMARY_FILE, set_active_run_dir,
+            DENIALS_FILE,
+            SUMMARY_FILE,
+            set_active_run_dir,
         )
 
         with TemporaryDirectory() as d:
@@ -1939,8 +1986,7 @@ class TestE2ESandboxSummaryRecording(unittest.TestCase):
                 # observe._check_blocked recognises (network category).
                 sandbox_run(
                     ["python3", "-c",
-                     "import socket; s=socket.socket(); s.settimeout(2); "
-                     "s.connect(('1.1.1.1', 80))"],
+                     "import socket; s=socket.socket(); s.settimeout(2); s.connect(('1.1.1.1', 80))"],
                     block_network=True, capture_output=True, text=True, timeout=10,
                 )
 
@@ -2025,31 +2071,28 @@ class TestRunUntrustedNetworked(unittest.TestCase):
 
     def test_requires_proxy_hosts(self):
         from core.sandbox import run_untrusted_networked
-        with TemporaryDirectory() as d:
-            with self.assertRaises(ValueError):
-                run_untrusted_networked(
-                    ["true"], target=d, output=d, proxy_hosts=[],
-                )
+        with TemporaryDirectory() as d, self.assertRaises(ValueError):
+            run_untrusted_networked(
+                ["true"], target=d, output=d, proxy_hosts=[],
+            )
 
     def test_rejects_block_network_kwarg(self):
         from core.sandbox import run_untrusted_networked
-        with TemporaryDirectory() as d:
-            with self.assertRaises(TypeError):
-                run_untrusted_networked(
-                    ["true"], target=d, output=d,
-                    proxy_hosts=["api.anthropic.com"],
-                    block_network=True,
-                )
+        with TemporaryDirectory() as d, self.assertRaises(TypeError):
+            run_untrusted_networked(
+                ["true"], target=d, output=d,
+                proxy_hosts=["api.anthropic.com"],
+                block_network=True,
+            )
 
     def test_rejects_use_egress_proxy_kwarg(self):
         from core.sandbox import run_untrusted_networked
-        with TemporaryDirectory() as d:
-            with self.assertRaises(TypeError):
-                run_untrusted_networked(
-                    ["true"], target=d, output=d,
-                    proxy_hosts=["api.anthropic.com"],
-                    use_egress_proxy=False,
-                )
+        with TemporaryDirectory() as d, self.assertRaises(TypeError):
+            run_untrusted_networked(
+                ["true"], target=d, output=d,
+                proxy_hosts=["api.anthropic.com"],
+                use_egress_proxy=False,
+            )
 
     def test_default_restrict_reads_denies_home(self):
         """Helper's whole point: even on Landlock-only hosts, the
@@ -2110,8 +2153,7 @@ class TestRunUntrustedNetworked(unittest.TestCase):
             # proxy to log a denial OR the child to fail.
             r = run_untrusted_networked(
                 ["python3", "-c",
-                 "import socket; s = socket.socket(); s.settimeout(2); "
-                 "s.connect(('1.1.1.1', 443))"],
+                 "import socket; s = socket.socket(); s.settimeout(2); s.connect(('1.1.1.1', 443))"],
                 target=d, output=d,
                 proxy_hosts=["api.anthropic.com"],
                 capture_output=True, text=True, timeout=10,
@@ -2179,13 +2221,15 @@ class TestLandlockOnlyModeWarning(unittest.TestCase):
 
         from unittest.mock import patch
 
-        with patch("core.sandbox.context.check_mount_available", return_value=False):
-            with self.assertLogs("core.sandbox.context", level="WARNING") as cm:
-                with TemporaryDirectory() as d:
-                    r = sandbox_run(
-                        ["true"], target=d, output=d,
-                        capture_output=True, text=True, timeout=5,
-                    )
+        with (
+            patch("core.sandbox.context.check_mount_available", return_value=False),
+            self.assertLogs("core.sandbox.context", level="WARNING") as cm,
+            TemporaryDirectory() as d,
+        ):
+            r = sandbox_run(
+                ["true"], target=d, output=d,
+                capture_output=True, text=True, timeout=5,
+            )
 
         # Per-run flag reflects that mount-ns did NOT engage on this run
         self.assertFalse(r.sandbox_info["mount_ns_active"])
@@ -2205,8 +2249,9 @@ class TestLandlockOnlyModeWarning(unittest.TestCase):
         if not check_landlock_available():
             self.skipTest("Landlock not available")
 
-        from core.sandbox import state
         from unittest.mock import patch
+
+        from core.sandbox import state
 
         # Pretend the warning was already fired earlier in this
         # process (e.g., the previous test set the flag).
@@ -2214,12 +2259,14 @@ class TestLandlockOnlyModeWarning(unittest.TestCase):
 
         with patch("core.sandbox.context.check_mount_available", return_value=False):
             try:
-                with self.assertNoLogs("core.sandbox.context", level="WARNING"):
-                    with TemporaryDirectory() as d:
-                        sandbox_run(
-                            ["true"], target=d, output=d,
-                            capture_output=True, text=True, timeout=5,
-                        )
+                with (
+                    self.assertNoLogs("core.sandbox.context", level="WARNING"),
+                    TemporaryDirectory() as d,
+                ):
+                    sandbox_run(
+                        ["true"], target=d, output=d,
+                        capture_output=True, text=True, timeout=5,
+                    )
             finally:
                 # Reset the flag so other tests in the same process
                 # aren't affected by the manual override above.
@@ -2263,8 +2310,8 @@ class TestE2EObserveMode(unittest.TestCase):
     def setUp(self):
         if not check_net_available():
             self.skipTest("User namespaces not available")
-        from core.sandbox.seccomp import check_seccomp_available
         from core.sandbox.ptrace_probe import check_ptrace_available
+        from core.sandbox.seccomp import check_seccomp_available
         if not check_seccomp_available():
             self.skipTest("libseccomp unavailable")
         if not check_ptrace_available():
@@ -2272,7 +2319,8 @@ class TestE2EObserveMode(unittest.TestCase):
 
     def test_observe_run_produces_parseable_profile(self):
         from core.sandbox.observe_profile import (
-            OBSERVE_FILENAME, parse_observe_log,
+            OBSERVE_FILENAME,
+            parse_observe_log,
         )
 
         with TemporaryDirectory() as d:
@@ -2320,6 +2368,150 @@ class TestE2EObserveMode(unittest.TestCase):
                 f"unexpected connect targets from /usr/bin/true: "
                 f"{profile.connect_targets!r}",
             )
+
+
+class TestE2ELandlockIoctlDev(unittest.TestCase):
+    """ABI v5+: IOCTL_DEV blocks device ioctl in sandboxed processes."""
+
+    def setUp(self):
+        if not check_net_available():
+            self.skipTest("User namespaces not available")
+        if not check_landlock_available():
+            self.skipTest("Landlock not available")
+        from core.sandbox.landlock import _get_landlock_abi
+        if _get_landlock_abi() < 5:
+            self.skipTest("Landlock ABI < 5 — IOCTL_DEV not available")
+
+    def test_ioctl_on_dev_null_blocked(self):
+        import shutil
+        if not shutil.which("gcc"):
+            self.skipTest("gcc not installed")
+        with TemporaryDirectory() as d:
+            src = Path(d) / "ioctldev.c"
+            src.write_text(
+                "#include <stdio.h>\n"
+                "#include <fcntl.h>\n"
+                "#include <unistd.h>\n"
+                "#include <errno.h>\n"
+                "#include <sys/ioctl.h>\n"
+                "int main(void){\n"
+                "  int fd=open(\"/dev/null\",O_RDWR);\n"
+                "  if(fd<0){printf(\"open_err=%d\\n\",errno);return 1;}\n"
+                "  int r=ioctl(fd,TCGETS,0);\n"
+                "  printf(\"rc=%d errno=%d\\n\",r,errno);\n"
+                "  close(fd);\n"
+                "  return 0;\n"
+                "}\n"
+            )
+            bin_path = Path(d) / "ioctldev"
+            compile_result = sandbox_run(
+                ["gcc", "-O0", str(src), "-o", str(bin_path)],
+                block_network=True, target=d, output=d,
+                capture_output=True, text=True, timeout=15,
+            )
+            if compile_result.returncode != 0:
+                self.skipTest(f"gcc failed: {compile_result.stderr[:200]}")
+            result = sandbox_run(
+                [str(bin_path)],
+                block_network=True, target=d, output=d,
+                capture_output=True, text=True, timeout=5,
+            )
+            # EACCES (13) from Landlock, not ENOTTY (25) which is the
+            # normal /dev/null response without Landlock IOCTL_DEV.
+            self.assertIn("errno=13", result.stdout,
+                          f"ioctl on /dev/null should be blocked by "
+                          f"Landlock IOCTL_DEV (EACCES); got: {result.stdout!r}")
+
+
+class TestE2ELandlockSignalScope(unittest.TestCase):
+    """ABI v6+: signal scoping blocks cross-domain signal delivery.
+
+    Can't test via the sandbox wrapper's PID namespace (parent PID is
+    invisible → ESRCH, not EPERM). Instead, compile a C program that
+    forks, applies Landlock scoping in the child only, and has the
+    child try to signal the (unscoped) parent. The child gets EPERM
+    from Landlock, not ESRCH from PID namespace.
+    """
+
+    def setUp(self):
+        if not check_landlock_available():
+            self.skipTest("Landlock not available")
+        from core.sandbox.landlock import _get_landlock_abi
+        if _get_landlock_abi() < 6:
+            self.skipTest("Landlock ABI < 6 — signal scoping not available")
+        import shutil
+        if not shutil.which("gcc"):
+            self.skipTest("gcc not installed")
+
+    _SIGNAL_SCOPE_SRC = (
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
+        "#include <unistd.h>\n"
+        "#include <signal.h>\n"
+        "#include <errno.h>\n"
+        "#include <sys/prctl.h>\n"
+        "#include <sys/syscall.h>\n"
+        "#include <sys/wait.h>\n"
+        "#include <string.h>\n"
+        "\n"
+        "struct landlock_ruleset_attr {\n"
+        "  unsigned long long handled_access_fs;\n"
+        "  unsigned long long handled_access_net;\n"
+        "  unsigned long long scoped;\n"
+        "};\n"
+        "\n"
+        "#define LANDLOCK_SCOPE_SIGNAL (1ULL << 1)\n"
+        "\n"
+        "int main(void) {\n"
+        "  pid_t parent = getpid();\n"
+        "  pid_t child = fork();\n"
+        "  if (child < 0) { perror(\"fork\"); return 1; }\n"
+        "  if (child > 0) {\n"
+        "    int status; waitpid(child, &status, 0);\n"
+        "    if (WIFEXITED(status)) return WEXITSTATUS(status);\n"
+        "    return 1;\n"
+        "  }\n"
+        "  /* child: apply Landlock with signal scoping */\n"
+        "  struct landlock_ruleset_attr attr = {0, 0, LANDLOCK_SCOPE_SIGNAL};\n"
+        "  int fd = syscall(444, &attr, sizeof(attr), 0);\n"
+        "  if (fd < 0) { printf(\"create_err=%d\\n\", errno); return 2; }\n"
+        "  prctl(38, 1, 0, 0, 0);\n"
+        "  long r = syscall(446, fd, 0);\n"
+        "  close(fd);\n"
+        "  if (r < 0) { printf(\"restrict_err=%d\\n\", errno); return 2; }\n"
+        "  /* self-signal: must succeed (same domain) */\n"
+        "  if (kill(getpid(), 0) != 0) {\n"
+        "    printf(\"self_errno=%d\\n\", errno); return 3;\n"
+        "  }\n"
+        "  /* cross-domain signal to parent: must fail with EPERM */\n"
+        "  int ret = kill(parent, 0);\n"
+        "  printf(\"cross_rc=%d cross_errno=%d\\n\", ret, errno);\n"
+        "  return (ret == -1 && errno == 1) ? 0 : 4;\n"
+        "}\n"
+    )
+
+    def test_cross_domain_signal_blocked(self):
+        """Child in a scoped Landlock domain cannot signal the parent."""
+        with TemporaryDirectory() as d:
+            src = Path(d) / "sigscope.c"
+            src.write_text(self._SIGNAL_SCOPE_SRC)
+            bin_path = Path(d) / "sigscope"
+            cr = subprocess.run(
+                ["gcc", "-O0", str(src), "-o", str(bin_path)],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if cr.returncode != 0:
+                self.skipTest(f"gcc failed: {cr.stderr[:200]}")
+            result = subprocess.run(
+                [str(bin_path)],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                f"signal scoping test failed (rc={result.returncode}); "
+                f"stdout: {result.stdout!r} stderr: {result.stderr!r}",
+            )
+            self.assertIn("cross_errno=1", result.stdout)
 
 
 if __name__ == "__main__":

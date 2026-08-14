@@ -232,16 +232,20 @@ class CredentialStore:
     def __init__(self) -> None:
         # Read each provider's key into private state. Store is
         # mutable so tests can inject fakes without touching env.
+        # Pre-read GOOGLE_API_KEY so it's always erased even when
+        # GEMINI_API_KEY is set (short-circuit would skip erasure).
+        _google_api_key = _read_env("GOOGLE_API_KEY")
         self._keys: dict[str, str | None] = {
             "anthropic":  _read_env("ANTHROPIC_API_KEY"),
             "openai":     _read_env("OPENAI_API_KEY"),
-            "gemini":     _read_env("GEMINI_API_KEY") or _read_env("GOOGLE_API_KEY"),
+            "gemini":     _read_env("GEMINI_API_KEY") or _google_api_key,
             # OpenAI-compatible aggregators + ecosystem providers.
             # Same Bearer-auth shape; different upstream URLs.
             "mistral":    _read_env("MISTRAL_API_KEY"),
             "groq":       _read_env("GROQ_API_KEY"),
             "together":   _read_env("TOGETHER_API_KEY"),
             "openrouter": _read_env("OPENROUTER_API_KEY"),
+            "orcarouter": _read_env("ORCAROUTER_API_KEY"),
             "fireworks":  _read_env("FIREWORKS_API_KEY"),
             "deepinfra":  _read_env("DEEPINFRA_API_KEY"),
             "perplexity": _read_env("PERPLEXITY_API_KEY"),
@@ -1041,6 +1045,15 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             # is preserved end-to-end through the dispatcher.
             upstream_base_url="https://openrouter.ai",
             inject_headers=_bearer_headers("openrouter"),
+        ),
+        "orcarouter": ProviderRule(
+            name="orcarouter",
+            # OrcaRouter's API is rooted at ``/v1`` (OpenAI-compatible
+            # gateway). The SDK's path component (``/v1/chat/completions``
+            # etc.) is preserved end-to-end through the dispatcher, so the
+            # bare host is the correct upstream — same shape as OpenRouter.
+            upstream_base_url="https://api.orcarouter.ai",
+            inject_headers=_bearer_headers("orcarouter"),
         ),
         "fireworks": ProviderRule(
             name="fireworks",

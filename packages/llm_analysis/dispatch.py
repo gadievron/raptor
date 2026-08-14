@@ -664,15 +664,13 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
                 # GLOBAL counter saw as universal failure even
                 # when other models had succeeded between them.
                 # Per-model counter only triggers when this
-                # specific model has 3 consecutive failures
-                # AND every result for this model has been a
-                # failure.
+                # Circuit-break a model after 3 consecutive failures.
                 pm = _per_model_state.setdefault(
                     model_key, {"consec": 0, "completed": 0},
                 )
                 pm["completed"] += 1
                 pm["consec"] += 1
-                if pm["consec"] >= 3 and pm["completed"] == pm["consec"]:
+                if pm["consec"] >= 3:
                     print(
                         f"\n  Model {model_key}:"
                         f" {pm['consec']} consecutive"

@@ -312,6 +312,29 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
             'an LLM prompt by callers'
         ),
     ),
+    # ----- packages/hypothesis_validation/runner.py (_evaluate_with_refinement) -----
+    AllowlistEntry(
+        file='packages/hypothesis_validation/runner.py',
+        func_name='_evaluate_with_refinement',
+        attr='summary',
+        expr_text='{evidence.summary}',
+        audit_note=(
+            'exception-path return value (verdict, reasoning) for '
+            'operator display; reasoning is not directly fed back into '
+            'an LLM prompt by callers'
+        ),
+    ),
+    AllowlistEntry(
+        file='packages/hypothesis_validation/runner.py',
+        func_name='_evaluate_with_refinement',
+        attr='summary',
+        expr_text='{evidence.summary}',
+        audit_note=(
+            'exception-path return value (verdict, reasoning) for '
+            'operator display; reasoning is not directly fed back into '
+            'an LLM prompt by callers'
+        ),
+    ),
     # ----- packages/llm_analysis/agent.py -----
     AllowlistEntry(
         file='packages/llm_analysis/agent.py',

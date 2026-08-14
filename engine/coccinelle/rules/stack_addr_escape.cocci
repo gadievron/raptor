@@ -7,6 +7,7 @@
 // the function return.
 //
 // CWE-562: Return of Stack Variable Address (generalised)
+// @role: verification
 
 @stack_to_global@
 identifier FUNC, LOCAL;

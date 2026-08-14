@@ -96,6 +96,7 @@ DEFAULT_GLOBAL_CAP = 10000
 # Per-category burst caps. Coarse buckets — see _default_categorise()
 # for the action → category mapping.
 DEFAULT_CATEGORY_CAPS = {
+    "file-open":          500,
     "file-read-metadata": 500,
     "file-read-data":    2000,
     "file-write":        3000,
@@ -123,6 +124,7 @@ DEFAULT_PID_CAP = 5000
 # global_cap / 600 (tuned so a 1-hour run doesn't drain the bucket
 # at a steady rate of ≤ refill).
 DEFAULT_REFILL_RATES = {
+    "file-open":           10,
     "file-read-metadata":  10,
     "file-read-data":      50,
     "file-write":          50,
@@ -190,7 +192,9 @@ def _default_categorise(action: str) -> str:
     if action in ("write", "writev", "pwrite64", "pwritev",
                   "creat", "mknod", "mknodat", "truncate"):
         return "file-write"
-    if action in ("openat", "open", "stat", "fstat", "lstat",
+    if action in ("openat", "open"):
+        return "file-open"
+    if action in ("stat", "fstat", "lstat",
                   "newfstatat", "statx", "access", "faccessat"):
         return "file-read-metadata"
     if action in ("read", "readv", "pread64", "preadv"):

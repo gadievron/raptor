@@ -50,6 +50,8 @@ def test_z3_solver_4_16_0_0_high_finding_with_recommendation(
     manylinux_2_38_aarch64; bookworm has glibc 2.36; the finding
     surfaces HIGH severity AND recommends 4.15.x (the last
     version with compatible wheels)."""
+    from packages.sca.wheel_compat.compat import clear_recommendation_cache
+    clear_recommendation_cache()
     pypi = _StubPyPI({
         "z3-solver": {
             "releases": {

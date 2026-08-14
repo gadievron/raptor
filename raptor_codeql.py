@@ -31,8 +31,6 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
 from core.sage.hooks import (
-    format_sage_memories_for_prompt,
-    recall_context_for_codeql_build,
     store_codeql_build_reliability,
 )
 from packages.codeql.agent import CodeQLAgent
@@ -53,7 +51,7 @@ def get_exploit_validator(work_dir: Path):
         from packages.autonomous.exploit_validator import ExploitValidator
         return ExploitValidator(work_dir)
     except Exception as e:
-        logger.warning(f"Exploit validator not available: {e}")
+        logger.warning("Exploit validator not available: %s", e)
         return None
 
 
@@ -63,7 +61,7 @@ def get_multi_turn_analyzer(llm_client):
         from packages.autonomous.dialogue import MultiTurnAnalyser
         return MultiTurnAnalyser(llm_client)
     except Exception as e:
-        logger.warning(f"Multi-turn analyzer not available: {e}")
+        logger.warning("Multi-turn analyzer not available: %s", e)
         return None
 
 
@@ -74,9 +72,9 @@ def run_autonomous_workflow(args):
     Args:
         args: Parsed command-line arguments
     """
-    logger.info(f"{'=' * 70}")
+    logger.info("%s", "=" * 70)
     logger.info("RAPTOR CODEQL - AUTONOMOUS SECURITY ANALYSIS")
-    logger.info(f"{'=' * 70}")
+    logger.info("%s", "=" * 70)
 
     # Parse languages — filter out empty entries from leading /
     # trailing / consecutive commas. Pre-fix `--languages
@@ -104,11 +102,6 @@ def run_autonomous_workflow(args):
             logger.error("--build-command requires exactly one language")
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
-    sage_rows = recall_context_for_codeql_build(repo_path=args.repo, languages=languages)
-    sage_build_ctx = format_sage_memories_for_prompt(sage_rows)
-    if sage_build_ctx:
-        logger.info("SAGE CodeQL build recall (methodology domain):\n%s", sage_build_ctx[:4000])
-
     # PHASE 1: CodeQL Scanning
     logger.info("\n" + "=" * 70)
     logger.info("PHASE 1: CODEQL SCANNING")
@@ -126,7 +119,6 @@ def run_autonomous_workflow(args):
         force_db_creation=args.force,
         use_extended=args.extended,
         min_files=args.min_files,
-        sage_build_recall=sage_build_ctx or None,
     )
 
     if not scan_result.success:
@@ -134,7 +126,7 @@ def run_autonomous_workflow(args):
         agent.print_summary(scan_result)
         sys.exit(1)
 
-    logger.info(f"\n✓ Phase 1 complete: {scan_result.total_findings} findings")
+    logger.info("\n✓ Phase 1 complete: %d findings", scan_result.total_findings)
 
     # Check if we should do autonomous analysis
     if args.scan_only:
@@ -180,7 +172,7 @@ def run_autonomous_workflow(args):
     total_exploits_compiled = 0
 
     for sarif_file in scan_result.sarif_files:
-        logger.info(f"\nAnalyzing SARIF: {sarif_file}")
+        logger.info("\nAnalyzing SARIF: %s", sarif_file)
 
         sarif = load_sarif(Path(sarif_file))
         if not sarif:
@@ -188,7 +180,7 @@ def run_autonomous_workflow(args):
 
         runs = sarif.get("runs", [])
         if not runs:
-            logger.warning(f"No runs in SARIF file: {sarif_file}")
+            logger.warning("No runs in SARIF file: %s", sarif_file)
             continue
         run = runs[0]
         results = run.get("results", [])
@@ -198,12 +190,12 @@ def run_autonomous_workflow(args):
         if remaining <= 0:
             break
         findings_to_analyze = results[:remaining]
-        logger.info(f"Analyzing {len(findings_to_analyze)} findings...")
+        logger.info("Analyzing %d findings...", len(findings_to_analyze))
 
         from core.reporting.formatting import display_rule_id
         for i, result in enumerate(findings_to_analyze, 1):
             rule_id = result.get("ruleId", "unknown")
-            logger.info(f"\n[{i}/{len(findings_to_analyze)}] {display_rule_id(rule_id)}")
+            logger.info("\n[%d/%d] %s", i, len(findings_to_analyze), display_rule_id(rule_id))
 
             try:
                 analysis = autonomous_analyzer.analyze_finding_autonomous(
@@ -227,9 +219,9 @@ def run_autonomous_workflow(args):
 
                 # Log results
                 if analysis.exploitable:
-                    logger.info(f"✓ Exploitable (score: {analysis.analysis.exploitability_score:.2f})")
+                    logger.info("✓ Exploitable (score: %.2f)", analysis.analysis.exploitability_score)
                     if analysis.exploit_code:
-                        logger.info(f"  Exploit generated: {len(analysis.exploit_code)} bytes")
+                        logger.info("  Exploit generated: %d bytes", len(analysis.exploit_code))
                         if analysis.exploit_compiled:
                             logger.info("  ✓ Exploit compiled successfully")
                         else:
@@ -238,7 +230,7 @@ def run_autonomous_workflow(args):
                     logger.info("✗ Not exploitable")
 
             except Exception as e:
-                logger.error(f"Analysis failed: {e}", exc_info=True)
+                logger.error("Analysis failed: %s", e, exc_info=True)
 
     # Save autonomous analysis summary
     short_circuits = getattr(llm_client, "short_circuits", 0)
@@ -256,15 +248,16 @@ def run_autonomous_workflow(args):
     save_json(summary_file, summary)
     # Future-agent note: post-run reliability memory is additive only; failures
     # inside SAGE hooks must not fail the CodeQL workflow.
+    codeql_outcome = "success" if scan_result.total_findings > 0 else "no_findings"
     store_codeql_build_reliability(
         repo_path=args.repo,
         languages=languages or [],
         build_command=args.build_command or "auto",
-        auto_detect_outcome="success",
+        auto_detect_outcome=codeql_outcome,
         analyses_completed=total_analyzed,
     )
 
-    logger.info(f"\n✓ Autonomous analysis summary saved: {summary_file}")
+    logger.info("\n✓ Autonomous analysis summary saved: %s", summary_file)
 
     # Print final summary
     print(f"\n{'=' * 70}")
@@ -400,7 +393,7 @@ Examples:
         args, run_dir=args.out, export_env=True,
     )
     if _sc is not None:
-        logger.info(f"Sanitizer-cut mode: {_sc.mode}")
+        logger.info("Sanitizer-cut mode: %s", _sc.mode)
     # All ``--binary`` / ``--binary-auto`` / ``--binary-edges`` plumbing
     # lives in the shared CLI helper — explicit path validation,
     # auto-detect walk, active-project binary layering, RaptorConfig
@@ -440,7 +433,7 @@ Examples:
         )
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error("Fatal error: %s", e, exc_info=True)
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 

@@ -403,6 +403,25 @@ def _install_hook_to_finding(
         "reads_credentials": hit.hit.reads_credentials,
         "has_publish_action": hit.hit.has_publish_action,
     }
+    if hit.hit.intree_targets:
+        try:
+            from . import hook_guard_analysis as _hga
+            pkg_root = hit.dependency.declared_in.parent
+            analyses = _hga.analyze_intree_targets(
+                list(hit.hit.intree_targets), pkg_root,
+            )
+            if analyses:
+                evidence["guard_analysis"] = [
+                    a.to_dict() for a in analyses
+                ]
+                evidence["has_unconditional_sink_in_payload"] = any(
+                    a.has_unconditional_dangerous_call for a in analyses
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "guard analysis failed for %s",
+                hit.dependency.name, exc_info=True,
+            )
     return SupplyChainFinding(
         finding_id=(
             f"sca:supplychain:install_hook_suspicious:"

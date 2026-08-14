@@ -147,7 +147,7 @@ class PythonExtractor:
             self._walk(tree, functions, class_name=None)
             functions.extend(self._top_level_items(tree))
         except SyntaxError as e:
-            logger.warning(f"Failed to parse {filepath}: {e}")
+            logger.warning("Failed to parse %s: %s", filepath, e)
             functions = self._regex_fallback(content)
 
         return functions
@@ -834,6 +834,14 @@ class CExtractor:
                 func.line_end = cls._find_end_brace(lines, func.line_start - 1)
 
 
+_JAVA_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _count_braces_outside_strings(line: str) -> int:
+    cleaned = _JAVA_STRING_RE.sub("", line)
+    return cleaned.count("{") - cleaned.count("}")
+
+
 class JavaExtractor:
     """Extract methods from Java files using regex.
 
@@ -854,15 +862,48 @@ class JavaExtractor:
     PATTERN = r'((?:public|private|protected|static|\s)+)([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{'
     _MAX_JAVA_LINE = 16 * 1024
 
+    @staticmethod
+    def _split_params_respecting_generics(params_str: str) -> List[str]:
+        """Split parameter string on top-level commas only."""
+        parts: List[str] = []
+        depth = 0
+        current: List[str] = []
+        for ch in params_str:
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append("".join(current))
+                current = []
+            else:
+                current.append(ch)
+        if current:
+            parts.append("".join(current))
+        return parts
+
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
         current_class = None
+        brace_depth = 0
+        class_depth = -1
 
         for i, line in enumerate(content.split('\n'), 1):
-            # Track class scope
-            class_match = re.search(r'class\s+(\w+)', line)
+            stripped = line.lstrip()
+
+            brace_depth += _count_braces_outside_strings(line)
+
+            class_match = re.search(r'\bclass\s+(\w+)', line)
             if class_match:
                 current_class = class_match.group(1)
+                class_depth = brace_depth
+
+            if current_class is not None and brace_depth < class_depth:
+                current_class = None
+                class_depth = -1
+
+            if stripped.startswith("//") or stripped.startswith("/*"):
+                continue
 
             # Cap line length before regex match — see PATTERN comment
             # for the ReDoS rationale.
@@ -886,7 +927,7 @@ class JavaExtractor:
                     # Parse parameters
                     parameters = []
                     if params_str:
-                        for p in params_str.split(','):
+                        for p in self._split_params_respecting_generics(params_str):
                             parts = p.strip().split()
                             if len(parts) >= 2:
                                 pname = parts[-1]
@@ -1212,6 +1253,19 @@ def _ts_language(lang: str):
             return Language(ts.language_php())
         elif lang == "lua":
             import tree_sitter_lua as ts
+        elif lang == "scala":
+            # Without this branch .scala fell through to the regex
+            # extractor: no ``line_end`` on any function, and roughly a
+            # third fewer functions found. ``line_end`` is what the
+            # source-slicing consumers key on, so a JVM target like
+            # Kafka (Scala broker core, Java clients) silently got a
+            # partial inventory on its Scala half only. Same failure
+            # shape as the cpp and typescript branches above.
+            import tree_sitter_scala as ts
+        elif lang == "kotlin":
+            import tree_sitter_kotlin as ts
+        elif lang == "swift":
+            import tree_sitter_swift as ts
         else:
             return None
         return Language(ts.language())
@@ -1268,6 +1322,24 @@ class TreeSitterExtractor:
         # ``function_signature_item`` — intentionally excluded (no code).
         "rust": ("function_item",),
         "lua": ("function_declaration", "function_definition"),
+        # Scala: ``def`` with a body is ``function_definition`` — NOT
+        # Java's ``method_declaration``. Reusing the Java node names
+        # here extracts zero functions from a file that parses cleanly.
+        # An abstract trait/interface ``def`` with no body parses as
+        # ``function_declaration`` and is intentionally excluded (no
+        # code to review), matching the Rust rule above.
+        "scala": ("function_definition",),
+        # Kotlin: ``fun`` bodies + secondary constructors. Abstract /
+        # interface ``fun`` without a body still parses as
+        # function_declaration but carries no function_body — kept, since
+        # unlike Rust/Scala the node type doesn't distinguish and callers
+        # tolerate line_start==line_end signatures.
+        "kotlin": ("function_declaration", "secondary_constructor"),
+        # Swift: ``func`` + ``init``/``deinit``. Protocol requirement
+        # signatures are ``protocol_function_declaration`` — excluded
+        # (no body), matching the Rust/Scala signature rule.
+        "swift": ("function_declaration", "init_declaration",
+                  "deinit_declaration"),
     }
 
     _CLASS_TYPES = {
@@ -1289,6 +1361,19 @@ class TreeSitterExtractor:
         # ``trait T`` with ``T`` (for default methods).
         "rust": ("impl_item", "trait_item"),
         "lua": (),
+        # Scala hosts methods in all three; ``object`` is where the
+        # singleton/companion helpers live, which is a lot of a typical
+        # Scala service's logic.
+        "scala": ("class_definition", "object_definition", "trait_definition"),
+        # Kotlin: class_declaration covers class/interface/enum (the
+        # grammar reuses one node type); object_declaration is the
+        # singleton/companion host.
+        "kotlin": ("class_declaration", "object_declaration"),
+        # Swift: class_declaration covers class/struct/enum/extension
+        # (one node type, keyword child differs); protocols host
+        # default implementations via extensions but the declaration
+        # itself is tracked for hierarchy.
+        "swift": ("class_declaration", "protocol_declaration"),
     }
 
     def __init__(self, language: str):
@@ -1305,7 +1390,7 @@ class TreeSitterExtractor:
             try:
                 _tree = self.parser.parse(content.encode())
             except Exception as e:
-                logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
+                logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
                 return []  # Caller will fall back to regex extractor
         self._source_lines = content.splitlines(True)
         functions = []
@@ -1544,6 +1629,8 @@ class TreeSitterExtractor:
                                 parameters=params,
                             ),
                         ))
+                    self._walk(arrow, functions, class_name=class_name,
+                               class_attributes=class_attributes)
                     continue
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
@@ -1566,7 +1653,7 @@ class TreeSitterExtractor:
                     if fi:
                         functions.append(fi)
                 except Exception as e:
-                    logger.debug(f"tree-sitter: failed to extract function at line {child.start_point[0]+1}: {e}")
+                    logger.debug("tree-sitter: failed to extract function at line %d: %s", child.start_point[0]+1, e)
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
             elif child.type == "decorated_definition":
@@ -1897,6 +1984,24 @@ class TreeSitterExtractor:
         # ``type_identifier`` names a TS class/interface — but in a Java/TS
         # method it's the RETURN TYPE (``public String handle()``), which
         # precedes the method name, so only accept it on a class declaration.
+        # Swift: init/deinit carry no name identifier — synthesise.
+        if self.language == "swift" and node.type == "init_declaration":
+            return "init"
+        if self.language == "swift" and node.type == "deinit_declaration":
+            return "deinit"
+        # Swift: ``extension C`` wraps the target in user_type →
+        # type_identifier (one level down, unlike a direct class name).
+        if self.language == "swift" and node.type == "class_declaration":
+            ut = next((c for c in node.children if c.type == "user_type"), None)
+            if ut is not None:
+                ti = next((g for g in ut.children
+                           if g.type == "type_identifier"), None)
+                if ti is not None:
+                    return ti.text.decode()
+        # Kotlin: secondary constructors carry no name — use the
+        # conventional "constructor".
+        if self.language == "kotlin" and node.type == "secondary_constructor":
+            return "constructor"
         is_class_decl = node.type in (
             "class_declaration", "abstract_class_declaration",
             "interface_declaration",
@@ -1907,6 +2012,8 @@ class TreeSitterExtractor:
             # this the name didn't resolve and inline methods read
             # class_name=None (no CHA / framework / qualname association).
             "class_specifier", "struct_specifier",
+            # Swift: protocol name is a type_identifier child.
+            "protocol_declaration",
         )
         for child in node.children:
             if child.type in ("identifier", "name"):
@@ -1927,6 +2034,11 @@ class TreeSitterExtractor:
             # otherwise ES private methods were dropped entirely.
             if child.type in ("property_identifier",
                               "private_property_identifier"):
+                return child.text.decode()
+            # Swift: function/method names are simple_identifier (no
+            # other supported grammar emits that type, so it is safe in
+            # the generic loop).
+            if child.type == "simple_identifier":
                 return child.text.decode()
             if child.type == "type_identifier" and is_class_decl:
                 return child.text.decode()
@@ -2116,6 +2228,14 @@ class TreeSitterExtractor:
         return None
 
 
+# Languages ``_ts_language`` has a loader branch for. Probed to build the
+# startup banner's grammar list; keep in sync with that branch.
+_TS_PROBE_LANGUAGES = (
+    "python", "java", "javascript", "typescript", "tsx", "c", "cpp",
+    "go", "rust", "csharp", "ruby", "php", "lua", "scala", "kotlin",
+    "swift",
+)
+
 _cached_ts_languages: Optional[List[str]] = None
 
 
@@ -2128,7 +2248,12 @@ def _get_ts_languages() -> List[str]:
         _cached_ts_languages = []
         return []
     available = []
-    for lang in ("python", "java", "javascript", "c", "go", "lua"):
+    # Every language ``_ts_language`` can load. This list drifted behind
+    # the loader — cpp, typescript, rust, csharp, ruby and php all had
+    # working branches but were absent here, so the startup banner
+    # under-reported what the inventory could actually parse. Keep the
+    # two in sync when adding a grammar.
+    for lang in _TS_PROBE_LANGUAGES:
         if _ts_language(lang):
             available.append(lang)
     _cached_ts_languages = available
@@ -2299,24 +2424,23 @@ def extract_items(filepath: str, language: str, content: str,
             and i.line_end is not None
             and i.line_end <= i.line_start
         }
-        if broken or True:
-            regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
-            regex_funcs = regex_ext.extract(filepath, content)
-            regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
-            for i, item in enumerate(items):
-                if item.kind == KIND_FUNCTION and item.name in broken:
-                    repair = regex_by_name.get(item.name)
-                    if repair and repair.line_end and repair.line_end > repair.line_start:
-                        items[i] = FunctionInfo(
-                            name=item.name,
-                            line_start=item.line_start,
-                            line_end=repair.line_end,
-                            signature=item.signature or repair.signature,
-                            metadata=item.metadata or repair.metadata,
-                        )
-            for name, rfn in regex_by_name.items():
-                if name not in ts_funcs:
-                    items.append(rfn)
+        regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+        regex_funcs = regex_ext.extract(filepath, content)
+        regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
+        for i, item in enumerate(items):
+            if item.kind == KIND_FUNCTION and item.name in broken:
+                repair = regex_by_name.get(item.name)
+                if repair and repair.line_end and repair.line_end > repair.line_start:
+                    items[i] = FunctionInfo(
+                        name=item.name,
+                        line_start=item.line_start,
+                        line_end=repair.line_end,
+                        signature=item.signature or repair.signature,
+                        metadata=item.metadata or repair.metadata,
+                    )
+        for name, rfn in regex_by_name.items():
+            if name not in ts_funcs:
+                items.append(rfn)
 
     # C/C++ macro extraction (regex — tree-sitter doesn't parse preprocessor)
     if language in ("c", "cpp"):
@@ -2770,33 +2894,46 @@ def _count_comment_lines_ts(node) -> int:
 
 
 def _collect_comment_lines(node, comment_lines: set, code_lines: set = None) -> None:
-    """Recursively collect line numbers that are comment-only.
+    """Collect line numbers that are comment-only.
 
     A line counts as comment-only if it contains a comment but no code.
     Lines like `int x = 1; // init` are code lines, not comment lines.
+
+    Iterative (explicit stack), not recursive: deeply nested ASTs —
+    e.g. openssl's ssl/s3_lib.c, whose giant static ciphersuite table
+    parses ~1000 levels deep — blow Python's recursion limit and got
+    the whole file silently dropped from the inventory.
     """
     if code_lines is None:
         code_lines = set()
         # First pass: collect all lines that have non-comment nodes
         _collect_code_lines(node, code_lines)
 
-    if node.type in ("comment", "line_comment", "block_comment"):
-        for line in range(node.start_point[0], node.end_point[0] + 1):
-            if line not in code_lines:
-                comment_lines.add(line)
-    for child in node.children:
-        _collect_comment_lines(child, comment_lines, code_lines)
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in ("comment", "line_comment", "block_comment", "multiline_comment"):
+            for line in range(n.start_point[0], n.end_point[0] + 1):
+                if line not in code_lines:
+                    comment_lines.add(line)
+        stack.extend(n.children)
 
 
 def _collect_code_lines(node, code_lines: set) -> None:
-    """Collect line numbers that have non-comment, non-whitespace nodes."""
-    if node.type not in ("comment", "line_comment", "block_comment") and not node.children:
-        # Leaf node that isn't a comment — it's code
-        if node.text and node.text.strip():
-            for line in range(node.start_point[0], node.end_point[0] + 1):
-                code_lines.add(line)
-    for child in node.children:
-        _collect_code_lines(child, code_lines)
+    """Collect line numbers that have non-comment, non-whitespace nodes.
+
+    Iterative for the same deep-AST reason as _collect_comment_lines.
+    """
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if (n.type not in ("comment", "line_comment", "block_comment", "multiline_comment")
+                and not n.children):
+            # Leaf node that isn't a comment — it's code
+            if n.text and n.text.strip():
+                for line in range(n.start_point[0], n.end_point[0] + 1):
+                    code_lines.add(line)
+        stack.extend(n.children)
 
 
 def _count_comment_lines_regex(content: str, language: str) -> int:

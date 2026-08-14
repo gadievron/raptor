@@ -35,6 +35,7 @@ def all_providers_creds():
         "groq":        "gsk-groq-real-NOT-LEAKED",
         "together":    "together-real-NOT-LEAKED",
         "openrouter":  "sk-or-real-NOT-LEAKED",
+        "orcarouter":  "sk-orca-real-NOT-LEAKED",
         "fireworks":   "fw-fireworks-real-NOT-LEAKED",
         "deepinfra":   "deepinfra-real-NOT-LEAKED",
         "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
@@ -256,6 +257,7 @@ _BEARER_PROVIDERS = [
     ("groq",       "openai/v1/chat/completions", "gsk-groq-real-NOT-LEAKED"),
     ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
     ("openrouter", "api/v1/chat/completions", "sk-or-real-NOT-LEAKED"),
+    ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
     ("fireworks",  "inference/v1/chat/completions", "fw-fireworks-real-NOT-LEAKED"),
     ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
     ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
@@ -392,6 +394,7 @@ class TestNewProvidersUnconfiguredKeyReturns503:
             ("groq",         "/groq/openai/v1/chat/completions"),
             ("together",     "/together/v1/chat/completions"),
             ("openrouter",   "/openrouter/api/v1/chat/completions"),
+            ("orcarouter",   "/orcarouter/v1/chat/completions"),
             ("fireworks",    "/fireworks/inference/v1/chat/completions"),
             ("deepinfra",    "/deepinfra/v1/openai/chat/completions"),
             ("perplexity",   "/perplexity/chat/completions"),
@@ -406,6 +409,7 @@ class TestNewProvidersUnconfiguredKeyReturns503:
         creds._keys = {p: None for p in [
             "anthropic", "openai", "gemini",
             "mistral", "groq", "together", "openrouter",
+            "orcarouter",
             "fireworks", "deepinfra", "perplexity",
             "cohere", "replicate",
             "azure_openai", "azure_openai_endpoint",
@@ -439,6 +443,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
             "GROQ_API_KEY":       "groq-test",
             "TOGETHER_API_KEY":   "together-test",
             "OPENROUTER_API_KEY": "openrouter-test",
+            "ORCAROUTER_API_KEY": "orcarouter-test",
             "FIREWORKS_API_KEY":  "fireworks-test",
             "DEEPINFRA_API_KEY":  "deepinfra-test",
             "PERPLEXITY_API_KEY": "perplexity-test",
@@ -455,6 +460,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
         assert creds.get("groq") == "groq-test"
         assert creds.get("together") == "together-test"
         assert creds.get("openrouter") == "openrouter-test"
+        assert creds.get("orcarouter") == "orcarouter-test"
         assert creds.get("fireworks") == "fireworks-test"
         assert creds.get("deepinfra") == "deepinfra-test"
         assert creds.get("perplexity") == "perplexity-test"

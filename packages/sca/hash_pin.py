@@ -25,7 +25,6 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -70,16 +69,16 @@ class HashPinChange:
 
 @dataclass
 class HashPinResult:
-    changed_files: List[Path]
-    changes: List[HashPinChange]
-    skipped: List[Tuple[Path, int, str, str]]   # (file, line, action, reason)
+    changed_files: list[Path]
+    changes: list[HashPinChange]
+    skipped: list[tuple[Path, int, str, str]]   # (file, line, action, reason)
 
 
 def hash_pin_workflows(
     target: Path,
     *,
-    workflows_dir: Optional[Path] = None,
-    github_token: Optional[str] = None,
+    workflows_dir: Path | None = None,
+    github_token: str | None = None,
     write: bool = False,
 ) -> HashPinResult:
     """Walk ``.github/workflows/*.yml`` and rewrite mutable refs to
@@ -95,11 +94,11 @@ def hash_pin_workflows(
         return HashPinResult([], [], [])
 
     token = github_token or os.environ.get("GITHUB_TOKEN")
-    cache: Dict[Tuple[str, str], Optional[str]] = {}
+    cache: dict[tuple[str, str], str | None] = {}
 
-    changes: List[HashPinChange] = []
-    skipped: List[Tuple[Path, int, str, str]] = []
-    changed_files: List[Path] = []
+    changes: list[HashPinChange] = []
+    skipped: list[tuple[Path, int, str, str]] = []
+    changed_files: list[Path] = []
 
     for wf_path in sorted(workflows.glob("*.y*ml")):
         try:
@@ -132,12 +131,12 @@ def hash_pin_workflows(
 # ---------------------------------------------------------------------------
 
 def _rewrite_file(
-    text: str, path: Path, cache: dict, token: Optional[str],
-) -> Tuple[str, List[HashPinChange], List[Tuple[Path, int, str, str]]]:
-    changes: List[HashPinChange] = []
-    skipped: List[Tuple[Path, int, str, str]] = []
+    text: str, path: Path, cache: dict, token: str | None,
+) -> tuple[str, list[HashPinChange], list[tuple[Path, int, str, str]]]:
+    changes: list[HashPinChange] = []
+    skipped: list[tuple[Path, int, str, str]] = []
     lines = text.splitlines(keepends=True)
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     for idx, raw in enumerate(lines):
         m = _USES_RE.search(raw)
         if not m:
@@ -183,8 +182,8 @@ def _rewrite_file(
 
 def _resolve_sha(
     owner: str, repo: str, ref: str, cache: dict,
-    token: Optional[str],
-) -> Optional[str]:
+    token: str | None,
+) -> str | None:
     """Use ``git ls-remote`` to resolve a tag/branch/ref to a SHA."""
     key = (f"{owner}/{repo}", ref)
     if key in cache:
@@ -207,8 +206,11 @@ def _resolve_sha(
         proc = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=20,
-            env=RaptorConfig.get_safe_env(),
+            # preserve_proxy: ls-remote dials the forge — git honours
+            # proxy env; no direct route on mandatory-proxy hosts.
+            env=RaptorConfig.get_safe_env(preserve_proxy=True),
             preexec_fn=set_pdeathsig(),
+            check=False,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning("sca.hash_pin: git ls-remote failed for %s/%s@%s: %s",
@@ -226,7 +228,7 @@ def _resolve_sha(
     return sha
 
 
-def _pick_sha(stdout: str) -> Optional[str]:
+def _pick_sha(stdout: str) -> str | None:
     """Pick the right SHA from git ls-remote output.
 
     Prefers the dereferenced-tag entry (``<sha>\\trefs/tags/<tag>^{}``)

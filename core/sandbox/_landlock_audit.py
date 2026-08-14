@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import select
 import subprocess
 import sys
 import tempfile
@@ -76,7 +77,11 @@ def _set_ptracer_any_in_child() -> None:
     SEIZE will fail and the parent's diagnostic fires there.
     """
     import ctypes
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    import ctypes.util
+    _libc_name = ctypes.util.find_library("c")
+    if not _libc_name:
+        return
+    libc = ctypes.CDLL(_libc_name, use_errno=True)
     libc.prctl.argtypes = [
         ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
         ctypes.c_ulong, ctypes.c_ulong,
@@ -308,14 +313,14 @@ def run_landlock_audit(
 
     target_pid = -1
     tracer_pid = -1
-    parent_owned_fds = [
-        p_go_r, p_go_w, t_ready_r, t_ready_w,
-        out_r, out_w, err_r, err_w,
-    ]
-
     def _cleanup_fds() -> None:
-        for fd in parent_owned_fds:
+        nonlocal p_go_r, p_go_w, t_ready_r, t_ready_w
+        nonlocal out_r, out_w, err_r, err_w
+        for fd in (p_go_r, p_go_w, t_ready_r, t_ready_w,
+                   out_r, out_w, err_r, err_w):
             _close_safely(fd)
+        p_go_r = p_go_w = t_ready_r = t_ready_w = -1
+        out_r = out_w = err_r = err_w = -1
 
     try:
         # ----- Fork the target -----
@@ -489,7 +494,9 @@ def run_landlock_audit(
         # Wait for tracer to signal ready (or die).
         ready = b""
         try:
-            ready = os.read(t_ready_r, 1)
+            rlist, _, _ = select.select([t_ready_r], [], [], _TRACER_READY_TIMEOUT_S)
+            if rlist:
+                ready = os.read(t_ready_r, 1)
         finally:
             _close_safely(t_ready_r)
             t_ready_r = -1
@@ -499,9 +506,10 @@ def run_landlock_audit(
             tracer_status = None
             try:
                 _, tracer_status = os.waitpid(tracer_pid, 0)
-                tracer_pid = -1
             except (ChildProcessError, OSError):
                 pass
+            finally:
+                tracer_pid = -1
             try:
                 _kill_and_reap(target_pid)
                 target_pid = -1
@@ -527,23 +535,28 @@ def run_landlock_audit(
             _close_safely(p_go_w)
             p_go_w = -1
 
-        # Drain stdio capture pipes while waiting for target exit.
-        # Simple sequential read since we don't expect huge stderr
-        # interleaved with stdout in the cc_profile / probe use
-        # cases. If a downstream consumer ever pumps GBs through
-        # stdout, switch to selectors.
+        # Drain both stdio pipes concurrently to avoid deadlock when
+        # the child fills one pipe buffer while we block reading the other.
         stdout_bytes = stderr_bytes = b""
         if capture_output:
-            try:
-                stdout_bytes = _read_to_eof(out_r)
-            finally:
-                _close_safely(out_r)
-                out_r = -1
-            try:
-                stderr_bytes = _read_to_eof(err_r)
-            finally:
-                _close_safely(err_r)
-                err_r = -1
+            bufs = {out_r: [], err_r: []}
+            fds_open = {out_r, err_r}
+            while fds_open:
+                ready, _, _ = select.select(list(fds_open), [], [], 30.0)
+                if not ready:
+                    break
+                for fd in ready:
+                    chunk = os.read(fd, 65536)
+                    if chunk:
+                        bufs[fd].append(chunk)
+                    else:
+                        fds_open.discard(fd)
+            stdout_bytes = b"".join(bufs[out_r])
+            stderr_bytes = b"".join(bufs[err_r])
+            _close_safely(out_r)
+            out_r = -1
+            _close_safely(err_r)
+            err_r = -1
 
         # waitpid the target.
         target_rc = -1
@@ -554,6 +567,7 @@ def run_landlock_audit(
                 try:
                     done, status = os.waitpid(target_pid, os.WNOHANG)
                 except (ChildProcessError, OSError):
+                    target_pid = -1
                     target_rc = -1
                     break
                 if done != 0:
@@ -584,22 +598,24 @@ def run_landlock_audit(
         else:
             try:
                 _, status = os.waitpid(target_pid, 0)
-                target_pid = -1
                 if os.WIFEXITED(status):
                     target_rc = os.WEXITSTATUS(status)
                 elif os.WIFSIGNALED(status):
                     target_rc = -os.WTERMSIG(status)
             except (ChildProcessError, OSError):
                 pass
+            finally:
+                target_pid = -1
 
         # Reap the tracer (PTRACE_O_EXITKILL means it exits when
         # the target's pid leaves; should be fast).
         if tracer_pid > 0:
             try:
                 os.waitpid(tracer_pid, 0)
-                tracer_pid = -1
             except (ChildProcessError, OSError):
                 pass
+            finally:
+                tracer_pid = -1
 
         # Marshal output to the requested type.
         if text:

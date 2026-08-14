@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:54:59Z",
+    "fetched_at": "2026-08-01T08:27:39Z",
     "git_ref": "3.1.9",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nodatime-3.1",
@@ -14,12 +14,16 @@
         "aliases": [
           "CVE-2026-44788"
         ],
-        "fixed_versions": [],
+        "fixed_versions": [
+          "0.48.0"
+        ],
         "id": "GHSA-6c8g-7p36-r338",
-        "modified": "2026-05-09T00:01:26.723108+00:00",
+        "modified": "2026-07-21T20:15:26.449621+00:00",
         "published": "2026-05-08T23:50:40+00:00",
         "references": [
           "https://github.com/adamhathcock/sharpcompress/security/advisories/GHSA-6c8g-7p36-r338",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-44788",
+          "https://github.com/adamhathcock/sharpcompress/commit/2021a06626d0555a4d69471386e763ca5f5d5dfb",
           "https://github.com/adamhathcock/sharpcompress"
         ],
         "severity": {

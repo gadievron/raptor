@@ -311,7 +311,7 @@ class ProjectManager:
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         save_json(project_file, project.to_dict())
-        logger.info(f"Created project '{name}' → {output_dir}")
+        logger.info("Created project '%s' → %s", name, output_dir)
         return project
 
     def load(self, name: str) -> Optional[Project]:
@@ -371,8 +371,11 @@ class ProjectManager:
                     f"expected base {expected_base}. Use --no-purge or "
                     f"clean the directory by hand."
                 ) from None
-            shutil.rmtree(project.output_path)
-            logger.info(f"Deleted output directory: {project.output_dir}")
+            try:
+                shutil.rmtree(project.output_path)
+            except FileNotFoundError:
+                pass
+            logger.info("Deleted output directory: %s", project.output_dir)
 
         project_file = self.projects_dir / f"{name}.json"
         project_file.unlink(missing_ok=True)
@@ -380,9 +383,9 @@ class ProjectManager:
         # Clear .active symlink if it pointed to this project
         active_link = self.projects_dir / ".active"
         if active_link.is_symlink() and os.readlink(active_link) == f"{name}.json":
-            active_link.unlink()
+            active_link.unlink(missing_ok=True)
 
-        logger.info(f"Deleted project '{name}'")
+        logger.info("Deleted project '%s'", name)
 
     def rename(self, old_name: str, new_name: str) -> Project:
         """Rename a project."""
@@ -433,7 +436,7 @@ class ProjectManager:
         if active_link.is_symlink() and os.readlink(active_link) == f"{old_name}.json":
             self.set_active(new_name)
 
-        logger.info(f"Renamed project '{old_name}' → '{new_name}'")
+        logger.info("Renamed project '%s' → '%s'", old_name, new_name)
         return project
 
     def update_notes(self, name: str, notes: str) -> Project:
@@ -490,9 +493,12 @@ class ProjectManager:
         if is_run_directory(src, strict=False):
             # Single run directory
             dest = dest_base / src.name
-            if dest.exists():
+            try:
+                dest.mkdir()
+            except FileExistsError:
                 skipped = 1
             else:
+                dest.rmdir()
                 shutil.move(str(src), str(dest))
                 generate_run_metadata(dest)
                 added = 1
@@ -501,17 +507,20 @@ class ProjectManager:
             for child in sorted(src.iterdir()):
                 if child.is_dir() and is_run_directory(child, strict=False):
                     dest = dest_base / child.name
-                    if dest.exists():
+                    try:
+                        dest.mkdir()
+                    except FileExistsError:
                         skipped += 1
                     else:
+                        dest.rmdir()
                         shutil.move(str(child), str(dest))
                         generate_run_metadata(dest)
                         added += 1
 
         if added:
-            logger.info(f"Added {added} run(s) to project '{name}'")
+            logger.info("Added %d run(s) to project '%s'", added, name)
         if skipped:
-            logger.info(f"Skipped {skipped} run(s) already in project '{name}'")
+            logger.info("Skipped %d run(s) already in project '%s'", skipped, name)
         return added
 
     def remove_run(self, name: str, run_name: str, to_path: str = None) -> None:
@@ -533,7 +542,7 @@ class ProjectManager:
         dest = Path(to_path)
         dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(run_dir), str(dest / run_name))
-        logger.info(f"Moved '{run_name}' to {to_path}")
+        logger.info("Moved '%s' to %s", run_name, to_path)
 
     def set_active(self, name: str = None) -> None:
         """Set the active project symlink. Pass None to clear.

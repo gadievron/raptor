@@ -97,8 +97,7 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
+    shutil.rmtree(src, ignore_errors=True)
     logger.info("zlib: cloning %s → %s", ZLIB_URL, src)
     if not clone_repository(ZLIB_URL, src, depth=1):
         raise RuntimeError(f"zlib: clone failed for {ZLIB_URL}")
@@ -120,8 +119,7 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        if build_dir.exists():
-            shutil.rmtree(build_dir)
+        shutil.rmtree(build_dir, ignore_errors=True)
         build_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["cp", "-a", f"{src}/.", str(build_dir)],

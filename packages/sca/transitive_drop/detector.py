@@ -366,13 +366,7 @@ def _dep_state_pypi(
         client, parent_name, parent_version,
     )
     if requires_dist is None:
-        meta = client.get_metadata(parent_name)
-        if not isinstance(meta, dict):
-            return None
-        info = meta.get("info") or {}
-        requires_dist = info.get("requires_dist") or []
-        if not isinstance(requires_dist, list):
-            return None
+        return None
 
     transitive_canon = transitive_name.lower().replace("_", "-")
     extras: List[str] = []
@@ -429,6 +423,8 @@ def _dep_state_npm(
     if not isinstance(meta, dict):
         return None
     versions = meta.get("versions") or {}
+    if not isinstance(versions, dict):
+        return None
     pkg_meta = versions.get(parent_version)
     if not isinstance(pkg_meta, dict):
         return None
@@ -519,6 +515,8 @@ def _dep_state_composer(
         return None
     # Packagist /p2 returns ``{packages: {<name>: [{version, ...}, ...]}}``
     packages = meta.get("packages") or {}
+    if not isinstance(packages, dict):
+        return None
     versions = packages.get(parent_name) or []
     pkg_meta = None
     for v in versions:
@@ -571,6 +569,8 @@ def _dep_state_rubygems(
     if not isinstance(meta, dict):
         return None
     deps = meta.get("dependencies") or {}
+    if not isinstance(deps, dict):
+        return None
     transitive_canon = transitive_name.lower()
     extras: List[str] = []
     unconditional = False
@@ -604,7 +604,7 @@ def _dep_state_maven(
     if not hasattr(client, "get_pom"):
         return None
     pom = client.get_pom(parent_name, parent_version)
-    if not pom:
+    if not isinstance(pom, dict):
         return None
     transitive_canon = transitive_name.strip()  # case-sensitive
     extras: List[str] = []

@@ -447,7 +447,12 @@ def run_sandboxed(cmd: List[str], *,
     #     We hold death_w for the whole synchronous run, so EOF (=> teardown)
     #     fires only when this process actually dies — never on a healthy run.
     status_r, status_w = os.pipe()
-    death_r, death_w = os.pipe()
+    try:
+        death_r, death_w = os.pipe()
+    except OSError:
+        os.close(status_r)
+        os.close(status_w)
+        raise
     child_env["_RAPTOR_STATUS_FD"] = str(status_w)
     child_env["_RAPTOR_DEATH_FD"] = str(death_r)
     # The seatbelt shim is RAPTOR's own dispatch helper and refuses to run

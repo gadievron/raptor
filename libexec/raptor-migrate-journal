@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""raptor-migrate-journal — one-shot legacy → review-journal migration.
+
+Consolidates three pre-migration sources of LLM review state into
+``<project>/review-journal-index.json``:
+
+1. ``<run>/coverage-audit.json`` — per-run history from before Phase 3
+   completion. May not survive ``/project clean`` — imported where
+   present.
+2. LLM-source annotations in ``<project>/annotations/`` — project-
+   durable. Pre-migration LLM writers stamped these; humans still
+   write them, but any ``source=llm`` entries are legacy artefacts.
+3. ``checked_by=[audit|agentic]`` entries on ``<project>/checklist.json``
+   — project-durable. Pre-migration ``mark_checked`` stamped these.
+
+Migrated entries carry ``legacy=true`` on the journal record so
+downstream consumers can filter forensic history from live reviews.
+
+Idempotent: re-running merges into the existing index without
+duplication (strict-monotone ``ts`` ensures no double-count).
+
+Usage:
+    libexec/raptor-migrate-journal <project>
+    libexec/raptor-migrate-journal <project> --skip-and-mark-inert
+
+The second form is an escape hatch that writes an empty
+``review-journal-index.json`` + a marker file
+``<project>/.legacy-audit-abandoned`` so subsequent ``/audit`` runs
+don't re-prompt.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+import core.startup.process_init  # noqa: E402,F401
+
+from core.coverage.journal import (  # noqa: E402
+    INDEX_FILENAME, ReviewJournalEntry, _flock, _load_index,
+    _write_index, now_iso,
+)
+
+
+_META_STATUS_RE = re.compile(r"status=(\S+)")
+_META_SOURCE_RE = re.compile(r"source=(\S+)")
+_META_LINES_RE = re.compile(r"lines=(\d+)-(\d+)")
+
+
+def _iter_run_coverage_audit(project_dir: Path) -> Iterable[Dict[str, Any]]:
+    """Yield (run_id, entry_dict) per legacy coverage-audit.json record."""
+    for run_dir in sorted(project_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        path = run_dir / "coverage-audit.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        # Two historical shapes: ``functions_analysed: [...]`` (list)
+        # and ``files: {path: {functions: {name: {status, hash}}}}``
+        # (nested dict). Handle both.
+        for fn in data.get("functions_analysed", []) or []:
+            yield run_dir.name, fn
+        for file_path, fe in (data.get("files") or {}).items():
+            for name, meta in (fe.get("functions") or {}).items():
+                if isinstance(meta, dict):
+                    yield run_dir.name, {
+                        "file": file_path,
+                        "function": name,
+                        "status": meta.get("status"),
+                        "hash": meta.get("hash"),
+                    }
+
+
+def _iter_annotation_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
+    """Yield entry dicts from source=llm annotation files."""
+    ann_dir = project_dir / "annotations"
+    if not ann_dir.is_dir():
+        return
+    for ann_path in ann_dir.rglob("*.md"):
+        rel = ann_path.relative_to(ann_dir)
+        source_file = str(rel).removesuffix(".md")
+        try:
+            text = ann_path.read_text(errors="replace")
+        except OSError:
+            continue
+        current_func: Optional[str] = None
+        current_status: Optional[str] = None
+        current_source: Optional[str] = None
+        current_hash: Optional[str] = None
+        for line in text.splitlines():
+            if line.startswith("## ") and not line.startswith("## _"):
+                if current_func and current_source == "llm" and current_status:
+                    yield {
+                        "file": source_file,
+                        "function": current_func,
+                        "status": current_status,
+                        "hash": current_hash,
+                        "ts": datetime.fromtimestamp(
+                            ann_path.stat().st_mtime, tz=timezone.utc,
+                        ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                    }
+                current_func = line[3:].strip()
+                current_status = None
+                current_source = None
+                current_hash = None
+            elif current_func and line.startswith("<!-- meta:"):
+                sm = _META_STATUS_RE.search(line)
+                if sm:
+                    current_status = sm.group(1)
+                src = _META_SOURCE_RE.search(line)
+                if src:
+                    current_source = src.group(1)
+        if current_func and current_source == "llm" and current_status:
+            yield {
+                "file": source_file,
+                "function": current_func,
+                "status": current_status,
+                "hash": current_hash,
+                "ts": datetime.fromtimestamp(
+                    ann_path.stat().st_mtime, tz=timezone.utc,
+                ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            }
+
+
+def _iter_checked_by_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
+    """Yield entry dicts from checklist ``checked_by`` labels."""
+    path = project_dir / "checklist.json"
+    if not path.is_file():
+        return
+    try:
+        checklist = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    for fe in checklist.get("files", []):
+        file_path = fe.get("path")
+        if not file_path:
+            continue
+        for item in fe.get("items", fe.get("functions", [])) or []:
+            checked_by = item.get("checked_by") or []
+            if not any(t in ("audit", "agentic")
+                       or t.startswith("audit:") or t.startswith("agentic:")
+                       for t in checked_by):
+                continue
+            yield {
+                "file": file_path,
+                "function": item.get("name", ""),
+                "status": "reviewed",
+                "hash": None,
+                "line_start": item.get("line_start", 0),
+                "line_end": item.get("line_end"),
+                "checked_by": checked_by,
+            }
+
+
+def _to_journal_entry(record: Dict[str, Any], run_id: str = "") -> ReviewJournalEntry:
+    """Build a ``legacy=true`` journal entry from a legacy record."""
+    return ReviewJournalEntry(
+        ts=record.get("ts") or now_iso(),
+        run_id=run_id or "legacy-migration",
+        file=record.get("file", ""),
+        function=record.get("function", ""),
+        verdict=record.get("status", "reviewed"),
+        source_hash=record.get("hash", "") or "",
+        line_start=record.get("line_start", 0),
+        line_end=record.get("line_end"),
+    )
+
+
+def _mark_inert(project_dir: Path) -> None:
+    """Write empty index + abandonment marker."""
+    index_path = project_dir / INDEX_FILENAME
+    with _flock(index_path):
+        _write_index(index_path, {})
+    marker = project_dir / ".legacy-audit-abandoned"
+    marker.write_text(
+        f"legacy /audit state abandoned via "
+        f"raptor-migrate-journal --skip-and-mark-inert on "
+        f"{now_iso()}\n"
+    )
+    print(f"wrote empty index + marker at {marker}", file=sys.stderr)
+
+
+def _migrate(project_dir: Path) -> int:
+    """Consolidate legacy sources into the project journal index.
+
+    Returns the number of entries added or updated.
+    """
+    index_path = project_dir / INDEX_FILENAME
+    added = 0
+
+    # Collect all legacy entries as raw dicts, tagged by source.
+    legacy_entries: List[tuple[str, Dict[str, Any]]] = []
+    for run_id, rec in _iter_run_coverage_audit(project_dir):
+        legacy_entries.append((run_id, rec))
+    for rec in _iter_annotation_entries(project_dir):
+        legacy_entries.append(("annotation", rec))
+    for rec in _iter_checked_by_entries(project_dir):
+        legacy_entries.append(("checked_by", rec))
+
+    if not legacy_entries:
+        print("no legacy /audit state found — nothing to migrate",
+              file=sys.stderr)
+        return 0
+
+    with _flock(index_path):
+        index = _load_index(index_path)
+        for source, rec in legacy_entries:
+            entry = _to_journal_entry(rec, run_id=source)
+            key = entry.key
+            existing = index.get(key)
+            new_dict = entry.to_dict()
+            new_dict["legacy"] = True
+            if existing is None or entry.ts > existing.get("ts", ""):
+                index[key] = new_dict
+                added += 1
+        _write_index(index_path, index)
+    return added
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="raptor-migrate-journal")
+    parser.add_argument("project", type=Path,
+                        help="Project directory to migrate")
+    parser.add_argument(
+        "--skip-and-mark-inert", action="store_true",
+        help="Write empty index + marker instead of migrating. "
+             "Use when legacy state is not worth preserving.",
+    )
+    args = parser.parse_args()
+
+    project_dir = args.project.resolve()
+    if not project_dir.is_dir():
+        print(f"error: {project_dir} is not a directory", file=sys.stderr)
+        return 2
+
+    if args.skip_and_mark_inert:
+        _mark_inert(project_dir)
+        return 0
+
+    added = _migrate(project_dir)
+    print(
+        f"migration: {added} entries added / updated in "
+        f"{project_dir / INDEX_FILENAME}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -117,9 +117,9 @@ class LibFuzzerRunner:
         self.crashes_dir = self.output_dir / "crashes"
         self.crashes_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"libFuzzer runner: harness={self.harness}")
-        logger.info(f"  corpus: {self.corpus_dir}")
-        logger.info(f"  output: {self.output_dir}")
+        logger.info("libFuzzer runner: harness=%s", self.harness)
+        logger.info("  corpus: %s", self.corpus_dir)
+        logger.info("  output: %s", self.output_dir)
 
     @staticmethod
     def _seed_working_corpus(source: Path, destination: Path) -> None:
@@ -139,7 +139,7 @@ class LibFuzzerRunner:
         event stream after the sandboxed campaign exits.
         """
         cmd = self._build_command()
-        logger.info(f"libFuzzer command: {' '.join(cmd)}")
+        logger.info("libFuzzer command: %s", ' '.join(cmd))
 
         env = RaptorConfig.get_safe_env()
         env.setdefault(

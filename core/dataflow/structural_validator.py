@@ -391,7 +391,7 @@ def validate_structurally(
             continue
 
         line_count = content.count("\n") + 1
-        if line > line_count:
+        if line < 1 or line > line_count:
             verifications.append(StepVerification(
                 step_index=i, file=file_path_str, line=line,
                 function=None, exists=False,

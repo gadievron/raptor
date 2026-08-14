@@ -184,9 +184,9 @@ class MultiTurnAnalyser:
                     "response": validation,
                 })
 
-        logger.info(f"Final analysis confidence: {analysis_result['confidence']:.2f}")
-        logger.info(f"Vulnerability type: {analysis_result['vulnerability_type']}")
-        logger.info(f"Exploitability: {analysis_result['exploitability']}")
+        logger.info("Final analysis confidence: %.2f", analysis_result['confidence'])
+        logger.info("Vulnerability type: %s", analysis_result['vulnerability_type'])
+        logger.info("Exploitability: %s", analysis_result['exploitability'])
 
         # Record dialogue
         self.dialogue_history.append(messages)
@@ -217,7 +217,7 @@ class MultiTurnAnalyser:
         current_code = exploit_code
 
         for iteration in range(1, max_iterations + 1):
-            logger.info(f"Iteration {iteration}: Refining exploit")
+            logger.info("Iteration %s: Refining exploit", iteration)
 
             # Build refinement prompt
             refine_bundle = self._build_refinement_prompt(
@@ -237,7 +237,7 @@ class MultiTurnAnalyser:
             # Extract code from response
             refined_code = self._extract_code_from_response(response)
             if not refined_code:
-                logger.warning(f"Iteration {iteration}: Failed to extract code from response")
+                logger.warning("Iteration %s: Failed to extract code from response", iteration)
                 continue
 
             current_code = refined_code
@@ -245,11 +245,11 @@ class MultiTurnAnalyser:
             # Validate refined code
             new_errors = self._quick_validate_code(refined_code)
             if not new_errors:
-                logger.info(f"Iteration {iteration}: Refinement successful!")
+                logger.info("Iteration %s: Refinement successful!", iteration)
                 self.dialogue_history.append(messages)
                 return refined_code
 
-            logger.info(f"Iteration {iteration}: Still has {len(new_errors)} errors")
+            logger.info("Iteration %s: Still has %d errors", iteration, len(new_errors))
             validation_errors = new_errors
 
         logger.warning("Max iterations reached without successful refinement")
@@ -272,7 +272,7 @@ class MultiTurnAnalyser:
         Returns:
             LLM's response
         """
-        logger.info(f"Strategic question: {question}")
+        logger.info("Strategic question: %s", question)
 
         system = (
             "You are an expert fuzzing strategist helping make autonomous decisions.\n\n"
@@ -313,7 +313,7 @@ class MultiTurnAnalyser:
             task_type=TaskType.AGENT_LOOP,
         )
         response = llm_response.content
-        logger.info(f"LLM recommendation: {response[:200]}...")
+        logger.info("LLM recommendation: %s...", response[:200])
 
         return response
 

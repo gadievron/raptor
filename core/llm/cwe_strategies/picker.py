@@ -21,7 +21,7 @@ Five signal dimensions, in roughly descending strength:
      functions the target calls. The strongest mechanical signal
      — a function calling ``mutex_lock`` IS concurrency-relevant
      regardless of path or name.
-  3. ``includes`` — substring match on the function's headers.
+  3. ``includes`` — exact match on the function's header includes.
   4. ``paths`` — substring match on the file path.
   5. ``function_keywords`` — token match against components of the
      function name. Token semantics (split on ``_``/``-``) prevent

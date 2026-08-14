@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:53:48Z",
+    "fetched_at": "2026-08-01T08:26:50Z",
     "git_ref": "jansa-1",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of manageiq-jansa",
@@ -36,7 +36,7 @@
       "dep_name": "actionmailer",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00944,
+      "epss": 0.00937,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -47,7 +47,7 @@
       "finding_id": "sca:vuln:RubyGems:actionmailer:5.2.4.3:GHSA-h47h-mwp9-c6q6",
       "in_kev": false,
       "purl": "pkg:gem/actionmailer@5.2.4.3",
-      "raptor_risk_estimate": 3.464384341845857,
+      "raptor_risk_estimate": 3.464078115673658,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -62,10 +62,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404117232,
+        "epss_multiplier": 0.404081511,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.464384341845857,
+        "final": 3.464078115673658,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -388,7 +388,7 @@
       "dep_name": "actionpack",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01594,
+      "epss": 0.01701,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -399,7 +399,7 @@
       "finding_id": "sca:vuln:RubyGems:actionpack:5.2.4.3:GHSA-mm33-5vfq-3mm3",
       "in_kev": false,
       "purl": "pkg:gem/actionpack@5.2.4.3",
-      "raptor_risk_estimate": 5.32654993462813,
+      "raptor_risk_estimate": 5.333688285435073,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -414,10 +414,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407434182,
+        "epss_multiplier": 0.407980203,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.32654993462813,
+        "final": 5.333688285435073,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -522,7 +522,7 @@
       "dep_name": "actionpack",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01048,
+      "epss": 0.01041,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -533,7 +533,7 @@
       "finding_id": "sca:vuln:RubyGems:actionpack:5.2.4.3:GHSA-vfg9-r3fq-jvx4",
       "in_kev": false,
       "purl": "pkg:gem/actionpack@5.2.4.3",
-      "raptor_risk_estimate": 3.468933987832815,
+      "raptor_risk_estimate": 3.468627761660616,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -548,10 +548,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404647944,
+        "epss_multiplier": 0.404612223,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.468933987832815,
+        "final": 3.468627761660616,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -591,7 +591,7 @@
       "dep_name": "actionpack",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00989,
+      "epss": 0.01009,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -602,7 +602,7 @@
       "finding_id": "sca:vuln:RubyGems:actionpack:5.2.4.3:GHSA-vfm5-rmrh-j26v",
       "in_kev": false,
       "purl": "pkg:gem/actionpack@5.2.4.3",
-      "raptor_risk_estimate": 3.4663529386671366,
+      "raptor_risk_estimate": 3.4672278705877053,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -617,10 +617,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404346867,
+        "epss_multiplier": 0.404448927,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4663529386671366,
+        "final": 3.4672278705877053,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -663,7 +663,7 @@
       "dep_name": "actionpack",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.02207,
+      "epss": 0.02226,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -674,7 +674,7 @@
       "finding_id": "sca:vuln:RubyGems:actionpack:5.2.4.3:GHSA-wh98-p28r-vrc9",
       "in_kev": false,
       "purl": "pkg:gem/actionpack@5.2.4.3",
-      "raptor_risk_estimate": 6.51132714136511,
+      "raptor_risk_estimate": 6.5128648342155095,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -689,10 +689,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.410562321,
+        "epss_multiplier": 0.41065927799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.51132714136511,
+        "final": 6.5128648342155095,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -732,7 +732,7 @@
       "dep_name": "actionpack",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01103,
+      "epss": 0.01095,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -743,7 +743,7 @@
       "finding_id": "sca:vuln:RubyGems:actionpack:5.2.4.3:GHSA-x76w-6vjr-8xgj",
       "in_kev": false,
       "purl": "pkg:gem/actionpack@5.2.4.3",
-      "raptor_risk_estimate": 3.47134005061438,
+      "raptor_risk_estimate": 3.470990077846152,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -758,10 +758,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404928609,
+        "epss_multiplier": 0.404887785,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.47134005061438,
+        "final": 3.470990077846152,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -874,7 +874,7 @@
       "dep_name": "actionview",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01485,
+      "epss": 0.01585,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -885,7 +885,7 @@
       "finding_id": "sca:vuln:RubyGems:actionview:5.2.4.3:GHSA-ch3h-j2vf-95pv",
       "in_kev": false,
       "purl": "pkg:gem/actionview@5.2.4.3",
-      "raptor_risk_estimate": 5.319278156703303,
+      "raptor_risk_estimate": 5.325949512597642,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -900,10 +900,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.406877955,
+        "epss_multiplier": 0.407388255,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.319278156703303,
+        "final": 5.325949512597642,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1011,7 +1011,7 @@
       "dep_name": "actionview",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00632,
+      "epss": 0.00643,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1022,7 +1022,7 @@
       "finding_id": "sca:vuln:RubyGems:actionview:5.2.4.3:GHSA-xp5h-f8jf-rc8q",
       "in_kev": false,
       "purl": "pkg:gem/actionview@5.2.4.3",
-      "raptor_risk_estimate": 5.434908261118843,
+      "raptor_risk_estimate": 5.435666170895036,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1037,10 +1037,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40252509599999997,
+        "epss_multiplier": 0.402581229,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.434908261118843,
+        "final": 5.435666170895036,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1132,7 +1132,7 @@
           "5.2.8.1"
         ],
         "id": "GHSA-3hhc-qp5v-9p2j",
-        "modified": "2026-05-11T18:49:52.650609+00:00",
+        "modified": "2026-07-08T06:29:07.745701+00:00",
         "published": "2022-07-12T19:39:47+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-32224",
@@ -1291,7 +1291,7 @@
       "dep_name": "activerecord",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00527,
+      "epss": 0.00565,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1302,7 +1302,7 @@
       "finding_id": "sca:vuln:RubyGems:activerecord:5.2.4.3:GHSA-76r7-hhxj-r776",
       "in_kev": false,
       "purl": "pkg:gem/activerecord@5.2.4.3",
-      "raptor_risk_estimate": 3.4461420113019927,
+      "raptor_risk_estimate": 3.4478043819510735,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1317,10 +1317,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401989281,
+        "epss_multiplier": 0.402183195,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4461420113019927,
+        "final": 3.4478043819510735,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1500,7 +1500,7 @@
       "dep_name": "activestorage",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01119,
+      "epss": 0.01129,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1511,7 +1511,7 @@
       "finding_id": "sca:vuln:RubyGems:activestorage:5.2.4.3:GHSA-8h22-8cf7-hq6g",
       "in_kev": false,
       "purl": "pkg:gem/activestorage@5.2.4.3",
-      "raptor_risk_estimate": 4.600452994899856,
+      "raptor_risk_estimate": 4.601032637297233,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1526,10 +1526,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.405010257,
+        "epss_multiplier": 0.405061287,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.600452994899856,
+        "final": 4.601032637297233,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1912,7 +1912,7 @@
       "dep_name": "activestorage",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.02742,
+      "epss": 0.02925,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1923,7 +1923,7 @@
       "finding_id": "sca:vuln:RubyGems:activestorage:5.2.4.3:GHSA-w749-p3v6-hccq",
       "in_kev": false,
       "purl": "pkg:gem/activestorage@5.2.4.3",
-      "raptor_risk_estimate": 8.680449767687273,
+      "raptor_risk_estimate": 8.70006355401663,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1938,10 +1938,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.413292426,
+        "epss_multiplier": 0.414226275,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.680449767687273,
+        "final": 8.70006355401663,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1949,6 +1949,73 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-66066"
+        ],
+        "fixed_versions": [
+          "7.2.3.2",
+          "8.0.5.1",
+          "8.1.3.1"
+        ],
+        "id": "GHSA-xr9x-r78c-5hrm",
+        "modified": "2026-07-31T21:29:54.350062+00:00",
+        "published": "2026-07-30T18:23:33+00:00",
+        "references": [
+          "https://github.com/rails/rails/security/advisories/GHSA-xr9x-r78c-5hrm",
+          "https://github.com/rails/rails/commit/1c01bb587206ee6eb0e1179c2cef96a6a47acb1e",
+          "https://github.com/rails/rails/commit/349e7a5d5b4b715af1e416db824f3c078a7d59e5",
+          "https://github.com/rails/rails/commit/d79b7f4aa17dec8ce4960fef05733c8c0c7ef49a",
+          "https://github.com/rails/rails"
+        ],
+        "severity": null,
+        "summary": "Active Storage has possible arbitrary file read and remote code execution in Active Storage variant processing"
+      },
+      "cvss_score": null,
+      "dep_name": "activestorage",
+      "dep_version": "5.2.4.3",
+      "ecosystem": "RubyGems",
+      "epss": 0.01701,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:activestorage:5.2.4.3:GHSA-xr9x-r78c-5hrm",
+      "in_kev": false,
+      "purl": "pkg:gem/activestorage@5.2.4.3",
+      "raptor_risk_estimate": 3.4975005150393925,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'activestorage'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.407980203,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.4975005150393925,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -2319,7 +2386,7 @@
       "dep_name": "activesupport",
       "dep_version": "5.2.4.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00907,
+      "epss": 0.00923,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2330,7 +2397,7 @@
       "finding_id": "sca:vuln:RubyGems:activesupport:5.2.4.3:GHSA-pj73-v5mw-pm9j",
       "in_kev": false,
       "purl": "pkg:gem/activesupport@5.2.4.3",
-      "raptor_risk_estimate": 4.588164576075465,
+      "raptor_risk_estimate": 4.589092003911268,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2345,10 +2412,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403928421,
+        "epss_multiplier": 0.40401006899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.588164576075465,
+        "final": 4.589092003911268,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2436,7 +2503,7 @@
           "2.8.0"
         ],
         "id": "GHSA-jxhc-q857-3j6g",
-        "modified": "2026-04-06T23:16:29.686787+00:00",
+        "modified": "2026-07-08T06:30:05.313107+00:00",
         "published": "2021-07-12T16:58:33+00:00",
         "references": [
           "https://github.com/sporkmonger/addressable/security/advisories/GHSA-jxhc-q857-3j6g",
@@ -2525,7 +2592,7 @@
       "dep_name": "aws-sdk-s3",
       "dep_version": "1.77.0",
       "ecosystem": "RubyGems",
-      "epss": 0.00185,
+      "epss": 0.00192,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2536,7 +2603,7 @@
       "finding_id": "sca:vuln:RubyGems:aws-sdk-s3:1.77.0:GHSA-2xgq-q749-89fq",
       "in_kev": false,
       "purl": "pkg:gem/aws-sdk-s3@1.77.0",
-      "raptor_risk_estimate": 5.197169054174999,
+      "raptor_risk_estimate": 5.197632891359999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2554,10 +2621,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400244055,
+        "epss_multiplier": 0.400279776,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.197169054174999,
+        "final": 5.197632891359999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2644,7 +2711,7 @@
           "2.2.33"
         ],
         "id": "GHSA-fj7f-vq84-fh43",
-        "modified": "2026-03-13T22:00:54.526949+00:00",
+        "modified": "2026-07-08T06:28:08.542099+00:00",
         "published": "2021-12-08T19:51:36+00:00",
         "references": [
           "https://github.com/rubygems/rubygems/security/advisories/GHSA-fj7f-vq84-fh43",
@@ -2812,7 +2879,7 @@
       "dep_name": "bundler",
       "dep_version": "1.15",
       "ecosystem": "RubyGems",
-      "epss": 0.07541,
+      "epss": 0.08482,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2823,7 +2890,7 @@
       "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-jvgm-pfqv-887x",
       "in_kev": false,
       "purl": "pkg:gem/bundler@1.15",
-      "raptor_risk_estimate": 10.51113916923,
+      "raptor_risk_estimate": 10.62643334046,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2843,10 +2910,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.437781723,
+        "epss_multiplier": 0.442583646,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.51113916923,
+        "final": 10.62643334046,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2942,7 +3009,7 @@
       "dep_name": "concurrent-ruby",
       "dep_version": "1.1.7",
       "ecosystem": "RubyGems",
-      "epss": 0.00278,
+      "epss": 0.00317,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2953,7 +3020,7 @@
       "finding_id": "sca:vuln:RubyGems:concurrent-ruby:1.1.7:GHSA-h8w8-99g7-qmvj",
       "in_kev": false,
       "purl": "pkg:gem/concurrent-ruby@1.1.7",
-      "raptor_risk_estimate": 9.875517930612416,
+      "raptor_risk_estimate": 9.880422608821108,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2968,10 +3035,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40071863399999996,
+        "epss_multiplier": 0.400917651,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.875517930612416,
+        "final": 9.880422608821108,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2992,16 +3059,23 @@
           "1.3.7"
         ],
         "id": "GHSA-wv3x-4vxv-whpp",
-        "modified": "2026-06-21T00:59:19.509895+00:00",
+        "modified": "2026-07-20T13:45:33.618798+00:00",
         "published": "2026-06-19T20:47:38+00:00",
         "references": [
           "https://github.com/ruby-concurrency/concurrent-ruby/security/advisories/GHSA-wv3x-4vxv-whpp",
-          "https://github.com/ruby-concurrency/concurrent-ruby"
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-54905",
+          "https://github.com/ruby-concurrency/concurrent-ruby",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/concurrent-ruby/CVE-2026-54905.yml",
+          "https://www.cve.org/CVERecord/SearchResults?query=CVE-2026-54905"
         ],
-        "severity": null,
+        "severity": {
+          "score": 5.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+        },
         "summary": "Concurrent Ruby: `ReentrantReadWriteLock` read-count overflow grants a write lock without exclusivity"
       },
-      "cvss_score": null,
+      "cvss_score": 5.5,
       "dep_name": "concurrent-ruby",
       "dep_version": "1.1.7",
       "ecosystem": "RubyGems",
@@ -3028,8 +3102,8 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 55.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.399840918,
         "exploit_evidence_multiplier": 1.0,
@@ -3094,9 +3168,9 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "config/initializers/session_store.rb:18",
+          "app/models/miq_server/worker_management/monitor.rb:169",
           "app/models/miq_worker/runner.rb:322",
-          "app/models/miq_server/worker_management/monitor.rb:169"
+          "config/initializers/session_store.rb:18"
         ],
         "verdict": "imported"
       },
@@ -3117,6 +3191,75 @@
         "version_match_confidence": 0.7
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54171"
+        ],
+        "fixed_versions": [
+          "1.5.0"
+        ],
+        "id": "GHSA-48rx-c7pg-q66r",
+        "modified": "2026-07-24T21:14:43.801933+00:00",
+        "published": "2026-07-10T20:37:29+00:00",
+        "references": [
+          "https://github.com/excon/excon/security/advisories/GHSA-48rx-c7pg-q66r",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-54171",
+          "https://github.com/excon/excon/pull/901",
+          "https://github.com/excon/excon/commit/ea89a35308a12f4b791b6c50f2cbd33f94889fa3",
+          "https://github.com/excon/excon"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Excon does not redact additional sensitive/risky headers when following redirects"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "excon",
+      "dep_version": "0.76.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.00304,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:excon:0.76.0:GHSA-48rx-c7pg-q66r",
+      "in_kev": false,
+      "purl": "pkg:gem/excon@0.76.0",
+      "raptor_risk_estimate": 5.584128095629929,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'excon'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400851312,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.584128095629929,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3332,7 +3475,7 @@
           "1.6.1"
         ],
         "id": "GHSA-5c5f-7vfq-3732",
-        "modified": "2026-02-04T03:03:21.769873+00:00",
+        "modified": "2026-07-08T17:45:15.204728+00:00",
         "published": "2022-06-07T00:00:31+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-32511",
@@ -3352,7 +3495,7 @@
       "dep_name": "jmespath",
       "dep_version": "1.4.0",
       "ecosystem": "RubyGems",
-      "epss": 0.02131,
+      "epss": 0.02273,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3363,7 +3506,7 @@
       "finding_id": "sca:vuln:RubyGems:jmespath:1.4.0:GHSA-5c5f-7vfq-3732",
       "in_kev": false,
       "purl": "pkg:gem/jmespath@1.4.0",
-      "raptor_risk_estimate": 8.614963300762485,
+      "raptor_risk_estimate": 8.630182741520782,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3378,10 +3521,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.410174493,
+        "epss_multiplier": 0.410899119,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.614963300762485,
+        "final": 8.630182741520782,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3422,7 +3565,7 @@
       "dep_name": "jwt",
       "dep_version": "1.5.6",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00242,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3433,7 +3576,7 @@
       "finding_id": "sca:vuln:RubyGems:jwt:1.5.6:GHSA-c32j-vqhx-rx3x",
       "in_kev": false,
       "purl": "pkg:gem/jwt@1.5.6",
-      "raptor_risk_estimate": 10.379272109742375,
+      "raptor_risk_estimate": 6.3522973281526856,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3448,10 +3591,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400534926,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.379272109742375,
+        "final": 6.3522973281526856,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3491,7 +3634,7 @@
       "dep_name": "kubeclient",
       "dep_version": "4.9.0",
       "ecosystem": "RubyGems",
-      "epss": 0.00905,
+      "epss": 0.00927,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3502,7 +3645,7 @@
       "finding_id": "sca:vuln:RubyGems:kubeclient:4.9.0:GHSA-69p3-xp37-f692",
       "in_kev": false,
       "purl": "pkg:gem/kubeclient@4.9.0",
-      "raptor_risk_estimate": 5.438610951104221,
+      "raptor_risk_estimate": 5.440122571710479,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3517,10 +3660,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40391821499999997,
+        "epss_multiplier": 0.404030481,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.438610951104221,
+        "final": 5.440122571710479,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -3741,6 +3884,72 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "2.25.2"
+        ],
+        "id": "GHSA-9wjq-cp2p-hrgf",
+        "modified": "2026-07-23T03:14:30.105106+00:00",
+        "published": "2026-07-21T22:01:58+00:00",
+        "references": [
+          "https://github.com/flavorjones/loofah/security/advisories/GHSA-9wjq-cp2p-hrgf",
+          "https://github.com/flavorjones/loofah/commit/20867b9be689521887364b74822c41ef830523c9",
+          "https://github.com/flavorjones/loofah",
+          "https://github.com/flavorjones/loofah/releases/tag/v2.25.2"
+        ],
+        "severity": {
+          "score": 4.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Loofah: SVG `href` attribute bypasses local-reference restriction"
+      },
+      "cvss_score": 4.7,
+      "dep_name": "loofah",
+      "dep_version": "2.6.0",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:loofah:2.6.0:GHSA-9wjq-cp2p-hrgf",
+      "in_kev": false,
+      "purl": "pkg:gem/loofah@2.6.0",
+      "raptor_risk_estimate": 6.592240394025561,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'loofah'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 47.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.592240394025561,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2021-3537"
         ],
@@ -3881,7 +4090,7 @@
           "1.12.5"
         ],
         "id": "GHSA-2rr5-8q37-2w7h",
-        "modified": "2026-03-13T22:14:27.475207+00:00",
+        "modified": "2026-07-08T06:28:52.471678+00:00",
         "published": "2021-09-27T20:12:47+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-2rr5-8q37-2w7h",
@@ -3901,7 +4110,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": 0.01583,
+      "epss": 0.0142,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3912,7 +4121,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-2rr5-8q37-2w7h",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 6.548134531327568,
+      "raptor_risk_estimate": 6.534764477916372,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3929,10 +4138,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40737804899999996,
+        "epss_multiplier": 0.40654626,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.548134531327568,
+        "final": 6.534764477916372,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4081,12 +4290,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57235"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-5prr-v3j2-97mh",
-        "modified": "2026-06-21T00:59:19.679931+00:00",
+        "modified": "2026-07-08T08:26:44.766889+00:00",
         "published": "2026-06-19T16:36:42+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-5prr-v3j2-97mh",
@@ -4099,7 +4310,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00341,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4110,7 +4321,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-5prr-v3j2-97mh",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.4380051444407003,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4127,10 +4338,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40104012299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.4380051444407003,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4143,12 +4354,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57236"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-5v8h-3h3q-446p",
-        "modified": "2026-06-21T03:59:17.924033+00:00",
+        "modified": "2026-07-08T08:27:00.360401+00:00",
         "published": "2026-06-19T16:35:58+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-5v8h-3h3q-446p",
@@ -4161,7 +4374,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00341,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4172,7 +4385,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-5v8h-3h3q-446p",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.4380051444407003,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4189,10 +4402,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40104012299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.4380051444407003,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4334,12 +4547,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57234"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-8678-w3jw-xfc2",
-        "modified": "2026-06-20T21:59:19.065214+00:00",
+        "modified": "2026-07-08T08:27:04.834739+00:00",
         "published": "2026-06-19T16:36:11+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-8678-w3jw-xfc2",
@@ -4356,7 +4571,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00166,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4367,7 +4582,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-8678-w3jw-xfc2",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 3.6467712818013744,
+      "raptor_risk_estimate": 2.2297271685882194,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4384,10 +4599,10 @@
         "cvss_base": 26.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400147098,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.6467712818013744,
+        "final": 2.2297271685882194,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4400,12 +4615,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57434"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-9cv2-cfxc-v4v2",
-        "modified": "2026-06-21T01:59:33.897972+00:00",
+        "modified": "2026-07-08T08:27:16.983005+00:00",
         "published": "2026-06-19T16:36:23+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-9cv2-cfxc-v4v2",
@@ -4418,7 +4635,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00358,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4429,7 +4646,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-9cv2-cfxc-v4v2",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.4387488365731844,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4446,10 +4663,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40112687399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.4387488365731844,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4826,7 +5043,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": 0.51733,
+      "epss": 0.52063,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4837,7 +5054,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-jc36-42cf-vqwj",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 21.75725690746071,
+      "raptor_risk_estimate": 21.81249490257876,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4854,10 +5071,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6632934989999999,
+        "epss_multiplier": 0.664977489,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 21.75725690746071,
+        "final": 21.81249490257876,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5011,12 +5228,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57437"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-p67v-3w7g-wjg7",
-        "modified": "2026-06-20T21:59:19.171261+00:00",
+        "modified": "2026-07-08T08:26:56.127788+00:00",
         "published": "2026-06-19T16:37:13+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-p67v-3w7g-wjg7",
@@ -5029,7 +5248,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00321,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5040,7 +5259,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-p67v-3w7g-wjg7",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.4371302125201324,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5057,10 +5276,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400938063,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.4371302125201324,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5073,12 +5292,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57435"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-phwj-rprq-35pp",
-        "modified": "2026-06-21T01:59:33.972596+00:00",
+        "modified": "2026-07-08T08:27:03.953113+00:00",
         "published": "2026-06-19T16:37:46+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-phwj-rprq-35pp",
@@ -5091,7 +5312,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00368,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5102,7 +5323,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-phwj-rprq-35pp",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.439186302533469,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5119,10 +5340,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.401177904,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.439186302533469,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5478,7 +5699,7 @@
           "1.11.0"
         ],
         "id": "GHSA-vr8q-g5c7-m54m",
-        "modified": "2026-03-13T22:14:17.657172+00:00",
+        "modified": "2026-07-08T05:59:36.466993+00:00",
         "published": "2020-12-30T18:35:06+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-vr8q-g5c7-m54m",
@@ -5605,12 +5826,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57438"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-wfpw-mmfh-qq69",
-        "modified": "2026-06-21T01:59:34.106167+00:00",
+        "modified": "2026-07-08T08:27:03.524442+00:00",
         "published": "2026-06-19T16:37:25+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-wfpw-mmfh-qq69",
@@ -5623,7 +5846,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00094,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5634,7 +5857,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-wfpw-mmfh-qq69",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.427199735221674,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5651,10 +5874,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.39977968199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.427199735221674,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5667,12 +5890,14 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-57436"
+        ],
         "fixed_versions": [
           "1.19.4"
         ],
         "id": "GHSA-wjv4-x9w8-wm3h",
-        "modified": "2026-06-21T01:59:34.550548+00:00",
+        "modified": "2026-07-08T08:27:17.612665+00:00",
         "published": "2026-06-19T16:36:59+00:00",
         "references": [
           "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-wjv4-x9w8-wm3h",
@@ -5685,7 +5910,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00321,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5696,7 +5921,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-wjv4-x9w8-wm3h",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 3.4371302125201324,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5713,10 +5938,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400938063,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 3.4371302125201324,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5888,7 +6113,7 @@
       "dep_name": "nokogiri",
       "dep_version": "1.10.10",
       "ecosystem": "RubyGems",
-      "epss": 0.02886,
+      "epss": 0.03078,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5899,7 +6124,7 @@
       "finding_id": "sca:vuln:RubyGems:nokogiri:1.10.10:GHSA-xh29-r2w5-wx8m",
       "in_kev": false,
       "purl": "pkg:gem/nokogiri@1.10.10",
-      "raptor_risk_estimate": 13.944786839784863,
+      "raptor_risk_estimate": 13.977786520860782,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5916,10 +6141,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.414027258,
+        "epss_multiplier": 0.415007034,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.944786839784863,
+        "final": 13.977786520860782,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6079,7 +6304,7 @@
           "4.3.9"
         ],
         "id": "GHSA-48w2-rm65-62xx",
-        "modified": "2026-03-13T22:15:20.589866+00:00",
+        "modified": "2026-07-08T06:28:18.680516+00:00",
         "published": "2021-10-12T17:53:00+00:00",
         "references": [
           "https://github.com/puma/puma/security/advisories/GHSA-48w2-rm65-62xx",
@@ -6429,7 +6654,7 @@
           "5.3.1"
         ],
         "id": "GHSA-q28m-8xjw-8vr5",
-        "modified": "2026-03-13T21:59:39.617877+00:00",
+        "modified": "2026-07-08T06:00:01.447117+00:00",
         "published": "2021-05-18T01:27:15+00:00",
         "references": [
           "https://github.com/puma/puma/security/advisories/GHSA-q28m-8xjw-8vr5",
@@ -6519,7 +6744,7 @@
       "dep_name": "puma",
       "dep_version": "4.3.5",
       "ecosystem": "RubyGems",
-      "epss": 0.02092,
+      "epss": 0.02124,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6530,7 +6755,7 @@
       "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-rmj8-8hhh-gv5h",
       "in_kev": false,
       "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 5.452019509940303,
+      "raptor_risk_estimate": 5.454191086119888,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6545,10 +6770,10 @@
         "cvss_base": 80.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.409975476,
+        "epss_multiplier": 0.410138772,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.452019509940303,
+        "final": 5.454191086119888,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -6951,7 +7176,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00591,
+      "epss": 0.00605,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6962,7 +7187,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-6xw4-3v39-52mm",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 9.531114478790624,
+      "raptor_risk_estimate": 9.532806984421873,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6979,10 +7204,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402315873,
+        "epss_multiplier": 0.40238731499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.531114478790624,
+        "final": 9.532806984421873,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7024,7 +7249,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01095,
+      "epss": 0.01142,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7035,7 +7260,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-7g2v-jj9q-g3rg",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 8.313105390646873,
+      "raptor_risk_estimate": 8.318029776078749,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7052,10 +7277,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404887785,
+        "epss_multiplier": 0.40512762599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.313105390646873,
+        "final": 8.318029776078749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7169,7 +7394,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01068,
+      "epss": 0.01084,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7180,7 +7405,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-7wqh-767x-r66v",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 9.588780563512499,
+      "raptor_risk_estimate": 9.590714855662497,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7197,10 +7422,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404750004,
+        "epss_multiplier": 0.404831652,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.588780563512499,
+        "final": 9.590714855662497,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7238,7 +7463,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00699,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7249,7 +7474,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-8cgq-6mh2-7j6v",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 5.090224507094999,
+      "raptor_risk_estimate": 5.092158799244999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7266,10 +7491,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402866997,
+        "epss_multiplier": 0.40302008699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.090224507094999,
+        "final": 5.092158799244999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7448,7 +7673,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.01063,
+      "epss": 0.01081,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7459,7 +7684,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-c6qg-cjj8-47qp",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 5.113693918515,
+      "raptor_risk_estimate": 5.114854493804999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7476,10 +7701,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40472448899999997,
+        "epss_multiplier": 0.40481634299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.113693918515,
+        "final": 5.114854493804999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7521,7 +7746,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00911,
+      "epss": 0.0098,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7532,7 +7757,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-gjh7-p2fx-99vx",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 9.569800321790623,
+      "raptor_risk_estimate": 9.578141956687498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7549,10 +7774,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403948833,
+        "epss_multiplier": 0.40430094,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.569800321790623,
+        "final": 9.578141956687498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7812,7 +8037,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00848,
+      "epss": 0.00868,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7823,7 +8048,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-p543-xpfm-54cp",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 9.562184046449998,
+      "raptor_risk_estimate": 9.5646019116375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7840,10 +8065,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403627344,
+        "epss_multiplier": 0.403729404,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.562184046449998,
+        "final": 9.5646019116375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8101,7 +8326,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.0044,
+      "epss": 0.00434,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8112,7 +8337,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-r657-rxjc-j557",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 7.356611421389998,
+      "raptor_risk_estimate": 7.356050476666498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8129,10 +8354,10 @@
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40154532,
+        "epss_multiplier": 0.401514702,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.356611421389998,
+        "final": 7.356050476666498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8386,7 +8611,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00193,
+      "epss": 0.00214,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8397,7 +8622,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-vpfw-47h7-xj4g",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 5.31047941847325,
+      "raptor_risk_estimate": 5.311901123203501,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8414,10 +8639,10 @@
         "cvss_base": 42.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400284879,
+        "epss_multiplier": 0.400392042,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.31047941847325,
+        "final": 5.311901123203501,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8459,7 +8684,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00516,
+      "epss": 0.00528,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8470,7 +8695,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-w9pc-fmgc-vxvw",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 9.522047484337499,
+      "raptor_risk_estimate": 9.523498203449998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8487,10 +8712,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40193314799999996,
+        "epss_multiplier": 0.401994384,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.522047484337499,
+        "final": 9.523498203449998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8605,7 +8830,7 @@
       "dep_name": "rack",
       "dep_version": "2.2.3",
       "ecosystem": "RubyGems",
-      "epss": 0.00848,
+      "epss": 0.00868,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8616,7 +8841,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:2.2.3:GHSA-wpv5-97wm-hp9c",
       "in_kev": false,
       "purl": "pkg:gem/rack@2.2.3",
-      "raptor_risk_estimate": 9.562184046449998,
+      "raptor_risk_estimate": 9.5646019116375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8633,10 +8858,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403627344,
+        "epss_multiplier": 0.403729404,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.562184046449998,
+        "final": 9.5646019116375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -9000,6 +9225,68 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.7.1"
+        ],
+        "id": "GHSA-cj75-f6xr-r4g7",
+        "modified": "2026-07-23T03:14:30.688722+00:00",
+        "published": "2026-07-21T22:05:28+00:00",
+        "references": [
+          "https://github.com/rails/rails-html-sanitizer/security/advisories/GHSA-cj75-f6xr-r4g7",
+          "https://github.com/rails/rails-html-sanitizer/commit/74dcb8053e6da9921246ce71b06ad9fd65b19586",
+          "https://github.com/rails/rails-html-sanitizer",
+          "https://github.com/rails/rails-html-sanitizer/releases/tag/v1.7.1"
+        ],
+        "severity": null,
+        "summary": "Rails HTML Sanitizers: Possible XSS vulnerability with certain configurations"
+      },
+      "cvss_score": null,
+      "dep_name": "rails-html-sanitizer",
+      "dep_version": "1.3.0",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:rails-html-sanitizer:1.3.0:GHSA-cj75-f6xr-r4g7",
+      "in_kev": false,
+      "purl": "pkg:gem/rails-html-sanitizer@1.3.0",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'rails-html-sanitizer'` found (also tried ['rails_html_sanitizer'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2022-23518"
         ],
@@ -9096,7 +9383,7 @@
       "dep_name": "rails-html-sanitizer",
       "dep_version": "1.3.0",
       "ecosystem": "RubyGems",
-      "epss": 0.2914,
+      "epss": 0.29353,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9107,7 +9394,7 @@
       "finding_id": "sca:vuln:RubyGems:rails-html-sanitizer:1.3.0:GHSA-pg8v-g4xq-hww9",
       "in_kev": false,
       "purl": "pkg:gem/rails-html-sanitizer@1.3.0",
-      "raptor_risk_estimate": 7.164241629282649,
+      "raptor_risk_estimate": 7.178451617337591,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9122,10 +9409,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.54800142,
+        "epss_multiplier": 0.549088359,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.164241629282649,
+        "final": 7.178451617337591,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9208,6 +9495,211 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-53510"
+        ],
+        "fixed_versions": [
+          "2.17.2"
+        ],
+        "id": "GHSA-mx5j-mp4f-g8jg",
+        "modified": "2026-07-31T19:45:20.500267+00:00",
+        "published": "2026-07-31T19:38:25+00:00",
+        "references": [
+          "https://github.com/savonrb/savon/security/advisories/GHSA-mx5j-mp4f-g8jg",
+          "https://github.com/savonrb/savon/commit/8f22eb543e7436f6247172c9be47e22792d375e9",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/savon/CVE-2026-53510.yml",
+          "https://github.com/savonrb/savon",
+          "https://github.com/savonrb/savon/releases/tag/v2.17.2"
+        ],
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Savon::Model evaluates WSDL operation names as Ruby source"
+      },
+      "cvss_score": 8.1,
+      "dep_name": "savon",
+      "dep_version": "2.11.2",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:savon:2.11.2:GHSA-mx5j-mp4f-g8jg",
+      "in_kev": false,
+      "purl": "pkg:gem/savon@2.11.2",
+      "raptor_risk_estimate": 11.361095147150438,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'savon'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.361095147150438,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54163"
+        ],
+        "fixed_versions": [
+          "7.3.0"
+        ],
+        "id": "GHSA-rqq5-2gf9-4w4q",
+        "modified": "2026-07-10T20:45:08.458164+00:00",
+        "published": "2026-07-10T20:37:15+00:00",
+        "references": [
+          "https://github.com/github/secure_headers/security/advisories/GHSA-rqq5-2gf9-4w4q",
+          "https://github.com/github/secure_headers",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/secure_headers/CVE-2026-54163.yml",
+          "https://www.cve.org/CVERecord/SearchResults?query=CVE-2026-54163"
+        ],
+        "severity": {
+          "score": 4.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Secure Headers: CSP directive injection via sandbox, plugin_types, and report_to when given untrusted input"
+      },
+      "cvss_score": 4.7,
+      "dep_name": "secure_headers",
+      "dep_version": "3.9.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.00174,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:secure_headers:3.9.0:GHSA-rqq5-2gf9-4w4q",
+      "in_kev": false,
+      "purl": "pkg:gem/secure_headers@3.9.0",
+      "raptor_risk_estimate": 7.649537010643544,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'secure_headers'` found (also tried ['secure-headers'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 47.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400187922,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.649537010643544,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54619"
+        ],
+        "fixed_versions": [
+          "2.9.5"
+        ],
+        "id": "GHSA-28hh-pr2h-2w89",
+        "modified": "2026-07-28T16:30:37.162953+00:00",
+        "published": "2026-07-28T16:21:31+00:00",
+        "references": [
+          "https://github.com/sparklemotion/sqlite3-ruby/security/advisories/GHSA-28hh-pr2h-2w89",
+          "https://github.com/sparklemotion/sqlite3-ruby/pull/710",
+          "https://github.com/sparklemotion/sqlite3-ruby/commit/2bd436d17f77cdd4c31b00fe9d50b0d21cbaf033",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/sqlite3/CVE-2026-54619.yml",
+          "https://github.com/sparklemotion/sqlite3-ruby"
+        ],
+        "severity": null,
+        "summary": "sqlite3-ruby has Use-After-Free When Redefining SQLite Functions with Different Arity"
+      },
+      "cvss_score": null,
+      "dep_name": "sqlite3",
+      "dep_version": "1.3.13",
+      "ecosystem": "RubyGems",
+      "epss": 0.00107,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:sqlite3:1.3.13:GHSA-28hh-pr2h-2w89",
+      "in_kev": false,
+      "purl": "pkg:gem/sqlite3@1.3.13",
+      "raptor_risk_estimate": 3.9184910057999995,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "tools/radar/rollup_radar_mixin.rb:13"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399846021,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.9184910057999995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2022-31163"
         ],
         "fixed_versions": [
@@ -9235,7 +9727,7 @@
       "dep_name": "tzinfo",
       "dep_version": "1.2.7",
       "ecosystem": "RubyGems",
-      "epss": 0.01786,
+      "epss": 0.0223,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9246,7 +9738,7 @@
       "finding_id": "sca:vuln:RubyGems:tzinfo:1.2.7:GHSA-5cm2-9h8c-rvfx",
       "in_kev": false,
       "purl": "pkg:gem/tzinfo@1.2.7",
-      "raptor_risk_estimate": 10.065165488015179,
+      "raptor_risk_estimate": 10.121003363006444,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9261,10 +9753,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40841395799999997,
+        "epss_multiplier": 0.41067969,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.065165488015179,
+        "final": 10.121003363006444,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9273,6 +9765,264 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-61666"
+        ],
+        "fixed_versions": [
+          "0.8.2"
+        ],
+        "id": "GHSA-2x63-gw47-w4mm",
+        "modified": "2026-07-23T22:29:33.241485+00:00",
+        "published": "2026-07-21T18:34:42+00:00",
+        "references": [
+          "https://github.com/faye/websocket-driver-ruby/security/advisories/GHSA-2x63-gw47-w4mm",
+          "https://github.com/faye/websocket-driver-ruby/commit/7d6fd87759a2fdc83590d3b49ffa661dc53fa128",
+          "https://github.com/faye/websocket-driver-ruby"
+        ],
+        "severity": null,
+        "summary": "websocket-driver-ruby: Denial of service via malformed Host header"
+      },
+      "cvss_score": null,
+      "dep_name": "websocket-driver",
+      "dep_version": "0.6.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:websocket-driver:0.6.5:GHSA-2x63-gw47-w4mm",
+      "in_kev": false,
+      "purl": "pkg:gem/websocket-driver@0.6.5",
+      "raptor_risk_estimate": 4.3515702489,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'websocket-driver'` found (also tried ['websocket_driver'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.3515702489,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54464"
+        ],
+        "fixed_versions": [
+          "0.8.1"
+        ],
+        "id": "GHSA-33ph-fccm-39pj",
+        "modified": "2026-07-15T22:30:45.870237+00:00",
+        "published": "2026-07-15T22:03:59+00:00",
+        "references": [
+          "https://github.com/faye/websocket-driver-ruby/security/advisories/GHSA-33ph-fccm-39pj",
+          "https://github.com/faye/websocket-driver-ruby",
+          "https://github.com/faye/websocket-driver-ruby/releases/tag/0.8.1",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/websocket-driver/CVE-2026-54464.yml",
+          "https://www.cve.org/CVERecord/SearchResults?query=CVE-2026-54464"
+        ],
+        "severity": null,
+        "summary": "websocket-driver: Resource limit bypass via message compression"
+      },
+      "cvss_score": null,
+      "dep_name": "websocket-driver",
+      "dep_version": "0.6.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00324,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:websocket-driver:0.6.5:GHSA-33ph-fccm-39pj",
+      "in_kev": false,
+      "purl": "pkg:gem/websocket-driver@0.6.5",
+      "raptor_risk_estimate": 2.6660199630091435,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'websocket-driver'` found (also tried ['websocket_driver'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400953372,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.6660199630091435,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54465"
+        ],
+        "fixed_versions": [
+          "0.8.1"
+        ],
+        "id": "GHSA-8j3g-f24p-4mpw",
+        "modified": "2026-07-15T22:30:45.868982+00:00",
+        "published": "2026-07-15T22:05:39+00:00",
+        "references": [
+          "https://github.com/faye/websocket-driver-ruby/security/advisories/GHSA-8j3g-f24p-4mpw",
+          "https://github.com/faye/websocket-driver-ruby",
+          "https://github.com/faye/websocket-driver-ruby/releases/tag/0.8.1",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/websocket-driver/CVE-2026-54465.yml",
+          "https://www.cve.org/CVERecord/SearchResults?query=CVE-2026-54465"
+        ],
+        "severity": null,
+        "summary": "websocket-driver: Memory exhaustion in HTTP header parser"
+      },
+      "cvss_score": null,
+      "dep_name": "websocket-driver",
+      "dep_version": "0.6.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00324,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:websocket-driver:0.6.5:GHSA-8j3g-f24p-4mpw",
+      "in_kev": false,
+      "purl": "pkg:gem/websocket-driver@0.6.5",
+      "raptor_risk_estimate": 2.6660199630091435,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'websocket-driver'` found (also tried ['websocket_driver'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400953372,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.6660199630091435,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54463"
+        ],
+        "fixed_versions": [
+          "0.8.1"
+        ],
+        "id": "GHSA-ghhp-3qvg-889p",
+        "modified": "2026-07-15T22:30:45.959512+00:00",
+        "published": "2026-07-15T22:01:52+00:00",
+        "references": [
+          "https://github.com/faye/websocket-driver-ruby/security/advisories/GHSA-ghhp-3qvg-889p",
+          "https://github.com/faye/websocket-driver-ruby",
+          "https://github.com/faye/websocket-driver-ruby/releases/tag/0.8.1",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/websocket-driver/CVE-2026-54463.yml",
+          "https://www.cve.org/CVERecord/SearchResults?query=CVE-2026-54463"
+        ],
+        "severity": null,
+        "summary": "websocket-driver: Memory exhaustion via abuse of protocol length headers"
+      },
+      "cvss_score": null,
+      "dep_name": "websocket-driver",
+      "dep_version": "0.6.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00324,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:websocket-driver:0.6.5:GHSA-ghhp-3qvg-889p",
+      "in_kev": false,
+      "purl": "pkg:gem/websocket-driver@0.6.5",
+      "raptor_risk_estimate": 2.6660199630091435,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'websocket-driver'` found (also tried ['websocket_driver'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400953372,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.6660199630091435,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

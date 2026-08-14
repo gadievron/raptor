@@ -15,7 +15,6 @@ from core.coverage.record import (
     write_record,
     load_record,
     load_records,
-    cleanup_manifest,
     READS_MANIFEST,
 )
 from core.coverage.track_read import main as track_read_main
@@ -366,20 +365,6 @@ class TestWriteAndLoad(unittest.TestCase):
     def test_load_missing(self):
         with TemporaryDirectory() as d:
             self.assertIsNone(load_record(Path(d)))
-
-
-class TestCleanupManifest(unittest.TestCase):
-
-    def test_removes_manifest(self):
-        with TemporaryDirectory() as d:
-            manifest = Path(d) / READS_MANIFEST
-            manifest.write_text("file.py\n")
-            cleanup_manifest(Path(d))
-            self.assertFalse(manifest.exists())
-
-    def test_no_error_if_missing(self):
-        with TemporaryDirectory() as d:
-            cleanup_manifest(Path(d))  # Should not raise
 
 
 class TestTrackReadHook(unittest.TestCase):

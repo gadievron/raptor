@@ -206,11 +206,26 @@ def _strip_ipa_suffix(name: str) -> str:
         name = stripped
 
 
+def _strip_params(full: str) -> str:
+    """Strip parameter list from a demangled C++ symbol, preserving
+    ``operator()`` and similar operators whose names contain parens."""
+    if "(" not in full:
+        return full
+    # operator() — the parens are part of the name, not the param list
+    op_marker = "operator()"
+    oi = full.find(op_marker)
+    if oi != -1:
+        after = full[oi + len(op_marker):]
+        prefix = full[: oi + len(op_marker)]
+        return prefix + (after.split("(", 1)[0] if "(" in after else after)
+    return full.split("(", 1)[0]
+
+
 def _nm_symbols(binary_path: Path) -> Dict[str, int]:
     """Name → address for every text symbol (local + global) defined in the
     binary. Missing tools / non-ELF input return ``{}``.
 
-    Uses ``nm --demangle`` so C++ source function names (which DWARF
+    Uses ``nm -C`` so C++ source function names (which DWARF
     ``DW_AT_name`` emits unmangled) match the symbol table entries (which
     nm emits MANGLED by default — e.g. ``_ZNK6Widget11live_methodEv``).
     Without ``-C``, every C++ method would classify as ``absent`` because
@@ -218,7 +233,7 @@ def _nm_symbols(binary_path: Path) -> Dict[str, int]:
     scenario B). Also indexes by *bare* name so source ``live_method``
     matches demangled ``Widget::live_method() const``, and so source
     ``gz_skip`` matches the GCC-cloned ``gz_skip.constprop.0``."""
-    out = _run(["nm", "--demangle", str(binary_path)])
+    out = _run(["nm", "-C", str(binary_path)])
     if not out:
         out = _run(["nm", str(binary_path)])   # fall back if -C unavailable
     syms: Dict[str, int] = {}
@@ -241,7 +256,7 @@ def _nm_symbols(binary_path: Path) -> Dict[str, int]:
             #   bare       "Uncompress"           ← legacy bare-name lookup
             # Without ``qualified``, C++ measurement against ``gcov -m``
             # demangled output couldn't match nm — surfaced in snappy Inc 3c.
-            qualified = full.split("(", 1)[0] if "(" in full else full
+            qualified = _strip_params(full)
             qualified = _strip_ipa_suffix(qualified)
             if qualified and qualified != full:
                 syms.setdefault(qualified, addr)
@@ -341,7 +356,7 @@ def _normalise_lambda_args(name: str) -> str:
 # decoder emits ``regex[7e9e1dd283b8ce7a]::Match``. The hash is distinct
 # per build (regenerated on each compile) but carries no information for
 # source-name matching. Strip it so qualified names compare cleanly
-# across rebuilds and align with ``nm --demangle`` output (which omits
+# across rebuilds and align with ``nm -C`` output (which omits
 # the hash). Originally lived in the regex driver; promoted here so every
 # Rust binary + every future Rust corpus driver benefits automatically.
 #
@@ -458,7 +473,7 @@ def _demangle_linkage_names(linkage_names: Iterable[str]) -> Dict[str, str]:
 
     The classifier uses this to also index subprograms under their
     canonical demangled spelling, because the spelling DWARF emits in
-    ``DW_AT_name`` may differ from what ``gcov -m`` / ``nm --demangle``
+    ``DW_AT_name`` may differ from what ``gcov -m`` / ``nm -C``
     produce (e.g. DWARF ``<long unsigned int>`` vs gcov
     ``<unsigned long>`` — surfaced by snappy's ``DecompressBranchless``
     template instantiations in Inc 3c)."""
@@ -674,7 +689,7 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
     # DW_AT_inline=inlined definition has no name of its own).
     # ``linkage_name`` inheritance is what lets c++filt canonical-name
     # aliasing reach DIEs whose DWARF ``DW_AT_name`` uses a different
-    # type-spelling than ``gcov -m`` / ``nm --demangle`` produce
+    # type-spelling than ``gcov -m`` / ``nm -C`` produce
     # (``long unsigned int`` vs ``unsigned long`` in snappy Inc 3c
     # followup).
     for die in subs.values():
@@ -703,7 +718,7 @@ def _dynamic_nm_symbols(binary_path: Path) -> Dict[str, int]:
     ``.dynsym`` survives (the dynamic linker needs it). For a shared
     library, this exposes the entire public API. Same demangle +
     bare-name + qualified-no-args indexing as ``_nm_symbols``."""
-    out = _run(["nm", "-D", "--demangle", str(binary_path)])
+    out = _run(["nm", "-D", "-C", str(binary_path)])
     if not out:
         out = _run(["nm", "-D", str(binary_path)])
     syms: Dict[str, int] = {}
@@ -716,7 +731,7 @@ def _dynamic_nm_symbols(binary_path: Path) -> Dict[str, int]:
                 continue
             full = parts[2].strip()
             syms[full] = addr
-            qualified = full.split("(", 1)[0] if "(" in full else full
+            qualified = _strip_params(full)
             qualified = _strip_ipa_suffix(qualified)
             if qualified and qualified != full:
                 syms.setdefault(qualified, addr)
@@ -785,9 +800,14 @@ def classify_binary_evidence(
     if not binary_path.is_file():
         return {}
 
-    if not shutil.which("nm") or not shutil.which("objdump"):
-        logger.warning("binary_oracle: nm / objdump unavailable; classifier "
-                       "cannot run")
+    _missing = [t for t in ("nm", "objdump", "readelf") if not shutil.which(t)]
+    if _missing:
+        import sys as _sys
+        _hint = (" (brew install binutils)"
+                 if _sys.platform == "darwin" else "")
+        logger.warning(
+            "binary_oracle: required tools missing: %s — "
+            "install GNU binutils%s", ", ".join(_missing), _hint)
         return {}
 
     build_id = read_build_id(binary_path) or ""
@@ -814,7 +834,7 @@ def classify_binary_evidence(
 
     # Reverse-index DWARF subprograms by both qualified and bare names.
     # Qualified is the primary key (matches the form ``gcov -m`` and
-    # ``nm --demangle`` emit for C++); bare-name is kept as a fallback
+    # ``nm -C`` emit for C++); bare-name is kept as a fallback
     # so callers that don't know the namespace still find C functions.
     # ALSO index under the demangled ``DW_AT_linkage_name`` form — this
     # gives canonical spelling that matches gcov even when DWARF's
@@ -847,7 +867,7 @@ def classify_binary_evidence(
     #       into its caller (e.g. zlib's ``tr_static_init``). Without
     #       this, such functions misclassify as ``absent``.
     # In both cases we index by the qualified name so C++ measurement
-    # against gcov -m / nm --demangle output hits — Inc 3c on snappy
+    # against gcov -m / nm -C output hits — Inc 3c on snappy
     # showed every ``snappy::Bits::Log2Floor`` style call misclassifying
     # as absent without namespace qualification.
     inlined_names: Set[str] = set()
@@ -1247,9 +1267,40 @@ def enrich_inventory_with_binary_oracle(
     return counts
 
 
+def extract_verdicts(inventory: Dict) -> Dict[str, str]:
+    """Extract a flat {function_name: verdict} dict from an enriched inventory.
+
+    After ``enrich_inventory_with_binary_oracle`` has annotated items,
+    this extracts the combined classification for each function into
+    the shape ``OrchestratorConfig.binary_verdicts`` expects.
+
+    ``absent`` verdicts are only emitted when at least one contributing
+    binary has ``tier == "full"`` (full-DWARF evidence).  Symbol-only
+    tier absent verdicts are not suppression-grade and are excluded.
+    """
+    verdicts: Dict[str, str] = {}
+    for f in inventory.get("files") or []:
+        for item in f.get("items") or []:
+            bo = (item.get("metadata") or {}).get("binary_oracle")
+            if bo and isinstance(bo, dict):
+                classification = bo["classification"]
+                if classification == "absent":
+                    has_full = any(
+                        b.get("tier") == "full"
+                        for b in bo.get("binaries", [])
+                    )
+                    if not has_full:
+                        continue
+                name = item.get("name")
+                if isinstance(name, str) and name:
+                    verdicts[name] = classification
+    return verdicts
+
+
 __all__ = [
     "BinaryOracleWitness",
     "classify_binary_evidence",
     "enrich_inventory_with_binary_oracle",
+    "extract_verdicts",
     "read_build_id",
 ]

@@ -6,14 +6,31 @@
 #   ollama  - Embedding model server (port 11435)
 #
 # Ports use non-standard mappings to avoid conflicts with local services.
+#
+# Embedding model selection (auto-detected by raptor-sage-setup):
+#   GPU:      nomic-embed-text (137M F16, 768 dims, ~0.1s/embed)
+#   CPU-only: snowflake-arctic-embed:m (110M, 768 dims, ~3s/embed)
+#   Override: export SAGE_EMBED_MODEL=<model> SAGE_EMBED_DIM=<dim>
 
 services:
   ollama:
-    image: ollama/ollama:0.21.0
+    image: ollama/ollama:0.32.6
     ports:
       - "11435:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KEEP_ALIVE=24h
+      # Proxied environments: the ollama SERVER performs the model download
+      # (ollama-init merely drives it over the API), so pass the host's
+      # proxy through. NO_PROXY must include 0.0.0.0 — the image sets
+      # OLLAMA_HOST=0.0.0.0:11434, so the healthcheck's `ollama list` dials
+      # 0.0.0.0 — plus the service names for inter-container traffic.
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
     healthcheck:
       test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 10s
@@ -30,30 +47,43 @@ services:
     #           capabilities: [gpu]
 
   ollama-init:
-    image: ollama/ollama:0.21.0
+    image: ollama/ollama:0.32.5
     depends_on:
       ollama:
         condition: service_healthy
     restart: "no"
-    entrypoint: ["ollama", "pull", "nomic-embed-text"]
+    entrypoint: ["ollama", "pull", "${SAGE_EMBED_MODEL:-snowflake-arctic-embed:m}"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
+      # No proxy needed here (talks only to the ollama service), but pin
+      # NO_PROXY so a globally-injected proxy (~/.docker/config.json
+      # proxies) cannot hijack the CLI→server call.
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
 
   sage:
-    image: ghcr.io/l33tdawg/sage:11.10.0
+    image: ghcr.io/l33tdawg/sage:11.18.6
     ports:
       - "8090:8080"
     volumes:
-      - sage_data:/root/.sage-gui
+      - sage_data:/root/.sage
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     environment:
-      - OLLAMA_URL=http://ollama:11434
+      - SAGE_HOME=/root/.sage
+      - SAGE_EMBEDDING_PROVIDER=openai-compatible
+      - SAGE_EMBEDDING_BASE_URL=http://ollama:11434
+      - SAGE_EMBEDDING_MODEL=${SAGE_EMBED_MODEL:-snowflake-arctic-embed:m}
+      - SAGE_EMBEDDING_DIMENSION=${SAGE_EMBED_DIM:-768}
       - REST_ADDR=0.0.0.0:8080
+      # Same NO_PROXY pin as ollama-init: sage only talks to the ollama
+      # service; keep that traffic off any globally-injected proxy.
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
     healthcheck:
-      # ghcr.io/l33tdawg/sage images ship with wget, not curl
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
+      # v11.17.11+ images ship neither wget nor curl; use bash /dev/tcp
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" > /dev/tcp/localhost/8080 && exit 0 || exit 1'"]
       interval: 10s
       timeout: 5s
       retries: 10

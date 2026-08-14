@@ -25,12 +25,12 @@ import sqlite3
 import stat
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
 
 from core.config import RaptorConfig
-from core.dataflow.cvefix_loader import CveFixPair, INJECTION_CWES, load_pairs
+from core.dataflow.cvefix_loader import INJECTION_CWES, CveFixPair, load_pairs
 
 DEFAULT_CODEQL_BIN = "codeql"
 
@@ -179,7 +179,7 @@ def _codeql_lang(repo_language: str) -> str:
     return _LANG_MAP.get(repo_language, "javascript")
 
 
-def query_for(repo_language: str, cwe: str) -> Optional[str]:
+def query_for(repo_language: str, cwe: str) -> str | None:
     pack, table = _QUERIES[_codeql_lang(repo_language)]
     sub = table.get(cwe)
     return None if sub is None else f"codeql/{pack}:{sub}"
@@ -205,10 +205,15 @@ class WalkResult:
 
 def _run(cmd, timeout) -> bool:
     # get_safe_env() strips env vars tools may shell-evaluate (untrusted-repo
-    # hygiene per CLAUDE.md); buildless extraction + git read-only ops only.
+    # hygiene per CLAUDE.md); buildless extraction + git ops only.
+    # preserve_proxy: _fetch_pair routes `git fetch` at the REMOTE
+    # origin through here — git honours proxy env, and without it
+    # mandatory-egress-proxy hosts have no route. Harmless for the
+    # local-only invocations (git never dials out for those).
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           check=False, env=RaptorConfig.get_safe_env())
+                           check=False,
+                           env=RaptorConfig.get_safe_env(preserve_proxy=True))
         return r.returncode == 0
     except (subprocess.TimeoutExpired, OSError):
         return False
@@ -282,13 +287,13 @@ def _fetch_pair(repo_url: str, fix_hash: str, dest: Path, timeout: int) -> bool:
 # home for all CodeQL-related utilities.  We re-export the type at the
 # old name so other modules in this file (and tests that import it via
 # cvefix_walk) keep working without churn.
-from packages.codeql.tunables import CodeQLTunables  # noqa: E402
+from packages.codeql.tunables import CodeQLTunables
 
 _DEFAULT_TUNABLES = CodeQLTunables()
 
 
 def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, timeout: int,
-              build_mode: Optional[str] = None,
+              build_mode: str | None = None,
               tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> bool:
     if not _run(["git", "-C", str(src), "checkout", "-q", commit], 60):
         return False
@@ -306,7 +311,7 @@ def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, time
 
 
 def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
-                 tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> Optional[int]:
+                 tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> int | None:
     cmd = [codeql_bin, "database", "analyze", str(db), query,
            "--format=sarif-latest", f"--output={out}"]
     # ``database analyze`` doesn't accept ``--max-disk-cache``; suppress it
@@ -365,7 +370,7 @@ def _clean_go_caches(work_dir: Path) -> None:
 def process_pair(
     pair: CveFixPair, *, work_dir: Path, codeql_bin: str = DEFAULT_CODEQL_BIN,
     fetch_timeout: int = 150, build_timeout: int = 240, analyze_timeout: int = 180,
-    build_mode: Optional[str] = None,
+    build_mode: str | None = None,
     tunables: CodeQLTunables = _DEFAULT_TUNABLES,
 ) -> WalkResult:
     """Fetch, build before/after DBs, run the CWE query; clean up; return counts.
@@ -450,7 +455,7 @@ def walk(
     languages=("Python", "JavaScript", "TypeScript"),
     work_dir: Path = Path("/data/corpus/clones/walk"),
     codeql_bin: str = DEFAULT_CODEQL_BIN,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     fetch_timeout: int = 150,
     build_timeout: int = 240,
     analyze_timeout: int = 180,
@@ -480,19 +485,22 @@ def walk(
             todo.append(p)
         log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
         work_dir.mkdir(parents=True, exist_ok=True)
-        n = 0
-        for pair in todo:
+        for n, pair in enumerate(todo):
             if limit is not None and n >= limit:
                 break
-            res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                               fetch_timeout=fetch_timeout,
-                               build_timeout=build_timeout,
-                               analyze_timeout=analyze_timeout,
-                               tunables=tunables)
+            try:
+                res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                                   fetch_timeout=fetch_timeout,
+                                   build_timeout=build_timeout,
+                                   analyze_timeout=analyze_timeout,
+                                   tunables=tunables)
+            except Exception as exc:  # noqa: BLE001
+                log(f"  [{n + 1}/{len(todo)}] {pair.cve_id} {pair.cwe}: "
+                    f"process_pair crashed: {exc}")
+                res = WalkResult(pair.fix_hash, "error")
             _record(con, pair, res)
-            n += 1
             tag = "YIELD" if res.is_yield else res.status
-            log(f"  [{n}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
+            log(f"  [{n + 1}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
                 f"{pair.repo_url.split('github.com/')[-1]}: {tag} "
                 f"before={res.before_count} after={res.after_count}")
         summary = dict(con.execute(
@@ -511,7 +519,7 @@ def promote_misses(
     codeql_bin: str = DEFAULT_CODEQL_BIN,
     promote_languages: Sequence[str] = ("Java",),
     build_timeout: int = 600,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     log=print,
 ) -> dict:
     """Build-promote buildless misses (the second half of the Java plan).
@@ -541,8 +549,13 @@ def promote_misses(
                 break
             n += 1
             pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
-            res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                               build_timeout=build_timeout, build_mode="autobuild")
+            try:
+                res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                                   build_timeout=build_timeout, build_mode="autobuild")
+            except Exception as exc:  # noqa: BLE001
+                log(f"  [{n}/{len(rows)}] {cve_id} {cwe}: "
+                    f"process_pair crashed: {exc}")
+                continue
             if res.status == "ok" and res.before_count > 0:
                 con.execute(
                     "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "
@@ -605,7 +618,7 @@ def main(argv=None) -> None:
     ap.add_argument("--analyze-timeout", type=int, default=180,
                     help="codeql database analyze timeout, seconds (default 180)")
     a = ap.parse_args(argv)
-    log = lambda m: print(m, flush=True)  # noqa: E731
+    log = lambda m: print(m, flush=True)
     # Resolve operator overrides against tuning.json-backed defaults.
     tunables = CodeQLTunables.from_tuning(
         overrides={"threads": a.threads, "ram_mb": a.ram,

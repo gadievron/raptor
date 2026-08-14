@@ -8,7 +8,7 @@ if dataflow paths are truly exploitable beyond theoretical detection.
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as _dataclass_fields
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -304,15 +304,15 @@ def _infer_bv_profile(rule_id: Optional[str], llm_hint: Dict) -> BVProfile:
 
 # Dict schema for LLM structured generation (consistent with other callers)
 DATAFLOW_VALIDATION_SCHEMA = {
-    "is_exploitable": "boolean",
-    "confidence": "float (0.0-1.0)",
-    "sanitizers_effective": "boolean",
-    "bypass_possible": "boolean",
-    "bypass_strategy": "string - strategy to bypass sanitizers, or empty if none",
-    "attack_complexity": "string (low/medium/high)",
     "reasoning": "string",
     "barriers": "list of strings",
     "prerequisites": "list of strings",
+    "bypass_strategy": "string - strategy to bypass sanitizers, or empty if none",
+    "attack_complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+    "sanitizers_effective": "boolean",
+    "bypass_possible": "boolean",
+    "confidence": "float (0.0-1.0)",
+    "is_exploitable": "boolean",
 }
 
 
@@ -320,13 +320,16 @@ DATAFLOW_VALIDATION_SCHEMA = {
 # schema in autonomous_analyzer.py — same asymmetric framing, same
 # verdict literal set, so the scorecard substrate keys uniformly.
 DATAFLOW_FP_PREFILTER_SCHEMA = {
-    "verdict": (
-        "string — one of 'clear_fp' (this dataflow is clearly NOT "
-        "exploitable — source isn't attacker-controlled, sink isn't "
-        "reachable, sanitizers definitively block) or 'needs_analysis' "
-        "(any uncertainty)"
-    ),
     "reasoning": "string — brief justification, 1-2 sentences",
+    "verdict": {
+        "type": "string",
+        "enum": ["clear_fp", "needs_analysis"],
+        "description": (
+            "clear_fp = dataflow is clearly NOT exploitable (source not "
+            "attacker-controlled, sink not reachable, sanitizers block); "
+            "needs_analysis = any uncertainty"
+        ),
+    },
 }
 
 
@@ -445,16 +448,13 @@ class DataflowValidator:
                 task_type=TaskType.VERDICT_BINARY,
             )
         except Exception as e:                         # noqa: BLE001
-            self.logger.debug(
-                f"Cheap dataflow FP check failed (falling through): {e}"
-            )
+            self.logger.debug("Cheap dataflow FP check failed (falling through): %s", e)
             return None
         verdict = (response.get("verdict") or "").strip().lower()
         reasoning = response.get("reasoning") or ""
         if verdict not in ("clear_fp", "needs_analysis"):
             self.logger.debug(
-                f"Cheap dataflow FP check returned unexpected verdict "
-                f"{verdict!r} — falling through"
+                "Cheap dataflow FP check returned unexpected verdict %r — falling through", verdict
             )
             return None
         return verdict, reasoning
@@ -520,8 +520,8 @@ class DataflowValidator:
                     file_path=artifact.get("uri", ""),
                     line=region.get("startLine", 0),
                     column=region.get("startColumn", 0),
-                    snippet=region.get("snippet", {}).get("text", ""),
-                    label=loc.get("message", {}).get("text", "")
+                    snippet=(region.get("snippet") or {}).get("text", ""),
+                    label=(loc.get("message") or {}).get("text", "")
                 )
                 steps.append(step)
 
@@ -542,11 +542,11 @@ class DataflowValidator:
                 intermediate_steps=intermediate,
                 sanitizers=sanitizers,
                 rule_id=result.get("ruleId", ""),
-                message=result.get("message", {}).get("text", "")
+                message=(result.get("message") or {}).get("text", "")
             )
 
         except Exception as e:
-            self.logger.warning(f"Failed to extract dataflow path: {e}")
+            self.logger.warning("Failed to extract dataflow path: %s", e)
             return None
 
     def read_source_context(self, file_path: str, line: int, context_lines: int = 10,
@@ -594,9 +594,9 @@ class DataflowValidator:
                 content = content[:_MAX_SOURCE_BYTES]
                 content = content.rsplit("\n", 1)[0] + "\n"
                 self.logger.warning(
-                    f"Source file {resolved} exceeded "
-                    f"{_MAX_SOURCE_BYTES}-byte cap; context window "
-                    f"reflects truncated read"
+                    "Source file %s exceeded %s-byte cap; context window reflects truncated read",
+                    resolved,
+                    _MAX_SOURCE_BYTES
                 )
             lines = content.splitlines(keepends=True)
 
@@ -610,7 +610,7 @@ class DataflowValidator:
 
             return "\n".join(context)
         except Exception as e:
-            self.logger.warning(f"Failed to read source context: {e}")
+            self.logger.warning("Failed to read source context: %s", e)
             return ""
 
     def _extract_path_conditions(
@@ -716,7 +716,7 @@ class DataflowValidator:
             }
             return conditions, hint
         except Exception as e:
-            self.logger.debug(f"Path condition extraction failed: {e}")
+            self.logger.debug("Path condition extraction failed: %s", e)
             return [], {}
 
     def validate_dataflow_path(
@@ -735,7 +735,7 @@ class DataflowValidator:
             DataflowValidation result
         """
         from core.reporting.formatting import display_rule_id
-        self.logger.info(f"Validating dataflow path: {display_rule_id(dataflow.rule_id)}")
+        self.logger.info("Validating dataflow path: %s", display_rule_id(dataflow.rule_id))
 
         # SMT pre-check: extract path conditions (plus a bitvector type
         # hint from the LLM) and test joint satisfiability.  If unsat,
@@ -745,9 +745,7 @@ class DataflowValidator:
         smt_result = check_path_feasibility(conditions, profile=profile)
 
         if smt_result.feasible is False:
-            self.logger.info(
-                f"SMT: path infeasible — {smt_result.reasoning}"
-            )
+            self.logger.info("SMT: path infeasible — %s", smt_result.reasoning)
             return DataflowValidation(
                 is_exploitable=False,
                 confidence=SMT_INFEASIBLE_CONFIDENCE,
@@ -789,9 +787,8 @@ class DataflowValidator:
         )
         if decision.short_circuit:
             self.logger.info(
-                f"Fast-tier short-circuit on dataflow {decision_class} — "
-                f"skipping full validation (cheap verdict trusted by "
-                f"scorecard)"
+                "Fast-tier short-circuit on dataflow %s — skipping full validation (cheap verdict trusted by scorecard)",
+                decision_class
             )
             self.llm.record_short_circuit()
             return self._short_circuit_fp_dataflow_result(cheap_reasoning)
@@ -918,12 +915,17 @@ class DataflowValidator:
                 task_type=TaskType.ANALYSE,
             )
 
-            # Parse response
-            validation = DataflowValidation(**response_dict)
+            # Parse response — filter to declared fields so extra
+            # keys returned by the LLM don't cause TypeError.
+            _valid_keys = {f.name for f in _dataclass_fields(DataflowValidation)}
+            validation = DataflowValidation(**{
+                k: v for k, v in response_dict.items() if k in _valid_keys
+            })
 
             self.logger.info(
-                f"Dataflow validation: exploitable={validation.is_exploitable}, "
-                f"confidence={validation.confidence:.2f}"
+                "Dataflow validation: exploitable=%s, confidence=%.2f",
+                validation.is_exploitable,
+                validation.confidence
             )
 
             # Record cheap-vs-full agreement for the scorecard.
@@ -944,7 +946,7 @@ class DataflowValidator:
             return validation
 
         except Exception as e:
-            self.logger.error(f"Dataflow validation failed: {e}")
+            self.logger.error("Dataflow validation failed: %s", e)
 
             # Return conservative default
             return DataflowValidation(

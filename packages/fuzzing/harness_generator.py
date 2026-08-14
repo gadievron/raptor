@@ -164,7 +164,7 @@ class HarnessGenerator:
                 system_prompt=_HARNESS_SYSTEM_PROMPT,
             )
         except Exception as e:
-            logger.error(f"LLM harness generation failed: {e}")
+            logger.error("LLM harness generation failed: %s", e)
             return self._fallback(spec, header_text)
 
         if not result or "source_code" not in result:
@@ -274,6 +274,6 @@ class HarnessGenerator:
         )
         compile_script.chmod(0o755)
 
-        logger.info(f"Wrote harness: {target_path}")
-        logger.info(f"Wrote build script: {compile_script}")
+        logger.info("Wrote harness: %s", target_path)
+        logger.info("Wrote build script: %s", compile_script)
         return target_path

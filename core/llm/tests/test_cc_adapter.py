@@ -190,3 +190,246 @@ class TestExtractEnvelopeMetadata:
         extract_envelope_metadata({}, into)
         assert "cost_usd" not in into
         assert into["analysed_by"] == "claude-code"
+
+
+class TestBuildCCCommandResume:
+    def test_persist_session_omits_no_session_persistence(self):
+        config = CCDispatchConfig(
+            claude_bin="claude", persist_session=True,
+        )
+        cmd = build_cc_command(config)
+        assert "--no-session-persistence" not in cmd
+
+    def test_session_id_adds_resume_flag(self):
+        config = CCDispatchConfig(
+            claude_bin="claude",
+            session_id="abc-123",
+            persist_session=True,
+        )
+        cmd = build_cc_command(config)
+        idx = cmd.index("--resume")
+        assert cmd[idx + 1] == "abc-123"
+        assert "--no-session-persistence" not in cmd
+
+    def test_default_has_no_session_persistence(self):
+        config = CCDispatchConfig(claude_bin="claude")
+        cmd = build_cc_command(config)
+        assert "--no-session-persistence" in cmd
+        assert "--resume" not in cmd
+
+
+class TestExtractSessionId:
+    def test_extracts_from_envelope(self):
+        from core.llm.cc_adapter import extract_session_id
+        stdout = json.dumps({
+            "result": "4",
+            "session_id": "eefdf10d-f8a1-490b-88f2-219f7c26a9d8",
+            "total_cost_usd": 0.01,
+        })
+        assert extract_session_id(stdout) == "eefdf10d-f8a1-490b-88f2-219f7c26a9d8"
+
+    def test_returns_none_for_missing_field(self):
+        from core.llm.cc_adapter import extract_session_id
+        assert extract_session_id(json.dumps({"result": "ok"})) is None
+
+    def test_returns_none_for_invalid_json(self):
+        from core.llm.cc_adapter import extract_session_id
+        assert extract_session_id("not json") is None
+
+    def test_returns_none_for_empty(self):
+        from core.llm.cc_adapter import extract_session_id
+        assert extract_session_id("") is None
+
+
+class TestBuildCCCommandStreamJson:
+    def test_stream_json_sets_output_format(self):
+        config = CCDispatchConfig(
+            claude_bin="claude", stream_json=True,
+            capture_json_envelope=True,
+        )
+        cmd = build_cc_command(config)
+        idx = cmd.index("--output-format")
+        assert cmd[idx + 1] == "stream-json"
+        assert "--verbose" in cmd
+
+    def test_stream_json_overrides_json_envelope(self):
+        config = CCDispatchConfig(
+            claude_bin="claude", stream_json=True,
+            capture_json_envelope=True,
+        )
+        cmd = build_cc_command(config)
+        assert cmd.count("--output-format") == 1
+        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+
+
+class TestParseStreamJsonLines:
+    def test_parses_assistant_and_result(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "model": "claude-haiku-4-5-20251001",
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                        "cache_read_input_tokens": 80,
+                    },
+                },
+            }),
+            json.dumps({
+                "type": "result",
+                "session_id": "sess-abc",
+                "total_cost_usd": 0.005,
+                "is_error": False,
+            }),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.content == "hello"
+        assert r.session_id == "sess-abc"
+        assert r.cost_usd == 0.005
+        assert r.input_tokens == 100
+        assert r.output_tokens == 50
+        assert r.cache_read_tokens == 80
+        assert r.model == "claude-haiku-4-5-20251001"
+        assert r.error is None
+
+    def test_ignores_system_lines(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({"type": "system", "subtype": "hook_started"}),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "hi"}],
+                    "usage": {},
+                },
+            }),
+            json.dumps({"type": "result", "session_id": "s1"}),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.content == "hi"
+        assert r.session_id == "s1"
+
+    def test_handles_error_result(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({
+                "type": "result",
+                "is_error": True,
+                "result": "something broke",
+            }),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.error == "something broke"
+
+    def test_handles_empty_lines(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        r = parse_stream_json_lines(["", "  ", "not json"])
+        assert r.content == ""
+        assert r.session_id is None
+
+    def test_result_usage_overrides_assistant_usage(self):
+        from core.llm.cc_adapter import parse_stream_json_lines
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "x"}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            }),
+            json.dumps({
+                "type": "result",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }),
+        ]
+        r = parse_stream_json_lines(lines)
+        assert r.input_tokens == 100
+        assert r.output_tokens == 50
+
+
+class TestCcSubprocessEnv:
+    """cc_subprocess_env: safe baseline + backend overlay."""
+
+    def test_backend_families_overlaid(self, monkeypatch):
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        monkeypatch.setenv("ANTHROPIC_MODEL", "anthropic.claude-mythos-5")
+        monkeypatch.setenv("AWS_PROFILE", "mythos")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        env = cc_subprocess_env()
+        assert env["CLAUDE_CODE_USE_BEDROCK"] == "1"
+        assert env["ANTHROPIC_MODEL"] == "anthropic.claude-mythos-5"
+        assert env["AWS_PROFILE"] == "mythos"
+        assert env["AWS_REGION"] == "us-east-1"
+
+    def test_aws_gated_on_bedrock(self, monkeypatch):
+        """AWS credentials must not reach CLI children on installs
+        that never selected Bedrock — some children run with tools
+        enabled against hostile repos."""
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_PROFILE", "prod")
+        env = cc_subprocess_env()
+        assert "AWS_ACCESS_KEY_ID" not in env
+        assert "AWS_PROFILE" not in env
+
+    def test_dangerous_vars_still_stripped(self, monkeypatch):
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.setenv("BASH_ENV", "/tmp/evil")
+        monkeypatch.setenv("PYTHONSTARTUP", "/tmp/evil.py")
+        env = cc_subprocess_env()
+        assert "BASH_ENV" not in env
+        assert "PYTHONSTARTUP" not in env
+
+    def test_safe_baseline_preserved(self, monkeypatch):
+        from core.llm.cc_adapter import cc_subprocess_env
+        env = cc_subprocess_env()
+        assert "PATH" in env
+        assert "HOME" in env
+
+    def test_operator_proxy_propagated(self, monkeypatch):
+        """Mandatory-egress-proxy hosts: the CLI child has no route to
+        any backend unless the operator's proxy env survives."""
+        from core.llm import egress
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.setattr(egress, "_original_proxy_env", None)
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+        monkeypatch.setenv("NO_PROXY", "169.254.169.254")
+        env = cc_subprocess_env()
+        assert env["HTTPS_PROXY"] == "http://proxy.corp:3128"
+        assert env["NO_PROXY"] == "169.254.169.254"
+
+    def test_proxy_snapshot_wins_over_egress_rewrite(self, monkeypatch):
+        """After enable_llm_egress points HTTPS_PROXY at the in-process
+        loopback proxy, children must still get the operator's original
+        route — the loopback proxy's allowlist doesn't cover the CLI's
+        backend hosts."""
+        from core.llm import egress
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:45123")
+        monkeypatch.setattr(
+            egress, "_original_proxy_env",
+            {"HTTPS_PROXY": "http://proxy.corp:3128"},
+        )
+        env = cc_subprocess_env()
+        assert env["HTTPS_PROXY"] == "http://proxy.corp:3128"
+
+
+class TestNeutralCwd:
+    def test_creates_private_dir_once(self):
+        import os
+        from core.llm.cc_adapter import neutral_cwd
+        d1 = neutral_cwd()
+        d2 = neutral_cwd()
+        assert d1 == d2
+        assert os.path.isdir(d1)
+        assert os.path.basename(d1).startswith("raptor-cc-cwd-")
+        # mkdtemp guarantees 0700 — no other local user can plant
+        # .claude hooks the CLI child would execute.
+        assert (os.stat(d1).st_mode & 0o777) == 0o700
+        assert os.listdir(d1) == []

@@ -18,7 +18,6 @@ transitively imports the module before runpy executes it as
 __main__.
 """
 import faulthandler
-import os
 import signal
 import sys
 from pathlib import Path
@@ -28,6 +27,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(

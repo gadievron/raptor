@@ -49,8 +49,8 @@ def _resolve_function_from_checklist(
             continue
         best_name = None
         best_dist = float("inf")
-        for func in fi.get("functions", []):
-            func_line = func.get("line", 0)
+        for func in fi.get("items") or fi.get("functions") or []:
+            func_line = func.get("line_start", 0) or func.get("line", 0)
             if func_line and abs(func_line - line) < best_dist:
                 best_dist = abs(func_line - line)
                 best_name = func.get("name")
@@ -79,14 +79,14 @@ def _build_reverse_call_map(
             if len(chain) == 1:
                 callee = chain[0]
                 reverse.setdefault(callee, []).append({
-                    "file": fi["path"],
+                    "file": fi.get("path", ""),
                     "function": caller,
                     "line": str(line),
                 })
             elif len(chain) == 2 and chain[0] in ("self", "this"):
                 callee = chain[1]
                 reverse.setdefault(callee, []).append({
-                    "file": fi["path"],
+                    "file": fi.get("path", ""),
                     "function": caller,
                     "line": str(line),
                 })
@@ -188,3 +188,63 @@ def enrich_all_traces(
             )
 
     return count
+
+
+def enrich_trace_with_assumption_filter(
+    trace_data: dict[str, Any],
+    checklist: dict[str, Any],
+    assumptions: list[Any],
+) -> dict[str, Any]:
+    """Like ``enrich_trace_with_siblings`` but marks which siblings
+    lack the enforcer from the relevant assumption.
+
+    Each sibling gets an additional ``lacks_enforcer`` field when
+    the caller doesn't invoke any of the assumption's ``enforced_by``
+    functions.
+    """
+    trace_data = enrich_trace_with_siblings(trace_data, checklist)
+
+    enforcer_names: set[str] = set()
+    for a in assumptions:
+        enforced = getattr(a, "enforced_by", None) or []
+        enforcer_names.update(enforced)
+
+    if not enforcer_names:
+        return trace_data
+
+    forward_map = _build_forward_call_map(checklist)
+
+    for step in trace_data.get("steps", []):
+        siblings = step.get("siblings")
+        if not siblings:
+            continue
+        for sibling in siblings:
+            sfile = sibling.get("file", "")
+            sfunc = sibling.get("function", "")
+            callees = forward_map.get((sfile, sfunc), set())
+            if not (callees & enforcer_names):
+                sibling["lacks_enforcer"] = True
+
+    return trace_data
+
+
+def _build_forward_call_map(
+    checklist: dict[str, Any],
+) -> dict[tuple[str, str], set[str]]:
+    """Build a map of (file, function) -> set of callee names."""
+    forward: dict[tuple[str, str], set[str]] = {}
+
+    for fi in checklist.get("files", []):
+        cg = fi.get("call_graph")
+        if not isinstance(cg, dict):
+            continue
+        for call in cg.get("calls", []):
+            caller = call.get("caller") or "<module>"
+            key = (fi.get("path", ""), caller)
+            chain = call.get("chain", [])
+            if len(chain) == 1:
+                forward.setdefault(key, set()).add(chain[0])
+            elif len(chain) == 2 and chain[0] in ("self", "this"):
+                forward.setdefault(key, set()).add(chain[1])
+
+    return forward

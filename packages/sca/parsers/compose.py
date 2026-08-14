@@ -59,6 +59,13 @@ logger = logging.getLogger(__name__)
 ECOSYSTEM = "OCI"
 _PURL_TYPE = "oci"
 
+_FLOATING_TAGS = frozenset({
+    "latest", "stable", "edge", "nightly", "dev",
+    "beta", "alpha", "rc", "canary",
+    "main", "master",
+})
+
+
 # Compose v2 / v3 / current — top-level ``services:`` map.
 _SERVICES_KEY = "services"
 
@@ -185,6 +192,8 @@ def _build_dep(
     if version:
         purl += f"@{version}"
 
+    pin_style = _classify_pin_style(version)
+
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=name,
@@ -192,22 +201,36 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=pin_style,
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            "high" if version else "medium",
+            "high" if version and pin_style == PinStyle.EXACT else "medium",
             reason=(
                 f"docker-compose service {service_name!r} pinned to "
                 f"{image}"
-            ) if version else (
+            ) if version and pin_style == PinStyle.EXACT else (
                 f"docker-compose service {service_name!r} references "
                 f"{image} with no tag (implicitly :latest)"
+            ) if not version else (
+                f"docker-compose service {service_name!r} references "
+                f"{image} (floating tag)"
             ),
         ),
         source_kind="compose",
         source_extra={"service": service_name, "image_ref": image},
     )
+
+
+def _classify_pin_style(version: Optional[str]) -> PinStyle:
+    """Classify an OCI tag's pin style."""
+    if not version:
+        return PinStyle.WILDCARD
+    if version.startswith("sha256:"):
+        return PinStyle.EXACT
+    if version.lower() in _FLOATING_TAGS:
+        return PinStyle.WILDCARD
+    return PinStyle.EXACT
 
 
 def _split_image_ref(ref: str) -> tuple:

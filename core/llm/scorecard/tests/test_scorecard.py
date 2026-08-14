@@ -618,6 +618,7 @@ def _bump_in_subprocess(path_str: str, dc: str, model: str, n: int):
 
 
 @pytest.mark.slow
+@pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
 def test_concurrent_writes_do_not_lose_updates(tmp_path):
     """Two processes recording on different cells of the same
     sidecar must each see all of their own increments preserved.

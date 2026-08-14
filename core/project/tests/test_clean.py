@@ -2,6 +2,8 @@
 
 import time
 import unittest
+
+import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -125,6 +127,7 @@ class TestClean(unittest.TestCase):
             self.assertEqual(stats["deleted"], [])
             self.assertEqual(stats["kept"], [])
 
+    @pytest.mark.slow
     def test_by_type_breakdown(self):
         with TemporaryDirectory() as d:
             p = _make_project_with_runs(d, [

@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence, Tuple
 
+from core.config import RaptorConfig
 from packages.codeql.tunables import CodeQLTunables
 
 
@@ -147,6 +148,7 @@ def analyze(
             text=True,
             timeout=timeout_seconds,
             check=False,
+            env=RaptorConfig.get_safe_env(),
         )
     except subprocess.TimeoutExpired as e:
         raise CodeQLRunError(

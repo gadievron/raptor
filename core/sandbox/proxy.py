@@ -71,12 +71,14 @@ Error responses:
 
 import asyncio
 import atexit
+import contextlib
 import ipaddress
 import logging
 import socket
 import threading
 import time
-from typing import Iterable, List, Optional, Set, Tuple
+from collections.abc import Iterable
+from typing import Optional
 
 # Module-top so the import doesn't run on every CONNECT — the proxy
 # tunnel handler used to do `from core.security.log_sanitisation
@@ -194,7 +196,7 @@ _lock = threading.Lock()
 _instance: Optional["EgressProxy"] = None
 
 
-def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
+def _record_proxy_denial(host: str, port: int, resolved_ip: str | None,
                          would_deny: str) -> None:
     """Route a proxy-side audit-mode denial into the per-run sandbox
     summary via core.sandbox.summary.record_denial.
@@ -238,7 +240,7 @@ def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
         if resolved_ip is not None:
             details["resolved_ip"] = resolved_ip
         record_denial(cmd, 0, "network", **details)
-    except Exception:  # noqa: BLE001 — best-effort; never fail a CONNECT
+    except Exception:
         # Deliberate scope: Exception, not BaseException. SystemExit and
         # KeyboardInterrupt SHOULD propagate so the process can exit.
         # record_denial is documented to never raise either of those —
@@ -280,7 +282,7 @@ def _ip_is_blocked(ip_str: str) -> bool:
     return not ip.is_global
 
 
-def _parse_proxy_url(url: Optional[str]) -> Optional[tuple]:
+def _parse_proxy_url(url: str | None) -> tuple | None:
     """Parse a proxy URL like `http://corp-proxy:3128` into (host, port).
 
     Returns None if url is None/empty. Raises ValueError for malformed
@@ -313,7 +315,7 @@ def _parse_proxy_url(url: Optional[str]) -> Optional[tuple]:
     return (parsed.hostname, port)
 
 
-def _parse_no_proxy(value: Optional[str]) -> list:
+def _parse_no_proxy(value: str | None) -> list:
     """Parse NO_PROXY (comma-separated host patterns).
 
     Each entry is a host suffix: `internal.corp` matches
@@ -345,7 +347,7 @@ def _host_in_no_proxy(host: str, patterns: list) -> bool:
 
 def _split_addrinfo_by_family(
     addrinfo: list,
-) -> Tuple[list, list]:
+) -> tuple[list, list]:
     """Partition an addrinfo list into (v6, v4) buckets, preserving
     each bucket's internal order.
 
@@ -381,12 +383,12 @@ class EgressProxy:
                  total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
                  max_tunnels: int = _DEFAULT_MAX_TUNNELS,
                  buffer_size: int = _DEFAULT_BUFFER_SIZE,
-                 upstream_proxy: Optional[str] = None,
-                 no_proxy: Optional[str] = None,
+                 upstream_proxy: str | None = None,
+                 no_proxy: str | None = None,
                  audit_log_only: bool = False,
                  audit_enforce: bool = False):
         self._hosts_lock = threading.Lock()
-        self._allowed_hosts: Set[str] = {h.lower() for h in allowed_hosts}
+        self._allowed_hosts: set[str] = {h.lower() for h in allowed_hosts}
         # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
         # event AND a record_denial entry, then falls through to the
         # connect path — operator workflows that hit gate 1 keep working
@@ -441,7 +443,7 @@ class EgressProxy:
         # stored as (host, port) tuple; None = direct connect. The
         # upstream host is trusted to resolve to any IP (private
         # corporate addresses are expected), unlike target hostnames.
-        self._upstream: Optional[tuple] = _parse_proxy_url(upstream_proxy)
+        self._upstream: tuple | None = _parse_proxy_url(upstream_proxy)
         # NO_PROXY honoured when an upstream is configured: any host
         # matching a pattern bypasses the upstream and connects directly
         # (so internal services like git-server.corp remain reachable).
@@ -493,16 +495,16 @@ class EgressProxy:
         # caller's view — same end-state as the previous design where
         # the late event would have been recorded into a buffer the
         # caller had already left behind.
-        self._sandbox_buffers_snapshot: Tuple[list, ...] = ()
+        self._sandbox_buffers_snapshot: tuple[list, ...] = ()
 
         # Synchronise startup: the thread runs the asyncio loop and signals
         # `_ready` once the server is bound and port is known. The calling
         # thread blocks on _ready before returning from __init__, so
         # callers see a fully-ready proxy or an exception.
         self._ready = threading.Event()
-        self._start_error: Optional[BaseException] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._server: Optional[asyncio.AbstractServer] = None
+        self._start_error: BaseException | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._server: asyncio.AbstractServer | None = None
         self.port: int = 0
         self._unix_servers: dict = {}
         self._unix_lock = threading.Lock()
@@ -652,20 +654,21 @@ class EgressProxy:
             raise RuntimeError("proxy event loop not running")
 
         import os as _os
-        old_umask = _os.umask(0o077)
-        try:
-            async def _bind():
+
+        async def _bind():
+            old_umask = _os.umask(0o077)
+            try:
                 srv = await asyncio.start_unix_server(
                     self._handle_unix_client, path=path,
                 )
-                with self._unix_lock:
-                    self._unix_servers[path] = srv
-                return srv
+            finally:
+                _os.umask(old_umask)
+            with self._unix_lock:
+                self._unix_servers[path] = srv
+            return srv
 
-            future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
-            future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
-        finally:
-            _os.umask(old_umask)
+        future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
+        future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
         logger.info("egress proxy: unix socket bound at %s", path)
 
     def unbind_unix(self, path: str) -> None:
@@ -682,13 +685,11 @@ class EgressProxy:
         if self._loop is not None and self._loop.is_running():
             async def _close():
                 srv.close()
-            try:
+            with contextlib.suppress(Exception):
                 future = asyncio.run_coroutine_threadsafe(
                     _close(), self._loop,
                 )
                 future.result(timeout=2.0)
-            except Exception:
-                pass
         import os as _os
         try:
             _os.unlink(path)
@@ -722,7 +723,7 @@ class EgressProxy:
         with self._hosts_lock:
             return host.lower() in self._allowed_hosts
 
-    def register_sandbox(self, caller_label: Optional[str] = None) -> int:
+    def register_sandbox(self, caller_label: str | None = None) -> int:
         """Register an active sandbox and receive a token.
 
         While registered, every tunnel event the proxy records is
@@ -746,7 +747,7 @@ class EgressProxy:
             )
             return token
 
-    def unregister_sandbox(self, token: int) -> List[dict]:
+    def unregister_sandbox(self, token: int) -> list[dict]:
         """Stop forwarding events to this sandbox and return its buffer.
 
         The returned list is a fresh copy of each event with the
@@ -847,7 +848,7 @@ class EgressProxy:
 
     async def _happy_eyeballs_connect(
         self, addrinfo: list, port: int,
-    ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
         """RFC 8305 happy-eyeballs dial across an addrinfo list.
 
         Returns ``(reader, writer, dialed_ip)`` for the first address
@@ -873,9 +874,9 @@ class EgressProxy:
         # Single-family path: no race needed, just walk in order.
         if not v6 or not v4:
             ordered = v6 if v6 else v4
-            last_exc: Optional[Exception] = None
+            last_exc: Exception | None = None
             for entry in ordered:
-                family, socktype, proto, _, sockaddr = entry
+                family, _socktype, _proto, _, sockaddr = entry
                 ip = sockaddr[0]
                 if _ip_is_blocked(ip):
                     last_exc = OSError(f"IP {ip} blocked by gate 2")
@@ -901,7 +902,7 @@ class EgressProxy:
         # (Most upstream registries return one address per family, so
         # the common case is exactly two attempts.)
         async def _attempt(entry):
-            family, socktype, proto, _, sockaddr = entry
+            family, _socktype, _proto, _, sockaddr = entry
             ip = sockaddr[0]
             if _ip_is_blocked(ip):
                 raise OSError(f"IP {ip} blocked by gate 2")
@@ -913,7 +914,7 @@ class EgressProxy:
             return reader, writer, ip
 
         v6_task = asyncio.ensure_future(_attempt(v6[0]))
-        v4_task: Optional[asyncio.Task] = None
+        v4_task: asyncio.Task | None = None
 
         try:
             done, pending = await asyncio.wait(
@@ -934,19 +935,25 @@ class EgressProxy:
                 {v6_task, v4_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            # First to finish — if it succeeded, take it; if it failed,
-            # wait on the other.
+            # First to finish — if it succeeded, take it; close/cancel
+            # the loser. When both land in `done` simultaneously,
+            # cancel() is a no-op — close the writer explicitly.
+            winner = None
             for t in done:
                 try:
                     result = t.result()
-                    # Cancel the loser.
-                    for p in pending:
-                        p.cancel()
-                    return result
+                    if winner is None:
+                        winner = result
+                    else:
+                        result[1].close()
                 except (OSError, asyncio.TimeoutError):
                     pass
+            if winner is not None:
+                for p in pending:
+                    p.cancel()
+                return winner
             # Both done in this iteration with failures? Wait the rest.
-            last_err: Optional[Exception] = None
+            last_err: Exception | None = None
             for t in pending:
                 try:
                     result = await t
@@ -994,10 +1001,8 @@ class EgressProxy:
         with self._unix_lock:
             unix_paths = list(self._unix_servers.keys())
         for p in unix_paths:
-            try:
+            with contextlib.suppress(Exception):
                 self.unbind_unix(p)
-            except Exception:
-                pass
         if drain_timeout > 0 and self._server is not None and self._loop.is_running():
             async def _graceful():
                 try:
@@ -1024,8 +1029,7 @@ class EgressProxy:
                 asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
             except RuntimeError:
                 _graceful().close()
-            return
-        if self._loop is not None and self._loop.is_running():
+        elif self._loop is not None and self._loop.is_running():
             async def _cancel_unix():
                 stale = [t for t in self._unix_tasks if not t.done()]
                 for t in stale:
@@ -1037,11 +1041,17 @@ class EgressProxy:
                 asyncio.run_coroutine_threadsafe(_cancel_unix(), self._loop)
             except RuntimeError:
                 pass
-            return
-        try:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        except RuntimeError:
-            pass  # loop already stopped
+        else:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass  # loop already stopped
+        # Join the daemon thread so transport _call_connection_lost
+        # callbacks complete before stop() returns.  Without this,
+        # the thread keeps running and may close recycled fd numbers
+        # that belong to the caller's next subprocess.run pipes.
+        if self._thread is not None:
+            self._thread.join(timeout=drain_timeout + 2.0)
 
     def _stop_thread_best_effort(self) -> None:
         """Defensive cleanup helper called from ``__init__`` when the
@@ -1100,7 +1110,7 @@ class EgressProxy:
             )
             self._ready.set()
             self._loop.run_forever()
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001
             self._start_error = e
             self._ready.set()
             return
@@ -1110,10 +1120,8 @@ class EgressProxy:
             self._client_tasks.clear()
             if self._server is not None and self._loop is not None:
                 self._server.close()
-                try:
+                with contextlib.suppress(Exception):
                     self._loop.run_until_complete(self._server.wait_closed())
-                except Exception:
-                    pass
             if self._loop is not None:
                 self._loop.close()
 
@@ -1142,7 +1150,7 @@ class EgressProxy:
         # no peer IP — they're trusted because bind_unix() restricts
         # the socket file to mode 0600.
         if client_ip not in ("127.0.0.1", "::1", "unix"):
-            logger.warning(f"egress proxy: rejecting non-loopback peer {client_ip}")
+            logger.warning("egress proxy: rejecting non-loopback peer %s", client_ip)
             writer.close()
             return
 
@@ -1174,11 +1182,9 @@ class EgressProxy:
                 # The reject path used to `return` before the try/finally
                 # below the cap-counter, so the writer was never closed
                 # on rejection — every 429 leaked the inbound socket.
-                try:
+                with contextlib.suppress(Exception):
                     writer.close()
                     await writer.wait_closed()
-                except Exception:
-                    pass
             return
 
         try:
@@ -1207,11 +1213,9 @@ class EgressProxy:
         finally:
             with self._active_lock:
                 self._active_tunnels -= 1
-            try:
+            with contextlib.suppress(Exception):
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def _serve_tunnel(self, reader: asyncio.StreamReader,
                             writer: asyncio.StreamWriter) -> None:
@@ -1387,7 +1391,7 @@ class EgressProxy:
                 )
             except (asyncio.TimeoutError, asyncio.IncompleteReadError,
                     ConnectionError) as e:
-                logger.warning(f"egress proxy: upstream CONNECT failed: {e}")
+                logger.warning("egress proxy: upstream CONNECT failed: %s", e)
                 up_writer.close()
                 event.update(result="upstream_failed",
                              reason=f"upstream CONNECT handshake: {e.__class__.__name__}",
@@ -1459,7 +1463,7 @@ class EgressProxy:
             # still gets caught. The "first record wins gate 2" semantic
             # matches the original code; happy-eyeballs only changes
             # which record we end up CONNECTING to, not which we VET.
-            family, socktype, proto, _, sockaddr = addrinfo[0]
+            _family, _socktype, _proto, _, sockaddr = addrinfo[0]
             resolved_ip = sockaddr[0]
             event["resolved_ip"] = resolved_ip
             if _ip_is_blocked(resolved_ip):
@@ -1548,7 +1552,7 @@ class EgressProxy:
 
         total = {"c2u": 0, "u2c": 0}  # byte counters
         result = "allowed"
-        reason: Optional[str] = None
+        reason: str | None = None
         # `asyncio.wait_for` is the correct primitive for "cap this block
         # at N seconds": it raises `asyncio.TimeoutError` when the deadline
         # fires AND cancels the inner coroutine cleanly. The previous
@@ -1573,17 +1577,15 @@ class EgressProxy:
                 f"egress proxy: TIMEOUT {host}:{port} "
                 f"(c2u={total['c2u']} u2c={total['u2c']})"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             reason = f"relay ended: {e.__class__.__name__}"
             logger.debug(
                 f"egress proxy: relay ended {host}:{port}: {e.__class__.__name__}"
             )
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 up_writer.close()
                 await up_writer.wait_closed()
-            except Exception:
-                pass
             # Update the already-recorded event with final byte counts
             # and outcome. Ring buffer holds a reference; consumers who
             # called events_since() between establishment and close will
@@ -1634,14 +1636,12 @@ class EgressProxy:
     async def _write_error(self, writer: asyncio.StreamWriter,
                            code: int, reason: str) -> None:
         body = f"HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        try:
+        with contextlib.suppress(Exception):
             writer.write(body.encode("ascii"))
             await writer.drain()
-        except Exception:
-            pass
 
 
-async def _read_line(reader: asyncio.StreamReader, max_len: int) -> Optional[str]:
+async def _read_line(reader: asyncio.StreamReader, max_len: int) -> str | None:
     """Read one CRLF-terminated line, max_len bytes. None on error/EOF."""
     try:
         data = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=_PROXY_CONNECT_TIMEOUT_S)
@@ -1694,16 +1694,22 @@ def get_proxy(
                 "egress proxy: singleton thread has died — "
                 "discarding stale instance and creating a fresh one"
             )
-            try:
+            with contextlib.suppress(Exception):
                 _instance.stop()
-            except Exception:
-                pass
             _instance = None
 
         if _instance is None:
             import os as _os
+            # Fall back through the whole conventional family: an
+            # HTTP_PROXY-only or ALL_PROXY-only host is still a
+            # mandatory-proxy host, and every value here is an HTTP
+            # CONNECT-capable proxy URL usable for our tunnels.
             upstream = (_os.environ.get("HTTPS_PROXY")
-                        or _os.environ.get("https_proxy"))
+                        or _os.environ.get("https_proxy")
+                        or _os.environ.get("ALL_PROXY")
+                        or _os.environ.get("all_proxy")
+                        or _os.environ.get("HTTP_PROXY")
+                        or _os.environ.get("http_proxy"))
             no_proxy = (_os.environ.get("NO_PROXY")
                         or _os.environ.get("no_proxy"))
             # bool(env_var) treats any non-empty string as truthy,
@@ -1738,9 +1744,9 @@ def get_proxy(
 
 
 def _reset_for_tests() -> None:
-    """Tear down the singleton. Test-only."""
+    """Tear down the singleton and join its thread. Test-only."""
     global _instance
     with _lock:
         if _instance is not None:
-            _instance.stop()
+            _instance.stop(drain_timeout=0)
             _instance = None

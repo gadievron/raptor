@@ -29,16 +29,33 @@ logger = logging.getLogger(__name__)
 CHECKER_MATCHES_FILE = "checker-matches.jsonl"
 
 
-def _llm_callable_from_client(llm_client) -> Optional[Any]:
+def _llm_callable_from_client(
+    llm_client, cost_tracker=None,
+) -> Optional[Any]:
     """Adapt RAPTOR's ``LLMClient`` to checker_synthesis's
     ``LLMCallable`` Protocol. Returns None when the client doesn't
     expose ``generate_structured`` (e.g. ClaudeCodeProvider in
-    prep-only mode — checker synthesis can't run without an LLM)."""
+    prep-only mode -- checker synthesis can't run without an LLM).
+
+    When *cost_tracker* is provided, each call checks the budget
+    before invoking the LLM and returns None (skipped) when the
+    budget is exhausted.
+    """
     if not hasattr(llm_client, "generate_structured"):
         return None
     from core.llm.task_types import TaskType
 
     def _call(prompt, schema, system_prompt):
+        if cost_tracker is not None:
+            try:
+                max_cost = getattr(cost_tracker, "_max_cost", 0)
+                if max_cost > 0 and cost_tracker.total_cost >= max_cost:
+                    logger.debug(
+                        "checker_synthesis skipped: budget exhausted",
+                    )
+                    return None
+            except Exception:
+                pass
         try:
             data, _full = llm_client.generate_structured(
                 prompt=prompt,
@@ -48,7 +65,9 @@ def _llm_callable_from_client(llm_client) -> Optional[Any]:
             )
             return data
         except Exception as e:
-            logger.warning("checker_synthesis LLM call failed: %s", e)
+            logger.warning(
+                "checker_synthesis LLM call failed: %s", e,
+            )
             return None
     return _call
 
@@ -129,6 +148,133 @@ def _resolve_match_function(
     return func.get("name") or None
 
 
+def _try_replay_from_library(
+    seed,
+    repo_root: Path,
+    out_dir: Path,
+    llm_callable,
+    *,
+    max_matches: int,
+    max_triage_calls: int,
+):
+    """Check the rule library for replayable rules matching this
+    seed's CWE. Returns a ``CheckerSynthesisResult`` on hit, or
+    None if no library rule qualifies."""
+    try:
+        from packages.checker_synthesis import RuleLibrary
+        from packages.checker_synthesis.library import _DEFAULT_LIBRARY_DIR
+        from packages.checker_synthesis.languages import detect_engine
+        from packages.checker_synthesis.synthesise import _run_engine, _triage
+
+        engine = detect_engine(seed.file)
+        if engine is None:
+            return None
+
+        lib = RuleLibrary(_DEFAULT_LIBRARY_DIR)
+        candidates = lib.find_replayable(seed.cwe, engine)
+        if not candidates:
+            return None
+
+        entry = candidates[0]
+        rule_path = lib.rule_path(entry)
+        if not rule_path.exists():
+            logger.debug(
+                "checker_followup: library rule %s on disk missing",
+                entry.rule_id,
+            )
+            return None
+
+        from packages.checker_synthesis.models import (
+            CheckerSynthesisResult,
+            SynthesisedRule,
+        )
+
+        rule_body = rule_path.read_text(encoding="utf-8")
+        rule = SynthesisedRule(
+            engine=entry.engine,
+            rule_id=entry.rule_id,
+            body=rule_body,
+            rationale=entry.rationale,
+        )
+
+        matches, errors = _run_engine(rule, rule_path, repo_root)
+        from packages.checker_synthesis.synthesise import _is_seed_match
+        variants = [m for m in matches if not _is_seed_match(seed, m)]
+        if len(variants) > max_matches:
+            variants = variants[:max_matches]
+
+        triage_list = []
+        if variants:
+            triage_list, t_errors = _triage(
+                seed, rule, variants, llm_callable, max_triage_calls,
+            )
+            errors.extend(t_errors)
+
+        import hashlib
+        target_hash = hashlib.sha256(
+            str(repo_root).encode(),
+        ).hexdigest()[:12]
+        lib.update(
+            entry.rule_id, target_hash, variants, triage_list,
+        )
+
+        result = CheckerSynthesisResult(seed=seed)
+        result.rule = rule
+        result.rule_path = rule_path
+        result.positive_control = True
+        result.dual_control = entry.dual_control
+        result.matches = variants
+        result.triage = triage_list
+        result.errors = errors
+
+        logger.info(
+            "checker_followup: replayed library rule %s — %d match(es)",
+            entry.rule_id, len(variants),
+        )
+
+        _try_graduate_after_update(lib)
+
+        return result
+    except Exception:
+        logger.debug("checker_followup: library replay failed", exc_info=True)
+        return None
+
+
+def _try_promote_to_library(result, repo_root: Path):
+    """Promote a synthesis result to the rule library if eligible."""
+    try:
+        from packages.checker_synthesis import RuleLibrary
+        from packages.checker_synthesis.library import _DEFAULT_LIBRARY_DIR
+        import hashlib
+
+        lib = RuleLibrary(_DEFAULT_LIBRARY_DIR)
+        target_hash = hashlib.sha256(
+            str(repo_root).encode(),
+        ).hexdigest()[:12]
+        lib.promote(result, target_hash=target_hash)
+    except Exception:
+        logger.debug("checker_followup: library promotion failed", exc_info=True)
+
+
+def _try_graduate_after_update(lib):
+    """Graduate eligible rules after a library update.
+
+    The disk manifest already tracks targets, TP rate, and variant
+    counts — graduate() reads those directly.  No external state needed.
+    """
+    try:
+        from core.config import RaptorConfig
+
+        graduated = lib.graduate(RaptorConfig.ENGINE_DIR)
+        if graduated:
+            logger.info(
+                "checker_followup: graduated %d rule(s): %s",
+                len(graduated), ", ".join(graduated),
+            )
+    except Exception:
+        logger.debug("checker_followup: graduation failed", exc_info=True)
+
+
 def emit_variant_matches_for_finding(
     vuln,
     *,
@@ -136,6 +282,7 @@ def emit_variant_matches_for_finding(
     checklist: Optional[Dict[str, Any]],
     repo_root: Path,
     llm_client,
+    cost_tracker=None,
     max_matches: int = 10,
     triage_each: bool = True,
     max_triage_calls: int = 10,
@@ -146,6 +293,10 @@ def emit_variant_matches_for_finding(
     """For a confirmed exploitable finding, synthesise a checker
     rule, run it across ``repo_root``, and record variant matches
     in ``checker-matches.jsonl``.
+
+    Checks the rule library first: if a proven rule exists for this
+    CWE + engine, replays it directly (zero LLM synthesis cost).
+    Otherwise falls through to synthesis.
 
     When ``refine=True`` (default), runs the iterative FP-elimination
     loop: each iteration feeds false positives back as negative
@@ -170,7 +321,9 @@ def emit_variant_matches_for_finding(
             )
             return 0
 
-        llm_callable = _llm_callable_from_client(llm_client)
+        llm_callable = _llm_callable_from_client(
+            llm_client, cost_tracker=cost_tracker,
+        )
         if llm_callable is None:
             logger.debug(
                 "checker_followup: skipped — LLM client does not "
@@ -178,34 +331,44 @@ def emit_variant_matches_for_finding(
             )
             return 0
 
-        logger.debug(
-            "checker_followup: synthesising rule for %s:%s (%s)",
-            seed.file, seed.line_start, seed.function,
+        # Check library before spending LLM tokens on synthesis.
+        result = _try_replay_from_library(
+            seed, repo_root, out_dir, llm_callable,
+            max_matches=max_matches,
+            max_triage_calls=max_triage_calls,
         )
 
-        if refine:
-            from packages.checker_synthesis import synthesise_with_refinement
-            result = synthesise_with_refinement(
-                seed,
-                repo_root=repo_root,
-                out_dir=out_dir,
-                llm=llm_callable,
-                max_iterations=max_refine_iterations,
-                max_acceptable_fp_rate=max_acceptable_fp_rate,
-                max_matches=max_matches,
-                max_triage_calls=max_triage_calls,
+        if result is None:
+            logger.debug(
+                "checker_followup: synthesising rule for %s:%s (%s)",
+                seed.file, seed.line_start, seed.function,
             )
-        else:
-            from packages.checker_synthesis import synthesise_and_run
-            result = synthesise_and_run(
-                seed,
-                repo_root=repo_root,
-                out_dir=out_dir,
-                llm=llm_callable,
-                max_matches=max_matches,
-                triage_each=triage_each,
-                max_triage_calls=max_triage_calls,
-            )
+
+            if refine:
+                from packages.checker_synthesis import synthesise_with_refinement
+                result = synthesise_with_refinement(
+                    seed,
+                    repo_root=repo_root,
+                    out_dir=out_dir,
+                    llm=llm_callable,
+                    max_iterations=max_refine_iterations,
+                    max_acceptable_fp_rate=max_acceptable_fp_rate,
+                    max_matches=max_matches,
+                    max_triage_calls=max_triage_calls,
+                )
+            else:
+                from packages.checker_synthesis import synthesise_and_run
+                result = synthesise_and_run(
+                    seed,
+                    repo_root=repo_root,
+                    out_dir=out_dir,
+                    llm=llm_callable,
+                    max_matches=max_matches,
+                    triage_each=triage_each,
+                    max_triage_calls=max_triage_calls,
+                )
+
+            _try_promote_to_library(result, repo_root)
     except Exception:
         logger.warning("checker_followup: synthesis failed", exc_info=True)
         return 0

@@ -181,7 +181,7 @@ class LanguageDetector:
         Returns:
             Dict mapping language name -> LanguageInfo
         """
-        logger.info(f"Detecting languages in: {self.repo_path}")
+        logger.info("Detecting languages in: %s", self.repo_path)
 
         # Scan repository and collect statistics
         stats = self._scan_repository()
@@ -207,8 +207,10 @@ class LanguageDetector:
             if meets_threshold and meets_confidence:
                 detected[lang] = info
                 logger.info(
-                    f"✓ Detected {lang}: {info.file_count} files, "
-                    f"confidence={info.confidence:.2f}"
+                    "✓ Detected %s: %s files, confidence=%.2f",
+                    lang,
+                    info.file_count,
+                    info.confidence
                 )
             elif info.file_count > 0 or has_build_signal:
                 # Language had *some* signal but didn't pass — flag
@@ -217,16 +219,19 @@ class LanguageDetector:
                 # for languages with zero presence in the repo.
                 # (gh #548)
                 logger.warning(
-                    f"⚠ Skipping {lang}: file_count={info.file_count} "
-                    f"(min={min_files}), confidence={info.confidence:.2f} "
-                    f"(min={patterns['min_confidence']}), build_files="
-                    f"{sorted(info.build_files_found) or 'none'}"
+                    "⚠ Skipping %s: file_count=%s (min=%s), confidence=%.2f (min=%s), build_files=%s",
+                    lang,
+                    info.file_count,
+                    min_files,
+                    info.confidence,
+                    patterns['min_confidence'],
+                    sorted(info.build_files_found) or 'none'
                 )
 
         if not detected:
             logger.warning("No languages detected that meet minimum criteria")
         else:
-            logger.info(f"Total languages detected: {len(detected)}")
+            logger.info("Total languages detected: %d", len(detected))
 
         return detected
 
@@ -255,8 +260,9 @@ class LanguageDetector:
             meeting only the file-count floor.
         """
         logger.info(
-            f"Detecting languages in: {self.repo_path} (floor tier, "
-            f"floor={floor}, ignoring confidence gate)"
+            "Detecting languages in: %s (floor tier, floor=%s, ignoring confidence gate)",
+            self.repo_path,
+            floor
         )
         stats = self._scan_repository()
 
@@ -266,20 +272,22 @@ class LanguageDetector:
             if info.file_count >= floor:
                 detected[lang] = info
                 logger.warning(
-                    f"⚠ Floor-tier include {lang}: file_count={info.file_count} "
-                    f"(floor={floor}), confidence={info.confidence:.2f} "
-                    f"(would-be-min={patterns['min_confidence']}), "
-                    f"build_files={sorted(info.build_files_found) or 'none'} "
-                    f"— low-confidence detection, verify scan results"
+                    "⚠ Floor-tier include %s: file_count=%s (floor=%s), confidence=%.2f (would-be-min=%s), build_files=%s — low-confidence detection, verify scan results",
+                    lang,
+                    info.file_count,
+                    floor,
+                    info.confidence,
+                    patterns['min_confidence'],
+                    sorted(info.build_files_found) or 'none'
                 )
 
         if not detected:
             logger.warning(
-                f"No languages detected even at floor={floor}; "
-                f"target has no scannable source code"
+                "No languages detected even at floor=%s; target has no scannable source code",
+                floor
             )
         else:
-            logger.info(f"Floor-tier detected: {len(detected)} language(s)")
+            logger.info("Floor-tier detected: %d language(s)", len(detected))
 
         return detected
 
@@ -322,15 +330,15 @@ class LanguageDetector:
                 # Performance limit
                 if stats["scanned_files"] >= self.max_files:
                     logger.warning(
-                        f"Reached max file scan limit ({self.max_files}), "
-                        f"detection may be incomplete"
+                        "Reached max file scan limit (%s), detection may be incomplete",
+                        self.max_files
                     )
                     break
 
         except Exception as e:
-            logger.error(f"Error scanning repository: {e}")
+            logger.error("Error scanning repository: %s", e)
 
-        logger.debug(f"Scanned {stats['scanned_files']} files")
+        logger.debug("Scanned %s files", stats['scanned_files'])
         return stats
 
     def _walk_repository(self):
@@ -359,7 +367,7 @@ class LanguageDetector:
                     if p.is_file():
                         yield p
         except PermissionError as e:
-            logger.warning(f"Permission denied accessing: {e}")
+            logger.warning("Permission denied accessing: %s", e)
 
     def _analyze_language(self, lang: str, patterns: Dict, stats: Dict) -> LanguageInfo:
         """
@@ -476,7 +484,7 @@ class LanguageDetector:
         )
 
         primary = sorted_langs[0][0]
-        logger.info(f"Primary language: {primary}")
+        logger.info("Primary language: %s", primary)
         return primary
 
     def filter_codeql_supported(self, detected: Dict[str, LanguageInfo]) -> Dict[str, LanguageInfo]:
@@ -498,7 +506,7 @@ class LanguageDetector:
         unsupported = set(detected.keys()) - set(supported.keys())
         if unsupported:
             logger.warning(
-                f"Languages detected but not supported by CodeQL: {', '.join(unsupported)}"
+                "Languages detected but not supported by CodeQL: %s", ', '.join(unsupported)
             )
 
         return supported

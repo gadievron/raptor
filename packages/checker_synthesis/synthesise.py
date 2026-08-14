@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from core.atomic_fs import write_text_atomically
 
-from .languages import detect_engine
+from .languages import detect_engine, fallback_engine
 from .models import (
     CheckerSynthesisResult,
     Match,
@@ -82,8 +82,9 @@ def _validate_seed_path(file_path: str) -> Optional[str]:
 
 
 def _validate_rule_body(body: str) -> Optional[str]:
-    """Reject rule bodies with control chars or oversized lines.
-    Returns an error string on rejection, or None if OK."""
+    """Reject rule bodies with control chars, oversized lines, or
+    known-invalid syntax.  Returns an error string on rejection, or
+    None if OK."""
     if "\x00" in body:
         return "rule body contains null byte"
     for i, line in enumerate(body.split("\n"), 1):
@@ -92,6 +93,36 @@ def _validate_rule_body(body: str) -> Optional[str]:
                 f"rule body line {i} exceeds {_RULE_BODY_MAX_LINE} chars "
                 f"({len(line)})"
             )
+    return None
+
+
+_INVALID_WHEN_RE = re.compile(
+    r"^\s*when\s*!=\s*(?:if|assert|while|for|switch)\s*\(.*$",
+    re.MULTILINE,
+)
+
+
+def _fixup_cocci_body(body: str) -> str:
+    """Strip known-invalid ``when`` clauses that LLMs persistently generate.
+
+    ``when != if (...)`` and similar compound-statement negations are
+    invalid SmPL — Coccinelle ``when`` can only negate expressions.
+    Rather than rejecting the whole rule (which the LLM regenerates
+    identically on retry), strip the offending lines so the remaining
+    rule gets a chance at dual control.
+    """
+    return _INVALID_WHEN_RE.sub("", body)
+
+
+def _validate_cocci_body(body: str) -> Optional[str]:
+    """Catch known-invalid Coccinelle syntax before invoking spatch.
+    Returns an error string on rejection, or None if OK."""
+    if re.search(r"when\s*!=\s*if\s*\(", body):
+        return (
+            "invalid SmPL: 'when != if (...)' — when clauses cannot "
+            "negate compound statements; use 'when != E == NULL' or "
+            "'when != !E' instead"
+        )
     return None
 
 
@@ -264,6 +295,8 @@ def _propose_rule(
     body_err = _validate_rule_body(body)
     if body_err:
         return None, body_err
+    if engine == "coccinelle":
+        body = _fixup_cocci_body(body)
     return SynthesisedRule(
         engine=engine,
         rule_id=_make_rule_id(seed, attempt),
@@ -432,88 +465,94 @@ def synthesise_and_run(
     if path_err:
         return CheckerSynthesisResult(seed=seed, errors=[path_err])
 
-    engine = detect_engine(seed.file)
-    if engine is None:
+    primary_engine = detect_engine(seed.file)
+    if primary_engine is None:
         return CheckerSynthesisResult(
             seed=seed,
             errors=[f"no engine for file extension of {seed.file!r}"],
         )
 
+    engines_to_try = [primary_engine]
+    alt = fallback_engine(primary_engine, seed.file)
+    if alt:
+        engines_to_try.append(alt)
+
     result = CheckerSynthesisResult(seed=seed)
-    feedback = ""
     rule: Optional[SynthesisedRule] = None
     rule_path: Optional[Path] = None
 
-    for attempt in range(max_retries + 1):
-        rule, err = _propose_rule(
-            seed, engine, attempt, llm, feedback,
-            prior_fps=tuple(prior_fps),
-        )
-        if err:
-            result.errors.append(f"attempt {attempt}: {err}")
-            rule = None
-            if attempt >= max_retries:
-                return result
-            feedback = err
-            continue
+    for engine in engines_to_try:
+        if rule is not None:
+            break
+        feedback = ""
+        for attempt in range(max_retries + 1):
+            tag = f"{engine} attempt {attempt}"
+            rule, err = _propose_rule(
+                seed, engine, attempt, llm, feedback,
+                prior_fps=tuple(prior_fps),
+            )
+            if err:
+                result.errors.append(f"{tag}: {err}")
+                rule = None
+                feedback = err
+                continue
 
-        rule_path = _write_rule(out_dir, rule)
-        ok, run_errors = _positive_control(seed, rule_path, repo_root, engine)
-        result.errors.extend(f"attempt {attempt}: {e}" for e in run_errors)
-        if ok:
-            # Dual control: validate against LLM-generated test
-            # fixtures before trusting the rule on the real target.
-            ext = _fixture_ext(seed, engine)
-            if rule.test_positive and rule.test_negative:
-                dc_ok, dc_errors = _dual_control(
-                    rule, rule_path, engine, ext,
-                )
-                result.errors.extend(
-                    f"attempt {attempt}: {e}" for e in dc_errors
-                )
-                if dc_ok:
-                    result.dual_control = True
+            rule_path = _write_rule(out_dir, rule)
+            ok, run_errors = _positive_control(
+                seed, rule_path, repo_root, engine,
+            )
+            result.errors.extend(f"{tag}: {e}" for e in run_errors)
+            if ok:
+                ext = _fixture_ext(seed, engine)
+                if rule.test_positive and rule.test_negative:
+                    dc_ok, dc_errors = _dual_control(
+                        rule, rule_path, engine, ext,
+                    )
+                    result.errors.extend(
+                        f"{tag}: {e}" for e in dc_errors
+                    )
+                    if dc_ok:
+                        result.dual_control = True
+                        logger.debug(
+                            "dual control passed for %s (%s)",
+                            seed.file, engine,
+                        )
+                        break
+                    dc_reason = " ".join(
+                        e for e in dc_errors
+                        if e.startswith("dual control:")
+                    )
                     logger.debug(
-                        "dual control passed for %s (positive "
-                        "matched, negative clean)",
+                        "dual control failed for %s %s: %s",
+                        seed.file, tag, dc_reason,
+                    )
+                    feedback = (
+                        "The rule matched the seed bug (positive "
+                        "control passed) but failed the dual "
+                        "control gate. " + dc_reason
+                    )
+                    rule = None
+                    rule_path = None
+                    continue
+                else:
+                    logger.warning(
+                        "dual control skipped: LLM did not emit "
+                        "test fixtures for %s",
                         seed.file,
                     )
                     break
-                dc_reason = " ".join(
-                    e for e in dc_errors
-                    if e.startswith("dual control:")
-                )
-                logger.debug(
-                    "dual control failed for %s attempt %d: %s",
-                    seed.file, attempt, dc_reason,
-                )
-                feedback = (
-                    "The rule matched the seed bug (positive control "
-                    "passed) but failed the dual control gate. "
-                    + dc_reason
-                )
-                rule = None
-                rule_path = None
-                continue
-            else:
-                logger.warning(
-                    "dual control skipped: LLM did not emit test "
-                    "fixtures for %s",
-                    seed.file,
-                )
-                break
-        # Positive control failed — retry if we still have budget.
-        result.errors.append(
-            f"attempt {attempt}: rule did not match seed at "
-            f"{seed.file}:{seed.line_start}-{seed.line_end}"
-        )
-        feedback = (
-            f"Previous rule did not match the seed bug at lines "
-            f"{seed.line_start}-{seed.line_end} of {seed.file}. "
-            f"Refine the pattern so it captures the original."
-        )
-        rule = None
-        rule_path = None
+            result.errors.append(
+                f"{tag}: rule did not match seed at "
+                f"{seed.file}:{seed.line_start}-{seed.line_end}"
+            )
+            feedback = (
+                f"Previous rule did not match the seed bug at "
+                f"lines {seed.line_start}-{seed.line_end} of "
+                f"{seed.file}. Refine the pattern so it captures "
+                f"the original."
+            )
+            rule = None
+            rule_path = None
 
     if rule is None or rule_path is None:
         return result

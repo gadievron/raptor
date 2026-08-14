@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 LLM availability detection.
 
@@ -13,9 +12,6 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
-
-import requests
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -119,11 +115,11 @@ def _host_is_local(raw: str) -> bool:
     return False
 
 
-_cached_ollama_models: Optional[List[str]] = None
+_cached_ollama_models: list[str] | None = None
 _ollama_checked: bool = False
 
 
-def _get_available_ollama_models() -> List[str]:
+def _get_available_ollama_models() -> list[str]:
     """Get list of available Ollama models. Cached per-process to avoid repeated HTTP checks."""
     global _cached_ollama_models, _ollama_checked
     if _ollama_checked:
@@ -141,17 +137,23 @@ def _get_available_ollama_models() -> List[str]:
     try:
         # ``ollama_url`` is validated via ``_validate_ollama_url``
         # (line 82); operator-config-supplied + scheme-locked.
-        response = requests.get(f"{ollama_url}/api/tags", timeout=2)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+        # loopback_safe_get: bypasses proxy env for loopback URLs —
+        # on mandatory-proxy hosts a plain requests.get routed
+        # localhost:11434 through the corporate proxy and Ollama was
+        # misdetected as absent.
+        from core.llm.egress import loopback_safe_get
+        response = loopback_safe_get(f"{ollama_url}/api/tags", timeout=2)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
         if response.status_code == 200:
             data = response.json()
-            _cached_ollama_models = [model['name'] for model in data.get('models', [])]
+            _cached_ollama_models = [
+                model.get('name') for model in data.get('models', [])
+                if isinstance(model, dict) and model.get('name')
+            ]
             _ollama_checked = True
             return _cached_ollama_models
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         ollama_display = RaptorConfig.OLLAMA_HOST if _host_is_local(RaptorConfig.OLLAMA_HOST) else '[REMOTE-OLLAMA]'
-        logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
-    _cached_ollama_models = []
-    _ollama_checked = True
+        logger.debug("Could not connect to Ollama at %s: %s", ollama_display, e)
     return []
 
 
@@ -161,7 +163,8 @@ def _check_litellm_installed() -> bool:
     Returns True if litellm was found (migration handled here), False otherwise.
     """
     try:
-        from importlib.metadata import version as pkg_version, PackageNotFoundError
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as pkg_version
         try:
             installed = pkg_version("litellm")
 
@@ -354,8 +357,8 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
         )
         return True
 
-    except Exception as e:
-        logger.debug(f"Auto-migration failed: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Auto-migration failed: %s", e)
         return False
 
 
@@ -405,8 +408,9 @@ def generate_sample_config() -> str:
     the actual defaults. Includes a commented example showing the
     api_key field format. Called by migration guidance and CLI help.
     """
-    from .model_data import PROVIDER_DEFAULT_MODELS
     import json
+
+    from .model_data import PROVIDER_DEFAULT_MODELS
 
     models = []
     for provider, model in PROVIDER_DEFAULT_MODELS.items():
@@ -466,8 +470,8 @@ def _read_config_models() -> list:
             return []
 
         return _apply_anthropic_resolution(model_list)
-    except Exception as e:
-        logger.debug(f"detection: model list parse failed, returning []: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("detection: model list parse failed, returning []: %s", e)
         return []
 
 
@@ -515,8 +519,9 @@ def _config_has_keyed_models() -> bool:
     A model is usable if it has an API key (inline or via env var)
     AND the required SDK is installed to talk to its provider.
     """
-    from .model_data import PROVIDER_ENV_KEYS
     from core.security.llm_family import provider_of
+
+    from .model_data import PROVIDER_ENV_KEYS
 
     for entry in _read_config_models():
         if not isinstance(entry, dict):
@@ -577,7 +582,7 @@ def _config_has_keyed_models() -> bool:
     return False
 
 
-_cached_llm_availability: Optional[LLMAvailability] = None
+_cached_llm_availability: LLMAvailability | None = None
 
 
 def detect_llm_availability() -> LLMAvailability:

@@ -359,6 +359,26 @@ class TestTuningReaders:
         assert val > 0
 
 
+class TestStripJsonLineComments:
+    def test_preserves_url_in_value(self):
+        from core.llm.concurrency import _strip_json_line_comments
+
+        text = '{"url": "http://example.com//path"}'
+        assert _strip_json_line_comments(text) == text
+
+    def test_strips_line_comment(self):
+        from core.llm.concurrency import _strip_json_line_comments
+
+        text = '{"key": 1} // this is a comment'
+        assert _strip_json_line_comments(text) == '{"key": 1} '
+
+    def test_preserves_double_slash_inside_string(self):
+        from core.llm.concurrency import _strip_json_line_comments
+
+        text = '{"path": "a//b"}'
+        assert _strip_json_line_comments(text) == text
+
+
 class TestRunParallel:
     def test_empty_items(self):
         from core.llm.concurrency import run_parallel

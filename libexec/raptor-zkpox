@@ -20,6 +20,7 @@ the package docstring (packages/zkpox/__init__.py).
 import faulthandler
 import signal
 import sys
+import tempfile
 from pathlib import Path
 
 faulthandler.enable()
@@ -27,7 +28,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -145,9 +146,22 @@ def _cmd_reproduce(args) -> int:
     attach_reproduction(bundle, result)
 
     # Re-persist the manifest with the reproduction block + tier bump.
-    manifest_path.write_text(
-        json.dumps(bundle.as_dict(), indent=2), encoding="utf-8",
-    )
+    # Atomic write via tempfile + rename to avoid partial writes.
+    fd, tmp = tempfile.mkstemp(
+        dir=str(manifest_path.parent), suffix=".tmp")
+    closed = False
+    try:
+        os.write(fd, json.dumps(
+            bundle.as_dict(), indent=2).encode("utf-8"))
+        os.close(fd)
+        closed = True
+        os.rename(tmp, str(manifest_path))
+    except BaseException:
+        if not closed:
+            os.close(fd)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
     print(render_bundle(bundle))
     print(f"  reproduced: {result.reproduced} "

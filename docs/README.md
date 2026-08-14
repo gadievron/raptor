@@ -27,8 +27,10 @@ overview:
 | `/codeql` | CodeQL deep analysis |
 | `/fuzz` | Binary fuzzing |
 | `/web` | Web application testing |
+| `/audit` | Systematic hypothesis-driven code review |
 | `/validate` | Exploitability validation pipeline |
 | `/understand` | Code comprehension and attack surface mapping |
+| `/review` | Query audit state (findings, gaps, coverage, notes) |
 | `/sca` | Software composition analysis |
 | `/binary` | Black-box binary investigation |
 | `/frida` | Dynamic instrumentation |
@@ -41,6 +43,7 @@ overview:
 | `/diagram` | Mermaid diagram generation |
 | `/annotate` | Per-function annotations |
 | `/scorecard` | Model reliability inspection |
+| `/sage` | Persistent memory (store, recall, link, corroborate) |
 | `/threat-model` | Project threat model management |
 | `/cve-diff` | CVE patch discovery |
 | `/analyze` | LLM analysis of existing SARIF |
@@ -58,6 +61,7 @@ overview:
 | [CodeQL](codeql.md) | CodeQL integration and autonomous analysis |
 | [Fuzzing](fuzzing.md) | AFL++ and libFuzzer |
 | [Crash Analysis](crash-analysis.md) | Autonomous crash root-cause analysis |
+| [Audit](audit.md) | Systematic code review: hypotheses, tools, strategies, gates |
 | [Validation](validation.md) | Exploitability validation pipeline (stages 0--1) |
 | [Binary Analysis](binary-analysis.md) | Binary oracle, `/binary`, exploit feasibility |
 | [SCA](sca.md) | Software composition analysis |
@@ -66,5 +70,7 @@ overview:
 | [LLM Providers](llm.md) | Provider configuration, Bedrock, multi-model workflows, cost management |
 | [Security](security.md) | RAPTOR's own security model |
 | [Threat Model](threat-model.md) | Per-project threat model feature |
+| [Configuration](configuration.md) | tuning.json, env vars, sandbox calibration |
 | [Dependencies](dependencies.md) | Tool requirements and licensing |
+| [Troubleshooting](troubleshooting.md) | Common failures and fixes by subsystem |
 | [Python CLI](python-cli.md) | Direct `raptor.py` usage for CI and scripting |

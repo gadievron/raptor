@@ -55,7 +55,7 @@ def get_client(
             return None
         return LLMClient(cfg)
     except Exception as e:
-        logger.warning(f"LLM client not available: {e}")
+        logger.warning("LLM client not available: %s", e)
         return None
 
 

@@ -375,7 +375,7 @@ def _parse_flag_string(
     # -- _FORTIFY_SOURCE -------------------------------------------------
     fortify_source_level: Optional[int] = None
     if _FORTIFY_UNDEF_RE.search(text):
-        fortify_source_level = 0
+        fortify_source_level = None
     else:
         m = _FORTIFY_LEVEL_RE.search(text)
         if m:

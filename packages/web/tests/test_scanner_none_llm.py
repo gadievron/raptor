@@ -32,6 +32,7 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                 "http://example.com",
                 verify_ssl=True,
                 reveal_secrets=False,
+                block_private_ips=True,
             )
 
     @patch("packages.web.scanner.WebCrawler")
@@ -50,6 +51,7 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                 "http://example.com",
                 verify_ssl=False,
                 reveal_secrets=True,
+                block_private_ips=True,
             )
 
     @patch("packages.web.scanner.WebCrawler")

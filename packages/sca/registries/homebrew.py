@@ -87,6 +87,8 @@ def _extract_versions(data: dict) -> List[str]:
     We only return the stable version; head/bottle aren't versioned
     pins an operator would want to harden to.
     """
+    if not isinstance(data, dict):
+        return []
     versions = data.get("versions")
     if not isinstance(versions, dict):
         return []

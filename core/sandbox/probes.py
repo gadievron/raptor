@@ -266,7 +266,7 @@ def check_net_available() -> bool:
             # then treat as "no network isolation available". Fail-
             # closed: caller sees a disabled sandbox, not a PATH-
             # hijacked one.
-            logger.debug(f"Sandbox: {e}")
+            logger.debug("Sandbox: %s", e)
             state._net_available_cache = False
             return False
 
@@ -497,7 +497,7 @@ def mount_unavailable_reason() -> tuple[str, str]:
         if v == "1":
             return (
                 "mount-ns blocked by host "
-                "(apparmor_restrict_unprivileged_userns=1)",
+                "(kernel.apparmor_restrict_unprivileged_userns=1)",
                 "set kernel.apparmor_restrict_unprivileged_userns=0 "
                 "(Ubuntu 24.04+) and install the uidmap package; or "
                 "rerun on a host where mount-ns is available.",

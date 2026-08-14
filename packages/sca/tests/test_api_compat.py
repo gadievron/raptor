@@ -92,7 +92,7 @@ class _StubHttp:
         self._payloads = payloads
         self.calls = []
 
-    def get_json(self, url: str, headers: Optional[dict] = None):
+    def get_json(self, url: str, headers: Optional[dict] = None, **kwargs):
         self.calls.append(url)
         for fragment, payload in self._payloads.items():
             if fragment in url:
@@ -199,7 +199,7 @@ def test_http_failure_silent():
     crash; we just skip the dep-set comparison."""
 
     class _Broken:
-        def get_json(self, url, headers=None):
+        def get_json(self, url, headers=None, **kwargs):
             raise RuntimeError("boom")
 
     report = check_pypi_api_compat("foo", "1.0.0", "1.1.0", http=_Broken())

@@ -46,6 +46,18 @@ except ImportError as _e:
 
 logger = get_logger()
 
+_MODEL_BANNER_SHOWN = False
+
+
+def _model_banner_shown() -> bool:
+    """Return True (and set flag) if the model banner was already logged."""
+    global _MODEL_BANNER_SHOWN
+    if _MODEL_BANNER_SHOWN:
+        return True
+    _MODEL_BANNER_SHOWN = True
+    return False
+
+
 # After this many consecutive cache write failures, auto-disable
 # caching for the rest of the run. Tuned for "transient blip vs
 # durable problem" — three retries lets a momentary EBUSY recover,
@@ -242,6 +254,11 @@ def _is_retryable_error(error: Exception) -> bool:
     Non-retryable: schema validation, auth errors (401/403), bad request (400),
     Instructor failures, Pydantic validation errors.
     """
+    # Credit exhaustion / billing cap — no amount of retrying will fix
+    from core.llm.providers import is_credit_exhausted
+    if is_credit_exhausted(error):
+        return False
+
     # Daily quotas are NOT retryable — won't clear for hours
     if _is_daily_quota_error(error):
         return False
@@ -259,7 +276,8 @@ def _is_retryable_error(error: Exception) -> bool:
 
     # Check error message for retryable patterns
     error_str = str(error).lower()
-    retryable_patterns = ("timeout", "connection", "502", "503", "504",
+    retryable_patterns = ("timeout", "timed out", "connection",
+                          "502", "503", "504",
                           "internal server error", "service unavailable")
     if any(p in error_str for p in retryable_patterns):
         return True
@@ -358,14 +376,18 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     if "/" in model_name:
         provider, model_name = model_name.split("/", 1)
     else:
-        # Use the canonical routing-provider resolver so Bedrock-shaped
-        # IDs (``us.anthropic.claude-...``, ``eu.anthropic.claude-...``)
-        # correctly resolve to ``provider="bedrock"`` and downstream
-        # ``create_provider`` picks the dispatcher's bedrock path.
-        # The crude prefix-match this replaced returned ``"anthropic"``
-        # for ``eu.anthropic.claude-*`` (no prefix match → fell through
-        # to default), silently routing the request to direct Anthropic.
-        from core.security.llm_family import provider_of as _provider_of
+        from core.security.llm_family import (
+            provider_of as _provider_of,
+            resolve_model_shorthand as _resolve_shorthand,
+        )
+        configured = [
+            e.get("model", "")
+            for e in _get_configured_models()
+            if e.get("model")
+        ]
+        resolved = _resolve_shorthand(model_name, configured)
+        if resolved is not None:
+            model_name = resolved
         provider = _provider_of(model_name) or "anthropic"
 
     # Credential discovery, in this order:
@@ -435,6 +457,7 @@ class LLMClient:
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self.request_count = 0
+        self.cache_hits = 0
         self.task_type_costs: Dict[str, float] = {}  # task_type → cumulative cost
         # Distinct models actually invoked during this client's lifetime,
         # keyed by (provider, alias, resolved, role) → call count. Feeds the
@@ -495,15 +518,34 @@ class LLMClient:
                 "for this run.", e,
             )
 
-        # HEALTH CHECK: Warn if no API keys configured
+        # HEALTH CHECK: Warn if no API keys configured. When the
+        # claude CLI transport is the resolved primary (the claudecode
+        # fallback), calls will NOT "likely fail" — warning so said
+        # anyway and sent operators chasing API keys while dispatches
+        # were succeeding through the CLI. Say what is actually true.
         from .detection import detect_llm_availability
         availability = detect_llm_availability()
         if not availability.external_llm:
-            logger.warning(
-                "No external LLM available (no API keys, no config file, no Ollama). "
-                "LLMClient constructed but calls will likely fail. "
-                "For production use, configure at least one LLM provider."
-            )
+            primary = self.config.primary_model
+            if primary is not None and primary.provider.startswith("claudecode"):
+                logger.info(
+                    "No external LLM configured — using the claude CLI "
+                    "transport (provider %s). Slower than SDK access; "
+                    "configure models.json for direct API calls.",
+                    primary.provider,
+                )
+            elif availability.claude_code:
+                logger.info(
+                    "No external LLM configured; Claude Code is available "
+                    "and will do the reasoning for prep-only pipelines."
+                )
+            else:
+                logger.warning(
+                    "No external LLM available (no API keys, no config file, "
+                    "no Ollama, no claude CLI). LLMClient constructed but "
+                    "calls will likely fail. Configure at least one LLM "
+                    "provider."
+                )
 
         # Initialize cache
         if self.config.enable_caching:
@@ -511,7 +553,7 @@ class LLMClient:
                 self.config.cache_dir.mkdir(parents=True, exist_ok=True)
             except OSError:
                 self.config.enable_caching = False
-                logger.warning(f"Cannot create cache dir {self.config.cache_dir} — caching disabled")
+                logger.warning("Cannot create cache dir %s — caching disabled", self.config.cache_dir)
 
         # Consecutive cache-write failure counter. Auto-disable
         # caching after `_CACHE_WRITE_FAILURE_THRESHOLD` in a row to
@@ -520,22 +562,18 @@ class LLMClient:
         self._cache_write_failures = 0
 
         logger.debug("LLM Client initialized")
-        if self._pinned_model:
-            # Caller has signalled it will override the model on every call.
-            # Suppress the misleading "Primary: <auto-selected>" and
-            # "Fallback models: N" lines — those reflect the operator's
-            # default config, but none of them will actually fire in this
-            # run.  Log what WILL fire instead.
-            logger.info(
-                f"Pinned model: {self._pinned_model} "
-                f"(caller override; RAPTOR config defaults bypassed)"
-            )
-        elif self.config.primary_model:
-            logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
-            if self.config.enable_fallback:
-                logger.info(f"Fallback models: {len(self.config.fallback_models)}")
-        else:
-            logger.warning("LLM Client initialized with no primary model — all calls will fail")
+        if not _model_banner_shown():
+            if self._pinned_model:
+                logger.info(
+                    "Pinned model: %s (caller override; RAPTOR config defaults bypassed)",
+                    self._pinned_model,
+                )
+            elif self.config.primary_model:
+                logger.info("Primary model: %s/%s", self.config.primary_model.provider, self.config.primary_model.model_name)
+                if self.config.enable_fallback:
+                    logger.info("Fallback models: %d", len(self.config.fallback_models))
+            else:
+                logger.warning("LLM Client initialized with no primary model — all calls will fail")
 
         # Warn if using Ollama for exploit generation
         if self.config.primary_model and self.config.primary_model.provider.lower() == "ollama":
@@ -562,7 +600,7 @@ class LLMClient:
 
         with self._stats_lock:
             if key not in self.providers:
-                logger.debug(f"Creating provider: {key}")
+                logger.debug("Creating provider: %s", key)
                 self.providers[key] = create_provider(model_config)
             return self.providers[key]
 
@@ -904,19 +942,20 @@ class LLMClient:
                 if not alias:
                     continue
                 p = int(counts.get("pass") or 0)
-                f = int(counts.get("fail") or 0)
-                if not (p or f):
+                fail_count = int(counts.get("fail") or 0)
+                if not (p or fail_count):
                     continue
                 uses.append({
                     "model": alias, "decision_class": "_structured",
-                    "calls": p + f,
-                    "schema_valid_pass": p, "schema_valid_fail": f,
+                    "calls": p + fail_count,
+                    "schema_valid_pass": p, "schema_valid_fail": fail_count,
                 })
             self.scorecard.register_uses(uses)
             # Per-run scorecard delta — the discoverability lever. One line at
             # process end so every command's user sees the scorecard active
             # and learns the command exists. Best-effort print to stderr.
             try:
+                import os as _os
                 import sys as _sys
                 # Test-run noise suppression: under pytest, a scorecard
                 # line for a zero-cost run (stub providers, cache-only
@@ -935,6 +974,8 @@ class LLMClient:
                 # after pytest has already unset the per-test env var.
                 # sys.modules entry persists for the process lifetime.
                 if "pytest" in _sys.modules and tot_cost == 0.0:
+                    return
+                if _os.environ.get("RAPTOR_LLM_QUIET"):
                     return
                 avg_ms = (tot_lat_ms // tot_calls) if tot_calls else 0
                 # Four-decimal format always: preserves sub-penny
@@ -1015,9 +1056,9 @@ class LLMClient:
         if data is None:
             return None
         if self._is_entry_stale(data):
-            logger.debug(f"Cache stale (TTL): {cache_key}")
+            logger.debug("Cache stale (TTL): %s", cache_key)
             return None
-        logger.debug(f"Cache hit: {cache_key}")
+        logger.debug("Cache hit: %s", cache_key)
         return data.get("content")
 
     def _save_to_cache(self, cache_key: str, response: LLMResponse) -> None:
@@ -1108,6 +1149,10 @@ class LLMClient:
                 # only job is to bring count down, and that's happening.
                 continue
 
+    # Bump when schema-to-Pydantic conversion changes behaviour so
+    # cached results validated under old rules are not replayed.
+    _STRUCTURED_CACHE_VERSION = 3  # v3: nested schema recursion
+
     def _get_structured_cache_key(
         self, prompt: str, system_prompt: Optional[str],
         model: str, schema: Dict[str, Any],
@@ -1128,6 +1173,7 @@ class LLMClient:
             # weird, fall back to repr — still deterministic for that caller.
             schema_json = repr(schema)
         content = (
+            f"v{self._STRUCTURED_CACHE_VERSION}:"
             f"{model}:{system_prompt or ''}:{prompt}:{schema_json}:"
             f"{self._kwargs_for_cache_key(kwargs)}"
         )
@@ -1150,9 +1196,9 @@ class LLMClient:
         if "result" not in data or "raw" not in data:
             return None
         if self._is_entry_stale(data):
-            logger.debug(f"Structured cache stale (TTL): {cache_key}")
+            logger.debug("Structured cache stale (TTL): %s", cache_key)
             return None
-        logger.debug(f"Structured cache hit: {cache_key}")
+        logger.debug("Structured cache hit: %s", cache_key)
         return data["result"], data["raw"]
 
     def _save_structured_to_cache(
@@ -1206,7 +1252,7 @@ class LLMClient:
 
         with self._stats_lock:
             if self.total_cost + estimated_cost > self.config.max_cost_per_scan:
-                logger.error(f"Budget exceeded: ${self.total_cost:.2f} + ${estimated_cost:.2f} > ${self.config.max_cost_per_scan:.2f}")
+                logger.error("Budget exceeded: $%.2f + $%.2f > $%.2f", self.total_cost, estimated_cost, self.config.max_cost_per_scan)
                 return False
 
         return True
@@ -1338,9 +1384,10 @@ class LLMClient:
         with self._key_lock(cache_key):
             cached_content = self._get_cached_response(cache_key)
             if cached_content is not None:
-                logger.debug(f"Using cached response for {model_config.provider}/{model_config.model_name}")
+                logger.debug("Using cached response for %s/%s", model_config.provider, model_config.model_name)
                 with self._stats_lock:
                     self.request_count += 1
+                    self.cache_hits += 1
                 return LLMResponse(
                     content=cached_content,
                     model=model_config.model_name,
@@ -1396,13 +1443,13 @@ class LLMClient:
                 attempts_count += 1
 
                 if model_idx == 0:
-                    logger.debug(f"Using model: {model.provider}/{model.model_name}")
+                    logger.debug("Using model: %s/%s", model.provider, model.model_name)
                 else:
-                    logger.warning(f"Falling back to: {model.provider}/{model.model_name}")
+                    logger.warning("Falling back to: %s/%s", model.provider, model.model_name)
                 if model.provider.lower() == "ollama":
                     logger.warning("Local model — exploit PoCs may be unreliable")
 
-                logger.debug(f"Trying model: {model.provider}/{model.model_name}")
+                logger.debug("Trying model: %s/%s", model.provider, model.model_name)
 
                 for attempt in range(self.config.max_retries):
                     try:
@@ -1415,7 +1462,7 @@ class LLMClient:
                             # the retry from either. Adding an INFO
                             # bookend produces operator log noise
                             # without new signal.
-                            logger.debug(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
+                            logger.debug("Retrying %s/%s (attempt %d/%d)", model.provider, model.model_name, attempt + 1, self.config.max_retries)
 
                         provider = self._get_provider(model)
                         # Acquire budget reservation immediately before the
@@ -1477,9 +1524,7 @@ class LLMClient:
                             duration_s=duration,
                         )
 
-                        logger.debug(f"Generation successful: {model.provider}/{model.model_name} "
-                                    f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f}, "
-                                    f"duration: {duration:.1f}s)")
+                        logger.debug("Generation successful: %s/%s (tokens: %s, cost: $%.4f, duration: %.1fs)", model.provider, model.model_name, response.tokens_used, response.cost, duration)
 
                         return response
 
@@ -1530,24 +1575,30 @@ class LLMClient:
                         )
                         _safe_e = _esc_np(_redact(str(e)))[:1024]
                         logger.warning(
-                            f"Attempt {attempt + 1}/{self.config.max_retries} "
-                            f"failed for {model.provider}/{model.model_name}: "
-                            f"{_safe_e}"
+                            "Attempt %d/%d failed for %s/%s: %s",
+                            attempt + 1, self.config.max_retries,
+                            model.provider, model.model_name, _safe_e,
                         )
 
                         if not _is_retryable_error(e):
-                            logger.info(f"Non-retryable error — skipping remaining retries for {model.provider}/{model.model_name}")
+                            logger.info("Non-retryable error — skipping remaining retries for %s/%s", model.provider, model.model_name)
                             break
 
                         if attempt < self.config.max_retries - 1:
                             delay = min(self.config.retry_delay * (2 ** attempt), 30)
-                            logger.debug(f"Retrying in {delay}s...")
+                            logger.debug("Retrying in %ss...", delay)
                             time.sleep(delay)
 
-                logger.warning(f"All attempts failed for {model.provider}/{model.model_name}, trying next model...")
+                logger.warning("All attempts failed for %s/%s, trying next model...", model.provider, model.model_name)
 
             # All models in tier failed
-            tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
+            _prov = model_config.provider.lower()
+            if _prov == "ollama":
+                tier = "local (Ollama)"
+            elif _prov.startswith("claudecode"):
+                tier = "claude CLI"
+            else:
+                tier = "cloud"
             error_msg = f"All {tier} models failed (tried {attempts_count} model(s))."
 
             # Check if last error was quota-related
@@ -1558,12 +1609,24 @@ class LLMClient:
                 error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
                 if tier == "local (Ollama)":
                     error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
+                elif tier == "claude CLI":
+                    error_msg += (
+                        "\n→ claude CLI transport — the cause is in the "
+                        "error above (timeout / per-call budget / CLI "
+                        "failure), not API keys. Verify `claude -p` works."
+                    )
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
             else:
                 error_msg += "\nNo enabled models available in this tier."
                 if tier == "local (Ollama)":
                     error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
+                elif tier == "claude CLI":
+                    error_msg += (
+                        "\n→ claude CLI transport — the cause is in the "
+                        "error above (timeout / per-call budget / CLI "
+                        "failure), not API keys. Verify `claude -p` works."
+                    )
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
 
@@ -1663,6 +1726,7 @@ class LLMClient:
                 )
                 with self._stats_lock:
                     self.request_count += 1
+                    self.cache_hits += 1
                 return StructuredResponse(
                     result=cached_result,
                     raw=cached_raw,
@@ -1706,9 +1770,9 @@ class LLMClient:
                 attempts_count += 1
 
                 if model_idx == 0:
-                    logger.debug(f"Using model: {model.provider}/{model.model_name} (structured)")
+                    logger.debug("Using model: %s/%s (structured)", model.provider, model.model_name)
                 else:
-                    logger.warning(f"Falling back to: {model.provider}/{model.model_name} (structured)")
+                    logger.warning("Falling back to: %s/%s (structured)", model.provider, model.model_name)
                 if model.provider.lower() == "ollama":
                     logger.warning("Local model — exploit PoCs may be unreliable")
 
@@ -1717,7 +1781,7 @@ class LLMClient:
                         if attempt > 0:
                             # DEBUG, not INFO — see ``generate`` above
                             # for the same noise-vs-signal rationale.
-                            logger.debug(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
+                            logger.debug("Retrying %s/%s (attempt %d/%d)", model.provider, model.model_name, attempt + 1, self.config.max_retries)
 
                         provider = self._get_provider(model)
 
@@ -1776,9 +1840,7 @@ class LLMClient:
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
 
-                        logger.debug(f"Structured generation successful: {model.provider}/{model.model_name} "
-                                    f"(tokens: {tokens_delta}, cost: ${cost_delta:.4f}, "
-                                    f"duration: {duration:.1f}s)")
+                        logger.debug("Structured generation successful: %s/%s (tokens: %s, cost: $%.4f, duration: %.1fs)", model.provider, model.model_name, tokens_delta, cost_delta, duration)
 
                         result_dict, raw = result_tuple
                         # Lift the resolved snapshot the provider attached
@@ -1865,21 +1927,27 @@ class LLMClient:
                         )
                         _safe_e = _esc_np(_redact(str(e)))[:1024]
                         logger.warning(
-                            f"Structured generation attempt {attempt + 1} "
-                            f"failed: {_safe_e}"
+                            "Structured generation attempt %d failed: %s",
+                            attempt + 1, _safe_e,
                         )
 
                         if not _is_retryable_error(e):
-                            logger.info(f"Non-retryable error — skipping remaining retries for {model.provider}/{model.model_name}")
+                            logger.info("Non-retryable error — skipping remaining retries for %s/%s", model.provider, model.model_name)
                             break
 
                         if attempt < self.config.max_retries - 1:
                             delay = min(self.config.retry_delay * (2 ** attempt), 30)
-                            logger.debug(f"Retrying in {delay}s...")
+                            logger.debug("Retrying in %ss...", delay)
                             time.sleep(delay)
 
             # All models in tier failed
-            tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
+            _prov = model_config.provider.lower()
+            if _prov == "ollama":
+                tier = "local (Ollama)"
+            elif _prov.startswith("claudecode"):
+                tier = "claude CLI"
+            else:
+                tier = "cloud"
             error_msg = f"Structured generation failed for all {tier} models (tried {attempts_count} model(s))."
 
             if last_error and _is_quota_error(last_error):
@@ -1889,12 +1957,24 @@ class LLMClient:
                 error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
                 if tier == "local (Ollama)":
                     error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
+                elif tier == "claude CLI":
+                    error_msg += (
+                        "\n→ claude CLI transport — the cause is in the "
+                        "error above (timeout / per-call budget / CLI "
+                        "failure), not API keys. Verify `claude -p` works."
+                    )
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
             else:
                 error_msg += "\nNo enabled models available in this tier."
                 if tier == "local (Ollama)":
                     error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
+                elif tier == "claude CLI":
+                    error_msg += (
+                        "\n→ claude CLI transport — the cause is in the "
+                        "error above (timeout / per-call budget / CLI "
+                        "failure), not API keys. Verify `claude -p` works."
+                    )
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
 
@@ -1922,11 +2002,14 @@ class LLMClient:
             provider_stats[key] = pstat
 
         with self._stats_lock:
-            return {
+            stats = {
                 "total_requests": self.request_count,
                 "total_cost": self.total_cost,
                 "budget_remaining": self.config.max_cost_per_scan - self.total_cost,
                 "providers": provider_stats,
                 "task_type_costs": dict(self.task_type_costs),
             }
+            if self.cache_hits:
+                stats["cache_hits"] = self.cache_hits
+            return stats
 

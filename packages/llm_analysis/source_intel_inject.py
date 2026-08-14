@@ -134,20 +134,20 @@ def prepare_source_intel(
             repo_path,
         )
         return
-    from packages.source_intel.cache import compute_target_signature
-    sig = compute_target_signature(repo_path)
-    with _SI_LOCK:
-        cached = _SI_RESULT_CACHE.get(key)
-        if cached is not None and cached[0] == sig:
-            return  # already attempted on this exact tree state
     if _analyze is None:
         logger.debug(
             "prepare_source_intel: packages.source_intel not importable; "
             "skipping injection wiring",
         )
         with _SI_LOCK:
-            _SI_RESULT_CACHE[key] = (sig, None)
+            _SI_RESULT_CACHE[key] = ("", None)
         return
+    from packages.source_intel.cache import compute_target_signature
+    sig = compute_target_signature(repo_path)
+    with _SI_LOCK:
+        cached = _SI_RESULT_CACHE.get(key)
+        if cached is not None and cached[0] == sig:
+            return  # already attempted on this exact tree state
     try:
         result = _analyze(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001

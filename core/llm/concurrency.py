@@ -33,6 +33,9 @@ def derive_max_workers(model: str) -> int:
     that value is used (still clamped to [1, 32]).  Otherwise
     returns ``rpm // 2`` (headroom for retries) clamped to [1, 32].
     Falls back to 1 when RPM is unknown.
+
+    ``"default"`` is resolved to the actual primary model inside
+    ``rpm_for`` so callers need not resolve it themselves.
     """
     override = read_tuning_max_llm_workers()
     if override is not None:
@@ -50,11 +53,31 @@ def _tuning_path() -> Path:
     return Path(__file__).resolve().parents[2] / "tuning.json"
 
 
+def _strip_json_line_comments(text: str) -> str:
+    """Strip ``//`` line comments while respecting double-quoted strings."""
+    lines = []
+    for line in text.split("\n"):
+        in_str = False
+        i = 0
+        while i < len(line):
+            c = line[i]
+            if c == "\\" and in_str:
+                i += 2
+                continue
+            if c == '"':
+                in_str = not in_str
+            elif c == "/" and not in_str and i + 1 < len(line) and line[i + 1] == "/":
+                line = line[:i]
+                break
+            i += 1
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _read_tuning() -> dict:
     try:
-        import re
         text = _tuning_path().read_text()
-        clean = re.sub(r"//.*", "", text)
+        clean = _strip_json_line_comments(text)
         return json.loads(clean)
     except Exception:
         return {}
@@ -157,6 +180,8 @@ def run_parallel(
                                 thread_name_prefix=label) as pool:
             result = list(pool.map(_do, enumerate(items)))
     finally:
+        final_effective = throttle.effective_workers
+        final_signals = throttle.signal_count
         throttle.close()
 
     logger.info(
@@ -164,8 +189,8 @@ def run_parallel(
         label,
         sum(1 for r in result if r is not None),
         len(items),
-        throttle.signal_count,
+        final_signals,
         throttle.max_workers,
-        throttle.effective_workers,
+        final_effective,
     )
     return result

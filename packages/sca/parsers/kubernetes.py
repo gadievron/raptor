@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 ECOSYSTEM = "OCI"
 _PURL_TYPE = "oci"
 
+_FLOATING_TAGS = frozenset({
+    "latest", "stable", "edge", "nightly", "dev",
+    "beta", "alpha", "rc", "canary",
+    "main", "master",
+})
+
 
 # Workload kinds that carry images via ``spec.containers[]`` (or
 # ``spec.template.spec.containers[]`` for higher-level wrappers).
@@ -233,6 +239,8 @@ def _build_dep(
     if container_name:
         extra["container"] = container_name
 
+    pin_style = _classify_pin_style(version)
+
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=name,
@@ -240,16 +248,27 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=pin_style,
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            "high",
+            "high" if pin_style == PinStyle.EXACT else "medium",
             reason=f"k8s {kind_ctx}: {image_ref}",
         ),
         source_kind="k8s",
         source_extra=extra,
     )
+
+
+def _classify_pin_style(version: Optional[str]) -> PinStyle:
+    """Classify an OCI tag's pin style."""
+    if not version:
+        return PinStyle.WILDCARD
+    if version.startswith("sha256:"):
+        return PinStyle.EXACT
+    if version.lower() in _FLOATING_TAGS:
+        return PinStyle.WILDCARD
+    return PinStyle.EXACT
 
 
 def _split_image_ref(ref: str) -> tuple:

@@ -92,12 +92,11 @@ python3 raptor.py doctor
 # Dynamic instrumentation
 python3 raptor.py frida --target /path/to/binary
 
-# CI pipeline (fast mode, no exploits, non-zero exit on critical findings)
+# CI pipeline (no exploits, non-zero exit on critical findings)
 python3 raptor.py agentic \
   --repo . \
   --policy-groups owasp,secrets \
   --max-findings 5 \
-  --mode fast \
   --no-exploits
 ```
 

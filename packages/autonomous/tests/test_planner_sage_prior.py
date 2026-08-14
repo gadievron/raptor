@@ -15,7 +15,6 @@ class TestPlannerSageMechanicalPrior(unittest.TestCase):
         ]
         planner = FuzzingPlanner(
             memory=None,
-            sage_planning_notes="notes",
             sage_strategy_rows=rows,
         )
         state = FuzzingState(start_time=0.0, current_time=1.0)
@@ -34,6 +33,19 @@ class TestPlannerSageMechanicalPrior(unittest.TestCase):
         with mock.patch.dict(os.environ, {"RAPTOR_SAGE_AFL_PRIOR": "0"}, clear=False):
             strat = planner.select_fuzzing_strategy(state)
         self.assertNotIn("-L", strat.get("extra_flags", []))
+
+
+class TestDecisionHistorySerialisation(unittest.TestCase):
+    def test_action_stored_as_string_not_enum(self):
+        import json
+        planner = FuzzingPlanner(memory=None)
+        state = FuzzingState(start_time=0.0, current_time=1.0)
+        planner.decide_next_action(state)
+        assert planner.decision_history
+        entry = planner.decision_history[-1]
+        json.dumps(entry)
+        assert isinstance(entry["action"], str)
+        assert "Action." not in entry["action"]
 
 
 if __name__ == "__main__":

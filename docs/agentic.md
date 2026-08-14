@@ -133,6 +133,15 @@ dedup, prep, dataflow -- no analysis).  In that mode the findings sit in
 `autonomous_analysis_report.json` with code and dataflow attached, ready for
 manual analysis.
 
+### Persona injection
+
+The methodology loader (`core/llm/methodology.py`) automatically injects
+expert persona content from `tiers/personas/` into analysis system
+prompts.  The crash agent gets the crash analyst and binary exploitation
+specialist personas; the autonomous analyser gets the security researcher
+for analysis and the exploit developer for exploit generation.  This
+happens transparently -- no flags needed.
+
 
 ## Multi-model analysis
 

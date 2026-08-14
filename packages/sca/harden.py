@@ -198,7 +198,7 @@ def main(argv: Sequence[str]) -> int:
               file=sys.stderr)
         return 2
 
-    http = default_client()
+    http = default_client(offline=args.offline)
     cache = (None if args.no_cache else
              JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT))
     osv = OsvClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
@@ -322,6 +322,7 @@ def main(argv: Sequence[str]) -> int:
             ecosystem_allowlist=ecosystem_allowlist,
             allow_major_without_review=args.allow_major_without_review,
             allow_degraded=args.allow_degraded,
+            library_mode=library_mode,
         )
         if rc != 0:
             return rc
@@ -1160,6 +1161,7 @@ def _run_self_test(
     allow_major_without_review: bool,
     allow_degraded: bool,
     pin_debian: bool = False,
+    library_mode: bool = False,
 ) -> int:
     """Apply patch to a temp copy of ``target`` and re-run the planner.
 
@@ -1270,7 +1272,7 @@ def _run_self_test(
             target=worktree,
             registries=registries, osv=osv, kev=kev, epss=epss,
             offline=offline, allow_major=allow_major, pin_only=pin_only,
-            pin_debian=pin_debian,
+            pin_debian=pin_debian, library_mode=library_mode,
         )
         post_actionable = _count_actionable(
             post_candidates,

@@ -78,6 +78,11 @@ def _sandbox_state_guard():
         # (where the cache otherwise stays at None and the function
         # short-circuits to False on platform check).
         "_seatbelt_available_cache",
+        # raptor-gidmap-allow helper probe result + warn-once flag.
+        # test_spawn_mount_ns.py::TestGidmapAllowProbe resets the cache
+        # to exercise the probe; without snapshot the poisoned value
+        # leaks into subsequent tests.
+        "_gidmap_allow_cache", "_gidmap_allow_warned_missing",
         "_unshare_path_cache", "_prlimit_path_cache",
         "_mount_path_cache", "_mkdir_path_cache",
     ]

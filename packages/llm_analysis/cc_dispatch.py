@@ -18,6 +18,7 @@ from typing import Any, Dict
 from core.llm.cc_adapter import (
     CCDispatchConfig,
     build_cc_command,
+    cc_subprocess_env,
     parse_cc_structured,
     parse_cc_freeform,
 )
@@ -85,9 +86,15 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # setting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC /
         # ENABLE_CLAUDEAI_MCP_SERVERS env vars: undocumented Claude
         # Code internals; the egress proxy allowlist is OUR policy.
+        # env: safe baseline + CLAUDE_CODE_*/ANTHROPIC_*/AWS_* overlay —
+        # a Bedrock/Vertex-backed CLI child needs its backend env to
+        # authenticate (bare get_safe_env leaves it credential-less and
+        # it hangs to timeout). The sandbox's proxy_env_overrides still
+        # win for HTTPS_PROXY, so egress stays on the chokepoint.
         proc = run_untrusted_networked(
             cmd, input=prompt, capture_output=True, text=True,
             timeout=timeout, target=str(repo_path), output=str(out_dir),
+            env=cc_subprocess_env(),
             readable_paths=readable_paths_for_cc_dispatch(claude_bin),
             proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
             caller_label="claude-sub-agent",

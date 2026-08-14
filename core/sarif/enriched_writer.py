@@ -86,6 +86,8 @@ def _build_result(finding: Dict[str, Any]) -> Dict[str, Any]:
     start_line = finding.get("start_line")
     if start_line is None:
         start_line = finding.get("startLine")
+    if start_line is None:
+        start_line = finding.get("line")
     if start_line is None or start_line < 1:
         start_line = 1
 

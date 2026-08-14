@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -82,36 +84,51 @@ class YarnResolver:
             cmd = ["yarn", "install", "--mode=update-lockfile",
                    "--immutable-cache"]
 
-        try:
-            proc = _run(
-                cmd,
-                cwd=project_dir,
-                timeout=timeout,
-                proxy_hosts=self.proxy_hosts,
-            )
-        except subprocess.TimeoutExpired:
-            return ResolverResult(
-                ecosystem=self.ecosystem,
-                success=False, available=True,
-                error=f"yarn install timed out after {timeout}s",
-            )
+        # Berry (2.x+) removed --ignore-scripts; the equivalent is the
+        # YARN_ENABLE_SCRIPTS env var.  Set it unconditionally — harmless
+        # on classic (ignores unknown env), load-bearing on Berry.
+        env = {"YARN_ENABLE_SCRIPTS": "false"}
 
-        raw = (proc.stdout + "\n" + proc.stderr).strip()
-        if proc.returncode != 0:
+        # Copy manifest files into a writable tempdir — the sandbox
+        # only allows writes to the output dir and /tmp, not cwd.
+        with tempfile.TemporaryDirectory(prefix="raptor-sca-yarn-") as tmp:
+            tmp_path = Path(tmp)
+            for fname in ("package.json", "yarn.lock"):
+                src = project_dir / fname
+                if src.exists():
+                    shutil.copy2(src, tmp_path / fname)
+
+            try:
+                proc = _run(
+                    cmd,
+                    cwd=tmp_path,
+                    timeout=timeout,
+                    proxy_hosts=self.proxy_hosts,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
+                return ResolverResult(
+                    ecosystem=self.ecosystem,
+                    success=False, available=True,
+                    error=f"yarn install timed out after {timeout}s",
+                )
+
+            raw = (proc.stdout + "\n" + proc.stderr).strip()
+            if proc.returncode != 0:
+                return ResolverResult(
+                    ecosystem=self.ecosystem,
+                    success=False, available=True,
+                    error=(proc.stderr.strip()
+                           or "yarn install exited non-zero"),
+                    raw_output=raw,
+                )
+            lockfile = _read_if_exists(tmp_path / "yarn.lock")
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=False, available=True,
-                error=(proc.stderr.strip()
-                       or "yarn install exited non-zero"),
+                success=True, available=True,
+                proposed_lockfile=lockfile,
                 raw_output=raw,
             )
-        lockfile = _read_if_exists(project_dir / "yarn.lock")
-        return ResolverResult(
-            ecosystem=self.ecosystem,
-            success=True, available=True,
-            proposed_lockfile=lockfile,
-            raw_output=raw,
-        )
 
 
 def _detect_major_version() -> Optional[int]:

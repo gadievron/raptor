@@ -1502,19 +1502,17 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
         mod_state._landlock_warned_unavailable = self._saved_unav
         mod_state._landlock_warned_abi_v4 = self._saved_abi
 
-    def test_warns_when_landlock_unavailable_but_target_set(self):
-        import core.sandbox as mod 
+    def test_raises_when_landlock_unavailable_but_target_set(self):
+        import core.sandbox as mod
+        from core.sandbox.errors import SandboxSetupError
         from unittest.mock import patch
         with TemporaryDirectory() as d:
-            # Force check_landlock_available → False regardless of host kernel.
             with patch.object(mod.landlock, "check_landlock_available", return_value=False):
-                # Also stub check_mount_available → False so we hit the
-                # Landlock-warning branch (use_mount=False).
                 with patch.object(mod.probes, "check_mount_available", return_value=False):
-                    with self.assertLogs("core.sandbox", level="WARNING") as cm:
+                    with self.assertRaises(SandboxSetupError) as cm:
                         with sandbox(target=d, output=d) as run:
                             run(["true"], capture_output=True, text=True)
-        self.assertTrue(any("Landlock is unavailable" in m for m in cm.output))
+        self.assertIn("Landlock is unavailable", cm.exception.reason)
 
     def test_warns_when_tcp_allowlist_on_abi_lt_4(self):
         import core.sandbox as mod 
@@ -1528,20 +1526,18 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
                             run(["true"], capture_output=True, text=True)
         self.assertTrue(any("ABI v4" in m for m in cm.output))
 
-    def test_degradation_warning_throttled(self):
-        """Opening many sandbox contexts on a degraded kernel warns ONCE."""
-        import core.sandbox as mod 
+    def test_landlock_unavailable_raises_every_time(self):
+        """Each sandbox() call raises when Landlock is unavailable — no silent degradation."""
+        import core.sandbox as mod
+        from core.sandbox.errors import SandboxSetupError
         from unittest.mock import patch
         with TemporaryDirectory() as d:
             with patch.object(mod.landlock, "check_landlock_available", return_value=False), \
                  patch.object(mod.probes, "check_mount_available", return_value=False):
-                with self.assertLogs("core.sandbox", level="WARNING") as cm:
-                    for _ in range(5):
+                for _ in range(3):
+                    with self.assertRaises(SandboxSetupError):
                         with sandbox(target=d, output=d) as run:
                             run(["true"], capture_output=True, text=True)
-        matches = [m for m in cm.output if "Landlock is unavailable" in m]
-        self.assertEqual(len(matches), 1,
-                         f"expected exactly 1 degradation warning, got {len(matches)}")
 
     def test_warns_on_old_landlock_abi_v2(self):
         """Pre-5.19 kernels lack REFER — rename-across-dirs isn't blocked.

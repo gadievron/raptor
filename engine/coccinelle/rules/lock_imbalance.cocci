@@ -11,6 +11,7 @@
 // pthread mutex is enumerated by lock_sites.cocci but not bug-detected here;
 // this rule remains kernel-focused. Keep the two files' kernel-locking name
 // sets aligned when extending.
+// @role: verification
 
 // Spinlock: error return with lock held
 @spin_held@
@@ -19,7 +20,9 @@ position p;
 constant C;
 @@
 
+// @vocab: lock_acquires
 \(spin_lock\|spin_lock_irq\|spin_lock_bh\|raw_spin_lock\|raw_spin_lock_irq\|raw_spin_lock_bh\)(&L);
+// @vocab: lock_releases
 ... when != \(spin_unlock\|spin_unlock_irq\|spin_unlock_bh\|raw_spin_unlock\|raw_spin_unlock_irq\|raw_spin_unlock_bh\)(&L)
 (
 * return@p -C;
@@ -46,6 +49,7 @@ position p;
 constant C;
 @@
 
+// @vocab: lock_acquires
 \(mutex_lock\|mutex_lock_interruptible\|mutex_lock_killable\)(&M);
 ... when != mutex_unlock(&M)
 (

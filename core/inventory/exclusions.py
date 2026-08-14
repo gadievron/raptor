@@ -82,10 +82,10 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
     tree-sitter spent CPU on garbage before erroring.
 
     Sample BOTH ends: the original head sample plus a tail sample
-    of the same size when the file is larger than 2 * sample_size.
-    Files smaller than 2 * sample_size are fully covered by the
-    head sample alone (the tail would overlap, no extra coverage).
-    Single seek + read for the tail keeps wallclock minimal.
+    of the same size when the file is larger than sample_size.
+    Files smaller than sample_size are fully covered by the
+    head sample alone.  Single seek + read for the tail keeps
+    wallclock minimal.
     """
     try:
         with open(filepath, 'rb') as f:
@@ -99,7 +99,7 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
                 size = f.tell()
             except OSError:
                 return False
-            if size > 2 * sample_size:
+            if size > sample_size:
                 f.seek(size - sample_size)
                 tail = f.read(sample_size)
                 if b'\x00' in tail:

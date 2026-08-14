@@ -39,7 +39,8 @@ def test_categorise_handles_linux_syscall_names():
     """Same coarsening should apply to Linux syscall names so the
     Linux tracer benefits from the same per-cat semantics."""
     cf = audit_budget._default_categorise
-    assert cf("openat") == "file-read-metadata"
+    assert cf("openat") == "file-open"
+    assert cf("stat") == "file-read-metadata"
     assert cf("write") == "file-write"
     assert cf("read") == "file-read-data"
     assert cf("connect") == "network"

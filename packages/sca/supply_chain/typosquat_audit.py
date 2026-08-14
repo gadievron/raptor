@@ -404,22 +404,31 @@ def run_reaudit(reviewed_legit_path, *, use_llm: bool = False) -> str:
     if llm is None:
         return (_render_reaudit(flagged)
                 + "\n(no LLM configured — Tier-1 mechanical flags only)\n")
+    from core.llm.concurrency import run_parallel
+
     enriched: Dict[str, list] = {}
     for eco, items in flagged.items():
         meta = _load_name_meta(reviewed_legit_path, eco)
         verdict_fn = make_llm_verdict_fn(llm, eco)
         client = clients.get(eco)
-        rows = []
-        for name, reason in items:
-            twin = (meta.get(name) or {}).get("near_twin", "")
+
+        def _do_one(
+            pair: tuple,
+            _meta=meta, _eco=eco, _client=client, _vfn=verdict_fn,
+        ) -> tuple:
+            name, reason = pair
+            twin = (_meta.get(name) or {}).get("near_twin", "")
             cand = Candidate(name=name, near_twin=twin, rank=0, twin_rank=0,
                              distance=1)
-            ev = collect_evidence_rich(cand, eco, http,
-                                       client.get_metadata if client else None)
-            verdict = verdict_fn(cand, ev)
-            rows.append((name, reason, verdict,
-                         reaudit_recommendation(reason, verdict)))
-        enriched[eco] = rows
+            ev = collect_evidence_rich(cand, _eco, http,
+                                       _client.get_metadata if _client else None)
+            verdict = _vfn(cand, ev)
+            return (name, reason, verdict,
+                    reaudit_recommendation(reason, verdict))
+
+        enriched[eco] = run_parallel(
+            list(items), _do_one, label="typosquat-reaudit",
+        )
     return _render_reaudit_llm(enriched)
 
 

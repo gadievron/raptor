@@ -116,6 +116,8 @@ def _parse_v2_or_v3(data: Dict[str, Any], path: Path) -> List[Dependency]:
 
 
 def _direct_names_from_root(root_entry: Dict[str, Any]) -> Set[str]:
+    if not isinstance(root_entry, dict):
+        return set()
     names: Set[str] = set()
     for key, _scope in _ROOT_KEY_SCOPE:
         block = root_entry.get(key)

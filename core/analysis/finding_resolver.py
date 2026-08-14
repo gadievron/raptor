@@ -271,12 +271,12 @@ def _parse_semgrep(
     trace = extra.get("dataflow_trace") or {}
     src_line = _semgrep_extract_line(trace.get("taint_source"))
     if src_line is None:
-        src_line = (finding.get("start") or {}).get("line", 0)
+        src_line = (finding.get("start") or {}).get("line") or None
     sink_line = _semgrep_extract_line(trace.get("taint_sink"))
     if sink_line is None:
-        sink_line = (finding.get("end") or {}).get("line", 0) or (
+        sink_line = (finding.get("end") or {}).get("line") or (
             finding.get("start") or {}
-        ).get("line", 0)
+        ).get("line") or None
 
     if src_line is None or sink_line is None:
         return ResolutionFailure(

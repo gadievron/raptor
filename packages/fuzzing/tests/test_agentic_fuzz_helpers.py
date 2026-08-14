@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.json import save_json
-from raptor_agentic import _build_fuzz_phase_summary, _run_fuzz_validation_smoke
+from raptor_agentic import _build_fuzz_phase_summary, _collect_crash_files, _run_fuzz_validation_smoke
 
 
 class TestAgenticFuzzHelpers(unittest.TestCase):
@@ -62,6 +62,11 @@ class TestAgenticFuzzHelpers(unittest.TestCase):
             self.assertTrue(result["ran"])
             self.assertTrue((root / "fuzz_validation" / "findings.json").exists())
             self.assertTrue((root / "fuzz_validation" / "validation-report.md").exists())
+
+
+class TestCollectCrashFilesEmptyPath(unittest.TestCase):
+    def test_empty_string_path_returns_empty(self):
+        assert _collect_crash_files(Path("")) == []
 
 
 if __name__ == "__main__":

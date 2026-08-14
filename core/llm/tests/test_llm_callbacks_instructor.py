@@ -79,7 +79,7 @@ class TestDictSchemaToPydanticSimple:
             "metadata": "dict",
         }
         model = _dict_schema_to_pydantic(schema)
-        instance = model(name="x", active=True, count=1, items=[1], metadata={"a": 1})
+        instance = model(name="x", active=True, count=1, items=["a"], metadata={"a": 1})
         assert instance.name == "x"
         assert instance.active is True
 
@@ -152,6 +152,127 @@ class TestDictSchemaToPydanticJsonSchema:
         assert instance.name == "test"
         assert instance.notes is None
 
+    def test_string_enum_becomes_literal(self):
+        """JSON Schema enum on a string field produces Literal type."""
+        schema = {
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["clean", "suspicious", "finding"],
+                },
+                "notes": {"type": "string"},
+            },
+            "required": ["status"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(status="clean")
+        assert instance.status == "clean"
+        instance2 = model(status="finding")
+        assert instance2.status == "finding"
+        # Wrong case must be rejected
+        with pytest.raises(Exception):
+            model(status="CLEAN")
+        # Value not in enum must be rejected
+        with pytest.raises(Exception):
+            model(status="banana")
+        # Enum must appear in the generated JSON schema
+        json_schema = model.model_json_schema()
+        assert json_schema["properties"]["status"]["enum"] == [
+            "clean", "suspicious", "finding",
+        ]
+
+    def test_nested_object_properties_enforced(self):
+        """Nested object with properties creates a real nested Pydantic model."""
+        schema = {
+            "properties": {
+                "name": {"type": "string"},
+                "location": {
+                    "type": "object",
+                    "properties": {
+                        "file": {"type": "string"},
+                        "line": {"type": "integer"},
+                    },
+                    "required": ["file"],
+                },
+            },
+            "required": ["name", "location"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(name="test", location={"file": "a.py", "line": 10})
+        assert instance.location.file == "a.py"
+        assert instance.location.line == 10
+
+    def test_array_of_objects_enforced(self):
+        """Array with items schema creates List[NestedModel]."""
+        schema = {
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "severity": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"],
+                            },
+                        },
+                        "required": ["title", "severity"],
+                    },
+                },
+            },
+            "required": ["findings"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(findings=[
+            {"title": "bug1", "severity": "high"},
+            {"title": "bug2", "severity": "low"},
+        ])
+        assert instance.findings[0].title == "bug1"
+        assert instance.findings[0].severity == "high"
+        # Nested enum must be enforced
+        with pytest.raises(Exception):
+            model(findings=[{"title": "bug", "severity": "CRITICAL"}])
+
+    def test_nested_enum_enforced(self):
+        """Enum inside a nested object is enforced, not dropped."""
+        schema = {
+            "properties": {
+                "hypotheses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "mechanism": {"type": "string"},
+                            "confidence": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low", "refuted"],
+                            },
+                        },
+                        "required": ["mechanism", "confidence"],
+                    },
+                },
+            },
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(hypotheses=[
+            {"mechanism": "overflow", "confidence": "high"},
+        ])
+        assert instance.hypotheses[0].confidence == "high"
+        with pytest.raises(Exception):
+            model(hypotheses=[{"mechanism": "overflow", "confidence": "WRONG"}])
+
+    def test_array_of_strings(self):
+        """Array of simple type becomes List[str]."""
+        schema = {
+            "properties": {
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(tags=["a", "b"])
+        assert instance.tags == ["a", "b"]
+
     def test_invalid_schema_type_raises(self):
         """Non-dict, non-Pydantic schema raises ValueError."""
         with pytest.raises(ValueError, match="must be dict or Pydantic"):
@@ -195,7 +316,12 @@ class TestCoerceToSchema:
         assert _coerce_to_schema({"text": None}, schema) == {"text": None}
 
     def test_correct_types_unchanged(self):
-        schema = {"properties": {"flag": {"type": "boolean"}, "score": {"type": "number"}}}
+        schema = {
+            "properties": {
+                "flag": {"type": "boolean"},
+                "score": {"type": "number"},
+            },
+        }
         data = {"flag": True, "score": 0.9}
         assert _coerce_to_schema(data, schema) == data
 
@@ -207,6 +333,24 @@ class TestCoerceToSchema:
 
     def test_empty_schema_noop(self):
         assert _coerce_to_schema({"anything": "here"}, {}) == {"anything": "here"}
+
+    def test_coerce_recurses_into_nested_objects(self):
+        """_coerce_to_schema should recurse into nested object fields."""
+        schema = {
+            "properties": {
+                "impact": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "number"},
+                        "critical": {"type": "boolean"},
+                    },
+                },
+            },
+        }
+        data = {"impact": {"score": "0.9", "critical": "true"}}
+        coerced = _coerce_to_schema(data, schema)
+        assert coerced["impact"]["score"] == 0.9
+        assert coerced["impact"]["critical"] is True
 
 
 class TestStructuredFallback:
@@ -341,3 +485,56 @@ class TestStructuredFallback:
         # full_response should be valid JSON
         parsed_response = json.loads(full_response)
         assert parsed_response["name"] == "test"
+
+
+class TestGeminiNativeStructuredTruncation:
+    """Gemini native structured path must raise on truncated output."""
+
+    @staticmethod
+    def _make_gemini(mock_response):
+        pytest.importorskip("google.genai")
+        from core.llm.providers import GeminiProvider
+        import threading
+
+        provider = GeminiProvider(ModelConfig(
+            provider="gemini", model_name="gemini-2.5-flash",
+            api_key="test-key", timeout=1,
+        ))
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+        provider._clients[threading.get_ident()] = mock_client
+        return provider
+
+    @staticmethod
+    def _mock_response(text, finish_reason_name, out_tokens=100):
+        fr = MagicMock()
+        fr.name = finish_reason_name
+        candidate = MagicMock()
+        candidate.finish_reason = fr
+        usage = MagicMock()
+        usage.prompt_token_count = 50
+        usage.candidates_token_count = out_tokens
+        usage.thoughts_token_count = 0
+        resp = MagicMock()
+        resp.text = text
+        resp.candidates = [candidate]
+        resp.usage_metadata = usage
+        return resp
+
+    def test_truncated_response_raises_runtime_error(self):
+        resp = self._mock_response(
+            '{"result": "trun', "MAX_TOKENS", 8192,
+        )
+        provider = self._make_gemini(resp)
+
+        with pytest.raises(RuntimeError, match="truncated"):
+            provider.generate_structured("test", {"result": "string"})
+
+    def test_complete_response_not_raised(self):
+        resp = self._mock_response('{"result": "ok"}', "STOP", 20)
+        provider = self._make_gemini(resp)
+
+        result = provider.generate_structured(
+            "test", {"result": "string"},
+        )
+        assert result.result["result"] == "ok"

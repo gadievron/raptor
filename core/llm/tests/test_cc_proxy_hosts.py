@@ -392,7 +392,7 @@ class TestReadablePathsForCCDispatch:
         assert any(p == home + "/.claude.json" for p in paths)
         assert any(p == home + "/.local/share/claude" for p in paths)
 
-    def test_calibrated_paths_used_when_present(
+    def test_calibrated_paths_extend_the_floor(
         self, isolated_env, no_override_config, monkeypatch,
     ):
         prof = _fake_profile(
@@ -402,16 +402,18 @@ class TestReadablePathsForCCDispatch:
         )
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: prof)
         paths = readable_paths_for_cc_dispatch()
-        # Calibrated values replace the defaults; the union of
-        # paths_read + paths_stat is exposed (sandbox needs read
-        # access for both opens AND stats).
+        # Calibrated values are exposed; the union of paths_read +
+        # paths_stat (sandbox needs read access for both opens AND
+        # stats).
         assert "/opt/custom/claude/bin/claude" in paths
         assert "/opt/custom/claude/lib" in paths
         assert "/etc/raptor/claude.conf" in paths
-        # Default install-layout paths are NOT in the result —
-        # calibration is authoritative when present.
+        # The static floor SURVIVES calibration. Calibration observes
+        # open()/stat(), never the execve of the binary itself — a
+        # calibrated-only policy can't exec the CLI (exit 126).
         home = str(Path.home())
-        assert home + "/.claude" not in paths
+        assert home + "/.claude" in paths
+        assert home + "/.local/bin" in paths
 
     def test_calibrated_paths_dedupe_across_read_and_stat(
         self, isolated_env, no_override_config, monkeypatch,
@@ -426,7 +428,8 @@ class TestReadablePathsForCCDispatch:
         )
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: prof)
         paths = readable_paths_for_cc_dispatch()
-        assert paths == ["/path/A", "/path/B", "/path/C"]
+        calibrated_part = [p for p in paths if p.startswith("/path/")]
+        assert calibrated_part == ["/path/A", "/path/B", "/path/C"]
 
     def test_empty_calibrated_paths_falls_through(
         self, isolated_env, no_override_config, monkeypatch,
@@ -435,6 +438,36 @@ class TestReadablePathsForCCDispatch:
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: prof)
         paths = readable_paths_for_cc_dispatch()
         # Falls through to the default install layout.
+        home = str(Path.home())
+        assert home + "/.claude" in paths
+
+    def test_binary_exec_paths_included(
+        self, isolated_env, no_override_config, no_calibrate,
+        tmp_path, monkeypatch,
+    ):
+        # A launcher symlink outside the default install layout:
+        # both the link's dir and the resolved target's dir must be
+        # readable or the sandboxed child can't execve the CLI.
+        target_dir = tmp_path / "versions" / "9.9.9"
+        target_dir.mkdir(parents=True)
+        real_bin = target_dir / "claude"
+        real_bin.write_text("#!/bin/sh\n")
+        link_dir = tmp_path / "bin"
+        link_dir.mkdir()
+        link = link_dir / "claude"
+        link.symlink_to(real_bin)
+
+        paths = readable_paths_for_cc_dispatch(str(link))
+        assert str(link_dir) in paths
+        assert str(target_dir) in paths
+
+    def test_binary_exec_paths_missing_binary_tolerated(
+        self, isolated_env, no_override_config, no_calibrate,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+        paths = readable_paths_for_cc_dispatch()
+        # No binary found — floor is just the default layout.
         home = str(Path.home())
         assert home + "/.claude" in paths
 

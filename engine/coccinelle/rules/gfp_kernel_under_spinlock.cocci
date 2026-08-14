@@ -7,6 +7,7 @@
 //
 // CWE-764: Multiple Locks of a Critical Resource (deadlock class)
 // Zero-FP confidence: very high — always wrong in kernel context.
+// @role: verification
 
 @gfp_under_spin@
 expression E, S, L;

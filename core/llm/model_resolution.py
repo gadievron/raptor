@@ -148,7 +148,7 @@ def _get_inventory(api_key: Optional[str]) -> list[str]:
         try:
             _INVENTORY = _fetch_inventory(api_key) if api_key else []
         except Exception as exc:
-            logger.debug(f"Anthropic model inventory fetch failed: {exc}")
+            logger.debug("Anthropic model inventory fetch failed: %s", exc)
             _INVENTORY = []
         _INVENTORY_PROBED = True
         return _INVENTORY

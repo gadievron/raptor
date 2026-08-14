@@ -70,16 +70,16 @@ class VulnerabilityAnalysis:
 
 # Dict schema for LLM structured generation (consistent with other callers)
 VULNERABILITY_ANALYSIS_SCHEMA = {
-    "is_true_positive": "boolean",
-    "is_exploitable": "boolean",
-    "exploitability_score": "float (0.0-1.0)",
-    "severity_assessment": "string (critical/high/medium/low)",
     "reasoning": "string",
     "attack_scenario": "string",
     "prerequisites": "list of strings",
     "impact": "string",
     "cvss_estimate": "float (0.0-10.0)",
     "mitigation": "string",
+    "severity_assessment": "string (critical/high/medium/low)",
+    "exploitability_score": "float (0.0-1.0)",
+    "is_true_positive": "boolean",
+    "is_exploitable": "boolean",
 }
 
 
@@ -91,12 +91,15 @@ VULNERABILITY_ANALYSIS_SCHEMA = {
 # FPs; ambiguous and confident-TP cases both fall through. A cheap
 # model that says "needs_analysis" pays nothing in trust.
 FP_PREFILTER_SCHEMA = {
-    "verdict": (
-        "string — one of 'clear_fp' (this is clearly a false positive "
-        "and needs no further analysis) or 'needs_analysis' (any "
-        "uncertainty, or this looks like a real issue)"
-    ),
     "reasoning": "string — brief justification, 1-2 sentences",
+    "verdict": {
+        "type": "string",
+        "enum": ["clear_fp", "needs_analysis"],
+        "description": (
+            "clear_fp = clearly a false positive, needs no further analysis; "
+            "needs_analysis = any uncertainty, or this looks like a real issue"
+        ),
+    },
 }
 
 
@@ -431,9 +434,9 @@ class AutonomousCodeQLAnalyzer:
         # Extract location
         locations = result.get("locations", [])
         location = locations[0] if locations else {}
-        physical_loc = location.get("physicalLocation", {})
-        region = physical_loc.get("region", {})
-        artifact = physical_loc.get("artifactLocation", {})
+        physical_loc = location.get("physicalLocation") or {}
+        region = physical_loc.get("region") or {}
+        artifact = physical_loc.get("artifactLocation") or {}
 
         # Extract CWE. Pre-fix `for tag in tags: if tag.startswith(...)`
         # raised AttributeError when SARIF emitters produced
@@ -463,12 +466,12 @@ class AutonomousCodeQLAnalyzer:
         return CodeQLFinding(
             rule_id=rule_id,
             rule_name=rule_name,
-            message=result.get("message", {}).get("text", ""),
+            message=(result.get("message") or {}).get("text", ""),
             level=result.get("level", "warning"),
             file_path=artifact.get("uri", ""),
             start_line=region.get("startLine", 0),
             end_line=region.get("endLine") or region.get("startLine", 0),
-            snippet=region.get("snippet", {}).get("text", ""),
+            snippet=(region.get("snippet") or {}).get("text", ""),
             cwe=cwe,
             has_dataflow=has_dataflow,
             dataflow_path_count=dataflow_path_count
@@ -530,7 +533,7 @@ class AutonomousCodeQLAnalyzer:
             return "\n".join(context)
 
         except Exception as e:
-            self.logger.warning(f"Failed to read vulnerable code: {e}")
+            self.logger.warning("Failed to read vulnerable code: %s", e)
             return finding.snippet
 
     def _fast_tier_model_name(self) -> str:
@@ -609,9 +612,7 @@ class AutonomousCodeQLAnalyzer:
                 task_type=TaskType.VERDICT_BINARY,
             )
         except Exception as e:                         # noqa: BLE001
-            self.logger.debug(
-                f"Cheap FP check failed (falling through to full): {e}"
-            )
+            self.logger.debug("Cheap FP check failed (falling through to full): %s", e)
             return None
         verdict = (response.get("verdict") or "").strip().lower()
         reasoning = response.get("reasoning") or ""
@@ -619,8 +620,7 @@ class AutonomousCodeQLAnalyzer:
             # Defensive: an unexpected verdict string means we can't
             # gate on it. Fall through to full analysis.
             self.logger.debug(
-                f"Cheap FP check returned unexpected verdict "
-                f"{verdict!r} — falling through"
+                "Cheap FP check returned unexpected verdict %r — falling through", verdict
             )
             return None
         return verdict, reasoning
@@ -669,7 +669,7 @@ class AutonomousCodeQLAnalyzer:
             VulnerabilityAnalysis result
         """
         from core.reporting.formatting import display_rule_id
-        self.logger.info(f"Analyzing vulnerability: {display_rule_id(finding.rule_id)}")
+        self.logger.info("Analyzing vulnerability: %s", display_rule_id(finding.rule_id))
 
         # Step 1: cheap-tier prefilter. Asks a small model "is this
         # a clear false positive?" — and consults the scorecard for
@@ -704,9 +704,8 @@ class AutonomousCodeQLAnalyzer:
         )
         if decision.short_circuit:
             self.logger.info(
-                f"Fast-tier short-circuit on {decision_class} — "
-                f"skipping full analysis (cheap verdict trusted by "
-                f"scorecard)"
+                "Fast-tier short-circuit on %s — skipping full analysis (cheap verdict trusted by scorecard)",
+                decision_class
             )
             self.llm.record_short_circuit()
             return self._short_circuit_fp_result(cheap_reasoning)
@@ -805,14 +804,15 @@ class AutonomousCodeQLAnalyzer:
             unexpected_fields = set(response_dict.keys()) - valid_fields
             if unexpected_fields:
                 self.logger.debug(
-                    f"LLM response included unexpected fields (ignored): {unexpected_fields}"
+                    "LLM response included unexpected fields (ignored): %s", unexpected_fields
                 )
 
             analysis = VulnerabilityAnalysis(**filtered_response)
 
             self.logger.info(
-                f"Analysis complete: exploitable={analysis.is_exploitable}, "
-                f"score={analysis.exploitability_score:.2f}"
+                "Analysis complete: exploitable=%s, score=%.2f",
+                analysis.is_exploitable,
+                analysis.exploitability_score
             )
 
             # Record the cheap-vs-full comparison for the scorecard's
@@ -834,7 +834,7 @@ class AutonomousCodeQLAnalyzer:
             return analysis
 
         except Exception as e:
-            self.logger.error(f"Vulnerability analysis failed: {e}")
+            self.logger.error("Vulnerability analysis failed: %s", e)
 
             # Return conservative default
             return VulnerabilityAnalysis(
@@ -867,7 +867,7 @@ class AutonomousCodeQLAnalyzer:
         Returns:
             Exploit code or None
         """
-        self.logger.info(f"Generating exploit for: {finding.rule_id}")
+        self.logger.info("Generating exploit for: %s", finding.rule_id)
 
         system = (
             "You are Mark Dowd, creating exploits for authorized security testing only.\n\n"
@@ -958,11 +958,11 @@ class AutonomousCodeQLAnalyzer:
 
                 exploit_code = "\n".join(code_lines)
 
-            self.logger.info(f"Exploit generated ({len(exploit_code)} bytes)")
+            self.logger.info("Exploit generated (%d bytes)", len(exploit_code))
             return exploit_code
 
         except Exception as e:
-            self.logger.error(f"Exploit generation failed: {e}")
+            self.logger.error("Exploit generation failed: %s", e)
             return None
 
     def _refine_exploit_loop(
@@ -1024,8 +1024,7 @@ class AutonomousCodeQLAnalyzer:
         ):
             refinement_count += 1
             self.logger.info(
-                f"🔄 Refining exploit "
-                f"(attempt {refinement_count}/{max_refinement})..."
+                "🔄 Refining exploit (attempt %s/%s)...", refinement_count, max_refinement
             )
 
             refined_code = self.multi_turn.refine_exploit_iteratively(
@@ -1050,9 +1049,9 @@ class AutonomousCodeQLAnalyzer:
 
             if validation_result.success:
                 self.logger.info(
-                    f"✓ Refinement succeeded after "
-                    f"{refinement_count} iteration"
-                    f"{'s' if refinement_count != 1 else ''}"
+                    "✓ Refinement succeeded after %s iteration%s",
+                    refinement_count,
+                    's' if refinement_count != 1 else ''
                 )
                 break
 
@@ -1092,7 +1091,7 @@ class AutonomousCodeQLAnalyzer:
 
         # Stage 1: Parse finding
         finding = self.parse_sarif_finding(sarif_result, sarif_run)
-        self.logger.info(f"🤖 AUTONOMOUS ANALYSIS: {finding.rule_id}")
+        self.logger.info("🤖 AUTONOMOUS ANALYSIS: %s", finding.rule_id)
 
         # Stage 1a: Reachability prefilter. The
         # ``core.analysis.reachability`` resolver answers "is the
@@ -1137,6 +1136,7 @@ class AutonomousCodeQLAnalyzer:
             # ``suppressions.jsonl`` /agentic emits so an operator
             # can correlate suppressions across both consumers from
             # a single per-run JSONL. Best-effort; never blocks.
+            _finding_dict = {}
             try:
                 from core.analysis.reach_chokepoint import (
                     record_suppression,
@@ -1145,11 +1145,14 @@ class AutonomousCodeQLAnalyzer:
                 # CodeQLAgent run; fall back to repo_path when not
                 # available (analyzer-as-library call shapes).
                 _out = getattr(self, "out_dir", None) or repo_path
+                _rule = getattr(finding, "rule_id", "") or ""
+                _file = getattr(finding, "file_path", "") or ""
+                _line = getattr(finding, "start_line", None)
                 _finding_dict = {
-                    "finding_id": getattr(finding, "id", "") or "",
-                    "rule_id": getattr(finding, "rule_id", "") or "",
-                    "file_path": getattr(finding, "file_path", "") or "",
-                    "line": getattr(finding, "start_line", None),
+                    "finding_id": f"{_rule}:{_file}:{_line}",
+                    "rule_id": _rule,
+                    "file_path": _file,
+                    "line": _line,
                     "function": "",
                 }
                 record_suppression(
@@ -1165,7 +1168,7 @@ class AutonomousCodeQLAnalyzer:
                     ),
                 )
             except Exception:  # noqa: BLE001
-                logger.debug("record_suppression failed for %s", _finding_dict.get("id", "?"))
+                logger.debug("record_suppression failed for %s", _finding_dict.get("finding_id", "?"))
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,
@@ -1207,9 +1210,11 @@ class AutonomousCodeQLAnalyzer:
                             finding_id,
                             repo_path
                         )
-                        self.logger.info(f"✓ Generated {len(visualization_paths)} visualization formats")
+                        self.logger.info(
+                            "✓ Generated %d visualization formats", len(visualization_paths)
+                        )
                 except Exception as e:
-                    self.logger.warning(f"Failed to generate visualizations: {e}")
+                    self.logger.warning("Failed to generate visualizations: %s", e)
 
             if dataflow_validation and not dataflow_validation.is_exploitable:
                 self.logger.info("✗ Dataflow not exploitable - skipping exploit generation")
@@ -1255,7 +1260,7 @@ class AutonomousCodeQLAnalyzer:
             vuln_type = finding.rule_id  # Use CodeQL rule ID
             viable, reason = self.validator.check_mitigations(vuln_type=vuln_type)
             if not viable:
-                self.logger.warning(f"Mitigation check: {reason}")
+                self.logger.warning("Mitigation check: %s", reason)
                 self.logger.warning("Exploit generation may fail - proceeding anyway")
 
         # Stage 6: Generate PoC exploit
@@ -1355,7 +1360,7 @@ class AutonomousCodeQLAnalyzer:
             exploit_file = out_dir / f"{safe_id}_exploit{exploit_ext}"
             with open(exploit_file, 'w', encoding='utf-8') as f:
                 f.write(exploit_code)
-            self.logger.info(f"✓ Exploit saved: {exploit_file}")
+            self.logger.info("✓ Exploit saved: %s", exploit_file)
 
         return AutonomousAnalysisResult(
             finding=finding,

@@ -23,13 +23,16 @@ prepass (which mutates a checklist with the same precedence).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Verdicts that mean "not reachable in this deployment" (dead).
 _DEAD_VERDICTS = frozenset({
     "module_aborts", "lexical_dead", "build_excluded",
-    "no_path_from_entry", "not_called",
+    "no_path_from_entry", "not_called", "binary_oracle_absent",
 })
 # Verdicts that mean "reachable / has a live path".
 _LIVE_VERDICTS = frozenset({
@@ -37,6 +40,23 @@ _LIVE_VERDICTS = frozenset({
     "frida_runtime_trace",
 })
 # "uncertain" is neither — the substrate declines to claim.
+
+# NOTE: single-threaded use assumed — no synchronisation on this global.
+_joern_server = None
+
+
+def set_joern_server(server) -> None:
+    """Set a Joern server for indirect-call resolution.
+
+    When set, the ``not_called`` verdict from ``_stage_one_hop`` is
+    checked against Joern's CPG callers query before firing. This
+    catches function-pointer callbacks, struct dispatch, and other
+    indirect calls that tree-sitter misses.
+
+    Call with None to clear.
+    """
+    global _joern_server
+    _joern_server = server
 
 
 @dataclass
@@ -156,8 +176,24 @@ def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
         # precise typed dispatch resolution is CodeQL's (Tier 2) job.
         if R.is_virtual_dispatch_candidate(ctx.inventory, ctx.class_name, ctx.name):
             return None
+        if _joern_has_callers(ctx.name):
+            logger.debug(
+                "not_called overridden by Joern callers for %s", ctx.name,
+            )
+            return "called"
         return "not_called"
     return None
+
+
+def _joern_has_callers(function_name: str) -> bool:
+    """Check whether Joern finds callers that tree-sitter missed."""
+    if _joern_server is None:
+        return False
+    try:
+        from core.analysis.reachability_gates import _joern_find_callers
+        return bool(_joern_find_callers(function_name, _joern_server))
+    except Exception:
+        return False
 
 
 # Ordered precedence. Sound witnesses (module_aborts / lexical_dead) first so

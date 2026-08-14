@@ -65,6 +65,8 @@ def detect_dead_scopes(language: str, content: str) -> List[DeadRange]:
             return _detect_python(content)
         if language in ("javascript", "typescript", "tsx"):
             return _detect_javascript(content)
+        if language in ("c", "cpp"):
+            return _detect_c(content)
         if language == "rust":
             return _detect_rust(content)
         if language == "php":
@@ -133,10 +135,9 @@ _JS_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0)\s*\)\s*\{")
 
 
 def _detect_javascript(content: str) -> List[DeadRange]:
-    stripped = _js_strip_comments(content)
+    stripped = _js_strip_comments_and_strings(content)
     ranges: List[DeadRange] = []
     for m in _JS_DEAD_IF.finditer(stripped):
-        # The opening brace is the last char of the match.
         brace_pos = m.end() - 1
         close = _match_brace(stripped, brace_pos)
         if close is None:
@@ -153,6 +154,63 @@ def _js_strip_comments(content: str) -> str:
     out = _JS_BLOCK_COMMENT.sub(_spaces, content)
     out = _JS_LINE_COMMENT.sub(_spaces, out)
     return out
+
+
+def _js_strip_comments_and_strings(content: str) -> str:
+    """Strip comments AND string literals, preserving newlines so
+    line numbers remain valid.  After this, only braces, keywords,
+    and whitespace remain — the brace matcher never sees quote chars.
+    """
+    out = list(_js_strip_comments(content))
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c not in "\"'`":
+            i += 1
+            continue
+        quote = c
+        out[i] = " "
+        j = i + 1
+        while j < n:
+            ch = out[j]
+            if ch == "\\":
+                out[j] = " "
+                if j + 1 < n:
+                    if out[j + 1] != "\n":
+                        out[j + 1] = " "
+                    j += 2
+                else:
+                    j += 1
+                continue
+            if quote == "`" and ch == "$" and j + 1 < n and out[j + 1] == "{":
+                out[j] = " "
+                out[j + 1] = " "
+                j += 2
+                depth = 1
+                while j < n and depth > 0:
+                    ic = out[j]
+                    if ic == "{":
+                        depth += 1
+                    elif ic == "}":
+                        depth -= 1
+                        if depth == 0:
+                            out[j] = " "
+                            j += 1
+                            break
+                    if ic != "\n":
+                        out[j] = " "
+                    j += 1
+                continue
+            if ch == quote:
+                out[j] = " "
+                j += 1
+                break
+            if ch != "\n":
+                out[j] = " "
+            j += 1
+        i = j
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +261,13 @@ def _detect_rust(content: str) -> List[DeadRange]:
         # First ``{`` after the attribute is the gated item's body —
         # nothing between the cfg and the body uses braces (attributes
         # use ``[]``, visibility uses ``()``, generics use ``<>``).
+        # A bodyless item (e.g. ``mod dead_mod;``) has no ``{`` before
+        # its ``;`` — skip rather than latching onto the next item.
         brace_rel = after.find("{")
+        semi_rel = after.find(";")
         if brace_rel == -1:
+            continue
+        if semi_rel != -1 and semi_rel < brace_rel:
             continue
         close = _match_brace(content, m.end() + brace_rel)
         if close is None:
@@ -215,6 +278,151 @@ def _detect_rust(content: str) -> List[DeadRange]:
         start_line = content.count("\n", 0, m.start()) + 1
         end_line = content.count("\n", 0, close) + 1
         ranges.append((start_line, end_line))
+    return ranges
+
+
+# ---------------------------------------------------------------------------
+# C / C++ — ``static`` functions with zero callers in the translation unit.
+#
+# A ``static`` function has file scope: it can only be called from
+# within its translation unit. If the function name (as a whole-word
+# match) appears exactly once in the file after stripping comments and
+# string/char literals, the definition is the only occurrence — no
+# code in the file calls it, so it is provably dead. The compiler
+# would emit ``-Wunused-function`` and optimise it away.
+#
+# Conservative: names appearing in macros, initialiser designators,
+# or sizeof expressions all count as occurrences, so we under-detect
+# rather than over-detect. ``__attribute__((constructor))`` /
+# ``destructor`` functions are skipped (called by the runtime, not by
+# source-level call sites).
+# ---------------------------------------------------------------------------
+
+
+_C_NOT_FUNC_NAMES = frozenset({
+    "if", "while", "for", "switch", "sizeof", "typeof", "alignof",
+    "return", "goto", "case", "do",
+    "void", "int", "char", "short", "long", "float", "double",
+    "unsigned", "signed", "bool", "_Bool",
+    "const", "volatile", "restrict", "_Atomic",
+    "struct", "enum", "union", "typedef",
+    "inline", "__inline", "__inline__", "__forceinline",
+    "__attribute__", "__extension__", "__typeof__",
+})
+
+
+def _c_strip_comments_and_strings(content: str) -> str:
+    """Strip C comments and string/char literals, preserving newlines."""
+    out = list(content)
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c == "/" and i + 1 < n:
+            if out[i + 1] == "/":
+                while i < n and out[i] != "\n":
+                    out[i] = " "
+                    i += 1
+                continue
+            if out[i + 1] == "*":
+                out[i] = " "
+                out[i + 1] = " "
+                i += 2
+                while i < n:
+                    if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
+                        out[i] = " "
+                        out[i + 1] = " "
+                        i += 2
+                        break
+                    if out[i] != "\n":
+                        out[i] = " "
+                    i += 1
+                continue
+        if c in "\"'":
+            quote = c
+            out[i] = " "
+            i += 1
+            while i < n:
+                if out[i] == "\\" and i + 1 < n:
+                    out[i] = " "
+                    if out[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if out[i] == quote:
+                    out[i] = " "
+                    i += 1
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+def _detect_c(content: str) -> List[DeadRange]:
+    stripped = _c_strip_comments_and_strings(content)
+    ranges: List[DeadRange] = []
+
+    for m in re.finditer(r"\bstatic\b", stripped):
+        paren_pos = None
+        for j in range(m.end(), min(m.end() + 500, len(stripped))):
+            c = stripped[j]
+            if c == "(":
+                paren_pos = j
+                break
+            if c in ";{}":
+                break
+        if paren_pos is None:
+            continue
+
+        between = stripped[m.end():paren_pos]
+        name_match = re.search(r"\b(\w+)\s*$", between)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+
+        if name in _C_NOT_FUNC_NAMES:
+            continue
+        if re.search(r"constructor|destructor", between):
+            continue
+
+        depth = 1
+        j = paren_pos + 1
+        while j < len(stripped) and depth > 0:
+            if stripped[j] == "(":
+                depth += 1
+            elif stripped[j] == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            continue
+
+        brace_pos = None
+        for k in range(j, min(j + 200, len(stripped))):
+            if stripped[k] == "{":
+                brace_pos = k
+                break
+            if stripped[k] == ";":
+                break
+        if brace_pos is None:
+            continue
+
+        close = _match_brace(stripped, brace_pos)
+        if close is None:
+            continue
+
+        if re.search(r"\binline\b|__inline\b|__inline__\b|__forceinline\b",
+                     between):
+            continue
+
+        count = len(re.findall(r"\b" + re.escape(name) + r"\b", stripped))
+        if count <= 1:
+            start_line = stripped.count("\n", 0, m.start()) + 1
+            end_line = stripped.count("\n", 0, close) + 1
+            ranges.append((start_line, end_line))
+
     return ranges
 
 
@@ -341,8 +549,28 @@ _RB_BRANCH_AT = re.compile(r"^(\s*)(?:else|elsif)\b")
 _RB_END_AT = re.compile(r"^(\s*)end\b")
 
 
+def _strip_ruby_comment(line: str) -> str:
+    """Strip ``#`` comments while respecting string literals."""
+    in_str: str | None = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and in_str:
+            i += 2
+            continue
+        if in_str:
+            if c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+        elif c == "#":
+            return line[:i]
+        i += 1
+    return line
+
+
 def _detect_ruby(content: str) -> List[DeadRange]:
-    lines = [re.sub(r"#.*$", "", ln) for ln in content.split("\n")]
+    lines = [_strip_ruby_comment(ln) for ln in content.split("\n")]
     ranges: List[DeadRange] = []
     for i, line in enumerate(lines):
         m = _RB_DEAD_IF.match(line)

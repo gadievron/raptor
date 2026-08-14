@@ -141,7 +141,7 @@ _QUALITY_RETRY_THRESHOLD: float = 0.5
 def _resolve_weights(schema: Dict[str, Any]) -> Dict[str, float]:
     """Pick the right weight table for a schema, or fall back to uniform."""
     props = _get_properties(schema)
-    field_names = set(props.keys())
+    field_names = set(props)
     for signature, weights in _WEIGHT_REGISTRY:
         if signature <= field_names:
             return weights
@@ -162,7 +162,7 @@ def _get_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
 def _get_required(schema: Dict[str, Any]) -> Set[str]:
     if "properties" in schema:
         return set(schema.get("required", []))
-    return set(schema.keys())
+    return set(schema)
 
 
 def _get_field_type(field_spec: Any) -> str:

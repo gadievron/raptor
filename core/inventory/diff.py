@@ -56,8 +56,8 @@ def compare_inventories(old: Dict[str, Any], new: Dict[str, Any]) -> Optional[Di
     #
     # Treat presence asymmetry as a CHANGE: if either side has a
     # sha and they differ (including one-being-None), flag it.
-    old_bin_sha = old.get('binary', {}).get('sha256')
-    new_bin_sha = new.get('binary', {}).get('sha256')
+    old_bin_sha = (old.get('binary') or {}).get('sha256')
+    new_bin_sha = (new.get('binary') or {}).get('sha256')
     if old_bin_sha is None and new_bin_sha is None:
         binary_changed = False
     else:

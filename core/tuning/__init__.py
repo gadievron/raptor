@@ -31,6 +31,10 @@ _VALID_KEYS = frozenset({
     "codeql_ram_mb",
     "codeql_threads",
     "codeql_max_disk_cache_mb",
+    "joern_enabled",
+    "joern_heap_mb",
+    "joern_cpg_timeout_s",
+    "joern_query_timeout_s",
     "max_semgrep_workers",
     "max_codeql_workers",
     "max_fuzz_parallel",
@@ -38,6 +42,10 @@ _VALID_KEYS = frozenset({
     "max_llm_workers",
     "max_json_memo_mb",
     "throttle_cooldown_s",
+})
+
+_DEPRECATED_KEYS = frozenset({
+    "max_agentic_parallel",
 })
 
 # Keys that are valid in tuning.json but consumed directly by their
@@ -48,7 +56,25 @@ _PASSTHROUGH_KEYS = frozenset({
     "throttle_cooldown_s",
 })
 
-_BOOLEAN_KEYS = frozenset({"codeql_enabled"})
+_BOOLEAN_KEYS = frozenset({"codeql_enabled", "joern_enabled"})
+
+_KEY_COMMENTS = {
+    "codeql_enabled": "set false to disable CodeQL across all runs (licensing)",
+    "codeql_ram_mb": "MB of RAM for CodeQL (-M)",
+    "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
+    "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
+    "joern_enabled": "set false to disable Joern CPG analysis across all runs",
+    "joern_heap_mb": "MB of JVM heap for Joern (auto = 25% system RAM, min 1024)",
+    "joern_cpg_timeout_s": "seconds before CPG generation is killed",
+    "joern_query_timeout_s": "seconds before a single Joern query is killed",
+    "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
+    "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
+    "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
+    "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
+    "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",
+    "max_llm_workers": "parallel LLM API calls (consumed by core/llm/concurrency.py)",
+    "throttle_cooldown_s": "seconds to wait between LLM batches when rate-limited",
+}
 
 _DEFAULTS = {
     "codeql_enabled": True,
@@ -58,6 +84,10 @@ _DEFAULTS = {
     # explicit MB cap when running unattended on bounded disk; codeql's
     # DB build cache otherwise grows without limit.
     "codeql_max_disk_cache_mb": 0,
+    "joern_enabled": True,
+    "joern_heap_mb": "auto",
+    "joern_cpg_timeout_s": 300,
+    "joern_query_timeout_s": 300,
     "max_semgrep_workers": 4,
     "max_codeql_workers": 2,
     "max_fuzz_parallel": 4,
@@ -108,6 +138,19 @@ def _detect_codeql_workers() -> int:
 def _detect_fuzz_parallel() -> int:
     """Resolve a conservative AFL++ parallel-instance ceiling."""
     return _detect_half_cpu_parallelism()
+
+
+def _detect_joern_heap_mb() -> int:
+    """25% of system RAM, floor 1024 MB, no upper clamp.
+
+    -Xmx is a ceiling, not a reservation — the JVM commits only what
+    it uses — and RAPTOR runs a single Joern server per run, so a
+    proportional ceiling is safe. The former 4096 MB cap starved
+    CPG queries on large targets when the host had RAM to spare
+    (a 500 GB box was clamped to a laptop-sized heap).
+    """
+    total_mb = _detect_total_ram_mb()
+    return max(1024, total_mb // 4)
 
 
 def _detect_inventory_workers() -> int:
@@ -189,6 +232,7 @@ def _detect_half_cpu_parallelism(max_workers: int | None = None) -> int:
 _AUTO_RESOLVERS = {
     "codeql_ram_mb": _detect_ram_mb,
     "codeql_threads": _detect_threads,
+    "joern_heap_mb": _detect_joern_heap_mb,
     "max_semgrep_workers": _detect_semgrep_workers,
     "max_codeql_workers": _detect_codeql_workers,
     "max_fuzz_parallel": _detect_fuzz_parallel,
@@ -210,6 +254,10 @@ class Tuning:
     codeql_ram_mb: int
     codeql_threads: int
     codeql_max_disk_cache_mb: int
+    joern_enabled: bool
+    joern_heap_mb: int
+    joern_cpg_timeout_s: int
+    joern_query_timeout_s: int
     max_semgrep_workers: int
     max_codeql_workers: int
     max_fuzz_parallel: int
@@ -261,7 +309,7 @@ def _validate_value(key: str, raw: Any):
 def _resolve(raw_config: Dict[str, Any]) -> Tuning:
     """Resolve raw config dict into a validated Tuning instance."""
     for key in raw_config:
-        if key not in _VALID_KEYS:
+        if key not in _VALID_KEYS and key not in _DEPRECATED_KEYS:
             logger.warning('tuning.json: unknown key "%s" (ignored)', key)
 
     resolved = {}
@@ -274,12 +322,72 @@ def _resolve(raw_config: Dict[str, Any]) -> Tuning:
     return Tuning(**resolved)
 
 
+def _migrate_deprecated(raw: Dict[str, Any], path: Path) -> None:
+    """Strip deprecated keys from raw config and rewrite the file.
+
+    Mutates ``raw`` in place. Rewrites the file atomically when at
+    least one deprecated key was present; degrades gracefully on
+    read-only filesystems.
+    """
+    found = [k for k in list(raw) if k in _DEPRECATED_KEYS]
+    if not found:
+        return
+    for k in found:
+        del raw[k]
+        logger.info('tuning.json: removed deprecated key "%s"', k)
+    try:
+        _rewrite_tuning(raw, path)
+    except OSError as exc:
+        logger.debug("could not rewrite %s after deprecation cleanup: %s", path, exc)
+
+
+def _rewrite_tuning(values: Dict[str, Any], path: Path) -> None:
+    """Rewrite tuning.json preserving all current valid keys."""
+    import json as _json
+    base_keys = [k for k in _DEFAULTS if k not in _PASSTHROUGH_KEYS]
+    extra_keys = [k for k in values if k in _VALID_KEYS and k not in _DEFAULTS]
+    key_order = base_keys + extra_keys
+    merged = dict(_DEFAULTS)
+    for k in key_order:
+        if k in values:
+            merged[k] = values[k]
+    entries = []
+    for i, key in enumerate(key_order):
+        val = _json.dumps(merged[key])
+        comma = "," if i < len(key_order) - 1 else ""
+        entries.append((f'  "{key}": {val}{comma}', _KEY_COMMENTS.get(key, "")))
+    col = max(len(e) for e, _ in entries) + 2
+    lines = ["{"]
+    for entry, comment in entries:
+        if comment:
+            lines.append(f"{entry:<{col}}// {comment}")
+        else:
+            lines.append(entry)
+    lines.append("}")
+    content = "\n".join(lines) + "\n"
+    tmp = path.with_name(
+        f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+    )
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def load_tuning(path: Optional[Path] = None) -> Tuning:
     """Load and resolve tuning from disk. Falls back to defaults.
 
     If the file does not exist at the default location, it is
     silently created with shipped defaults so users can discover
     and edit it.
+
+    Deprecated keys are stripped from the file on first load so
+    stale operator configs self-heal without manual intervention.
     """
     p = path or _TUNING_PATH
     raw = load_json_with_comments(p)
@@ -291,6 +399,7 @@ def load_tuning(path: Optional[Path] = None) -> Tuning:
     if not isinstance(raw, dict):
         logger.warning("tuning.json: expected object, using all defaults")
         raw = {}
+    _migrate_deprecated(raw, p)
     return _resolve(raw)
 
 
@@ -309,26 +418,13 @@ def _create_default_file(path: Path) -> None:
         rename, and the final rename is last-writer-wins.
     """
     try:
-        # Import here to avoid circular dep with libexec/raptor-tune
-        # which also writes this file. Use the same format.
         import json
-        comments = {
-            "codeql_enabled": "set false to disable CodeQL across all runs (licensing)",
-            "codeql_ram_mb": "MB of RAM for CodeQL (-M)",
-            "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
-            "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
-            "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
-            "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
-            "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
-            "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
-            "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",
-        }
         keys = list(_DEFAULTS.keys())
         entries = []
         for i, key in enumerate(keys):
             val = json.dumps(_DEFAULTS[key])
             comma = "," if i < len(keys) - 1 else ""
-            entries.append((f'  "{key}": {val}{comma}', comments[key]))
+            entries.append((f'  "{key}": {val}{comma}', _KEY_COMMENTS.get(key, "")))
         col = max(len(e) for e, _ in entries) + 2
         lines = ["{"]
         for entry, comment in entries:

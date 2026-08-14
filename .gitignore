@@ -20,6 +20,10 @@ out/
 .claude/*.local.json
 .claude/raptor.env
 
+# Compiled test fixtures (rebuilt on demand)
+core/analysis/tests/fixtures/*.o
+core/analysis/tests/fixtures/demo
+
 # Runtime artifacts
 codeql_dbs/
 .github/codeql/codeql-scoped-config.yml

@@ -1271,6 +1271,8 @@ def _charclass_to_re(chars: str):
         else:
             alts.append(z3.Re(z3.StringVal(chars[i])))
             i += 1
+    if not alts:
+        return None
     return z3.Union(*alts) if len(alts) > 1 else alts[0]
 
 
@@ -1323,6 +1325,11 @@ def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _
     """Z3 regex-intersection emptiness for whole-string anchored allowlists."""
     name = z3.String("name")
     char_re = _charclass_to_re(spec.charset)
+    if char_re is None:
+        return _ProofVerdict(
+            True, None,
+            "empty charset — validator rejects all input",
+        )
     validator_re = z3.Plus(char_re)
     s = z3.Solver()
     s.add(z3.InRe(name, z3.Intersect(validator_re, _danger_re(danger))))
