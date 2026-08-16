@@ -537,6 +537,45 @@ class TestDispatchTaskIntegration:
         assert all("error" in r for r in results)
         assert len(results) == 6  # All accounted for (3 dispatched + 3 aborted)
 
+    @pytest.mark.parametrize("model_name", ["codex-exec", "claude-code"])
+    def test_dispatch_error_envelope_uses_shared_failure_path(
+        self, capsys, model_name,
+    ):
+        """Transport error results are failures, not successful ``done`` items."""
+        findings = [_make_finding("f-001")]
+
+        def error_result_fn(prompt, schema, system_prompt, temperature, model):
+            return DispatchResult(
+                result={"error": "timeout after 5s", "error_type": "timeout"},
+                cost=0.05,
+                tokens=12,
+                model=model_name,
+            )
+
+        cost_tracker = CostTracker(0)
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=error_result_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=cost_tracker,
+            max_parallel=1,
+        )
+
+        assert results == [{
+            "finding_id": "f-001",
+            "error": "timeout after 5s",
+            "error_type": "timeout",
+            "analysed_by": model_name,
+            "cost_usd": 0.05,
+        }]
+        assert cost_tracker.get_summary()["total_cost"] == 0.05
+        assert cost_tracker.get_summary()["total_tokens"] == 12
+        output = capsys.readouterr().out
+        assert "FAILED — timeout after 5s" in output
+        assert " done" not in output
+
     def test_dispatch_no_abort_when_some_succeed(self):
         """Failures after successes don't trigger consecutive abort."""
         findings = [_make_finding("f-001"), _make_finding("f-002"),
