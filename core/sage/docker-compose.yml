@@ -14,7 +14,7 @@
 
 services:
   ollama:
-    image: ollama/ollama:0.32.6
+    image: ollama/ollama:0.32.14
     ports:
       - "11435:11434"
     volumes:
@@ -61,7 +61,7 @@ services:
       - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
 
   sage:
-    image: ghcr.io/l33tdawg/sage:11.18.6
+    image: ghcr.io/l33tdawg/sage:11.18.18
     ports:
       - "8090:8080"
     volumes:
