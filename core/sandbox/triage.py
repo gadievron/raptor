@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -468,31 +470,80 @@ def _derive_verdict(signals: List[dict]) -> str:
 
 # ---- I/O helpers ---------------------------------------------------------
 
-def _load_json(path: Path) -> Optional[dict]:
-    if not path.exists():
+# Bound on any single triage input file. Legitimate inputs are far
+# smaller (denials are capped at MAX_DENIALS_PER_RUN records; proxy
+# events at one line per CONNECT) — anything bigger is a planted
+# artifact, and reading it unboundedly hands the target a memory
+# lever over the parent's lifecycle hook.
+_MAX_INPUT_BYTES = 64 * 1024 * 1024
+
+
+def _read_bounded(path: Path) -> Optional[bytes]:
+    """Open-and-read a triage input with the same discipline the
+    writers use (see context._persist_proxy_events): the run dir is
+    target-writable, so a plain ``open()`` here would follow a
+    target-planted symlink out of the sandbox boundary, and block the
+    LIFECYCLE (complete_run/fail_run run this in-process) forever on
+    a target-planted FIFO with no writer. O_NOFOLLOW + O_NONBLOCK at
+    open, fstat regular-file check on the actually-opened inode,
+    bounded read. Any refusal returns None — absent and unreadable
+    collapse to "no input", matching the writers' fail-quiet stance.
+    """
+    try:
+        fd = os.open(
+            str(path),
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        )
+    except OSError:
+        # ENOENT (common case), ELOOP (planted symlink), and friends.
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None  # FIFO / device / directory — never read
+        if st.st_size > _MAX_INPUT_BYTES:
+            return None
+        chunks = []
+        remaining = _MAX_INPUT_BYTES
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 1 << 20))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError:
         return None
+    finally:
+        os.close(fd)
+
+
+def _load_json(path: Path) -> Optional[dict]:
+    data = _read_bounded(path)
+    if data is None:
+        return None
+    try:
+        loaded = json.loads(data.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
 
 
 def _load_jsonl(path: Path) -> List[dict]:
-    if not path.exists():
+    data = _read_bounded(path)
+    if data is None:
         return []
     out: List[dict] = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except OSError:
-        return []
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            out.append(record)
     return out
 
 
