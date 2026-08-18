@@ -45,6 +45,7 @@ the CLI tests and test_symlink_hop_bound.py).
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -143,6 +144,43 @@ PY_PROLOGUE = (
 # ─── sys.path preamble ───────────────────────────────────────────────
 
 SYSPATH_INSERT = "sys.path.insert(0, str(Path(__file__).resolve().parents[1]))"
+
+# Named-root form: scripts that need the repo root elsewhere in the
+# file bind it once and insert the binding. Accepted as canonical only
+# when the bound expression is byte-identical to the majority insert's.
+_NAMED_ROOT_BIND_RE = re.compile(
+    r"^([A-Z][A-Z0-9_]*) = Path\(__file__\)\.resolve\(\)\.parents\[1\]$"
+)
+_NAMED_ROOT_INSERT_RE = re.compile(
+    r"^sys\.path\.insert\(0, str\(([A-Z][A-Z0-9_]*)\)\)$"
+)
+
+
+def _named_root_insert_index(lines):
+    """Index of a canonical named-root sys.path insert, or None.
+
+    Matches exactly one insert of the form
+    ``sys.path.insert(0, str(REPO_ROOT))`` preceded by
+    ``REPO_ROOT = Path(__file__).resolve().parents[1]`` (any
+    ALL_CAPS name), at top level.
+    """
+    inserts = [
+        (i, ln) for i, ln in enumerate(lines)
+        if "sys.path.insert" in ln
+    ]
+    if len(inserts) != 1:
+        return None
+    idx, line = inserts[0]
+    m = _NAMED_ROOT_INSERT_RE.match(line.strip())
+    if m is None or line != line.strip():
+        return None
+    var = m.group(1)
+    for ln in lines[:idx]:
+        b = _NAMED_ROOT_BIND_RE.match(ln)
+        if b is not None and b.group(1) == var:
+            return idx
+    return None
+
 PROCESS_INIT = "import core.startup.process_init  # noqa: E402,F401"
 
 # Scripts whose repo-root resolution deliberately deviates from the
@@ -542,14 +580,21 @@ class SyspathPreambleIdentityTests(unittest.TestCase):
                         f"variant (found {inserts})"
                     )
                 continue
-            if inserts != [SYSPATH_INSERT]:
-                problems.append(
-                    f"{name}: expected exactly the majority insert "
-                    f"{SYSPATH_INSERT!r} (found {inserts}); genuinely "
-                    "variant scripts must be declared in SYSPATH_VARIANTS"
-                )
-                continue
-            i = lines.index(SYSPATH_INSERT)
+            if inserts == [SYSPATH_INSERT]:
+                i = lines.index(SYSPATH_INSERT)
+            else:
+                named = _named_root_insert_index(lines)
+                if named is None:
+                    problems.append(
+                        f"{name}: expected the majority insert "
+                        f"{SYSPATH_INSERT!r} or the named-root form "
+                        "(NAME = Path(__file__).resolve().parents[1]; "
+                        "sys.path.insert(0, str(NAME))) "
+                        f"(found {inserts}); genuinely variant scripts "
+                        "must be declared in SYSPATH_VARIANTS"
+                    )
+                    continue
+                i = named
             if lines[i + 1 : i + 2] != [PROCESS_INIT]:
                 problems.append(
                     f"{name}: process_init import must directly follow the "
