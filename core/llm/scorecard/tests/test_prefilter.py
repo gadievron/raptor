@@ -8,16 +8,15 @@ substrate's ``ModelScorecard`` is exercised separately.
 
 from __future__ import annotations
 
-
-
 from core.llm.scorecard import (
     EventType,
     ModelScorecard,
     Policy,
+    fast_tier_model_name,
     prefilter_decision,
     record_prefilter_outcome,
+    run_cheap_fp_check,
 )
-
 
 # ---------------------------------------------------------------------------
 # prefilter_decision
@@ -154,3 +153,122 @@ def test_reasoning_text_is_truncated(tmp_path):
     stat = sc.get_stat("x:y", "m")
     assert len(stat.disagreement_samples[0]["this_reasoning"]) == 500
     assert len(stat.disagreement_samples[0]["other_reasoning"]) == 500
+
+
+# ---------------------------------------------------------------------------
+# fast_tier_model_name
+# ---------------------------------------------------------------------------
+
+
+class _Model:
+    def __init__(self, name, enabled=True):
+        self.model_name = name
+        self.enabled = enabled
+
+
+class _Cfg:
+    def __init__(self, specialized=None, primary=None):
+        from core.llm.task_types import TaskType
+        self.specialized_models = (
+            {TaskType.VERDICT_BINARY: specialized} if specialized else {}
+        )
+        self.primary_model = primary
+
+
+def test_fast_tier_prefers_enabled_specialized_model():
+    cfg = _Cfg(specialized=_Model("fast"), primary=_Model("big"))
+    assert fast_tier_model_name(cfg) == "fast"
+
+
+def test_fast_tier_skips_disabled_specialized_model():
+    cfg = _Cfg(specialized=_Model("fast", enabled=False),
+               primary=_Model("big"))
+    assert fast_tier_model_name(cfg) == "big"
+
+
+def test_fast_tier_falls_back_to_primary_then_empty():
+    assert fast_tier_model_name(_Cfg(primary=_Model("big"))) == "big"
+    assert fast_tier_model_name(_Cfg()) == ""
+
+
+# ---------------------------------------------------------------------------
+# run_cheap_fp_check
+# ---------------------------------------------------------------------------
+
+
+class _StubClient:
+    """Client-level stub capturing the structured call."""
+
+    def __init__(self, result=None, raise_exc=None):
+        self._result = result
+        self._raise = raise_exc
+        self.calls = []
+
+    def generate_structured(self, *, prompt, schema, system_prompt=None,
+                            task_type=None, **kwargs):
+        self.calls.append({
+            "prompt": prompt, "schema": schema,
+            "system_prompt": system_prompt, "task_type": task_type,
+        })
+        if self._raise is not None:
+            raise self._raise
+        return (self._result, "raw")  # stub-tuple shape; helper unwraps
+
+
+_SCHEMA = {"reasoning": "string", "verdict": {"enum": ["clear_fp",
+                                                       "needs_analysis"]}}
+
+
+def test_run_cheap_fp_check_returns_verdict_and_reasoning():
+    client = _StubClient(result={"verdict": "Clear_FP",
+                                 "reasoning": "hardcoded"})
+    out = run_cheap_fp_check(client, system="sys text", schema=_SCHEMA)
+    assert out == ("clear_fp", "hardcoded")
+    # The call went through the VERDICT_BINARY fast tier with the
+    # envelope's role-separated messages.
+    from core.llm.task_types import TaskType
+    call = client.calls[0]
+    assert call["task_type"] == TaskType.VERDICT_BINARY
+    assert "sys text" in call["system_prompt"]
+
+
+def test_run_cheap_fp_check_wraps_untrusted_content_in_envelope():
+    from core.security.prompt_envelope import TaintedString, UntrustedBlock
+    client = _StubClient(result={"verdict": "needs_analysis",
+                                 "reasoning": ""})
+    run_cheap_fp_check(
+        client, system="s", schema=_SCHEMA,
+        untrusted_blocks=[UntrustedBlock(
+            content="EVIL CODE", kind="vulnerable-code", origin="a.c:1")],
+        slots={"rule_id": TaintedString(value="cpp/x", trust="untrusted")},
+    )
+    prompt = client.calls[0]["prompt"]
+    assert "EVIL CODE" in prompt
+    assert "cpp/x" in prompt
+
+
+def test_run_cheap_fp_check_call_failure_is_no_signal():
+    client = _StubClient(raise_exc=RuntimeError("provider down"))
+    assert run_cheap_fp_check(client, system="s", schema=_SCHEMA) is None
+
+
+def test_run_cheap_fp_check_unexpected_verdict_is_no_signal():
+    client = _StubClient(result={"verdict": "definitely_exploit_it",
+                                 "reasoning": "x"})
+    assert run_cheap_fp_check(client, system="s", schema=_SCHEMA) is None
+
+
+def test_run_cheap_fp_check_custom_verdict_literals():
+    """SCA-style consumers use clear_safe/needs_analysis literals."""
+    client = _StubClient(result={"verdict": "clear_safe", "reasoning": "ok"})
+    out = run_cheap_fp_check(
+        client, system="s", schema=_SCHEMA,
+        allowed_verdicts=("clear_safe", "needs_analysis"),
+    )
+    assert out == ("clear_safe", "ok")
+    # And clear_fp is now out-of-set for that consumer.
+    client2 = _StubClient(result={"verdict": "clear_fp", "reasoning": "x"})
+    assert run_cheap_fp_check(
+        client2, system="s", schema=_SCHEMA,
+        allowed_verdicts=("clear_safe", "needs_analysis"),
+    ) is None

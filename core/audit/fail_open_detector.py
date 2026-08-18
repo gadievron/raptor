@@ -1,6 +1,6 @@
 """Detect fail-open-on-unknown bugs via mechanical pattern matching.
 
-Three sub-patterns where ambiguous/unknown/error results silently
+Four sub-patterns where ambiguous/unknown/error results silently
 become "safe":
 
 1. **optional_not_checked** — function returns ``Optional[T]`` but the
@@ -18,6 +18,12 @@ become "safe":
    function (e.g. ``except Exception: return {}`` alongside a normal
    ``return {}``).
 
+4. **truncation_consumed_unchecked** — consumer-side companion to
+   pattern 2: a caller of a truncation-silent function treats the
+   possibly-truncated result as authoritative (e.g. branches to a
+   "safe"/"clean" outcome on an empty result) with no
+   truncation-awareness check anywhere in the caller.
+
 All detection is mechanical: regex/AST-free pattern matching on source
 text, optionally enhanced by caller-side call-graph data.
 
@@ -32,7 +38,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +80,7 @@ class FailOpenPattern:
                 f"expected one of {sorted(PATTERN_TYPES)}"
             )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "file": self.file,
             "function": self.function,
@@ -89,9 +95,8 @@ class FailOpenPattern:
 # Helpers
 # ---------------------------------------------------------------------------
 
-# ``if X is False:`` / ``if X is True:``  (identity checks on bool)
+# ``if X is False:``  (identity check on bool)
 _IS_FALSE_RE = re.compile(r"\bif\s+(\w+)\s+is\s+False\b")
-_IS_TRUE_RE = re.compile(r"\bif\s+(\w+)\s+is\s+True\b")
 
 # Companion None checks
 _IS_NONE_RE = re.compile(r"\bif\s+(\w+)\s+is\s+None\b")
@@ -113,11 +118,6 @@ _CAP_BREAK_RE = re.compile(
     # Go: if LHS >= RHS { break/return
     rf"|\bif\s+{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\{{\s*\n?\s*(?:break|return)\b",
     re.MULTILINE,
-)
-
-# Collection returns
-_RETURN_COLLECTION_RE = re.compile(
-    r"^\s*return\s+\w+\s*$", re.MULTILINE
 )
 
 # Truncation signaling: returning a tuple, a dict with "truncated", or
@@ -151,15 +151,10 @@ _RETURN_LITERAL_RE = re.compile(
 )
 
 
-def _extract_functions(source: str) -> List[Tuple[str, int, str]]:
+def _extract_functions(source: str) -> list[tuple[str, int, str]]:
     """Extract (name, start_line, body) for each top-level/method def."""
     from ._util import extract_functions_from_source
     return extract_functions_from_source(source)
-
-
-def _line_number_of(source: str, match_start: int) -> int:
-    """1-based line number for a character offset."""
-    return source[:match_start].count("\n") + 1
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +164,9 @@ def _line_number_of(source: str, match_start: int) -> int:
 def _detect_optional_not_checked(
     file_path: str,
     source: str,
-) -> List[FailOpenPattern]:
+) -> list[FailOpenPattern]:
     """Find ``if X is False:`` without a corresponding ``is None`` guard."""
-    results: List[FailOpenPattern] = []
+    results: list[FailOpenPattern] = []
 
     for name, start_line, body in _extract_functions(source):
         is_false_matches = list(_IS_FALSE_RE.finditer(body))
@@ -230,14 +225,14 @@ _C_FUNC_RE = re.compile(
 )
 
 
-def _extract_c_functions(source: str, file_path: str = "file.c") -> List[Tuple[str, int, str]]:
+def _extract_c_functions(source: str, file_path: str = "file.c") -> list[tuple[str, int, str]]:
     """C function extraction — tree-sitter with regex fallback."""
     try:
-        from .ts_extract import _parse_file, _iter_functions
+        from .ts_extract import _iter_functions, _parse_file
         parsed = _parse_file(file_path, source)
         if parsed is not None:
             tree, lang, src_bytes = parsed
-            funcs: List[Tuple[str, int, str]] = []
+            funcs: list[tuple[str, int, str]] = []
             for func_node, name, body in _iter_functions(tree, lang, src_bytes, file_path):
                 func_text = src_bytes[func_node.start_byte:func_node.end_byte].decode(
                     "utf-8", errors="replace"
@@ -269,13 +264,13 @@ def _extract_c_functions(source: str, file_path: str = "file.c") -> List[Tuple[s
 def _detect_truncation_via_ts(
     file_path: str,
     source: str,
-) -> Optional[List[FailOpenPattern]]:
+) -> list[FailOpenPattern] | None:
     """Tree-sitter loop-cap detection for non-Python files.
 
     Returns None if tree-sitter is unavailable (caller falls back to regex).
     """
     try:
-        from .ts_extract import extract_loop_caps, extract_function_body
+        from .ts_extract import extract_function_body, extract_loop_caps
     except ImportError:
         return None
 
@@ -283,11 +278,11 @@ def _detect_truncation_via_ts(
     if caps is None:
         return None
 
-    results: List[FailOpenPattern] = []
+    results: list[FailOpenPattern] = []
     for cap in caps:
         func_body = extract_function_body(file_path, source, cap.function)
         if func_body is None:
-            return None
+            continue
         if not func_body:
             continue
         if not re.search(r"^\s*return\b", func_body, re.MULTILINE):
@@ -315,7 +310,7 @@ def _detect_truncation_via_ts(
 def _detect_truncation_not_signaled(
     file_path: str,
     source: str,
-) -> List[FailOpenPattern]:
+) -> list[FailOpenPattern]:
     """Find functions with a loop-cap break that don't signal truncation."""
     # Non-Python: try tree-sitter first (better structural detection)
     if not file_path.endswith(".py"):
@@ -323,7 +318,7 @@ def _detect_truncation_not_signaled(
         if ts_results is not None:
             return ts_results
 
-    results: List[FailOpenPattern] = []
+    results: list[FailOpenPattern] = []
 
     funcs = _extract_functions(source)
     if not funcs and any(file_path.endswith(ext) for ext in _C_EXTS):
@@ -381,9 +376,9 @@ def _normalise_literal(val: str) -> str:
 def _detect_error_conflated_with_empty(
     file_path: str,
     source: str,
-) -> List[FailOpenPattern]:
+) -> list[FailOpenPattern]:
     """Find except blocks that return the same literal as a success path."""
-    results: List[FailOpenPattern] = []
+    results: list[FailOpenPattern] = []
 
     for name, start_line, body in _extract_functions(source):
         lines = body.split("\n")
@@ -410,8 +405,8 @@ def _detect_error_conflated_with_empty(
                 i += 1
 
         # Pass 2: collect return literals, split by except vs. non-except.
-        except_returns: List[Tuple[str, int]] = []  # (normalised_val, line_idx)
-        success_returns: Dict[str, List[int]] = {}   # val -> [line_idx, ...]
+        except_returns: list[tuple[str, int]] = []  # (normalised_val, line_idx)
+        success_returns: dict[str, list[int]] = {}   # val -> [line_idx, ...]
 
         for idx, line in enumerate(lines):
             m = _RETURN_LITERAL_RE.match(line)
@@ -477,18 +472,18 @@ _SAFE_RETURN_AFTER_EMPTY_RE = re.compile(
 
 
 def _detect_consumer_fail_open(
-    source_text: Dict[str, str],
-    call_graphs: Dict[str, Any],
-    truncation_silent: List[FailOpenPattern],
-) -> List[FailOpenPattern]:
+    source_text: dict[str, str],
+    call_graphs: dict[str, Any],
+    truncation_silent: list[FailOpenPattern],
+) -> list[FailOpenPattern]:
     """Find callers of truncation-silent functions that treat results as authoritative."""
-    results: List[FailOpenPattern] = []
+    results: list[FailOpenPattern] = []
 
     silent_funcs: set = {fop.function for fop in truncation_silent}
     if not silent_funcs:
         return results
 
-    silent_by_file: Dict[str, set] = {}
+    silent_by_file: dict[str, set] = {}
     for fop in truncation_silent:
         silent_by_file.setdefault(fop.file, set()).add(fop.function)
 
@@ -534,8 +529,9 @@ def _detect_consumer_fail_open(
             confidence = "high" if caller_file in silent_by_file else "medium"
 
             line = 0
+            start_line = _function_start_line(source, caller_name)
             if empty_check:
-                line = caller_body[:empty_check.start()].count("\n") + 1
+                line = start_line + caller_body[:empty_check.start()].count("\n")
 
             results.append(FailOpenPattern(
                 file=caller_file,
@@ -553,6 +549,14 @@ def _detect_consumer_fail_open(
             ))
 
     return results
+
+
+def _function_start_line(source: str, func_name: str) -> int:
+    """Return the 1-based line number of a function definition in source."""
+    for i, line in enumerate(source.splitlines(), 1):
+        if re.search(rf"\b{re.escape(func_name)}\s*\(", line):
+            return i
+    return 1
 
 
 def _extract_caller_body(
@@ -633,9 +637,9 @@ def _extract_function_body_regex(source: str, func_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def detect_fail_open_patterns(
-    source_text: Dict[str, str],
-    call_graphs: Optional[dict] = None,
-) -> List[FailOpenPattern]:
+    source_text: dict[str, str],
+    call_graphs: dict | None = None,
+) -> list[FailOpenPattern]:
     """Run all fail-open sub-detectors across a set of source files.
 
     Parameters
@@ -652,7 +656,7 @@ def detect_fail_open_patterns(
     List of :class:`FailOpenPattern` findings, sorted by
     (file, line).
     """
-    results: List[FailOpenPattern] = []
+    results: list[FailOpenPattern] = []
 
     for file_path, source in source_text.items():
         if file_path.endswith(".py"):

@@ -305,6 +305,35 @@ class TestDetectTypeConfusion:
         methods = {f.overridden_method for f in findings}
         assert "validate" in methods
 
+    def test_describe_names_deser_origin(self):
+        """In the transitive case the dispatch site is a different
+        function from the deser site — describe() must name both so
+        the taint origin can be located from the finding record."""
+        graphs = {
+            "app.py": _cg(
+                calls=[
+                    ("load_data", ["yaml", "load"], 10),
+                    ("load_data", ["process"], 15),
+                    ("process", ["self", "validate"], 20),
+                ],
+                classes=[
+                    ClassDef(name="App", line=1, bases=[],
+                             methods=[("load_data", 3), ("process", 8),
+                                      ("validate", 12)]),
+                    ClassDef(name="WeakApp", line=40, bases=["App"],
+                             methods=[("validate", 45)]),
+                ],
+            ),
+        }
+        findings = detect_type_confusion({}, graphs)
+        transitive = [f for f in findings if f.function != f.deser_function]
+        assert transitive, f"expected a transitive finding: {findings}"
+        desc = transitive[0].describe()
+        assert "deserialised in load_data()" in desc
+        assert "yaml.load" in desc
+        assert "virtual dispatch of validate()" in desc
+        assert "WeakApp" in desc
+
     def test_no_deser_no_finding(self):
         graphs = {
             "auth.py": _cg(
@@ -369,6 +398,88 @@ class TestDetectTypeConfusion:
 
     def test_empty_call_graphs(self):
         assert detect_type_confusion({}, {}) == []
+
+
+# ---------------------------------------------------------------------------
+# Per-enclosing-class dedup
+# ---------------------------------------------------------------------------
+
+
+def _graphs_two_classes_same_method():
+    """One file, two class hierarchies sharing method names.
+
+    Both BaseA and BaseB define ``handler`` (the caller) and
+    ``process`` (dispatched via self); each has one subtype
+    overriding ``process``.
+    """
+    return {
+        "m.py": _cg(
+            calls=[
+                ("handler", ["pickle", "loads"], 5),
+                ("handler", ["self", "process"], 10),
+            ],
+            classes=[
+                ClassDef(name="BaseA", line=1, bases=[],
+                         methods=[("handler", 2), ("process", 3)]),
+                ClassDef(name="BaseB", line=20, bases=[],
+                         methods=[("handler", 21), ("process", 22)]),
+                ClassDef(name="SubA", line=40, bases=["BaseA"],
+                         methods=[("process", 41)]),
+                ClassDef(name="SubB", line=50, bases=["BaseB"],
+                         methods=[("process", 51)]),
+            ],
+        ),
+    }
+
+
+class TestPerClassDedup:
+    """Two classes in one file defining the same method name yield
+    per-class dispatch findings at the same call site (the dedup key
+    carries the enclosing class), while true duplicates still dedup."""
+
+    def test_both_enclosing_classes_emit_findings(self):
+        findings = detect_type_confusion({}, _graphs_two_classes_same_method())
+        assert len(findings) == 2
+        base_types = {f.base_type for f in findings}
+        assert base_types == {"BaseA", "BaseB"}
+        for f in findings:
+            assert f.file == "m.py"
+            assert f.function == "handler"
+            assert f.line == 10
+            assert f.overridden_method == "process"
+        by_base = {f.base_type: f for f in findings}
+        assert by_base["BaseA"].overriding_subtypes == ["SubA"]
+        assert by_base["BaseB"].overriding_subtypes == ["SubB"]
+
+    def test_true_duplicates_still_dedup(self):
+        graphs = _graphs_two_classes_same_method()
+        # Duplicate the dispatch call site verbatim: same file, caller,
+        # line, and enclosing classes — must not double the findings.
+        graphs["m.py"].calls.append(
+            CallSite(line=10, chain=["self", "process"], caller="handler"),
+        )
+        findings = detect_type_confusion({}, graphs)
+        assert len(findings) == 2
+        assert {f.base_type for f in findings} == {"BaseA", "BaseB"}
+
+    def test_single_class_unaffected(self):
+        graphs = {
+            "s.py": _cg(
+                calls=[
+                    ("handler", ["pickle", "loads"], 3),
+                    ("handler", ["self", "process"], 7),
+                ],
+                classes=[
+                    ClassDef(name="Base", line=1, bases=[],
+                             methods=[("handler", 2), ("process", 3)]),
+                    ClassDef(name="Sub", line=20, bases=["Base"],
+                             methods=[("process", 21)]),
+                ],
+            ),
+        }
+        findings = detect_type_confusion({}, graphs)
+        assert len(findings) == 1
+        assert findings[0].base_type == "Base"
 
 
 # ---------------------------------------------------------------------------

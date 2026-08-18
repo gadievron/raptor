@@ -5,8 +5,9 @@ Tests the delegation to ``packages.checker_synthesis`` via the
 and the ``SynthesisResult`` dataclass.
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from core.audit.checker_synthesis import (
     SynthesisResult,
@@ -122,7 +123,6 @@ class TestSeedFromOutcome:
 
 class _BareClient:
     """LLM client without generate_structured."""
-    pass
 
 
 class TestBuildLLMCallable:
@@ -141,8 +141,31 @@ class TestBuildLLMCallable:
         with patch("core.llm.client.LLMClient", return_value=_FullClient()):
             result = _build_llm_callable(_StubConfig())
             assert result is not None
-            fn, client = result
+            fn, _client = result
             assert callable(fn)
+
+    def test_call_passes_synthesis_timeout(self):
+        """Synthesis is the heaviest structured call class — the
+        callable must pass its own per-call timeout so the claudecode
+        provider's 600s default doesn't kill it mid-generation."""
+        from core.audit.checker_synthesis import SYNTHESIS_TIMEOUT_S
+
+        class _CapturingClient:
+            total_cost = 0.0
+            captured = None
+
+            def generate_structured(self, **kw):
+                _CapturingClient.captured = kw
+                return {"result": True}, {}
+
+        with patch("core.llm.client.LLMClient",
+                   return_value=_CapturingClient()):
+            fn, _client = _build_llm_callable(_StubConfig())
+            out = fn("prompt", {"type": "object"}, "system")
+            assert out == {"result": True}
+            assert (_CapturingClient.captured["timeout_s"]
+                    == SYNTHESIS_TIMEOUT_S)
+            assert SYNTHESIS_TIMEOUT_S > 600
 
 
 # ---------------------------------------------------------------------------
@@ -344,3 +367,152 @@ class TestSynthesizeAndSweepDelegation:
             side_effect=RuntimeError("substrate boom"),
         ):
             assert synthesize_and_sweep(o, c, set()) is None
+
+
+# ---------------------------------------------------------------------------
+# _sage_replay_rule — SAGE-recalled proven rules join sweeps (P33)
+# ---------------------------------------------------------------------------
+
+
+class TestSageReplayRule:
+    def _seed(self):
+        from packages.checker_synthesis import SeedBug
+
+        return SeedBug(
+            file="src/auth.c", function="check_pw",
+            line_start=42, line_end=42,
+            cwe="CWE-89", reasoning="sql injection",
+        )
+
+    def _meta(self, rule_path, body, **kw):
+        import hashlib
+
+        meta = {
+            "engine": "semgrep",
+            "cwe": "CWE-89",
+            "rule_id": "sqli-001",
+            "rule_body_hash": hashlib.sha256(
+                body.encode("utf-8")).hexdigest()[:16],
+            "rule_path": str(rule_path),
+            "tp_count": 9,
+            "fp_count": 1,
+            "total_matches": 10,
+            "dual_control": True,
+            "targets_tested": 4,
+            "verified": True,
+        }
+        meta.update(kw)
+        return meta
+
+    def test_replays_verified_rule_with_sage_provenance(self, tmp_path):
+        from core.audit.checker_synthesis import _sage_replay_rule
+        from packages.checker_synthesis import Match
+
+        body = "rules:\n  - id: sqli-001\n"
+        rule_file = tmp_path / "sqli-001.yaml"
+        rule_file.write_text(body)
+
+        with patch(
+            "core.sage.recall_verified_proven_rules",
+            return_value=[self._meta(rule_file, body)],
+        ), patch(
+            "packages.checker_synthesis.synthesise._run_engine",
+            return_value=(
+                [Match(file="src/other.c", line=7, snippet="q()")], [],
+            ),
+        ):
+            replay = _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            )
+
+        assert replay is not None
+        cs_result, provenance = replay
+        assert provenance == "sage:sqli-001"
+        assert cs_result.rule.rule_id == "sqli-001"
+        assert cs_result.rule_tier == "library"
+        assert cs_result.dual_control is True
+        assert [m.file for m in cs_result.matches] == ["src/other.c"]
+
+    def test_body_hash_mismatch_skipped(self, tmp_path):
+        from core.audit.checker_synthesis import _sage_replay_rule
+
+        rule_file = tmp_path / "sqli-001.yaml"
+        rule_file.write_text("rules:\n  - id: TAMPERED\n")
+        meta = self._meta(rule_file, "rules:\n  - id: sqli-001\n")
+
+        with patch(
+            "core.sage.recall_verified_proven_rules", return_value=[meta],
+        ):
+            assert _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            ) is None
+
+    def test_missing_rule_file_skipped(self, tmp_path):
+        from core.audit.checker_synthesis import _sage_replay_rule
+
+        meta = self._meta(tmp_path / "gone.yaml", "body")
+        with patch(
+            "core.sage.recall_verified_proven_rules", return_value=[meta],
+        ):
+            assert _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            ) is None
+
+    def test_no_verified_rows_returns_none(self, tmp_path):
+        from core.audit.checker_synthesis import _sage_replay_rule
+
+        with patch(
+            "core.sage.recall_verified_proven_rules", return_value=[],
+        ):
+            assert _sage_replay_rule(
+                "semgrep", "CWE-89", self._seed(), tmp_path,
+            ) is None
+
+    def test_sweep_hits_carry_sage_provenance(self, tmp_path):
+        """synthesize_and_sweep stamps sage: provenance on hits when
+        the rule came from SAGE replay."""
+        from packages.checker_synthesis import (
+            CheckerSynthesisResult,
+            Match,
+            SynthesisedRule,
+        )
+
+        def _fake_llm_callable(_config):
+            class _FakeClient:
+                total_cost = 0.0
+
+            return lambda p, s, sp: {"rule": "r"}, _FakeClient()
+
+        def _fake_sage_replay(engine, cwe, seed, target_path):
+            cs = CheckerSynthesisResult(
+                seed=seed,
+                rule=SynthesisedRule(
+                    engine="semgrep", rule_id="sqli-001", body="r",
+                ),
+                matches=[Match(file="src/other.c", line=7, snippet="q()")],
+            )
+            cs.rule_tier = "library"
+            return cs, "sage:sqli-001"
+
+        class _NoReplayLib:
+            def find_replayable(self, cwe, engine):
+                return []
+
+        o = _StubOutcome()
+        c = _StubConfig(target_path=str(tmp_path), out_dir=str(tmp_path))
+
+        with patch(
+            "core.audit.checker_synthesis._build_llm_callable",
+            side_effect=_fake_llm_callable,
+        ), patch(
+            "packages.checker_synthesis.RuleLibrary",
+            return_value=_NoReplayLib(),
+        ), patch(
+            "core.audit.checker_synthesis._sage_replay_rule",
+            side_effect=_fake_sage_replay,
+        ):
+            result = synthesize_and_sweep(o, c, set())
+
+        assert result is not None
+        assert result.rule_id == "sqli-001"
+        assert all(h["provenance"] == "sage:sqli-001" for h in result.hits)

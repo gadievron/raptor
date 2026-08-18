@@ -1,4 +1,4 @@
-"""Binary-oracle call-edge extraction — Inc 2b Tier 1.
+"""Binary-oracle call-edge extraction — Inc 2b Tiers 1 and 2.
 
 The asymmetric companion to Inc 2's ``absent``-direction suppression
 witness: extract the binary's direct call graph, then for each
@@ -8,11 +8,14 @@ graph thinks no caller exists — gets a positive reachability witness
 (``binary_call_edge``).
 
 Tier scope (per design §6 + Phase 4 edge-gap measurement):
-  * Tier 1 (this module) — DIRECT edges via r2 ``axffj`` per function.
-    Catches ~92% of all binary call sites (the indirect-call fraction
-    sat at 8.1% aggregate in the 4-corpus measurement). Misses fn-
+  * Tier 1 — DIRECT edges via r2 ``axffj`` per function. Catches
+    ~92% of all binary call sites (the indirect-call fraction sat
+    at 8.1% aggregate in the 4-corpus measurement). Misses fn-
     pointer / vtable / ESIL-needed cases.
-  * Tier 2 (deferred) — vtable resolution via r2 ``avtv`` for C++.
+  * Tier 2 — vtable resolution via r2 ``av`` for C++. Runs
+    unconditionally after Tier 1; each vtable slot becomes a
+    synthetic ``<vtable@addr>`` → method edge merged into the same
+    edge index. No-op on binaries without vtables.
   * Tier 3 (deferred) — ESIL emulation for constant fn-pointer
     propagation.
 
@@ -559,7 +562,8 @@ def _parse_axffj_batch(
     ``{type, at, ref, name}``."""
     current_caller: Optional[str] = None
     buf: List[str] = []
-    for line in output.splitlines():
+    for raw_line in output.splitlines():
+        line = re.sub(r"\x1b\[[\d;]*m", "", raw_line)
         if line.startswith("BATCH "):
             _flush_axffj(buf, current_caller, addr_to_name, index)
             try:
@@ -622,6 +626,40 @@ def _flush_axffj(
         index.callees.add(callee_name)
 
 
+def load_cached_edge_index(binary_path: Path) -> Optional[BinaryEdgeIndex]:
+    """Cache-only edge-index lookup — NEVER invokes r2.
+
+    Consults the two persisted edge sources in order:
+
+      1. an existing binary graph store (``/understand --map`` output,
+         matched by content sha256), then
+      2. the per-build-id edge cache written by
+         ``extract_direct_call_edges`` (populated by ``/agentic`` /
+         ``/codeql`` ``--binary-edges`` runs — Inc 2b).
+
+    Returns ``None`` on any miss. Consumers that must stay fast (audit
+    prep) use this instead of ``extract_direct_call_edges`` so a cold
+    cache costs one build-id read, not a 10-30s r2 ``aaa`` run.
+    """
+    binary_path = Path(binary_path)
+    if not binary_path.is_file():
+        return None
+    from_graph = _try_graph_store(binary_path)
+    if from_graph is not None:
+        return from_graph
+    cache_key = read_build_id(binary_path) or _content_hash(binary_path)
+    cache_file = _cache_path_for(cache_key) if cache_key else None
+    if cache_file is None:
+        return None
+    cached = _load_cached_index(cache_file, str(binary_path))
+    if cached is not None:
+        logger.debug(
+            "binary_oracle_edges: cache-only hit for %s (%d edges)",
+            binary_path.name, len(cached.edges),
+        )
+    return cached
+
+
 def annotate_inventory_with_edges(
     inventory: Dict,
     indices: List[BinaryEdgeIndex],
@@ -680,5 +718,6 @@ __all__ = [
     "BinaryCallEdge",
     "BinaryEdgeIndex",
     "extract_direct_call_edges",
+    "load_cached_edge_index",
     "annotate_inventory_with_edges",
 ]

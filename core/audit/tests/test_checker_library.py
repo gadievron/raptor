@@ -13,12 +13,17 @@ from pathlib import Path
 
 _WORKTREE_ROOT = Path(__file__).resolve().parents[3]
 _MAIN_REPO = Path(os.environ.get("RAPTOR_DIR", str(_WORKTREE_ROOT)))
-os.environ.setdefault("RAPTOR_DIR", str(_MAIN_REPO))
+# Hard-SET (never setdefault; same value — _MAIN_REPO already resolves
+# the deliberate ambient-first choice above, falling back to this tree).
+os.environ["RAPTOR_DIR"] = str(_MAIN_REPO)
 for _p in (str(_MAIN_REPO), str(_WORKTREE_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from packages.checker_synthesis.library import RuleLibrary, TargetRecord  # noqa: E402
+from packages.checker_synthesis.library import (  # noqa: E402
+    RuleLibrary,
+    TargetRecord,
+)
 
 
 def _add_rule(lib, rule_id="r1", engine="semgrep", cwe="CWE-89", **kw):
@@ -129,7 +134,13 @@ class TestRetireLowPrecision:
 class TestGraduate:
     def test_graduates_high_quality_rule(self, tmp_path):
         lib = RuleLibrary(tmp_path / "lib")
-        _add_rule(lib, rule_id="grad1")
+        # Graduation additionally requires the mechanical-control
+        # tier (dual_control + rule_tier="library") — precision
+        # stats alone cannot ship a rule to the engine rules dir.
+        # This test pins the file-copy mechanics, so it supplies
+        # the control evidence.
+        _add_rule(lib, rule_id="grad1",
+                  dual_control=True, rule_tier="library")
 
 
         entry = lib.all_entries()[0]
@@ -187,9 +198,12 @@ class TestGraduate:
 
     def test_coccinelle_graduation_path(self, tmp_path):
         lib = RuleLibrary(tmp_path / "lib")
+        # Control evidence required by the graduation gate — this
+        # test pins the coccinelle destination-path mechanics.
         lib.add_rule(
             rule_id="cocci1", engine="coccinelle",
             body="@@\n@@\n- foo()\n",
+            dual_control=True, rule_tier="library",
         )
 
 

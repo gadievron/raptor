@@ -6,10 +6,16 @@ expensive tool confirmation runs.  Each gate returns a demoted
 
 Gate ordering (cost order, short-circuit on first hit):
 
-1. Architecture model   — CWE-362 in single-threaded targets
-2. Lifecycle phase      — resource leaks in init-only code
-3. Contract provenance  — hypothesis-vs-contract contradiction
-4. Input-bound Tier 0   — known-return-type table
+1. Architecture model        — CWE-362 in single-threaded targets
+2. Lifecycle phase           — resource leaks in init-only code
+3. Contract provenance       — hypothesis-vs-contract contradiction
+4. Input-bound Tier 0        — known-return-type table
+5. Anti-self-refutation      — rescue self-refuted concurrency/lifecycle hyps
+6. Callee-inheritance        — demote thin wrappers flagged for callee's bug
+
+Gates 1-4 are demotion gates (finding/suspicious → clean).
+Gate 5 is a promotion gate (clean → suspicious) for self-refuted hypotheses.
+Gate 6 is a demotion gate (finding/suspicious → clean) for callee attribution.
 
 """
 
@@ -31,7 +37,7 @@ logger = logging.getLogger(__name__)
 class RefutationVerdict:
     """Result of a refutation gate firing."""
 
-    gate: str  # "architecture", "lifecycle", "contract", "input_bound"
+    gate: str
     reason: str  # human-readable explanation
     demote_to: str  # "clean" or "suspicious"
 
@@ -76,6 +82,13 @@ def refute_hypothesis(
     if v is not None:
         return v
 
+    # Gate 6: Callee-inheritance suppression
+    source, callees = _get_function_source_and_callees(outcome, checklist)
+    if source and callees:
+        v = _refute_by_callee_inheritance(outcome, source, callees)
+        if v is not None:
+            return v
+
     return None
 
 
@@ -86,6 +99,63 @@ def refute_hypothesis(
 _RACE_CWES = frozenset({"CWE-362", "CWE-364", "CWE-366", "CWE-367"})
 
 
+# Thread-spawn primitives across the supported languages. Seed set,
+# deliberately small: this drives a one-way VETO (see below) where a
+# miss only means the veto doesn't fire — never new suppression.
+_THREADING_PRIMITIVE_RE = re.compile(
+    rb"pthread_create|std::j?thread|std::async"
+    rb"|CreateThread|_beginthread"
+    rb"|threading\.Thread|multiprocessing\.|concurrent\.futures"
+    rb"|\bgo\s+func\b|thread::spawn|tokio::spawn"
+    rb"|new\s+Thread\s*\(|ExecutorService"
+)
+_SOURCE_EXTS = frozenset({
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
+    ".py", ".go", ".rs", ".java", ".kt", ".cs",
+})
+_SKIP_DIRS = frozenset({".git", "node_modules", "vendor", "third_party"})
+_VETO_SCAN_MAX_FILES = 2000
+_VETO_SCAN_MAX_BYTES = 256 * 1024
+
+_threading_seen_cache: Dict[str, bool] = {}
+
+
+def _threading_primitives_seen(target_path) -> bool:
+    """Bounded scan: does the target visibly spawn threads anywhere?
+
+    Cached per target path. Read errors and the file/byte caps fail
+    toward False — i.e. toward NOT vetoing — so a partial scan can
+    only under-veto, never over-suppress.
+    """
+    key = str(target_path)
+    cached = _threading_seen_cache.get(key)
+    if cached is not None:
+        return cached
+    import os as _os
+    seen = False
+    scanned = 0
+    for root, dirnames, filenames in _os.walk(key):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fn in filenames:
+            if _os.path.splitext(fn)[1] not in _SOURCE_EXTS:
+                continue
+            scanned += 1
+            if scanned > _VETO_SCAN_MAX_FILES:
+                break
+            try:
+                with open(_os.path.join(root, fn), "rb") as f:
+                    if _THREADING_PRIMITIVE_RE.search(
+                            f.read(_VETO_SCAN_MAX_BYTES)):
+                        seen = True
+                        break
+            except OSError:
+                continue
+        if seen or scanned > _VETO_SCAN_MAX_FILES:
+            break
+    _threading_seen_cache[key] = seen
+    return seen
+
+
 def _is_single_threaded(
     domain_model: Optional[Dict[str, Any]],
     config,
@@ -94,14 +164,31 @@ def _is_single_threaded(
 
     Only the domain model's ``architecture.threading_model`` field
     (produced by the study loop) is authoritative enough to suppress
-    race-condition findings.  Source-grep heuristics are too fragile:
-    kernel code uses its own primitives, excerpt trees are partial,
-    and framework-spawned threads leave no source footprint.
+    race-condition findings.  Source-grep heuristics are too fragile
+    to PROVE threading: kernel code uses its own primitives, excerpt
+    trees are partial, and framework-spawned threads leave no source
+    footprint.
+
+    The claim is an unverified LLM output derived from the untrusted
+    target, and this gate fails toward suppression — so a mechanical
+    VETO applies in the safe direction: when the source visibly
+    spawns threads, the single-threaded claim is provably wrong and
+    must not demote race findings. The veto can only prevent wrong
+    suppression, never add it.
     """
     if not domain_model:
         return False
     arch = domain_model.get("architecture", {})
-    return arch.get("threading_model", "") == "single_threaded"
+    if arch.get("threading_model", "") != "single_threaded":
+        return False
+    target = getattr(config, "target_path", None) if config else None
+    if target and _threading_primitives_seen(target):
+        logger.info(
+            "architecture gate: single_threaded claim vetoed — thread "
+            "primitives visible in %s; race findings NOT demoted", target,
+        )
+        return False
+    return True
 
 
 def _signal_reachable_set(
@@ -157,7 +244,9 @@ def _signal_reachable_set(
     for fentry in files:
         path = fentry.get("path", "")
         for item in fentry.get("items", []):
-            func_to_file[item["name"]] = path
+            name = item.get("name", "")
+            if name:
+                func_to_file[name] = path
         calls = _get_calls(fentry)
         for c in calls:
             caller = c.get("caller", "")
@@ -511,11 +600,12 @@ def _refute_by_known_return_type(
         if has_cwe:
             dist = 0
         else:
-            nearby = hyp_lower[max(0, func_pos - 100):func_pos + 100]
+            nearby_start = max(0, func_pos - 100)
+            nearby = hyp_lower[nearby_start:func_pos + 100]
             m = _OVERFLOW_KW.search(nearby)
             if not m:
                 continue
-            dist = abs(func_pos - m.start())
+            dist = abs(func_pos - nearby_start - m.start())
 
         if best is None or dist < best[3]:
             best = (func_name, ret_type, max_val, dist)
@@ -532,6 +622,158 @@ def _refute_by_known_return_type(
         )
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Gate 5: Anti-self-refutation (promotion gate: clean → suspicious)
+# ---------------------------------------------------------------------------
+
+_SELF_REFUTATION_CWES = frozenset({
+    "CWE-362", "CWE-364", "CWE-366",
+    "CWE-416", "CWE-415",
+})
+
+
+def rescue_self_refuted(
+    outcome,
+    *,
+    domain_model: Optional[Dict[str, Any]] = None,
+    checklist: Optional[Dict[str, Any]] = None,
+    config=None,
+) -> Optional[RefutationVerdict]:
+    """Rescue hypotheses the LLM formed then refuted without evidence.
+
+    Fires when ALL of:
+      - outcome.status == "clean"
+      - at least one hypothesis has confidence == "refuted"
+      - that hypothesis's CWE is in _SELF_REFUTATION_CWES
+      - no mechanical tool has confirmed OR denied the hypothesis
+      - the hypothesis has a non-empty counter field
+
+    Returns a verdict that promotes clean → suspicious so the sweep
+    pass can attempt mechanical verification.
+    """
+    if outcome.status != "clean":
+        return None
+
+    hypotheses = getattr(outcome, "hypotheses", None) or []
+    if not hypotheses:
+        rr = outcome.review_result or {}
+        hypotheses = rr.get("hypotheses") or []
+
+    from .evidence_grade import is_tool_evidence
+    if is_tool_evidence(outcome.evidence_tool or ""):
+        return None
+
+    for h in hypotheses:
+        if not isinstance(h, dict):
+            continue
+        conf = (h.get("confidence") or "").lower()
+        if conf != "refuted":
+            continue
+        counter = h.get("counter", "")
+        if not counter:
+            continue
+
+        mechanism = h.get("mechanism", "")
+        cwes = _extract_cwes_from_text(mechanism)
+        if not (cwes & _SELF_REFUTATION_CWES):
+            continue
+
+        return RefutationVerdict(
+            gate="anti_self_refutation",
+            reason=(
+                f"hypothesis '{mechanism[:80]}' self-refuted without "
+                f"mechanical evidence; concurrency/lifecycle self-refutations "
+                f"are unreliable"
+            ),
+            demote_to="suspicious",
+        )
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Gate 6: Callee-inheritance suppression (demotion gate)
+# ---------------------------------------------------------------------------
+
+_CALLEE_VULN_PATTERNS = re.compile(
+    r"(?:call(?:s|ed|ing)?|invok(?:es?|ing)|delegat(?:es?|ing)|"
+    r"pass(?:es|ing)?(?:\s+to)?)\s+(?:a\s+)?(?:buggy|vulnerable|"
+    r"unsafe|flawed)\s+(?:function|callee|routine|method|helper|"
+    r"implementation)",
+    re.IGNORECASE,
+)
+
+_CALLEE_NAME_IN_HYPO = re.compile(
+    r"(?:the\s+)?(?:function|callee|call\s+to)\s+[`'\"]?(\w+)[`'\"]?\s+"
+    r"(?:is|has|contains|suffers|may|could|might)\s+",
+    re.IGNORECASE,
+)
+
+_WRAPPER_EXCLUSION_RE = re.compile(
+    r"\*\s*\(|\([^)]*\*\s*\)"
+    r"|\b(?:memcpy|memset|memmove|copy_from_user|copy_to_user)\b"
+    r"|\b(?:k?m?alloc|calloc|realloc|kzalloc|kmalloc|vmalloc)\b",
+)
+
+
+def _refute_by_callee_inheritance(
+    outcome,
+    source: str,
+    callees: list,
+) -> Optional[RefutationVerdict]:
+    """Refute when the hypothesis names a callee's bug, not ours.
+
+    Fires when:
+      1. The hypothesis text attributes the bug to a named callee
+      2. The function body is a thin wrapper (<=10 SLOC)
+      3. The function does not transform data (no casts, memcpy, allocs)
+    """
+    hyp = outcome.hypothesis or ""
+    if not hyp:
+        return None
+
+    matched_callee = False
+    if _CALLEE_VULN_PATTERNS.search(hyp):
+        matched_callee = True
+    else:
+        m = _CALLEE_NAME_IN_HYPO.search(hyp)
+        if m:
+            named_callee = m.group(1)
+            if named_callee in callees:
+                matched_callee = True
+
+    if not matched_callee:
+        return None
+
+    code_lines = [
+        ln.strip() for ln in source.strip().splitlines()
+        if ln.strip()
+        and not ln.strip().startswith("//")
+        and not ln.strip().startswith("/*")
+        and not ln.strip().startswith("*")
+        and not ln.strip().startswith("#")
+        and ln.strip() not in ("{", "}")
+    ]
+    body_lines = code_lines[1:] if code_lines else []
+
+    if len(body_lines) > 10:
+        return None
+
+    body = "\n".join(body_lines)
+    if _WRAPPER_EXCLUSION_RE.search(body):
+        return None
+
+    return RefutationVerdict(
+        gate="callee_inheritance",
+        reason=(
+            f"hypothesis attributes bug to callee, but {outcome.function} "
+            f"is a thin delegation wrapper ({len(body_lines)} SLOC) that "
+            f"does not transform data"
+        ),
+        demote_to="clean",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +846,27 @@ def _extract_all_cwes(outcome) -> FrozenSet[str]:
     return frozenset()
 
 
+def _extract_cwes_from_text(text: str) -> FrozenSet[str]:
+    """Extract CWE IDs from free-form text (mechanism, hypothesis, etc.).
+
+    Unlike ``_extract_all_cwes`` which reads from an outcome's
+    ``review_result``, this operates on arbitrary strings — used by
+    Gate 5 to extract CWEs from a hypothesis mechanism field.
+    Falls back to keyword inference when no explicit CWE-NNN is found.
+    """
+    ids = _CWE_ID_RE.findall(text)
+    if ids:
+        return frozenset(ids)
+    try:
+        from .cwe_dispatch import infer_cwe_from_hypothesis
+        inferred = infer_cwe_from_hypothesis(text)
+        if inferred:
+            return frozenset({inferred})
+    except ImportError:
+        pass
+    return frozenset()
+
+
 def _get_calls(fentry: Dict[str, Any]) -> list:
     """Extract the calls list from a checklist file entry."""
     cg = fentry.get("call_graph", {})
@@ -612,3 +875,34 @@ def _get_calls(fentry: Dict[str, Any]) -> list:
         if isinstance(calls, list):
             return calls
     return []
+
+
+def _get_function_source_and_callees(
+    outcome,
+    checklist: Optional[Dict[str, Any]],
+) -> tuple:
+    """Look up function source and callee names from checklist.
+
+    Returns (source, callees) where source is the function body text
+    and callees is a list of called function names.  Both may be empty
+    if the checklist doesn't have the data.
+    """
+    if not checklist:
+        return "", []
+
+    for fentry in checklist.get("files", []):
+        if fentry.get("path") != outcome.file:
+            continue
+        for item in fentry.get("items", []):
+            if item.get("name") != outcome.function:
+                continue
+            source = item.get("source", "")
+            callees = []
+            for c in _get_calls(fentry):
+                if c.get("caller") == outcome.function:
+                    chain = c.get("chain", [])
+                    if chain:
+                        callees.extend(chain)
+            return source, callees
+
+    return "", []

@@ -11,6 +11,7 @@ import textwrap
 
 from core.inventory.module_load_abort import (
     ModuleLoadAbort,
+    _go_panic_is_unconditional,
     detect_module_load_abort,
 )
 
@@ -228,6 +229,150 @@ def test_go_no_init_does_not_fire():
 
 
 # ---------------------------------------------------------------------------
+# Go — comments and strings must not fabricate an abort. A panic, init
+# header, or brace inside a comment or string literal must never
+# produce the whole-file abort gate (which would suppress every
+# finding in a loadable file).
+# ---------------------------------------------------------------------------
+
+
+def test_go_commented_panic_not_detected():
+    src = (
+        "package p\n"
+        "\n"
+        "func init() {\n"
+        '\t// panic("disabled")\n'
+        "}\n"
+        "\n"
+        "func Vulnerable(cmd string) { run(cmd) }\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_block_commented_panic_not_detected():
+    src = (
+        "package p\n"
+        "func init() {\n"
+        '\t/* panic("disabled") */\n'
+        "\tregister()\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_panic_in_string_not_detected():
+    src = (
+        "package p\n"
+        "func init() {\n"
+        '\ts := "panic(oops)"\n'
+        "\t_ = s\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_commented_init_header_not_detected():
+    # The whole init (header included) is commented out.
+    src = (
+        "package p\n"
+        '// func init() { panic("x") }\n'
+        "func Live() {}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_conditional_panic_with_brace_in_comment_not_detected():
+    # A '}' inside a comment before the panic used to drop the depth
+    # counter to zero, misreading a conditional panic as unconditional.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\tif bad() {\n"
+        "\t\t// note: }\n"
+        '\t\tpanic("x")\n'
+        "\t}\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_rune_quote_does_not_corrupt_depth():
+    # A '"' rune used to mispair the string skipper, swallowing the
+    # conditional's '{' and misreading the panic as unconditional.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\tr := '\"'\n"
+        '\tt := "a"\n'
+        "\t_ = r\n"
+        "\t_ = t\n"
+        "\tif cond {\n"
+        '\t\tpanic("boom")\n'
+        "\t}\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_real_panic_after_comment_still_detected():
+    # Sanitisation preserves newlines, so the reported line is exact.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\t// abort on load\n"
+        '\tpanic("must not load")\n'
+        "}\n"
+    )
+    abort = detect_module_load_abort("go", src)
+    assert isinstance(abort, ModuleLoadAbort)
+    assert abort.line == 4
+    assert abort.summary == "func init() { panic(...) }"
+
+
+def test_go_unconditional_panic_after_rune_still_detected():
+    # Sanitising rune interiors must not break real detection.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\tr := '\"'\n"
+        "\t_ = r\n"
+        '\tpanic("x")\n'
+        "}\n"
+    )
+    abort = detect_module_load_abort("go", src)
+    assert abort is not None
+    assert abort.line == 5
+
+
+def test_go_raw_string_brace_still_conditional():
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\ts := `}`\n"
+        "\t_ = s\n"
+        "\tif cond {\n"
+        '\t\tpanic("a")\n'
+        "\t}\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_panic_walker_skips_comments_directly():
+    # Defense in depth: the depth walker itself (not just the sanitised
+    # entry point) must skip comments like its sibling brace matcher.
+    body = '\n\tif bad() {\n\t\t// note: }\n\t\tpanic("x")\n\t}\n'
+    offset = body.index("panic")
+    assert _go_panic_is_unconditional(body, offset) is False
+
+
+def test_go_panic_walker_top_level_still_true():
+    body = '\n\t// abort\n\tpanic("x")\n'
+    offset = body.index("panic")
+    assert _go_panic_is_unconditional(body, offset) is True
+
+
+# ---------------------------------------------------------------------------
 # Rust
 # ---------------------------------------------------------------------------
 
@@ -330,6 +475,23 @@ def test_ruby_raise_inside_if_block_does_not_fire():
 def test_ruby_bare_raise_does_not_fire():
     # Bare ``raise`` (re-raise) has no argument — not a module-abort signal.
     assert detect_module_load_abort("ruby", "raise\n") is None
+
+
+def test_ruby_exit_bang_detected():
+    abort = detect_module_load_abort("ruby", "exit!\n")
+    assert isinstance(abort, ModuleLoadAbort)
+    assert abort.line == 1
+    assert abort.summary == "exit!"
+
+
+def test_ruby_exit_bang_with_modifier_not_detected():
+    assert detect_module_load_abort("ruby", "exit! if broken\n") is None
+
+
+def test_ruby_plain_exit_still_detected():
+    abort = detect_module_load_abort("ruby", "exit\n")
+    assert abort is not None
+    assert abort.summary == "exit"
 
 
 # ---------------------------------------------------------------------------

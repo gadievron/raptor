@@ -6,6 +6,7 @@ installed, the ``z3`` module attribute exported from here is ``None`` and
 
 """
 from __future__ import annotations
+
 from core.logging import get_logger
 
 try:
@@ -16,7 +17,7 @@ except ImportError as i:
     z3 = None  # type: ignore[assignment]
     _Z3_AVAILABLE = False
     get_logger().debug(f"z3-solver not installed: {i}")
-except Exception as e:
+except Exception as e:  # noqa: BLE001 — installed-but-broken z3 can raise anything from its loader; degrade with the loud warning below
     # Anything OTHER than ImportError indicates the package
     # IS installed but failed to load. Pre-fix this branch
     # logged at debug — same level as the expected
@@ -31,9 +32,11 @@ except Exception as e:
     #   * `RuntimeError` from Z3's C++ ctor on architectures
     #     where the wheel's prebuilt binary is incompatible
     #     (musl/Alpine vs the manylinux wheel).
-    #   * `ImportError` re-raised from a transitive deep dep
-    #     (caught by the outer `Exception` arm only on
-    #     unusual stack-walks; normally caught above).
+    #
+    # (An `ImportError` — even one re-raised from a transitive
+    # deep dep — is always caught by the `ImportError` arm
+    # above; except-clause ordering guarantees it never
+    # reaches this arm.)
     #
     # In every case, SMT-dependent features (CodeQL dataflow
     # path-feasibility, exploit_feasibility one-gadget SMT)
@@ -58,3 +61,11 @@ except Exception as e:
 def z3_available() -> bool:
     """True when the ``z3-solver`` package imported successfully."""
     return _Z3_AVAILABLE
+
+
+#: Exception classes the Z3 bindings raise, for narrow best-effort
+#: handlers around SMT-backed checks (``except (..., *Z3_ERRORS):``).
+#: Empty when z3 is unavailable — nothing Z3-ish can raise then.
+Z3_ERRORS: tuple[type[Exception], ...] = (
+    (z3.Z3Exception,) if _Z3_AVAILABLE else ()
+)

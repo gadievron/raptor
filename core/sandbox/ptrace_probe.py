@@ -249,6 +249,10 @@ def _run_probe() -> bool:
         _, exit_status = _waitpid_eintr_safe(pid, 0)
     except OSError as e:
         logger.debug("ptrace probe: final waitpid failed: %s", e)
+        # Same cleanup as the earlier failure paths — without it a
+        # final-waitpid error leaks the resumed child unreaped
+        # (zombie until process exit). ECHILD is swallowed inside.
+        _try_kill_and_reap(pid)
         return False
     if not os.WIFEXITED(exit_status) or os.WEXITSTATUS(exit_status) != 0:
         logger.debug(

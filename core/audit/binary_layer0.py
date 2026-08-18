@@ -321,7 +321,14 @@ def check_lock_imbalance(
     return_paths: int = 1,
     file: str = "",
 ) -> List[Layer0Finding]:
-    """30.7: lock acquired but not released on all return paths."""
+    """30.7: lock acquired with no matching release anywhere in the
+    function.
+
+    Presence/absence heuristic, NOT path-sensitive: it cannot tell
+    "released on the happy path but leaked on the error path" from
+    "released everywhere" — only "no release call exists at all".
+    (The finding text still frames the error path because that is
+    where the leak bites when the heuristic fires.)"""
     findings = []
     call_names = [c.get("callee", "") for c in calls]
 
@@ -358,20 +365,35 @@ def check_missing_clear(
     if has_secure_clear:
         return []
 
-    if not has_memset:
+    # Plain memset does not satisfy the secure-clear requirement:
+    # the compiler may elide a clear of a buffer that is dead after
+    # the store (same position as check_inlined_ops). It does lower
+    # confidence — the clear survives at some optimization levels.
+    if has_memset:
         return [Layer0Finding(
             pattern_id=PatternID.MISSING_CLEAR,
             function=function, file=file,
             evidence_tier=EvidenceTier.HEURISTIC,
             description=(
-                "sensitive function without explicit_bzero/memset_s "
-                "before return — secret data may persist on stack"
+                "sensitive function clears with plain memset() but no "
+                "explicit_bzero/memset_s — compiler may elide the clear "
+                "and secret data may persist on stack"
             ),
-            confidence="medium",
+            confidence="low",
             vuln_type="sensitive_data_exposure",
         )]
 
-    return []
+    return [Layer0Finding(
+        pattern_id=PatternID.MISSING_CLEAR,
+        function=function, file=file,
+        evidence_tier=EvidenceTier.HEURISTIC,
+        description=(
+            "sensitive function without explicit_bzero/memset_s "
+            "before return — secret data may persist on stack"
+        ),
+        confidence="medium",
+        vuln_type="sensitive_data_exposure",
+    )]
 
 
 def check_sign_confusion(
@@ -624,6 +646,46 @@ def check_dwarf_types(
     return findings
 
 
+# Coarse callee extraction from raw function source. Deliberately
+# regex-level: Layer 0 is a cheap pre-sweep whose findings are
+# hypothesis SIGNALS attached to the evidence index, never verdicts —
+# a parse-grade extractor would cost more than the tier is worth.
+# Callers that HAVE real call data (disassembly, call graphs) should
+# pass it instead; this exists so a source-only caller no longer
+# passes calls=[] and silently disables the six calls-based checks.
+_CALLEE_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_CALLEE_KEYWORDS = frozenset({
+    # C/C++ control flow / operators that precede '('
+    "if", "for", "while", "switch", "return", "sizeof", "defined",
+    "catch", "assert", "alignof", "typeof", "decltype", "case",
+    # declaration-ish shapes the regex can hit
+    "int", "char", "long", "short", "float", "double", "void",
+    "unsigned", "signed", "struct", "union", "enum", "static",
+    # Python / Go / JS keywords that precede '('
+    "def", "lambda", "func", "function", "elif", "except",
+    "raise", "with", "yield", "await", "not", "and", "or", "in",
+})
+
+
+def callees_from_source(source: str) -> List[Dict[str, Any]]:
+    """Best-effort ``[{"callee": name}, ...]`` from function source.
+
+    Over-approximates (a macro invocation and a call look identical;
+    the function's own definition line contributes its name) — fine
+    for the presence/absence checks above, the wrong tool for
+    anything that counts.
+    """
+    seen: set[str] = set()
+    out: List[Dict[str, Any]] = []
+    for m in _CALLEE_RE.finditer(source):
+        name = m.group(1)
+        if name in _CALLEE_KEYWORDS or name in seen:
+            continue
+        seen.add(name)
+        out.append({"callee": name})
+    return out
+
+
 def scan_function(
     function: str,
     calls: Sequence[Dict[str, Any]],
@@ -634,16 +696,28 @@ def scan_function(
     return_paths: int = 1,
     source: str = "",
     file: str = "",
+    language: str = "c",
 ) -> List[Layer0Finding]:
-    """Run all applicable Layer 0 checks on a single function."""
+    """Run all applicable Layer 0 checks on a single function.
+
+    ``language`` gates the C-idiom checks when the scan runs over
+    SOURCE rather than disassembly: missing-secure-clear expects
+    explicit_bzero/memset discipline that only exists in C-family
+    code — on Python/Go/JS it fires on every function whose NAME
+    contains a sensitive fragment (calibrated: 305 of 346 findings
+    on a large mixed-language tree were exactly that shape).
+    Default "c" preserves the binary-analysis callers' behaviour.
+    """
     findings: List[Layer0Finding] = []
+    c_family = language in ("c", "cpp", "c++", "objc")
 
     findings.extend(check_format_string(function, calls, file))
     findings.extend(check_buffer_size_mismatch(function, calls, file))
     findings.extend(check_unchecked_return(function, calls, file))
     findings.extend(check_toctou(function, calls, file))
     findings.extend(check_lock_imbalance(function, calls, return_paths, file))
-    findings.extend(check_missing_clear(function, calls, file))
+    if c_family:
+        findings.extend(check_missing_clear(function, calls, file))
 
     if instructions:
         findings.extend(check_sign_confusion(function, instructions, file))

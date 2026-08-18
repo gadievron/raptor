@@ -73,8 +73,10 @@ class TestClientRetryLogCluster:
 
     def test_three_attempts_emit_only_warnings(self, monkeypatch):
         # Setup: single model, 3 retries, every attempt fails with
-        # a RETRYABLE error ("timeout" matches _is_retryable_error's
-        # pattern set; non-retryable errors break after attempt 1).
+        # a RETRYABLE error ("503" matches _is_retryable_error's
+        # pattern set; non-retryable errors break after attempt 1,
+        # and timeout-class errors are capped at one retry by the
+        # timeout retry policy — see test_timeout_retry_cap.py).
         # Patch time.sleep to instant — the retry backoff would
         # otherwise add 6+ seconds per test.
         import core.llm.client as client_mod
@@ -89,10 +91,10 @@ class TestClientRetryLogCluster:
         with patch.object(client, "_get_provider") as mock_get:
             prov = MagicMock()
             prov.generate.side_effect = RuntimeError(
-                "simulated timeout from upstream",
+                "simulated 503 from upstream",
             )
             mock_get.return_value = prov
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017 — wrapper re-raises the provider's own error
                 client.generate("test prompt")
 
         # Operator-visible WARNINGs: 3 'Attempt N/3 failed' + 1
@@ -148,7 +150,7 @@ class TestClientRetryLogCluster:
             prov = MagicMock()
             prov.generate.side_effect = RuntimeError("simulated timeout")
             mock_get.return_value = prov
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017 — wrapper re-raises the provider's own error
                 client.generate("test")
 
         attempt_warnings = [

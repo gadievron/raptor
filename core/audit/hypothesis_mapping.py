@@ -7,12 +7,49 @@ consistency-check.  Pure functions — no orchestrator state.
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional
 
-_HYPOTHESIS_SEMGREP_PATTERNS: Dict[str, str] = {
+# P10 web families — unsafe-shape patterns shared across their keyword
+# aliases. Each family has a guarded fixture under
+# engine/negative_controls/ that the pattern must NOT match (safe
+# usage: json/yaml.safe_load, fixed-URL fetches, defusedxml / NONET
+# parsing, allowlist-derived redirect targets). A pattern that matched
+# its fixture would be a presence detector and the sweep caps it at
+# inconclusive.
+_DESERIALIZATION_PATTERN = (
+    "pickle\\.loads?\\s*\\(|yaml\\.load\\s*\\(|unserialize\\s*\\(|"
+    "Marshal\\.load|ObjectInputStream|marshal\\.loads?\\s*\\("
+)
+_SSRF_PATTERN = (
+    # request call whose URL argument is an f-string, a concatenation,
+    # or a request-derived attribute — a bare identifier (allowlist
+    # lookup result) does not match.
+    # \x27 is the apostrophe: the rendered rule embeds this pattern in
+    # a single-quoted YAML scalar, so a literal quote char would
+    # truncate the rule text.
+    "urlopen\\s*\\(\\s*(?:f[\\x27\"]|[^),]*\\+)|"
+    "requests\\.\\w+\\s*\\(\\s*(?:f[\\x27\"]|[^),]*\\+)|"
+    "(?:urlopen|requests\\.\\w+)\\s*\\(\\s*(?:request|req)\\.|"
+    "curl_easy_setopt\\s*\\([^;]*CURLOPT_URL[^;]*(?:\\+|argv|buf|input)|"
+    "curl_exec.*\\$_(?:GET|POST|REQUEST)"
+)
+_XXE_PATTERN = (
+    "resolve_entities\\s*=\\s*True|load_dtd\\s*=\\s*True|"
+    "etree\\.parse\\s*\\(|minidom\\.parse|"
+    "simplexml_load_string|libxml_disable_entity_loader\\s*\\(\\s*false|"
+    "XML_PARSE_NOENT|xmlSubstituteEntitiesDefault\\s*\\(\\s*1"
+)
+_OPEN_REDIRECT_PATTERN = (
+    "redirect\\s*\\(\\s*(?:request\\.|req\\.|params|"
+    "\\$_(?:GET|POST|REQUEST)|url|target|next|dest)|"
+    "sendRedirect\\s*\\(\\s*request|"
+    "header\\s*\\(\\s*[\\x27\"]Location:?[\\x27\"]?\\s*\\."
+)
+
+_HYPOTHESIS_SEMGREP_PATTERNS: dict[str, str] = {
     "buffer overflow": "strcpy|sprintf|gets\\s*\\(|strcat",
     "sql injection": "SELECT.*%|INSERT.*%|UPDATE.*%|DELETE.*%",
     "command injection": "system\\s*\\(|popen\\s*\\(|exec[lv]p?e?\\s*\\(",
@@ -23,40 +60,104 @@ _HYPOTHESIS_SEMGREP_PATTERNS: Dict[str, str] = {
     "xss": "(snprintf|sprintf)\\s*\\([^)]*\"%s|write\\s*\\(.*\\+|response\\.write|res\\.send",
     "reflected": "(snprintf|sprintf)\\s*\\([^)]*\"%s|write\\s*\\(.*\\+|response\\.write|res\\.send",
     "cross-site": "(snprintf|sprintf)\\s*\\([^)]*\"%s|write\\s*\\(.*\\+|response\\.write|res\\.send",
+    "deserialization": _DESERIALIZATION_PATTERN,
+    "deserialisation": _DESERIALIZATION_PATTERN,
+    "unpickle": _DESERIALIZATION_PATTERN,
+    "ssrf": _SSRF_PATTERN,
+    "server-side request": _SSRF_PATTERN,
+    "xxe": _XXE_PATTERN,
+    "xml external entit": _XXE_PATTERN,
+    "open redirect": _OPEN_REDIRECT_PATTERN,
+    "unvalidated redirect": _OPEN_REDIRECT_PATTERN,
 }
 
 
-def hypothesis_to_semgrep_rule(hypothesis: str, file_path: str) -> Optional[str]:
+# Target extension → semgrep language key for the dynamic
+# per-hypothesis rules. Every pattern in
+# ``_HYPOTHESIS_SEMGREP_PATTERNS`` is a ``pattern-regex``, so the
+# language key's only job is FILE SELECTION — a wrong key means the
+# rule never even scans its own target file. Pre-fix everything
+# unmapped defaulted to ``c``: for PHP/Ruby/C#/Kotlin/Swift/Lua/Scala
+# targets the per-hypothesis rule could never match, silently
+# disabling /audit's only dynamic verification channel there.
+# Unknown extensions fall back to ``generic`` (regex over any file)
+# rather than a language guess.
+_SEMGREP_LANG_BY_EXT: dict[str, str] = {
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".java": "java",
+    ".go": "go",
+    ".rs": "rust",
+    ".php": "php",
+    ".rb": "ruby",
+    ".cs": "csharp",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".lua": "lua",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".hh": "cpp",
+    ".hxx": "cpp",
+}
+
+
+def semgrep_language_for(file_path: str) -> str:
+    """Semgrep language key for a dynamic pattern-regex rule targeting
+    ``file_path``. ``generic`` for unmapped extensions."""
+    ext = Path(file_path).suffix.lower()
+    return _SEMGREP_LANG_BY_EXT.get(ext, "generic")
+
+
+def hypothesis_to_semgrep_rule(hypothesis: str, file_path: str) -> str | None:
     """Generate a Semgrep YAML rule from a hypothesis string.
 
     Returns a path to a temp YAML file, or None if no rule can be derived.
     """
+    keyed = hypothesis_to_semgrep_rule_keyed(hypothesis, file_path)
+    return keyed[0] if keyed else None
+
+
+def hypothesis_to_semgrep_rule_keyed(
+    hypothesis: str, file_path: str,
+) -> tuple[str, str] | None:
+    """Like hypothesis_to_semgrep_rule, but also returns the keyword.
+
+    Returns ``(rule_yaml_path, keyword)`` where *keyword* is the
+    ``_HYPOTHESIS_SEMGREP_PATTERNS`` key that selected the pattern.
+    The keyword lets the sweep engine look up the matching negative
+    control fixture (engine/negative_controls/) so a presence-detector
+    rule cannot return "confirmed".
+    """
     hyp_lower = hypothesis.lower()
 
     pattern = None
+    matched_keyword = ""
     rule_id = "hypothesis-check"
     for keyword, regex in _HYPOTHESIS_SEMGREP_PATTERNS.items():
         if keyword in hyp_lower:
             if keyword == "format string" and file_path.endswith(".go"):
                 continue
             pattern = regex
+            matched_keyword = keyword
             rule_id = keyword.replace(" ", "-")
             break
 
     if not pattern:
         return None
 
-    lang = "c"
-    if file_path.endswith(".py"):
-        lang = "python"
-    elif file_path.endswith((".js", ".ts")):
-        lang = "javascript"
-    elif file_path.endswith(".java"):
-        lang = "java"
-    elif file_path.endswith(".go"):
-        lang = "go"
-    elif file_path.endswith(".rs"):
-        lang = "rust"
+    lang = semgrep_language_for(file_path)
 
     rule_yaml = (
         f"rules:\n"
@@ -68,13 +169,12 @@ def hypothesis_to_semgrep_rule(hypothesis: str, file_path: str) -> Optional[str]
     )
 
     try:
-        tmp = tempfile.NamedTemporaryFile(
-            prefix="audit_sweep_", suffix=".yaml",
-            mode="w", delete=False,
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="audit_sweep_", suffix=".yaml", text=True,
         )
-        tmp.write(rule_yaml)
-        tmp.close()
-        return tmp.name
+        with os.fdopen(fd, "w") as fh:
+            fh.write(rule_yaml)
+        return tmp_name, matched_keyword
     except OSError:
         return None
 
@@ -141,7 +241,7 @@ _SMT_HYPOTHESIS_VERBS = [
 ]
 
 
-def hypothesis_to_smt_verb(hypothesis: str) -> Optional[str]:
+def hypothesis_to_smt_verb(hypothesis: str) -> str | None:
     """Map a hypothesis to an SMT solver verb."""
     hyp_lower = hypothesis.lower()
     for keyword, verb in _SMT_HYPOTHESIS_VERBS:
@@ -155,7 +255,7 @@ def hypothesis_to_smt_verb(hypothesis: str) -> Optional[str]:
 _COCCI_RULES_DIR = Path(__file__).resolve().parents[2] / "engine" / "coccinelle" / "rules"
 
 
-def hypothesis_to_cocci_check(hypothesis: str) -> Optional[str]:
+def hypothesis_to_cocci_check(hypothesis: str) -> str | None:
     """Map a hypothesis to a Coccinelle consistency-check rule.
 
     Returns the path to a .cocci rule file, or None.

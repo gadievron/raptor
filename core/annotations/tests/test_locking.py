@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -75,7 +74,7 @@ class TestConcurrentWrites:
         assert not missing, (
             f"{len(missing)} annotations lost to read-modify-write "
             f"race — locking didn't serialise. Missing: "
-            f"{sorted(list(missing))[:5]}..."
+            f"{sorted(missing)[:5]}..."
         )
 
 

@@ -212,31 +212,38 @@ if [ -n "$PROJECT_TARGET" ]; then
     esac
 fi
 
-# Append to manifest under flock so concurrent hook fires don't
-# interleave their writes mid-line.
+# Append to manifest with an O_NOFOLLOW guard.
 #
-# The hook is registered as PostToolUse on Read, which Claude
-# Code can fire concurrently from multiple worker threads
-# (parallel agentic tool dispatch, batch_tool_use). Pre-fix bare
-# `>>` was atomic per-write up to PIPE_BUF (4096 bytes on Linux)
-# — a single short path is fine, but two appends from two threads
-# on the same file at the same instant could interleave their
-# data in the kernel pipe buffer for buffered IO chains, leaving
-# manifest entries like `/path/A/path/B\n\n` (the second's
-# leading content stuck onto the first's trailing newline).
-# Downstream coverage parsing then saw a nonexistent path
-# `/path/A/path/B` and lost both real reads.
-#
-# `flock -x` on the manifest path serialises the appends. The
-# fd-3 redirect keeps the lock fd open across the inner echo
-# while flock holds the lock; closing fd 3 on exit releases
-# the lock implicitly when the script ends. 5s timeout because
-# the hook runs async and shouldn't block tool dispatch — if
-# 5s isn't enough to acquire the lock there's something seriously
-# wrong with the hook concurrency.
+# Bash `>>` follows ANY symlink at the manifest path. The run dir
+# is writable by sandboxed target-derived children (it is the
+# sandbox's output= path), so a symlink planted at
+# <run_dir>/.reads-manifest turned this unsandboxed hook into an
+# append-to-arbitrary-user-file primitive (content = source
+# paths). The Python twin (core/coverage/track_read.py) documents
+# and defends this exact attack with O_NOFOLLOW; a race-free
+# equivalent is not expressible with shell redirection (an
+# `[ -L ]` pre-check leaves the classic TOCTOU window), so the
+# append delegates to python3 mirroring the twin's semantics:
+# O_NOFOLLOW + O_APPEND, path and line passed as argv DATA, never
+# interpolated into the -c source. A single O_APPEND write of one
+# short line is atomic on POSIX regular files, giving the same
+# no-interleave guarantee the previous flock provided for
+# concurrent hook fires. python3 is already a hard fallback
+# dependency of this script's JSON parsing above.
 manifest="${RUN_DIR}.reads-manifest"
-exec 3>>"$manifest"
-if flock -w 5 -x 3; then
-    echo "$FILE_PATH" >&3
-fi
-exec 3>&-
+command -v python3 >/dev/null 2>&1 || exit 0
+python3 - "$manifest" "$FILE_PATH" <<'PY' 2>/dev/null || exit 0
+import os
+import sys
+
+manifest, line = sys.argv[1], sys.argv[2]
+flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+try:
+    fd = os.open(manifest, flags, 0o600)
+except OSError:
+    sys.exit(0)  # symlink (ELOOP) or unwritable — refuse silently
+try:
+    os.write(fd, (line + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+PY

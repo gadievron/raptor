@@ -38,17 +38,38 @@ class TestClassifyRole:
     def test_encoder(self):
         assert classify_function_role("encode_base64") == FunctionRole.ENCODER
 
-    def test_decoder(self):
-        assert classify_function_role("deserialize_json") == FunctionRole.DESERIALISER
-
     def test_unrelated(self):
         assert classify_function_role("process_data") is None
+
+    def test_unsafe_not_classified_as_sanitiser(self):
+        assert classify_function_role("mark_unsafe") != FunctionRole.SANITISER
+
+    def test_unchecked_not_classified_as_validator(self):
+        assert classify_function_role("unchecked_cast") != FunctionRole.VALIDATOR
 
     def test_summary_text_contributes(self):
         assert classify_function_role(
             "process",
             summary_text="sanitizes user input by stripping HTML",
         ) == FunctionRole.SANITISER
+
+    def test_decode_names_are_decoder(self):
+        assert classify_function_role("decode_base64") == FunctionRole.DECODER
+        assert classify_function_role("decoder_run") == FunctionRole.DECODER
+
+    def test_deserialise_names_are_deserialiser(self):
+        assert (
+            classify_function_role("deserialize_json")
+            == FunctionRole.DESERIALISER
+        )
+        assert (
+            classify_function_role("deserialise_config")
+            == FunctionRole.DESERIALISER
+        )
+
+    def test_serialise_names_are_serialiser(self):
+        assert classify_function_role("serialize_obj") == FunctionRole.SERIALISER
+        assert classify_function_role("marshal_data") == FunctionRole.SERIALISER
 
 
 class TestExtractPostconditions:
@@ -84,6 +105,28 @@ class TestExtractPostconditions:
         result = extract_postconditions(gaps, summaries)
         assert len(result) == 0
 
+    def test_decoder_still_extracted(self):
+        # DECODER must keep the treatment DESERIALISER had: postconditions
+        # are still extracted for it.
+        summary = self._make_summary(
+            postconds=[SimpleNamespace(guarantee="output is plain text")],
+        )
+        gaps = [{"name": "decode_payload", "file": "d.py"}]
+        summaries = {"d.py:decode_payload": summary}
+
+        result = extract_postconditions(gaps, summaries)
+
+        assert len(result) == 1
+        assert result[0].role == FunctionRole.DECODER
+
+    def test_inferred_postcondition_carries_gap_file(self):
+        gaps = [{"name": "sanitize_input", "file": "auth.c"}]
+        result = extract_postconditions(gaps, {})
+
+        assert len(result) == 1
+        assert result[0].source == "inferred"
+        assert result[0].file == "auth.c"
+
 
 class TestOrderingViolations:
     def test_no_violation_when_safety_is_last(self):
@@ -111,6 +154,27 @@ class TestOrderingViolations:
         assert result is not None
         assert result.violation_kind == ViolationKind.ORDERING
         assert "normalize" in result.description
+
+    def test_violation_attributed_to_consumer(self):
+        """The misordered call sequence belongs to the CONSUMER — the
+        violation must name the caller, not the sanitising callee's
+        defining module; the postcondition payload still names the
+        guarantee at risk."""
+        pc = Postcondition(
+            function="strip_metacharacters", file="lib/sanitize.c",
+            kind=PostconditionKind.SAFETY_GUARANTEE,
+            description="", claimed_guarantee="safe output",
+            role=FunctionRole.SANITISER,
+        )
+        result = check_ordering_violations(
+            pc, ["strip_metacharacters", "normalize_unicode"],
+            consumer_function="handle_request",
+            consumer_file="src/server.c",
+        )
+        assert result is not None
+        assert result.function == "handle_request"
+        assert result.file == "src/server.c"
+        assert result.postcondition.function == "strip_metacharacters"
 
     def test_no_violation_with_single_call(self):
         pc = Postcondition(
@@ -192,6 +256,66 @@ class TestCompletenessCheck:
         assert "2 representations" in result.description
 
 
+class TestCompletenessDiscriminates:
+    """Completeness only scores representations the extractor can emit."""
+
+    def _pc(self, guarantee):
+        return Postcondition(
+            function="strip", file="a.c",
+            kind=PostconditionKind.SAFETY_GUARANTEE,
+            description="", claimed_guarantee=guarantee,
+            role=FunctionRole.SANITISER,
+        )
+
+    def test_all_emittable_handled_no_violation(self):
+        # Handling every representation the extractor can report must
+        # silence the check even against the full default known set
+        # (which includes double_encoded / utf8_overlong).
+        result = check_completeness(
+            self._pc("no metacharacters"),
+            ["ascii", "url_encoded", "html_entity", "unicode"],
+        )
+        assert result is None
+
+    def test_partial_handling_still_fires(self):
+        result = check_completeness(self._pc("no metacharacters"), ["ascii"])
+        assert result is not None
+        assert result.violation_kind == ViolationKind.COMPLETENESS
+        assert "3 representations" in result.description
+
+    def test_non_emittable_known_tokens_ignored(self):
+        result = check_completeness(
+            self._pc("no metacharacters"),
+            [],
+            known_representations=["double_encoded", "utf8_overlong"],
+        )
+        assert result is None
+
+    def test_end_to_end_sanitiser_handling_everything_is_quiet(self):
+        summary = SimpleNamespace(
+            postconditions=[SimpleNamespace(
+                guarantee=(
+                    "strips ascii metacharacters, url percent encodings, "
+                    "html entities and unicode homoglyphs"
+                ),
+            )],
+            summary="",
+        )
+        gaps = [
+            {"name": "sanitize_all", "file": "a.py", "callees": []},
+            {"name": "caller", "file": "a.py", "callees": ["sanitize_all"]},
+        ]
+        summaries = {"a.py:sanitize_all": summary}
+
+        result = verify_postconditions(gaps, summaries, call_graphs={"a.py": {}})
+
+        completeness = [
+            v for v in result.violations
+            if v.violation_kind == ViolationKind.COMPLETENESS
+        ]
+        assert completeness == []
+
+
 class TestVerifyPostconditions:
     def test_basic_verification(self):
         summary = SimpleNamespace(
@@ -208,6 +332,65 @@ class TestVerifyPostconditions:
         result = verify_postconditions([], {})
         assert result.functions_checked == 0
         assert len(result.violations) == 0
+
+    def test_multi_record_function_counted_once(self):
+        # functions_with_postconditions counts functions, not records.
+        summary = SimpleNamespace(
+            postconditions=[
+                SimpleNamespace(guarantee="output has no HTML tags"),
+                SimpleNamespace(guarantee="output has no script blocks"),
+            ],
+            summary="sanitises input",
+        )
+        gaps = [{"name": "sanitize_html", "file": "util.c", "callees": []}]
+        summaries = {"util.c:sanitize_html": summary}
+
+        result = verify_postconditions(gaps, summaries)
+
+        assert len(result.postconditions) == 2
+        assert result.functions_with_postconditions == 1
+
+    def test_distinct_functions_counted_separately(self):
+        summary = SimpleNamespace(
+            postconditions=[SimpleNamespace(guarantee="output is safe")],
+            summary="",
+        )
+        gaps = [
+            {"name": "sanitize_a", "file": "a.c", "callees": []},
+            {"name": "sanitize_b", "file": "b.c", "callees": []},
+        ]
+        summaries = {
+            "a.c:sanitize_a": summary,
+            "b.c:sanitize_b": summary,
+        }
+
+        result = verify_postconditions(gaps, summaries)
+
+        assert result.functions_with_postconditions == 2
+
+    def test_serialiser_still_completeness_checked(self):
+        # SERIALISER must keep the treatment ENCODER had: the completeness
+        # gate still examines it.
+        summary = SimpleNamespace(
+            postconditions=[SimpleNamespace(
+                guarantee="output has no ascii metacharacters",
+            )],
+            summary="",
+        )
+        gaps = [
+            {"name": "serialize_row", "file": "s.py", "callees": []},
+            {"name": "caller", "file": "s.py", "callees": ["serialize_row"]},
+        ]
+        summaries = {"s.py:serialize_row": summary}
+
+        result = verify_postconditions(gaps, summaries, call_graphs={"s.py": {}})
+
+        completeness = [
+            v for v in result.violations
+            if v.violation_kind == ViolationKind.COMPLETENESS
+        ]
+        assert len(completeness) == 1
+        assert completeness[0].function == "serialize_row"
 
 
 class TestFormatContext:

@@ -154,3 +154,12 @@ def test_alias_following_skips_non_ghsa(fake) -> None:
     v = verify(_CVE, "curl/curl", _SHA, fake)  # type: ignore[arg-type]
     assert v.verdict == Verdict.ORPHAN
     assert v.source == "osv"
+
+
+def test_short_sha_no_mirror_match(fake) -> None:
+    """A 3-char SHA must not produce a mirror-slug match."""
+    fake.add(_CVE, _payload(
+        references=[{"type": "FIX", "url": "https://github.com/other/repo/commit/abc"}],
+    ))
+    v = verify(_CVE, "curl/curl", "abcdef", fake)  # type: ignore[arg-type]
+    assert v.verdict != Verdict.MIRROR_DIFFERENT_SLUG

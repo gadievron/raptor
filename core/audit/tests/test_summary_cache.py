@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import ClassVar
 
 from core.audit.summary_cache import (
     CachedSummary,
@@ -128,7 +129,7 @@ class TestSummaryCache:
 class TestPathTraversalRejection:
     """All public methods must reject path-traversal components."""
 
-    _PAYLOADS = [
+    _PAYLOADS: ClassVar[list[tuple[str, str]]] = [
         ("../../etc", "passwd"),
         ("openssl", "../../etc"),
         ("../", "1.0"),
@@ -185,6 +186,46 @@ class TestDetectLibraryVersion:
             ")\n"
         )
         assert detect_library_version(tmp_path, "gin") == "1.9.1"
+
+    def test_go_mod_no_substring_match(self, tmp_path):
+        """"crypto" must match golang.org/x/crypto, not cryptoutil."""
+        (tmp_path / "go.mod").write_text(
+            "module example.com/app\n\n"
+            "require (\n"
+            "\tgithub.com/foo/cryptoutil v0.0.9\n"
+            "\tgolang.org/x/crypto v0.21.0\n"
+            ")\n"
+        )
+        assert detect_library_version(tmp_path, "crypto") == "0.21.0"
+
+    def test_go_mod_single_line_require(self, tmp_path):
+        (tmp_path / "go.mod").write_text(
+            "module example.com/app\n\n"
+            "require golang.org/x/net v0.23.0\n"
+        )
+        assert detect_library_version(tmp_path, "net") == "0.23.0"
+
+    def test_cargo_toml_plain_version(self, tmp_path):
+        (tmp_path / "Cargo.toml").write_text(
+            '[dependencies]\nserde = "1.0.190"\n'
+        )
+        assert detect_library_version(tmp_path, "serde") == "1.0.190"
+
+    def test_cargo_toml_inline_table(self, tmp_path):
+        """foo = { version = "1.0", features = [...] } must yield 1.0."""
+        (tmp_path / "Cargo.toml").write_text(
+            "[dependencies]\n"
+            'serde = { version = "1.0.190", features = ["derive"] }\n'
+        )
+        assert detect_library_version(tmp_path, "serde") == "1.0.190"
+
+    def test_cargo_toml_inline_table_no_version(self, tmp_path):
+        """git/path deps carry no version — must not return garbage."""
+        (tmp_path / "Cargo.toml").write_text(
+            "[dependencies]\n"
+            'mylib = { git = "https://example.com/mylib.git" }\n'
+        )
+        assert detect_library_version(tmp_path, "mylib") is None
 
     def test_not_found(self, tmp_path):
         assert detect_library_version(tmp_path, "nonexistent") is None

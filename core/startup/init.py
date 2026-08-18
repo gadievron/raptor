@@ -6,6 +6,7 @@ the startup banner, writes .startup-output, and sets up CLAUDE_ENV_FILE.
 Entry point: `python3 -m core.startup.init`
 """
 
+import importlib.util
 import logging
 import os
 import shutil
@@ -34,7 +35,14 @@ def check_tools() -> tuple[list, list, set]:
     results = []
     available = set()
     for name in sorted(RaptorConfig.TOOL_DEPS):
-        found = bool(shutil.which(RaptorConfig.TOOL_DEPS[name]["binary"]))
+        dep = RaptorConfig.TOOL_DEPS[name]
+        if "module" in dep:
+            # Python-module dependency (e.g. z3) — no binary to probe.
+            # find_spec locates without importing, so a broken module
+            # can't crash the banner.
+            found = importlib.util.find_spec(dep["module"]) is not None
+        else:
+            found = bool(shutil.which(dep["binary"]))
         results.append((name, found))
         if found:
             available.add(name)
@@ -217,14 +225,16 @@ def check_llm() -> tuple[list, list]:
                     # Wrap each `future.result()` in its own
                     # per-task `timeout=5` so each provider gets a
                     # full 5-second budget independent of others.
-                    # The outer as_completed's timeout still bounds
-                    # total wall-clock at ~5×N seconds worst case
-                    # (acceptable for startup banner).
+                    # as_completed itself has no timeout; the
+                    # per-future result(timeout=5) (plus _test_key's
+                    # own request timeout) bounds total wall-clock
+                    # at ~5×N seconds worst case (acceptable for
+                    # startup banner).
                     for future in as_completed(futures):
                         provider = futures[future]
                         try:
                             key_status[provider] = future.result(timeout=5)
-                        except Exception:
+                        except Exception:  # noqa: BLE001
                             key_status[provider] = False
 
             # Build output lines (same format as before). Dedupe
@@ -266,7 +276,7 @@ def check_llm() -> tuple[list, list]:
         if shutil.which("claude"):
             lines.append("        claude code ✓")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         lines.append("   llm: detection error")
         warnings.append(f"LLM detection: {e}")
 
@@ -290,7 +300,7 @@ def _validator_available() -> bool:
         return False
 
 
-def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
+def _test_key(provider: str, api_key: str, api_base: str | None = None) -> bool:
     """Lightweight API key smoke test — no SDK imports."""
     import requests
 
@@ -342,7 +352,13 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
             return r.status_code == 200
         elif provider == "ollama":
             base = (api_base or "http://localhost:11434").rstrip("/")
-            r = requests.get(f"{base}/api/tags", timeout=timeout)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+            # loopback_safe_get: bypasses proxy env for loopback URLs
+            # — a plain requests.get routed localhost through the
+            # corporate proxy on mandatory-proxy hosts and the probe
+            # always failed. Remote Ollama bases keep proxy-env
+            # behaviour.
+            from core.llm.egress import loopback_safe_get
+            r = loopback_safe_get(f"{base}/api/tags", timeout=timeout)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
             return r.status_code == 200
         else:
             return True  # Unknown provider — can't test, assume OK
@@ -350,7 +366,7 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
         return False
 
 
-def _key_source(provider: str, model_entry: dict = None) -> str:
+def _key_source(provider: str, model_entry: dict | None = None) -> str:
     if provider == "ollama":
         return "local"
     env_keys = {
@@ -368,7 +384,10 @@ def _key_source(provider: str, model_entry: dict = None) -> str:
 
 
 def check_env(unavailable_features: set) -> tuple[list, list]:
-    """Check environment: output dir, disk, config vars, tree-sitter.
+    """Check environment: output dir, disk, config vars.
+
+    Tree-sitter language support is checked separately by
+    :func:`check_lang`.
 
     Returns (env_parts, warnings).
     """
@@ -391,7 +410,7 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     # "wrong Python" instead of a deep import trace.
     import platform
     py_version_str = platform.python_version()
-    if sys.version_info < (3, 10):
+    if sys.version_info < (3, 10):  # noqa: UP036 — deliberate runtime guard: surface "wrong Python" to operators on old interpreters
         parts.append(f"Python {py_version_str} ✗")
         warnings.append(
             f"Python {py_version_str} at {sys.executable} — RAPTOR "
@@ -501,8 +520,10 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
                 )
         else:
             from core.sandbox import (
-                check_net_available, check_mount_available,
-                check_landlock_available, check_seccomp_available,
+                check_landlock_available,
+                check_mount_available,
+                check_net_available,
+                check_seccomp_available,
             )
             net_ok = check_net_available()
             mount_ok = check_mount_available() if net_ok else False
@@ -549,6 +570,63 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
             "sandbox availability probe failed", exc_info=True
         )
 
+    parts_cap, warnings_cap = _check_analyzer_capabilities()
+    parts.extend(parts_cap)
+    warnings.extend(warnings_cap)
+
+    return parts, warnings
+
+
+def _check_analyzer_capabilities() -> tuple[list, list]:
+    """Probe compiler-analyzer capability and the z3 version.
+
+    /audit's compiler corroboration channel needs gcc >= 10 with
+    ``-fanalyzer`` (or clang) — plain binary presence is not enough,
+    so this reuses ``core.audit.compiler_sweep``'s cached capability
+    probes. When neither works the channel silently degrades recall;
+    surface that at run start instead. z3 presence is already covered
+    by TOOL_DEPS; this adds the version (SMT feature coverage is
+    version-gated) without importing the module.
+
+    Never raises; returns ``([], [...])`` shaped like check_env parts.
+    """
+    parts: list = []
+    warnings: list = []
+
+    try:
+        from core.audit.compiler_sweep import _clang_path, _gcc_analyzer
+
+        gcc = _gcc_analyzer()
+        clang = _clang_path()
+        if gcc is not None:
+            parts.append("analyzer ✓ (gcc -fanalyzer)")
+        elif clang is not None:
+            parts.append("analyzer ✓ (clang --analyze)")
+        else:
+            # No ✗ part: a missing analyzer degrades (warning), it is
+            # not a startup failure like a broken sandbox.
+            warnings.append(
+                "/audit compiler-analyzer corroboration limited — no "
+                "gcc -fanalyzer (needs gcc >= 10) or clang on PATH"
+            )
+    except Exception:
+        logging.getLogger("core.startup").debug(
+            "compiler-analyzer capability probe failed", exc_info=True
+        )
+
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            parts.append(f"z3 {version('z3-solver')} ✓")
+        except PackageNotFoundError:
+            # Absent z3 is already warned about via TOOL_DEPS.
+            logging.getLogger("core.startup").debug("z3-solver not installed")
+    except Exception:
+        logging.getLogger("core.startup").debug(
+            "z3 version probe failed", exc_info=True
+        )
+
     return parts, warnings
 
 
@@ -561,7 +639,7 @@ def check_lang() -> str | None:
             return f"  lang: tree-sitter ✓ ({', '.join(ts_langs)})"
         else:
             return "  lang: tree-sitter ✗"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -596,7 +674,7 @@ def check_active_project() -> str | None:
             except OSError:
                 pass
         return f"Project: {name} ({proj_target}) — `/project none` to clear"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -642,7 +720,7 @@ def main():
             llm_lines, llm_warnings, env_parts, env_warnings,
             project_line, lang_line,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         output = f"{logo}\n\nraptor:~$ {quote}"
 
     OUTPUT_FILE.write_text(output, encoding="utf-8")

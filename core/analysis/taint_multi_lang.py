@@ -20,6 +20,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Per-function callee cap — single authority shared by every
+# per-language extractor and the generic consumer (they used to
+# disagree: extractors capped at 30, the consumer re-sliced to 20).
+_MAX_CALLEES = 20
+
 
 # -- Dangerous sinks per language --
 
@@ -95,25 +100,16 @@ _JS_TYPE_CHECK = re.compile(r"typeof\s+(\w+)\s*(?:===?|!==?)")
 _GO_NIL_CHECK = re.compile(r"if\s+(\w+)\s*(?:==\s*nil|!=\s*nil)")
 _GO_ERR_CHECK = re.compile(r"if\s+(?:err|(\w+))\s*!=\s*nil")
 
-_RUST_OPTION_CHECK = re.compile(
-    r"(?:\.unwrap\(\)|\.expect\(|\.is_some\(\)|\.is_none\(\))"
-    r"|if\s+let\s+Some\((\w+)\)"
-)
-
 
 # -- Function extraction patterns --
 
+# Modifiers each consume their own trailing whitespace and the return
+# type is word-boundary anchored — no overlapping \s quantifiers, so a
+# whitespace-heavy file cannot trigger quadratic backtracking.
 _JAVA_FUNC = re.compile(
-    r"(?:public|private|protected|static|\s)+\s+"
-    r"(?:\w+(?:<[^>]*>)?)\s+"
+    r"(?:\b(?:public|private|protected|static)\s+)*"
+    r"\b(?:\w+(?:<[^>]*>)?)\s+"
     r"(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[^{]*)?\{"
-)
-
-_JS_FUNC = re.compile(
-    r"(?:(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)"
-    r"|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?"
-    r"(?:\([^)]*\)|(\w+))\s*=>"
-    r"|(\w+)\s*\(([^)]*)\)\s*\{)"
 )
 
 _GO_FUNC = re.compile(
@@ -169,7 +165,7 @@ def _extract_summaries_generic(
                 for p, cond in preconditions
                 if p in params
             ],
-            callees=callees[:20],
+            callees=callees[:_MAX_CALLEES],
             source="mechanical",
             confidence="medium",
             evidence_tier=EvidenceTier.HEURISTIC,
@@ -317,7 +313,7 @@ def _extract_callees_java(body: str) -> List[str]:
         if callee not in seen:
             seen.add(callee)
             callees.append(callee)
-    return callees[:30]
+    return callees[:_MAX_CALLEES]
 
 
 # -- JavaScript/TypeScript helpers --
@@ -408,7 +404,7 @@ def _extract_callees_js(body: str) -> List[str]:
         if callee not in seen:
             seen.add(callee)
             callees.append(callee)
-    return callees[:30]
+    return callees[:_MAX_CALLEES]
 
 
 # -- Go helpers --
@@ -482,7 +478,7 @@ def _extract_callees_go(body: str) -> List[str]:
         if callee not in seen:
             seen.add(callee)
             callees.append(callee)
-    return callees[:30]
+    return callees[:_MAX_CALLEES]
 
 
 # -- Rust helpers --
@@ -559,7 +555,7 @@ def _extract_callees_rust(body: str) -> List[str]:
         if callee not in seen:
             seen.add(callee)
             callees.append(callee)
-    return callees[:30]
+    return callees[:_MAX_CALLEES]
 
 
 # -- Shared utilities --
@@ -571,13 +567,13 @@ def _find_brace_end(content: str, open_pos: int) -> int:
         return open_pos
     depth = 1
     pos = open_pos + 1
+    length = len(content)
     in_string = False
     string_char = ""
-    while pos < len(content) and depth > 0:
+    while pos < length and depth > 0:
         ch = content[pos]
         if in_string:
             if ch == string_char:
-                # Count consecutive backslashes before the quote
                 n_bs = 0
                 scan = pos - 1
                 while scan >= 0 and content[scan] == "\\":
@@ -588,6 +584,18 @@ def _find_brace_end(content: str, open_pos: int) -> int:
         elif ch in ('"', "'", "`"):
             in_string = True
             string_char = ch
+        elif ch == "/" and pos + 1 < length:
+            nxt = content[pos + 1]
+            if nxt == "/":
+                pos = content.find("\n", pos + 2)
+                if pos < 0:
+                    # Unterminated line comment at EOF — same
+                    # treatment as an unterminated block comment.
+                    pos = length
+                    break
+            elif nxt == "*":
+                end = content.find("*/", pos + 2)
+                pos = end + 1 if end >= 0 else length
         elif ch == "{":
             depth += 1
         elif ch == "}":

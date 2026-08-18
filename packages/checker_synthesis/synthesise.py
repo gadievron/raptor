@@ -15,11 +15,12 @@ import logging
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
 from core.atomic_fs import write_text_atomically
+from packages.coccinelle.runner import contains_script_block
 
-from .languages import detect_engine
+from .languages import detect_engine, fallback_engine
 from .models import (
     CheckerSynthesisResult,
     Match,
@@ -30,10 +31,8 @@ from .models import (
 from .prompts import (
     SYNTHESIS_SCHEMA,
     TRIAGE_SCHEMA,
-    TRIAGE_SYSTEM,
     build_synthesis_prompt,
     build_triage_prompt,
-    synthesis_system_for_engine,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,7 +60,7 @@ _SEED_SNIPPET_MAX_BYTES = 8_192
 _RULE_TOO_LOOSE_THRESHOLD = 200
 
 
-def _validate_seed_path(file_path: str) -> Optional[str]:
+def _validate_seed_path(file_path: str) -> str | None:
     """Reject seed file paths that could escape ``repo_root`` or
     that would refer to an absolute location. Mirrors the defence
     in ``core.annotations`` — caller-supplied path that we then
@@ -81,8 +80,9 @@ def _validate_seed_path(file_path: str) -> Optional[str]:
     return None
 
 
-def _validate_rule_body(body: str) -> Optional[str]:
-    """Reject rule bodies with control chars or oversized lines.
+def _validate_rule_body(body: str) -> str | None:
+    """Reject rule bodies containing null bytes or oversized lines.
+    Syntax problems are handled by ``_fixup_cocci_body``, not here.
     Returns an error string on rejection, or None if OK."""
     if "\x00" in body:
         return "rule body contains null byte"
@@ -92,6 +92,54 @@ def _validate_rule_body(body: str) -> Optional[str]:
                 f"rule body line {i} exceeds {_RULE_BODY_MAX_LINE} chars "
                 f"({len(line)})"
             )
+    return None
+
+
+# Matches both layouts LLMs emit: the clause on its own line, and the
+# same-line ``... when != if (E)`` form. The optional dots group is
+# preserved on substitution so the ellipsis (valid SmPL on its own)
+# survives the strip.
+_INVALID_WHEN_RE = re.compile(
+    r"^(?P<dots>\s*\.\.\.)?[ \t]*when\s*!=\s*(?:if|assert|while|for|switch)"
+    r"\s*\(.*$",
+    re.MULTILINE,
+)
+
+
+def _fixup_cocci_body(body: str) -> str:
+    """Strip known-invalid ``when`` clauses that LLMs persistently generate.
+
+    ``when != if (...)`` and similar compound-statement negations are
+    invalid SmPL — Coccinelle ``when`` can only negate expressions.
+    Rather than rejecting the whole rule (which the LLM regenerates
+    identically on retry), strip the offending clauses (keeping a
+    same-line leading ``...``) so the remaining rule gets a chance at
+    dual control.
+    """
+    return _INVALID_WHEN_RE.sub(
+        lambda m: m.group("dots") or "", body)
+
+
+def _reject_cocci_scripting(body: str) -> str | None:
+    """Refuse Coccinelle rule bodies that declare scripting blocks.
+
+    ``@script:`` / ``@initialize:`` / ``@finalize:`` blocks execute
+    code inside spatch — an LLM-synthesised rule carrying one is a
+    code-execution vector and must never be persisted to the checkers
+    library. Shares the runner's matcher (contains_script_block) so
+    the gate here and the runner's refusal agree on what counts as a
+    scripting block. RAPTOR injects its own COCCIRESULT reporting
+    harness at run time; rules need only declarative SmPL.
+
+    Returns an error string on rejection, or None if OK.
+    """
+    if contains_script_block(body):
+        return (
+            "rule body declares a scripting block (@script:/"
+            "@initialize:/@finalize:) — LLM-synthesised rules must be "
+            "declarative SmPL only; RAPTOR injects the reporting "
+            "harness itself"
+        )
     return None
 
 
@@ -106,8 +154,8 @@ class LLMCallable(Protocol):
     """
 
     def __call__(
-        self, prompt: str, schema: Dict[str, Any], system_prompt: str,
-    ) -> Optional[Dict[str, Any]]:
+        self, prompt: str, schema: dict[str, Any], system_prompt: str,
+    ) -> dict[str, Any] | None:
         ...
 
 
@@ -158,7 +206,7 @@ def _write_rule(
 
 def _run_semgrep(
     rule_path: Path, target: Path,
-) -> Tuple[List[Match], List[str]]:
+) -> tuple[list[Match], list[str]]:
     """Run a Semgrep rule against ``target`` (file or directory).
     Returns ``(matches, errors)``.
 
@@ -168,7 +216,7 @@ def _run_semgrep(
     """
     from packages.semgrep.runner import run_rule
     result = run_rule(target, str(rule_path))
-    matches: List[Match] = []
+    matches: list[Match] = []
     target_resolved = target.resolve()
     for f in result.findings or []:
         # SemgrepFinding has attribute access — file, line, etc.
@@ -183,16 +231,16 @@ def _run_semgrep(
         except (ValueError, OSError):
             rel = path
         matches.append(Match(file=rel, line=line, snippet=""))
-    errors: List[str] = list(result.errors or [])
+    errors: list[str] = list(result.errors or [])
     return matches, errors
 
 
 def _run_coccinelle(
     rule_path: Path, target: Path,
-) -> Tuple[List[Match], List[str]]:
+) -> tuple[list[Match], list[str]]:
     from packages.coccinelle.runner import run_rule
     result = run_rule(target, rule_path)
-    matches: List[Match] = []
+    matches: list[Match] = []
     for m in getattr(result, "matches", []) or []:
         # SpatchMatch shape — access defensively.
         path = getattr(m, "file", "") or getattr(m, "path", "") or ""
@@ -211,7 +259,7 @@ def _run_coccinelle(
 
 def _run_engine(
     rule: SynthesisedRule, rule_path: Path, target: Path,
-) -> Tuple[List[Match], List[str]]:
+) -> tuple[list[Match], list[str]]:
     """Dispatch to engine adapter, swallowing any unexpected
     exception (ImportError if scanner package not installed,
     runtime errors from the runner) into the returned ``errors``
@@ -222,7 +270,7 @@ def _run_engine(
         if rule.engine == "coccinelle":
             return _run_coccinelle(rule_path, target)
         return [], [f"unsupported engine: {rule.engine!r}"]
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return [], [f"{rule.engine} adapter error: {e}"]
 
 
@@ -234,19 +282,20 @@ def _run_engine(
 def _propose_rule(
     seed: SeedBug, engine: str, attempt: int, llm: LLMCallable,
     retry_feedback: str = "",
-    prior_fps: Tuple[Match, ...] = (),
-) -> Tuple[Optional[SynthesisedRule], Optional[str]]:
+    prior_fps: tuple[Match, ...] = (),
+    model_id: str = "",
+) -> tuple[SynthesisedRule | None, str | None]:
     """Single LLM round-trip producing one candidate rule.
     Returns ``(rule, error)``; exactly one is set."""
-    prompt = build_synthesis_prompt(
+    prompt, system = build_synthesis_prompt(
         seed, engine,
         retry_feedback=retry_feedback,
         prior_fps=prior_fps,
+        model_id=model_id,
     )
     try:
-        data = llm(prompt, SYNTHESIS_SCHEMA,
-                   synthesis_system_for_engine(engine))
-    except Exception as e:
+        data = llm(prompt, SYNTHESIS_SCHEMA, system)
+    except Exception as e:  # noqa: BLE001
         return None, f"llm error: {e}"
     if not isinstance(data, dict):
         return None, "llm returned non-dict response"
@@ -254,6 +303,7 @@ def _propose_rule(
     rationale = data.get("rationale", "") or ""
     test_positive = data.get("test_positive", "") or ""
     test_negative = data.get("test_negative", "") or ""
+    fix_patch = data.get("fix_patch", "") or ""
     if not isinstance(body, str) or not body.strip():
         return None, "llm response missing 'rule_body'"
     if len(body.encode("utf-8")) > _RULE_BODY_MAX_BYTES:
@@ -264,6 +314,13 @@ def _propose_rule(
     body_err = _validate_rule_body(body)
     if body_err:
         return None, body_err
+    if engine == "coccinelle":
+        body = _fixup_cocci_body(body)
+        script_err = _reject_cocci_scripting(body)
+        if script_err:
+            # Rejected before _write_rule — a scripted rule never
+            # reaches the library on disk.
+            return None, script_err
     return SynthesisedRule(
         engine=engine,
         rule_id=_make_rule_id(seed, attempt),
@@ -271,12 +328,13 @@ def _propose_rule(
         rationale=rationale,
         test_positive=str(test_positive),
         test_negative=str(test_negative),
+        fix_patch=str(fix_patch),
     ), None
 
 
 def _positive_control(
     seed: SeedBug, rule_path: Path, repo_root: Path, engine: str,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """Run rule on the seed's source file alone; require at least
     one match within the seed's line range."""
     seed_file = repo_root / seed.file
@@ -299,14 +357,14 @@ def _fixture_ext(seed: SeedBug, engine: str) -> str:
 
 def _dual_control(
     rule: SynthesisedRule, rule_path: Path, engine: str, ext: str,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """Run the rule against LLM-generated positive and negative test
     fixtures. Both must be present; the rule must match the positive
     and must NOT match the negative."""
     if not rule.test_positive or not rule.test_negative:
         return False, ["dual control: LLM did not emit test fixtures"]
 
-    errors: List[str] = []
+    errors: list[str] = []
     dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
 
     with tempfile.TemporaryDirectory(prefix="raptor_dc_") as tmp:
@@ -332,6 +390,185 @@ def _dual_control(
                 f"({len(neg_matches)} hit(s) — rule is too broad)"
             )
             return False, errors
+        if neg_errors:
+            # Engine error on the negative run: zero matches proves
+            # nothing (the fixture may not even have parsed). Fail
+            # closed — same policy as _fix_mutant_control's
+            # engine-errored-on-patched-copy verdict.
+            errors.append(
+                "dual control: engine errored on negative fixture — "
+                "silence is not a pass (control not verifiable)"
+            )
+            return False, errors
+
+    return True, errors
+
+
+def _run_on_fixture_text(
+    rule_path: Path, engine: str, text: str, ext: str,
+) -> tuple[list, list[str]]:
+    """Run the rule against fixture text materialised in a temp file."""
+    dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
+    with tempfile.TemporaryDirectory(prefix="raptor_gt_") as tmp:
+        fixture = Path(tmp) / f"fixture{ext}"
+        fixture.write_text(text, encoding="utf-8")
+        return _run_engine(dummy, rule_path, fixture)
+
+
+def _ground_truth_control(
+    seed: SeedBug,
+    rule_path: Path,
+    engine: str,
+    positive_text: str,
+    negative_text: str | None,
+) -> tuple[bool, bool | None, list[str]]:
+    """External ground-truth control for seeds not present in the repo.
+
+    ``positive_text`` is known-vulnerable code (e.g. a CVE fix commit's
+    pre-fix hunk); ``negative_text`` is the fixed form. The rule must
+    match the positive; when a negative is supplied it must stay
+    silent on it. Returns ``(positive_ok, negative_ok, errors)`` where
+    ``negative_ok`` is None when no negative fixture was supplied.
+    """
+    ext = _fixture_ext(seed, engine)
+    errors: list[str] = []
+    pos_matches, pos_errors = _run_on_fixture_text(
+        rule_path, engine, positive_text, ext,
+    )
+    errors.extend(pos_errors)
+    if not pos_matches:
+        errors.append(
+            "ground-truth control: rule did not match the known-"
+            "vulnerable fixture"
+        )
+        return False, None, errors
+    if negative_text is None:
+        return True, None, errors
+    neg_matches, neg_errors = _run_on_fixture_text(
+        rule_path, engine, negative_text, ext,
+    )
+    errors.extend(neg_errors)
+    if neg_matches:
+        errors.append(
+            f"ground-truth control: rule matched the FIXED fixture "
+            f"({len(neg_matches)} hit(s) — pattern does not "
+            "distinguish the fix)"
+        )
+        return True, False, errors
+    if neg_errors:
+        # Engine error on the fixed fixture: zero matches proves
+        # nothing. Fail closed — an unverifiable negative must not
+        # cascade into fix_mutant_control=True + rule_tier="library".
+        errors.append(
+            "ground-truth control: engine errored on the FIXED "
+            "fixture — silence is not a pass (negative control "
+            "not verifiable)"
+        )
+        return True, False, errors
+    return True, True, errors
+
+
+def _fix_mutant_control(
+    seed: SeedBug,
+    rule: SynthesisedRule,
+    rule_path: Path,
+    repo_root: Path,
+    engine: str,
+) -> tuple[bool | None, list[str]]:
+    """Mechanical fix-mutant control.
+
+    Applies the LLM-supplied guard-insertion patch (``rule.fix_patch``
+    — a drop-in replacement for the seed's line range) to a COPY of
+    the seed file, then re-runs the rule against the patched copy.  A
+    rule that still matches inside the patched region cannot
+    distinguish fixed from unfixed code — it keys on guard-insensitive
+    syntax, not on the missing check.
+
+    Unlike dual control, the fixtures here are anchored to the REAL
+    seed file: the LLM only authors the guard insertion, and the
+    apply + re-run steps are mechanical, so the rule is not grading
+    its own homework end-to-end.
+
+    Returns ``(verdict, errors)``:
+
+      * ``True``  — patch applied and the rule no longer matches the
+        patched region (control passed).
+      * ``False`` — the rule still matches the patched region
+        (control failed).
+      * ``None``  — patch missing / failed to apply / result not
+        verifiable.  Callers treat this fail-closed for library
+        acceptance.
+    """
+    errors: list[str] = []
+    if not rule.fix_patch.strip():
+        return None, ["fix-mutant: LLM did not emit fix_patch"]
+
+    seed_file = repo_root / seed.file
+    try:
+        original = seed_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return None, [f"fix-mutant: cannot read seed file: {e}"]
+
+    lines = original.split("\n")
+    line_start, line_end = seed.line_start, seed.line_end
+    if not (1 <= line_start <= line_end <= len(lines)):
+        return None, [
+            (f"fix-mutant: seed line range {line_start}-{line_end} "
+             f"outside file ({len(lines)} lines) — patch not applicable"),
+        ]
+
+    patch_lines = rule.fix_patch.split("\n")
+    # Trim one trailing empty line from the patch — LLMs habitually
+    # end strings with "\n", which would otherwise insert a blank.
+    if patch_lines and patch_lines[-1] == "":
+        patch_lines = patch_lines[:-1]
+    if not patch_lines:
+        return None, ["fix-mutant: fix_patch is empty after trimming"]
+
+    original_region = lines[line_start - 1:line_end]
+    if [ln.strip() for ln in patch_lines] == \
+            [ln.strip() for ln in original_region]:
+        return None, [
+            ("fix-mutant: fix_patch is identical to the seed lines "
+             "(no guard inserted) — patch failed to apply"),
+        ]
+
+    patched = "\n".join(
+        lines[:line_start - 1] + patch_lines + lines[line_end:],
+    )
+
+    ext = Path(seed.file).suffix or _fixture_ext(seed, engine)
+    dummy = SynthesisedRule(engine=engine, rule_id="probe", body="")
+    with tempfile.TemporaryDirectory(prefix="raptor_fm_") as tmp:
+        patched_file = Path(tmp) / f"fix_mutant{ext}"
+        patched_file.write_text(patched, encoding="utf-8")
+        matches, run_errors = _run_engine(dummy, rule_path, patched_file)
+        errors.extend(run_errors)
+
+    # The patched region now spans [line_start, line_start+len-1].
+    # Matches with line 0 (engine gave no location) are counted as
+    # in-region — fail-closed rather than silently passing.
+    region_end = line_start + len(patch_lines) - 1
+    in_region = [
+        m for m in matches
+        if m.line == 0 or line_start <= m.line <= region_end
+    ]
+    if in_region:
+        errors.append(
+            f"fix-mutant: rule still matches the patched seed region "
+            f"({len(in_region)} hit(s)) — rule cannot distinguish "
+            f"fixed from unfixed code"
+        )
+        return False, errors
+
+    if run_errors and not matches:
+        # Engine failed on the patched copy (e.g. the patch broke
+        # parsing) — the control ran but proved nothing.
+        errors.append(
+            "fix-mutant: engine errored on patched copy — "
+            "control not verifiable"
+        )
+        return None, errors
 
     return True, errors
 
@@ -345,14 +582,15 @@ def _is_seed_match(seed: SeedBug, m: Match) -> bool:
 
 
 def _triage(
-    seed: SeedBug, rule: SynthesisedRule, matches: List[Match],
+    seed: SeedBug, rule: SynthesisedRule, matches: list[Match],
     llm: LLMCallable, max_calls: int,
-) -> Tuple[List[MatchTriage], List[str]]:
+    model_id: str = "",
+) -> tuple[list[MatchTriage], list[str]]:
     """LLM-classify each match. Bounded by ``max_calls`` to cap cost.
     Matches beyond the budget are recorded with ``status='skipped'``.
     """
-    out: List[MatchTriage] = []
-    errors: List[str] = []
+    out: list[MatchTriage] = []
+    errors: list[str] = []
     for i, m in enumerate(matches):
         if i >= max_calls:
             out.append(MatchTriage(
@@ -360,10 +598,10 @@ def _triage(
                 reasoning=f"triage budget exhausted after {max_calls} calls",
             ))
             continue
-        prompt = build_triage_prompt(seed, rule, m)
+        prompt, system = build_triage_prompt(seed, rule, m, model_id=model_id)
         try:
-            data = llm(prompt, TRIAGE_SCHEMA, TRIAGE_SYSTEM)
-        except Exception as e:
+            data = llm(prompt, TRIAGE_SCHEMA, system)
+        except Exception as e:  # noqa: BLE001
             errors.append(f"triage llm error for {m.file}:{m.line}: {e}")
             out.append(MatchTriage(
                 match=m, status="uncertain",
@@ -399,7 +637,9 @@ def synthesise_and_run(
     max_matches: int = 50,
     triage_each: bool = False,
     max_triage_calls: int = 50,
-    prior_fps: Tuple[Match, ...] = (),
+    prior_fps: tuple[Match, ...] = (),
+    model_id: str = "",
+    ground_truth_fixtures: tuple[str, str | None] | None = None,
 ) -> CheckerSynthesisResult:
     """End-to-end: propose → validate → run → optionally triage.
 
@@ -422,6 +662,14 @@ def synthesise_and_run(
             synthesis prompt appends them as negative examples. Empty
             for single-shot synthesis; populated by
             ``synthesise_with_refinement``.
+        ground_truth_fixtures: ``(positive_text, negative_text)`` for
+            EXTERNAL seeds whose file is not present in ``repo_root``
+            (e.g. a CVE fix commit's pre-fix hunk / fixed form). The
+            positive control runs against the positive fixture instead
+            of ``repo_root / seed.file``; when the negative fixture is
+            supplied the rule must stay silent on it (ground-truth
+            analogue of the fix-mutant control). The codebase sweep
+            still runs over ``repo_root``.
     """
     repo_root = Path(repo_root).resolve()
     out_dir = Path(out_dir)
@@ -432,88 +680,132 @@ def synthesise_and_run(
     if path_err:
         return CheckerSynthesisResult(seed=seed, errors=[path_err])
 
-    engine = detect_engine(seed.file)
-    if engine is None:
+    primary_engine = detect_engine(seed.file)
+    if primary_engine is None:
         return CheckerSynthesisResult(
             seed=seed,
             errors=[f"no engine for file extension of {seed.file!r}"],
         )
 
+    engines_to_try = [primary_engine]
+    alt = fallback_engine(primary_engine, seed.file)
+    if alt:
+        engines_to_try.append(alt)
+
     result = CheckerSynthesisResult(seed=seed)
-    feedback = ""
-    rule: Optional[SynthesisedRule] = None
-    rule_path: Optional[Path] = None
+    rule: SynthesisedRule | None = None
+    rule_path: Path | None = None
 
-    for attempt in range(max_retries + 1):
-        rule, err = _propose_rule(
-            seed, engine, attempt, llm, feedback,
-            prior_fps=tuple(prior_fps),
-        )
-        if err:
-            result.errors.append(f"attempt {attempt}: {err}")
-            rule = None
-            if attempt >= max_retries:
-                return result
-            feedback = err
-            continue
+    for engine in engines_to_try:
+        if rule is not None:
+            break
+        feedback = ""
+        for attempt in range(max_retries + 1):
+            tag = f"{engine} attempt {attempt}"
+            rule, err = _propose_rule(
+                seed, engine, attempt, llm, feedback,
+                prior_fps=tuple(prior_fps),
+                model_id=model_id,
+            )
+            if err:
+                result.errors.append(f"{tag}: {err}")
+                rule = None
+                feedback = err
+                continue
 
-        rule_path = _write_rule(out_dir, rule)
-        ok, run_errors = _positive_control(seed, rule_path, repo_root, engine)
-        result.errors.extend(f"attempt {attempt}: {e}" for e in run_errors)
-        if ok:
-            # Dual control: validate against LLM-generated test
-            # fixtures before trusting the rule on the real target.
-            ext = _fixture_ext(seed, engine)
-            if rule.test_positive and rule.test_negative:
-                dc_ok, dc_errors = _dual_control(
-                    rule, rule_path, engine, ext,
+            rule_path = _write_rule(out_dir, rule)
+            gt_negative_ok: bool | None = None
+            if ground_truth_fixtures is not None:
+                ok, gt_negative_ok, run_errors = _ground_truth_control(
+                    seed, rule_path, engine,
+                    ground_truth_fixtures[0], ground_truth_fixtures[1],
                 )
-                result.errors.extend(
-                    f"attempt {attempt}: {e}" for e in dc_errors
+                if ok and gt_negative_ok is False:
+                    result.errors.extend(f"{tag}: {e}" for e in run_errors)
+                    if any("not verifiable" in e for e in run_errors):
+                        feedback = (
+                            "The engine errored while running the rule "
+                            "against the fixed form of the code — the "
+                            "rule (or fixture) may not parse. Produce a "
+                            "simpler, syntactically valid pattern."
+                        )
+                    else:
+                        feedback = (
+                            "The rule matched the known-vulnerable "
+                            "fixture but ALSO matched the fixed form. "
+                            "Refine the pattern so the patched code "
+                            "does not match."
+                        )
+                    rule = None
+                    rule_path = None
+                    continue
+            else:
+                ok, run_errors = _positive_control(
+                    seed, rule_path, repo_root, engine,
                 )
-                if dc_ok:
-                    result.dual_control = True
+            result.errors.extend(f"{tag}: {e}" for e in run_errors)
+            if ok:
+                ext = _fixture_ext(seed, engine)
+                if rule.test_positive and rule.test_negative:
+                    dc_ok, dc_errors = _dual_control(
+                        rule, rule_path, engine, ext,
+                    )
+                    result.errors.extend(
+                        f"{tag}: {e}" for e in dc_errors
+                    )
+                    if dc_ok:
+                        result.dual_control = True
+                        logger.debug(
+                            "dual control passed for %s (%s)",
+                            seed.file, engine,
+                        )
+                        break
+                    dc_reason = " ".join(
+                        e for e in dc_errors
+                        if e.startswith("dual control:")
+                    )
                     logger.debug(
-                        "dual control passed for %s (positive "
-                        "matched, negative clean)",
+                        "dual control failed for %s %s: %s",
+                        seed.file, tag, dc_reason,
+                    )
+                    feedback = (
+                        "The rule matched the seed bug (positive "
+                        "control passed) but failed the dual "
+                        "control gate. " + dc_reason
+                    )
+                    rule = None
+                    rule_path = None
+                    continue
+                else:
+                    # Fail-closed: without fixtures the rule was never
+                    # exercised against known-good/known-bad code, so
+                    # it may not enter the persistent library
+                    # (rule_tier stays "sweep_once").  The rule is
+                    # still used for this run's codebase sweep.
+                    result.errors.append(
+                        f"{tag}: dual control skipped — LLM did not "
+                        "emit test fixtures; rule excluded from "
+                        "library (rule_tier=sweep_once)"
+                    )
+                    logger.warning(
+                        "dual control skipped: LLM did not emit "
+                        "test fixtures for %s — rule excluded from "
+                        "library",
                         seed.file,
                     )
                     break
-                dc_reason = " ".join(
-                    e for e in dc_errors
-                    if e.startswith("dual control:")
-                )
-                logger.debug(
-                    "dual control failed for %s attempt %d: %s",
-                    seed.file, attempt, dc_reason,
-                )
-                feedback = (
-                    "The rule matched the seed bug (positive control "
-                    "passed) but failed the dual control gate. "
-                    + dc_reason
-                )
-                rule = None
-                rule_path = None
-                continue
-            else:
-                logger.warning(
-                    "dual control skipped: LLM did not emit test "
-                    "fixtures for %s",
-                    seed.file,
-                )
-                break
-        # Positive control failed — retry if we still have budget.
-        result.errors.append(
-            f"attempt {attempt}: rule did not match seed at "
-            f"{seed.file}:{seed.line_start}-{seed.line_end}"
-        )
-        feedback = (
-            f"Previous rule did not match the seed bug at lines "
-            f"{seed.line_start}-{seed.line_end} of {seed.file}. "
-            f"Refine the pattern so it captures the original."
-        )
-        rule = None
-        rule_path = None
+            result.errors.append(
+                f"{tag}: rule did not match seed at "
+                f"{seed.file}:{seed.line_start}-{seed.line_end}"
+            )
+            feedback = (
+                f"Previous rule did not match the seed bug at "
+                f"lines {seed.line_start}-{seed.line_end} of "
+                f"{seed.file}. Refine the pattern so it captures "
+                f"the original."
+            )
+            rule = None
+            rule_path = None
 
     if rule is None or rule_path is None:
         return result
@@ -521,6 +813,44 @@ def synthesise_and_run(
     result.rule = rule
     result.rule_path = rule_path
     result.positive_control = True
+
+    # Fix-mutant control (library gate, not a sweep gate): only rules
+    # that passed dual control are candidates for the library, so only
+    # those pay for the extra engine run.  Verdict semantics and the
+    # fail-closed policy are documented on _fix_mutant_control.
+    if ground_truth_fixtures is not None:
+        # External seed: the repo-anchored fix-mutant control cannot
+        # run (seed file absent). The ground-truth negative fixture is
+        # its analogue — the grant requires the negative control to
+        # have VERIFIED silence on the fixed form (gt_negative_ok is
+        # True), not merely that a negative fixture was supplied: an
+        # engine error on the negative run reads as False now, and a
+        # missing fixture as None — neither may grant the library tier.
+        if result.dual_control and gt_negative_ok is True:
+            result.fix_mutant_control = True
+            result.rule_tier = "library"
+    elif result.dual_control:
+        fm_ok, fm_errors = _fix_mutant_control(
+            seed, rule, rule_path, repo_root, rule.engine,
+        )
+        result.fix_mutant_control = fm_ok
+        result.errors.extend(fm_errors)
+        if fm_ok is True:
+            result.rule_tier = "library"
+        else:
+            reason = (
+                "patch missing or failed to apply" if fm_ok is None
+                else "rule matched the patched seed"
+            )
+            result.errors.append(
+                f"fix-mutant control did not pass ({reason}); rule "
+                "excluded from library (rule_tier=sweep_once)"
+            )
+            logger.info(
+                "fix-mutant control %s for %s (%s) — library excluded",
+                "not applicable" if fm_ok is None else "failed",
+                seed.file, rule.engine,
+            )
 
     # Codebase scan.
     matches, run_errors = _run_engine(rule, rule_path, repo_root)
@@ -544,7 +874,8 @@ def synthesise_and_run(
     result.matches = variants
 
     if triage_each and variants:
-        triage, t_errors = _triage(seed, rule, variants, llm, max_triage_calls)
+        triage, t_errors = _triage(seed, rule, variants, llm,
+                                   max_triage_calls, model_id=model_id)
         result.triage = triage
         result.errors.extend(t_errors)
 
@@ -556,7 +887,7 @@ def synthesise_and_run(
 # ---------------------------------------------------------------------------
 
 
-def _fp_rate(result: CheckerSynthesisResult) -> Optional[float]:
+def _fp_rate(result: CheckerSynthesisResult) -> float | None:
     """Fraction of triaged matches classified as false positive.
 
     Returns None when the rate can't be computed (no triage,
@@ -580,6 +911,7 @@ def synthesise_with_refinement(
     max_acceptable_fp_rate: float = 0.2,
     max_matches: int = 50,
     max_triage_calls: int = 50,
+    model_id: str = "",
 ) -> CheckerSynthesisResult:
     """Iterative checker synthesis with FP-elimination.
 
@@ -623,9 +955,9 @@ def synthesise_with_refinement(
             errors=["max_iterations must be > 0"],
         )
 
-    prior_fps: List[Match] = []
-    best: Optional[CheckerSynthesisResult] = None
-    best_rate: Optional[float] = None
+    prior_fps: list[Match] = []
+    best: CheckerSynthesisResult | None = None
+    best_rate: float | None = None
 
     for iteration in range(max_iterations):
         result = synthesise_and_run(
@@ -634,6 +966,7 @@ def synthesise_with_refinement(
             triage_each=True,
             max_triage_calls=max_triage_calls,
             prior_fps=tuple(prior_fps),
+            model_id=model_id,
         )
 
         # If synthesis failed entirely, bump to next iteration.

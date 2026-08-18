@@ -8,6 +8,8 @@ from typing import List
 
 from core.audit.value_space_checker import (
     ValueSpaceMismatch,
+    _extract_function_literals,
+    _LiteralExtractor,
     detect_value_space_mismatches,
 )
 
@@ -241,6 +243,53 @@ class TestCallGraphLinking:
             if m.producer_function == "producer" and m.consumer_function == "consumer":
                 assert not m.unhandled
                 assert not m.dead_branches
+
+
+class TestSelfPairGuard:
+    """A self-recursive producer-consumer must not pair with itself."""
+
+    def test_recursive_function_not_linked_to_itself(self):
+        source = {
+            "mod.py": (
+                'def walk(status):\n'
+                '    if status == "ok":\n'
+                '        return walk("next")\n'
+                '    return "done"\n'
+            ),
+        }
+        cg = {
+            "mod.py": FakeCallGraph(calls=[
+                FakeCall(caller="walk", chain=["walk"]),
+            ]),
+        }
+        results = detect_value_space_mismatches(source, call_graphs=cg)
+        assert _find_mismatch(results, "walk", "walk") is None, (
+            f"self-pair fabricated a mismatch: {results}"
+        )
+
+    def test_genuine_same_file_link_unaffected(self):
+        source = {
+            "mod.py": (
+                'def producer():\n'
+                '    return "x"\n'
+                '\n'
+                'def consumer(val):\n'
+                '    if val == "x":\n'
+                '        pass\n'
+                '    elif val == "y":\n'
+                '        pass\n'
+            ),
+        }
+        cg = {
+            "mod.py": FakeCallGraph(calls=[
+                FakeCall(caller="consumer", chain=["producer"]),
+            ]),
+        }
+        results = detect_value_space_mismatches(source, call_graphs=cg)
+        match = _find_mismatch(results, "producer", "consumer")
+        assert match is not None
+        assert match.confidence == "high"
+        assert "y" in match.dead_branches
 
 
 class TestToDict:
@@ -526,3 +575,132 @@ class TestFormatMismatchFiltering:
         assert "07" not in match.unhandled, (
             "format-mismatch value '07' should be removed from unhandled"
         )
+
+    def test_case_mismatch_not_in_dead(self):
+        """A consumed value that differs only in case from a produced value
+        should not be reported as dead."""
+        source = {
+            "pkg/producer.py": (
+                'def produce():\n'
+                '    return "error"\n'
+            ),
+            "pkg/consumer.py": (
+                'def consume(v):\n'
+                '    if v == "ERROR":\n'
+                '        pass\n'
+                '    elif v == "error":\n'
+                '        pass\n'
+            ),
+        }
+        results = detect_value_space_mismatches(source)
+        match = _find_mismatch(results, "produce", "consume")
+        if match is None:
+            return
+        assert "ERROR" not in match.dead, (
+            "case-variant 'ERROR' should not appear in dead branches"
+        )
+
+
+class TestFormatMismatchOnFinding:
+    """Pure format-mismatch pairs carry the mismatch text on the finding."""
+
+    def test_zero_padding_mismatch_carried(self):
+        source = {
+            "pkg/producer.py": (
+                'def produce():\n'
+                '    signal = "07"\n'
+            ),
+            "pkg/consumer.py": (
+                'def consume(signal):\n'
+                '    if signal == "7":\n'
+                '        pass\n'
+            ),
+        }
+        results = detect_value_space_mismatches(source)
+        match = _find_mismatch(results, "produce", "consume")
+        assert match is not None, f"Expected produce-consume pair: {results}"
+        # The exact-miss sets are empty — the format mismatch IS the bug,
+        # and it must survive onto the finding.
+        assert match.unhandled == []
+        assert match.dead_branches == []
+        assert match.format_mismatches
+        assert any("07" in fm and "7" in fm for fm in match.format_mismatches)
+
+    def test_format_mismatches_serialized(self):
+        m = ValueSpaceMismatch(
+            producer_file="a.py",
+            producer_function="make",
+            producer_values=["07"],
+            consumer_file="b.py",
+            consumer_function="use",
+            consumer_values=["7"],
+            unhandled=[],
+            dead_branches=[],
+            confidence="medium",
+            format_mismatches=["'07' vs '7' (format mismatch)"],
+        )
+        d = m.to_dict()
+        assert d["format_mismatches"] == ["'07' vs '7' (format mismatch)"]
+
+    def test_format_mismatches_defaults_empty(self):
+        m = ValueSpaceMismatch(
+            producer_file="a.py",
+            producer_function="make",
+            producer_values=["x"],
+            consumer_file="b.py",
+            consumer_function="use",
+            consumer_values=["x", "y"],
+            unhandled=[],
+            dead_branches=["y"],
+            confidence="high",
+        )
+        assert m.format_mismatches == []
+        assert m.to_dict()["format_mismatches"] == []
+
+
+class TestFieldNameBookkeeping:
+    """field_produced/field_consumed track field names only."""
+
+    def test_producer_field_names(self):
+        funcs = _extract_function_literals(
+            'def f():\n    status = "ok"\n', "a.py"
+        )
+        assert len(funcs) == 1
+        assert funcs[0].field_produced == {"status"}
+
+    def test_consumer_field_names(self):
+        funcs = _extract_function_literals(
+            'def g(status):\n'
+            '    if status == "ok":\n'
+            '        pass\n'
+            '    if status in {"bad", "worse"}:\n'
+            '        pass\n',
+            "b.py",
+        )
+        assert len(funcs) == 1
+        assert funcs[0].field_consumed == {"status"}
+
+    def test_field_linking_still_fires(self):
+        source = {
+            "pkg/producer.py": (
+                'def produce():\n'
+                '    ecosystem = "npm"\n'
+                '    ecosystem = "PyPI"\n'
+            ),
+            "pkg/consumer.py": (
+                'def consume(ecosystem):\n'
+                '    if ecosystem == "npm":\n'
+                '        pass\n'
+            ),
+        }
+        results = detect_value_space_mismatches(source)
+        match = _find_mismatch(results, "produce", "consume")
+        assert match is not None
+        assert "PyPI" in match.unhandled
+
+
+class TestDeadVisitorFlagsRemoved:
+    def test_no_vestigial_state(self):
+        extractor = _LiteralExtractor("a.py", "f")
+        assert not hasattr(extractor, "_in_compare")
+        assert not hasattr(extractor, "_in_membership")

@@ -9,21 +9,34 @@ import re
 import shutil
 import subprocess
 
-from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted, SandboxSetupError
 # _run_trusted: read-only tools (strings, --help checks) — no namespace overhead.
-# Full sandbox for afl-fuzz / afl-showmap (execute untrusted binary): network
-# block + Landlock (target=output=self.output_dir — AFL reads and writes the
-# same corpus/queue/crash directories).
+# Full sandbox for afl-showmap (execute untrusted binary): network block +
+# Landlock (target=output=self.output_dir — AFL reads and writes the same
+# corpus/queue/crash directories).
+# afl-fuzz itself is NOT sandboxed: the long-lived campaign runs via a plain
+# subprocess.Popen with only a sanitised environment (get_safe_env()) and
+# pdeathsig — the untrusted target executes outside the sandbox layer during
+# fuzzing.
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import ClassVar
 
 from core.logging import get_logger
+from core.sandbox import SandboxSetupError
+from core.sandbox import run as _sandbox_run
+from core.sandbox import run_trusted as _run_trusted
 from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
 
 logger = get_logger()
 
 _AFL_INT_RE = re.compile(r"^-?\d+")
+
+# Stats keys that can carry the path/corpus discovery count across AFL++
+# versions. Single source of truth — raptor_agentic's fuzz phase summary
+# consumes the same tuple so the two lists cannot drift.
+AFL_PATHS_FOUND_KEYS = (
+    "paths_found", "corpus_found", "queued_paths", "cur_path", "corpus_count",
+)
 _AFL_CRASH_EXECS_RE = re.compile(r"(?:^|,)execs:(\d+)(?:,|$)")
 
 
@@ -32,27 +45,27 @@ class AFLRunner:
 
     # AFL++ power schedules: explore (default), exploit, coe, fast, lin, quad,
     # rare. See docs/AFLplusplus/docs/power_schedules.md.
-    _VALID_POWER_SCHEDULES = {
+    _VALID_POWER_SCHEDULES: ClassVar[set[str]] = {
         "explore", "exploit", "coe", "fast", "lin", "quad", "rare", "seek",
     }
 
     def __init__(
         self,
         binary_path: Path,
-        corpus_dir: Optional[Path] = None,
-        output_dir: Optional[Path] = None,
-        dict_path: Optional[Path] = None,
+        corpus_dir: Path | None = None,
+        output_dir: Path | None = None,
+        dict_path: Path | None = None,
         input_mode: str = "stdin",
         check_sanitizers: bool = False,
         recompile_guide: bool = False,
         use_showmap: bool = False,
-        cmplog_binary: Optional[Path] = None,
+        cmplog_binary: Path | None = None,
         power_schedule: str = "fast",
         use_laf_intel: bool = True,
         deterministic: bool = False,
-        custom_mutator: Optional[Path] = None,
+        custom_mutator: Path | None = None,
         seed_profile: str = "default",
-        extra_afl_flags: Optional[List[str]] = None,
+        extra_afl_flags: list[str] | None = None,
     ):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
@@ -169,7 +182,7 @@ class AFLRunner:
                 "Created built-in default corpus with "
                 f"{manifest['seed_count']} seeds (profile={seed_profile})"
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — best-effort: emergency seeds below
             logger.warning(
                 "Built-in default corpus failed (%s); falling back to emergency "
                 "minimal seeds",
@@ -256,7 +269,7 @@ class AFLRunner:
             except FileNotFoundError:
                 logger.error("afl-fuzz not found in PATH")
                 raise RuntimeError("AFL++ not installed") from None
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — advisory pre-flight check only
                 logger.warning("AFL compatibility check failed: %s", e)
 
     def check_binary_sanitizers(self) -> bool:
@@ -357,8 +370,8 @@ class AFLRunner:
         duration: int = 3600,
         parallel_jobs: int = 1,
         timeout_ms: int = 1000,
-        max_crashes: Optional[int] = None,
-    ) -> Tuple[int, Path]:
+        max_crashes: int | None = None,
+    ) -> tuple[int, Path]:
         """
         Run AFL++ fuzzing campaign.
 
@@ -466,7 +479,7 @@ class AFLRunner:
                         stderr=stderr_fp,
                         text=True,
                         env=afl_env,
-                        preexec_fn=set_pdeathsig(),
+                        preexec_fn=set_pdeathsig(),  # noqa: PLW1509 — single-threaded at spawn time; pdeathsig is required
                     )
                 except BaseException:
                     stdout_fp.close()
@@ -580,18 +593,12 @@ class AFLRunner:
                     break
 
         finally:
-            # Stop all AFL instances. Use communicate(timeout=5)
-            # NOT wait(timeout=5) — pre-fix `proc.wait()` could
-            # deadlock indefinitely if AFL had buffered output in
-            # the stderr PIPE that no one had drained (stdout is
-            # DEVNULL post-batch-450; stderr is still PIPE for
-            # diagnostic capture). On SIGTERM AFL writes a
-            # shutdown banner + final stats to stderr — for
-            # campaigns that ran long enough to fill 64KB of
-            # stderr, wait() blocked forever waiting for the
-            # process to exit while the process blocked forever
-            # waiting for stderr-pipe space. communicate() drains
-            # the pipe and waits in a single thread-safe call.
+            # Stop all AFL instances. Both stdout and stderr are
+            # redirected to per-instance log files (see the Popen
+            # above), so there is no pipe to drain and no deadlock
+            # risk; communicate(timeout=...) here is equivalent to
+            # wait(timeout=...) and is kept for uniformity with the
+            # historical call shape.
             logger.info("Stopping AFL instances...")
             for entry in processes:
                 name = entry["name"]
@@ -614,6 +621,11 @@ class AFLRunner:
         # Count final crashes across all instances
         crash_files = self._collect_all_crash_files()
         total_crashes = len(crash_files)
+        # Single directory containing every collected crash — with parallel
+        # secondaries, returning only main/crashes would count secondary
+        # crashes in the total above but silently exclude them from the
+        # downstream CrashCollector analysis phase.
+        crashes_dir = self._merge_crash_files(crash_files)
 
         elapsed = time.time() - start_time
         
@@ -657,7 +669,7 @@ class AFLRunner:
         logger.info("=" * 70)
         logger.info("Duration: %.1fs", elapsed)
         logger.info("Unique crashes: %s", total_crashes)
-        logger.info("Crashes dir: %s", self.output_dir)
+        logger.info("Crashes dir: %s", crashes_dir)
         logger.info("=" * 70)
 
         # Run coverage analysis if requested
@@ -670,7 +682,7 @@ class AFLRunner:
                 for key, value in coverage_stats.items():
                     logger.info("  %s: %s", key, value)
 
-        return total_crashes, self.output_dir / "main" / "crashes"
+        return total_crashes, crashes_dir
 
     @staticmethod
     def _close_process_logs(entry: dict) -> None:
@@ -705,6 +717,34 @@ class AFLRunner:
                     f for f in crashes_dir.iterdir() if f.name.startswith("id:")
                 )
         return sorted(crash_files)
+
+    def _merge_crash_files(self, crash_files: list[Path]) -> Path:
+        """Return one directory containing every collected crash file.
+
+        Single-instance campaigns (or ones where only the main instance
+        crashed) keep the historical ``main/crashes`` directory. When a
+        secondary instance found crashes, hardlink (or copy) every crash
+        into ``<output_dir>/merged_crashes`` so the downstream
+        CrashCollector sees them all. Names keep their ``id:`` prefix
+        (the collector filters on it) and gain an ``,instance:<name>``
+        suffix to disambiguate identical AFL ids across instances.
+        """
+        main_crashes = self.output_dir / "main" / "crashes"
+        if all(f.parent.parent.name == "main" for f in crash_files):
+            return main_crashes
+
+        merged = self.output_dir / "merged_crashes"
+        merged.mkdir(parents=True, exist_ok=True)
+        for f in crash_files:
+            instance = f.parent.parent.name
+            dest = merged / f"{f.name},instance:{instance}"
+            if dest.exists():
+                continue
+            try:
+                dest.hardlink_to(f)
+            except OSError:
+                shutil.copy2(f, dest)
+        return merged
 
     @staticmethod
     def _tail_file(path: Path, max_bytes: int = 4096) -> str:
@@ -766,10 +806,10 @@ class AFLRunner:
     @classmethod
     def _afl_paths_found(cls, stats: dict) -> int:
         """Map current AFL++ stats to a useful path/corpus discovery count."""
-        for key in ("paths_found", "corpus_found", "queued_paths", "cur_path"):
+        for key in AFL_PATHS_FOUND_KEYS:
             if key in stats:
                 return cls._parse_afl_int(stats[key])
-        return cls._parse_afl_int(stats.get("corpus_count"))
+        return 0
 
     @staticmethod
     def _max_crash_execs(crashes_dir: Path) -> int:
@@ -791,7 +831,7 @@ class AFLRunner:
         is_main: bool,
         timeout_ms: int,
         use_qemu: bool = False,
-    ) -> List[str]:
+    ) -> list[str]:
         """Build AFL command line.
 
         Wires up advanced AFL++ features when configured:
@@ -906,8 +946,8 @@ class AFLRunner:
             # For stdin mode, need to provide input via stdin parameter
             if test_input:
                 try:
-                    stdin_input = open(test_input, 'rb')
-                except Exception as e:
+                    stdin_input = open(test_input, 'rb')  # noqa: SIM115 — closed in the finally below
+                except Exception as e:  # noqa: BLE001 — showmap is best-effort
                     logger.warning("Failed to open test input %s: %s", test_input, e)
                     return {}
             else:
@@ -989,7 +1029,7 @@ class AFLRunner:
 
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — showmap is best-effort
             logger.warning("Error running afl-showmap: %s", e)
             return {}
         finally:

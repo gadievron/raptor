@@ -1,6 +1,7 @@
 """Tests for condition_adequacy — per-sink-API guard sufficiency specs."""
 
 
+import core.audit.condition_adequacy as ca
 from core.audit.condition_adequacy import (
     Adequacy,
     assess_file_guards,
@@ -229,3 +230,55 @@ class TestAssessFileGuards:
         assert adequacy[0].verdict == Adequacy.SUFFICIENT
         assert adequacy[1].verdict == Adequacy.INSUFFICIENT
         assert len(asymmetries) == 1
+
+
+# ---------------------------------------------------------------------------
+# present_categories semantics
+# ---------------------------------------------------------------------------
+
+
+class TestPresentCategoriesConsistency:
+    """'unknown' is excluded from present_categories on both paths."""
+
+    def test_no_spec_path_excludes_unknown(self):
+        result = assess_guard_adequacy(
+            "my_custom_function",
+            [_guard("???", "unknown"), _guard("x > 0", "bounds")],
+        )
+        assert result.verdict == Adequacy.UNKNOWN
+        assert result.present_categories == frozenset({"bounds"})
+
+    def test_spec_path_excludes_unknown(self):
+        result = assess_guard_adequacy(
+            "memcpy",
+            [_guard("???", "unknown"), _guard("len < sizeof(buf)", "bounds")],
+        )
+        assert result.present_categories == frozenset({"bounds"})
+
+    def test_both_paths_report_identically(self):
+        guards = [_guard("???", "unknown"), _guard("is_admin(u)", "auth")]
+        no_spec = assess_guard_adequacy("my_custom_function", guards)
+        with_spec = assess_guard_adequacy("system", guards)
+        assert (
+            no_spec.to_dict()["present_categories"]
+            == with_spec.to_dict()["present_categories"]
+        )
+
+    def test_only_unknown_guards_yield_empty(self):
+        result = assess_guard_adequacy(
+            "my_custom_function", [_guard("???", "unknown")],
+        )
+        assert result.present_categories == frozenset()
+
+
+class TestDerefSpecRemoved:
+    """The never-registered null-deref spec is gone, not silently dead."""
+
+    def test_constant_removed(self):
+        assert not hasattr(ca, "_DEREF_SPEC")
+
+    def test_no_registered_spec_requires_only_null(self):
+        assert all(
+            spec.required != frozenset({"null"})
+            for spec in ca._SINK_SPECS.values()
+        )

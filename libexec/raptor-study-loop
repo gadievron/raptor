@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Study loop: prep → study → drain reading list.
 
 Two modes:
@@ -20,33 +22,29 @@ Usage:
     raptor-study-loop <target> <output_dir> [options]
 """
 import argparse
-import faulthandler
 import json
 import re
-import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
-# ─── trust-marker check ───
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
-if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
         "  Run via 'bin/raptor' instead.\n"
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
-# ─── end trust-marker check ───
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
 
 # ------------------------------------------------------------------
 # Helpers
@@ -61,6 +59,7 @@ def _run(cmd: list[str], *, verbose: bool = False) -> int:
             stdout=None if verbose else subprocess.DEVNULL,
             stderr=None,
             timeout=3600,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         print(f"study-loop: subprocess timed out: {cmd[0]}",
@@ -77,7 +76,10 @@ def _load_pending_reading_list(output_dir: Path) -> list[dict]:
         raw = json.loads(rl_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
-    return [i for i in raw.get("items", []) if not i.get("resolved")]
+    return [
+        i for i in raw.get("items", [])
+        if not i.get("resolved") and not i.get("unresolvable")
+    ]
 
 
 def _extract_rl_identifiers(pending: list[dict]) -> tuple[list[str], list[str]]:
@@ -127,7 +129,7 @@ def _mark_items_resolved(output_dir: Path, idents: list[str],
     resolved_count = 0
 
     for item in rl_data.get("items", []):
-        if item.get("resolved"):
+        if item.get("resolved") or item.get("unresolvable"):
             continue
         q = item.get("question", "").strip()
         if not q:
@@ -242,14 +244,14 @@ def _store_in_sage(output_dir: Path, target: str) -> None:
         return
     try:
         dm = DomainModel.load(dm_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 - SAGE storage is best-effort
         return
     try:
         stored = store_study_concepts(target, dm, study_scope=str(target))
         if stored:
             print(f"study-loop: stored {stored} concepts in SAGE",
                   file=sys.stderr)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - SAGE storage is best-effort
         print(f"study-loop: WARNING: SAGE storage failed: {exc}",
               file=sys.stderr)
 
@@ -366,7 +368,7 @@ def _overview_from_directory(
             client = LLMClient(pinned_model=model)
         else:
             client = get_client()
-    except Exception:
+    except Exception:  # noqa: BLE001 - overview is best-effort
         print("study-loop: WARNING: no LLM available for overview",
               file=sys.stderr)
         return [], [], "", ""
@@ -380,7 +382,7 @@ def _overview_from_directory(
             prompt, _OVERVIEW_SCHEMA, max_tokens=4096,
         )
         result = response.result if hasattr(response, "result") else {}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - overview is best-effort
         print(f"study-loop: WARNING: overview LLM call failed: {exc}",
               file=sys.stderr)
         return [], [], "", ""
@@ -549,7 +551,7 @@ def _synthesise_overview(
             client = LLMClient(pinned_model=model)
         else:
             client = get_client()
-    except Exception:
+    except Exception:  # noqa: BLE001 - synthesis is best-effort
         return "", "", "", None
     if client is None:
         return "", "", "", None
@@ -559,7 +561,7 @@ def _synthesise_overview(
             prompt, _SYNTHESIS_SCHEMA, max_tokens=4096,
         )
         result = response.result if hasattr(response, "result") else {}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - synthesis is best-effort
         print(f"study-loop: WARNING: synthesis LLM call failed: {exc}",
               file=sys.stderr)
         return "", "", "", None
@@ -993,6 +995,7 @@ def main() -> int:
     libexec_dir = Path(__file__).resolve().parent
     prep_bin = str(libexec_dir / "raptor-study-prep")
     run_bin = str(libexec_dir / "raptor-study-run")
+    compile_bin = str(libexec_dir / "raptor-compile-invariants")
 
     identifiers = parsed.identifier or ""
     concepts = parsed.concept or ""
@@ -1097,6 +1100,35 @@ def main() -> int:
             rc = _run(run_cmd, verbose=parsed.verbose)
             if rc != 0:
                 print(f"study-loop: study-run failed (exit {rc})",
+                      file=sys.stderr)
+                exit_code = rc
+
+    # --- Phase 3b: compile invariants into mechanical rules ---
+    dm_path_check = output_dir / "domain-model.json"
+    if exit_code == 0 and dm_path_check.is_file():
+        try:
+            dm_check = json.loads(dm_path_check.read_text(encoding="utf-8"))
+            has_invariants = any(
+                inv.get("statement") and inv.get("negation")
+                and not inv.get("mechanical_rule")
+                for inv in dm_check.get("invariants", [])
+            )
+        except (OSError, json.JSONDecodeError):
+            has_invariants = False
+
+        if has_invariants:
+            compile_cmd = [sys.executable, compile_bin, str(output_dir)]
+            if parsed.model:
+                compile_cmd.extend(["--model", parsed.model])
+            compile_cmd.extend(["--target", str(target)])
+            if parsed.verbose:
+                compile_cmd.append("-v")
+
+            print("study-loop: compiling invariants into rules...",
+                  file=sys.stderr)
+            rc = _run(compile_cmd, verbose=parsed.verbose)
+            if rc != 0:
+                print(f"study-loop: compile-invariants failed (exit {rc})",
                       file=sys.stderr)
                 exit_code = rc
 

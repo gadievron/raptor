@@ -286,7 +286,7 @@ def _verdict(
         "suppression_lifted": len(delta.suppression_lifted),
         "severity_threshold": severity_floor,
     }
-    exit_code = 1 if triggering or not_cleared else 0
+    exit_code = 1 if triggering else 0
     return summary, exit_code
 
 

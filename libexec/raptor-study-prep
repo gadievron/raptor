@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Phase 1 mechanical prep for /understand --study.
 
 Extracts study items from target source files: struct/union/enum
@@ -15,10 +17,8 @@ The root is the search space for include resolution (defaults to
 detecting the top-level source root from the target path).
 """
 import bisect
-import faulthandler
 import json
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -27,24 +27,22 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
-# ─── trust-marker check ───
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
-if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
         "  Run via 'bin/raptor' instead.\n"
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
-# ─── end trust-marker check ───
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
 import argparse  # noqa: E402
 from dataclasses import asdict  # noqa: E402
 
@@ -532,7 +530,7 @@ def _extract_fields(block: str) -> list[str]:
     fields = []
     for line in block.split("\n"):
         line = line.strip()
-        if line.startswith("//") or line.startswith("/*") or line.startswith("*"):
+        if line.startswith(("//", "/*", "*")):
             continue
         fm = re.search(r"(\w+)\s*(?:\[[\w\s]*\])?\s*(?::\s*\d+)?\s*;", line)
         if fm:
@@ -581,7 +579,7 @@ def _extract_doc_comment(source: str, pos: int) -> str:
             if stripped.startswith("/*"):
                 in_block = False
             continue
-        if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
+        if stripped.startswith(("//", "*", "/*")):
             doc_lines.append(stripped)
         elif stripped == "":
             if doc_lines:
@@ -598,8 +596,19 @@ def _extract_doc_comment(source: str, pos: int) -> str:
 # Function extraction
 # ------------------------------------------------------------------
 
+# Attribute/declspec prefix: handles __attribute__((visibility("default"))),
+# __attribute__((format(printf, 1, 2))), __declspec(dllexport), extern, etc.
+# Two-level paren matching covers all common attribute forms.
+_ATTR_PREFIX = (
+    r"(?:__attribute__\s*\(\((?:[^()]*|\([^()]*\))*\)\)\s*)*"
+    r"(?:__declspec\s*\([^()]*\)\s*)?"
+    r"(?:extern\s+)?"
+)
+
 _C_FUNC_RE = re.compile(
-    r"^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?"
+    r"^" + _ATTR_PREFIX +
+    r"(?:static\s+)?(?:inline\s+)?(?:__\w+\s+)*"
+    r"(?:const\s+)?(?:unsigned\s+)?"
     r"(?:struct\s+\w+(?:\s+\*\s*|\s+)|enum\s+\w+\s+|union\s+\w+(?:\s+\*\s*|\s+)|"
     r"\w+(?:\s+\*\s*|\s+))"
     r"(\w+)\s*\(",
@@ -612,15 +621,19 @@ def _extract_functions(
     filepath: str,
     _nl_index: list[int] | None = None,
 ) -> list[dict]:
-    """Extract function definitions (name, line, signature, structural signals)."""
+    """Extract function definitions (name, line, signature, structural signals).
+
+    Returns ALL regex matches including forward declarations and
+    implementations of the same function — a forward declaration may
+    carry attributes or decorations absent from the implementation.
+    Downstream consumers (call graph, type index) use dict-last-wins
+    on name keys, so the implementation (with body) naturally takes
+    precedence.
+    """
     nl_index = _nl_index if _nl_index is not None else _build_newline_index(source)
     results = []
-    seen = set()
     for m in _C_FUNC_RE.finditer(source):
         name = m.group(1)
-        if name in seen:
-            continue
-        seen.add(name)
         line = _offset_to_line(nl_index, m.start())
         sig_end = source.find(")", m.end())
         sig = source[m.start():sig_end + 1] if sig_end != -1 else source[m.start():m.start() + 200]
@@ -667,7 +680,7 @@ def _get_ts_parser():
         import tree_sitter_c
         lang = tree_sitter.Language(tree_sitter_c.language())
         return tree_sitter.Parser(lang)
-    except Exception:
+    except Exception:  # noqa: BLE001 - any grammar failure means "no AST"
         return None
 
 
@@ -1078,9 +1091,7 @@ def _is_thin_wrapper(body: str, calls: set[str]) -> bool:
     stmts = [s.strip() for s in body.split(";") if s.strip()]
     if len(stmts) > 6:
         return False
-    if len(calls) > _MAX_WRAPPER_DISTINCT_CALLS:
-        return False
-    return True
+    return len(calls) <= _MAX_WRAPPER_DISTINCT_CALLS
 
 
 def _discover_project_patterns(
@@ -1456,7 +1467,7 @@ def _build_study_items(
         )
         if not scoped and not has_content:
             continue
-        item_id = f"func_{f['name']}"
+        item_id = f"func_{f['name']}_{f['line']}"
         if item_id in seen_ids:
             continue
         seen_ids.add(item_id)
@@ -1725,6 +1736,112 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
     return identifiers, concepts
 
 
+def _multilang_pass(
+    target: Path,
+    source_root: Path,
+    reading_list_path: Path | None,
+    cli_identifiers: list[str],
+    semantic_concepts: list[str],
+    *,
+    c_files_in_scope: bool,
+) -> tuple[list, list[dict], list[dict]]:
+    """Resolve reading-list identifiers in non-C sources.
+
+    The C/C++ extraction above only sees ``_C_EXTENSIONS`` files; this
+    pass dispatches Python/Go/Java/JS-TS/Rust identifiers to
+    ``core.concepts.lang_resolve`` and mirrors its output into the
+    study-list shapes.  Returns ``(items, related_docs, unresolved)``
+    where *unresolved* records carry the honest reason an identifier
+    could not be statically resolved (never guessed).
+    """
+    try:
+        from core.concepts.lang_resolve import (
+            extract_question_identifiers,
+            has_study_sources,
+            language_for_path,
+            resolve_concept_docs,
+            resolve_identifiers,
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade to C-only prep
+        print(f"study-prep: multilang pass unavailable: {exc}",
+              file=sys.stderr)
+        return [], [], []
+
+    if not has_study_sources(target):
+        return [], [], []
+
+    identifiers: list[str] = []
+    ident_questions: dict[str, list[str]] = {}
+    concept_questions: list[str] = []
+    seen: set[str] = set()
+
+    def _add_ident(name: str, question: str = "") -> None:
+        if name and name not in seen:
+            seen.add(name)
+            identifiers.append(name)
+        if name and question:
+            ident_questions.setdefault(name, []).append(question)
+
+    # CLI identifiers/concepts route here when the scope has no C
+    # files (pure non-C target — the C passes above were inert).
+    if not c_files_in_scope:
+        for ident in cli_identifiers:
+            _add_ident(ident)
+        concept_questions.extend(semantic_concepts)
+
+    if reading_list_path and reading_list_path.is_file():
+        try:
+            raw = json.loads(reading_list_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        for item in raw.get("items", []):
+            if item.get("resolved") or item.get("unresolvable"):
+                continue
+            sf = item.get("source_file", "")
+            if not language_for_path(sf):
+                continue  # C/C++ and unsupported handled elsewhere
+            question = item.get("question", "")
+            context = item.get("context", "")
+            if item.get("resolution") == "concept":
+                if question:
+                    concept_questions.append(question)
+                continue
+            names = extract_question_identifiers(question, context)
+            src_fn = (item.get("source_function") or "").strip()
+            if src_fn:
+                names.append(src_fn)
+            for name in names:
+                _add_ident(name, question)
+
+    items: list = []
+    related_docs: list[dict] = []
+    unresolved: list[dict] = []
+
+    if identifiers:
+        res = resolve_identifiers(source_root, identifiers, scope=target)
+        items = res.items
+        for rec in res.unresolved:
+            rec["questions"] = ident_questions.get(rec["name"], [])
+            unresolved.append(rec)
+        print(
+            f"study-prep: multilang pass: {len(identifiers)} identifiers "
+            f"→ {len(items)} items resolved, {len(unresolved)} "
+            f"unresolvable",
+            file=sys.stderr,
+        )
+
+    if concept_questions:
+        related_docs = resolve_concept_docs(source_root, concept_questions)
+        if related_docs:
+            print(
+                f"study-prep: multilang pass: {len(related_docs)} doc(s) "
+                f"for {len(concept_questions)} concept question(s)",
+                file=sys.stderr,
+            )
+
+    return items, related_docs, unresolved
+
+
 def _scope_from_reading_list(
     rl_path: Path,
     source_root: Path,
@@ -1840,7 +1957,7 @@ def _llm_seed_concepts_from_names(
                 client = get_client()
         else:
             client = get_client()
-    except Exception:
+    except Exception:  # noqa: BLE001 - seeding is best-effort
         print("study-prep: WARNING: no LLM available for concept seeding",
               file=sys.stderr)
         return []
@@ -1852,7 +1969,7 @@ def _llm_seed_concepts_from_names(
     names_block = "\n".join(all_names[:3000])
     concepts_block = "\n".join(f"- {c}" for c in semantic_concepts)
     prompt = (
-        "You are selecting items from a C codebase study list.\n\n"
+        "You are selecting items from a codebase study list.\n\n"
         "Semantic concepts to research:\n"
         f"{concepts_block}\n\n"
         "Available identifiers (struct names, function names, type names):\n"
@@ -1872,7 +1989,7 @@ def _llm_seed_concepts_from_names(
         if isinstance(seeded, list):
             name_set = set(all_names)
             return [s for s in seeded if isinstance(s, str) and s in name_set]
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - seeding is best-effort
         print(f"study-prep: WARNING: concept seeding failed: {exc}",
               file=sys.stderr)
     return []
@@ -2074,7 +2191,7 @@ def _chase_reading_list_definitions(
             proc = subprocess.run(
                 ["grep", "-rlE", "--include=*.c", "--include=*.h",
                  combined, str(source_root)],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=60, check=False,
             )
             for line in proc.stdout.strip().split("\n"):
                 if not line:
@@ -2102,7 +2219,7 @@ def _chase_reading_list_definitions(
             proc = subprocess.run(
                 ["find", str(source_root), "-type", "f", "("]
                 + name_args + [")"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=30, check=False,
             )
             for line in proc.stdout.strip().split("\n"):
                 if not line:
@@ -2164,11 +2281,18 @@ def main() -> None:
                     help="Worker threads for file extraction (default: cpu_count).")
     ap.add_argument("--model", default=None,
                     help="LLM model override for concept seeding.")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-run even if study-list.json already exists.")
     parsed, _extras = ap.parse_known_args(sys.argv[1:])
 
     target = Path(parsed.target).resolve()
     output_dir = Path(parsed.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    study_list_cache = output_dir / "study-list.json"
+    if study_list_cache.is_file() and not getattr(parsed, "force", False):
+        print("study-prep: reusing cached study-list.json", file=sys.stderr)
+        return 0
 
     if parsed.root:
         source_root = Path(parsed.root).resolve()
@@ -2205,9 +2329,9 @@ def main() -> None:
             try:
                 for depth2 in depth1.iterdir():
                     try:
-                        if depth2.is_dir() and depth2.name in _INC_NAMES:
-                            if depth2 not in search_dirs:
-                                search_dirs.append(depth2)
+                        if (depth2.is_dir() and depth2.name in _INC_NAMES
+                                and depth2 not in search_dirs):
+                            search_dirs.append(depth2)
                     except OSError:
                         continue
             except OSError:
@@ -2219,9 +2343,9 @@ def main() -> None:
         try:
             for child in target.iterdir():
                 try:
-                    if child.is_dir() and child.name in _INC_NAMES:
-                        if child not in search_dirs:
-                            search_dirs.append(child)
+                    if (child.is_dir() and child.name in _INC_NAMES
+                            and child not in search_dirs):
+                        search_dirs.append(child)
                 except OSError:
                     continue
         except OSError:
@@ -2428,7 +2552,7 @@ def main() -> None:
         search_terms: set[str] = set()
         for one_ident in identifiers:
             bare = re.sub(r"^(?:struct|union|enum)\s+", "", one_ident.lower())
-            bare_no_t = bare[:-2] if bare.endswith("_t") else bare
+            bare_no_t = bare.removesuffix("_t")
             search_terms.add(one_ident)
             search_terms.add(bare)
             for key in (one_ident, bare, bare_no_t, bare_no_t + "_t",
@@ -2474,7 +2598,7 @@ def main() -> None:
     # scope explosion when source_root is wider than target.
     target_resolved = target.resolve()
     seen_files = {sf.resolve() for sf in source_files}
-    for _inc_path, resolved_path in resolved_includes.items():
+    for resolved_path in resolved_includes.values():
         rp = Path(resolved_path)
         if not rp.is_file() or rp.resolve() in seen_files:
             continue
@@ -2587,7 +2711,7 @@ def main() -> None:
             # Strip struct/union/enum prefix to get the bare name
             bare = re.sub(r"^(?:struct|union|enum)\s+", "", low)
             # Strip _t suffix (as suffix, not char-set)
-            bare_no_t = bare[:-2] if bare.endswith("_t") else bare
+            bare_no_t = bare.removesuffix("_t")
             ident_exact.add(bare)
             ident_exact.add(bare_no_t)
             # Only use stem matching for unqualified identifiers
@@ -2771,6 +2895,25 @@ def main() -> None:
             print(f"study-prep: {len(related_docs)} related docs found",
                   file=sys.stderr)
 
+    # Multi-language pass: resolve reading-list identifiers that live
+    # in Python/Go/Java/JS-TS/Rust sources (the C passes above only
+    # scan _C_EXTENSIONS files).
+    ml_items, ml_docs, ml_unresolved = _multilang_pass(
+        target if target.is_dir() else target.parent,
+        source_root,
+        Path(parsed.reading_list) if parsed.reading_list else None,
+        identifiers,
+        semantic_concepts,
+        c_files_in_scope=bool(headers or c_files),
+    )
+    if ml_items:
+        items = list(items) + list(ml_items)
+    if ml_docs:
+        known_doc_files = {d.get("file") for d in related_docs}
+        related_docs.extend(
+            d for d in ml_docs if d.get("file") not in known_doc_files
+        )
+
     print(f"study-prep: {len(all_structs)} structs, {len(combined_fns)} functions "
           f"({len(all_prototypes)} from prototypes), "
           f"{len(pairs)} paired ops, {len(items)} study items", file=sys.stderr)
@@ -2784,6 +2927,28 @@ def main() -> None:
               f"passthru={usage_counts['passthru']})",
               file=sys.stderr)
 
+    # Stale-doc post-pass: mechanically decidable doc/code contract
+    # disagreements are flagged on the item — the study prompt treats
+    # the comment as unreliable (code-over-comments precedence).
+    try:
+        from core.concepts.receipts import detect_stale_doc
+        from core.inventory.languages import detect_language
+
+        n_stale = 0
+        for it in items:
+            if it.doc_comment and it.definition and not it.stale_doc:
+                it.stale_doc = detect_stale_doc(
+                    it.doc_comment, it.definition, it.name,
+                    detect_language(it.file) or "c",
+                )
+                if it.stale_doc:
+                    n_stale += 1
+        if n_stale:
+            print(f"study-prep: stale-doc markers on {n_stale} item(s)",
+                  file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - marker pass is best-effort
+        print(f"study-prep: stale-doc pass skipped: {exc}", file=sys.stderr)
+
     out_path = output_dir / "study-list.json"
     out_data = {
         "target": str(target),
@@ -2794,6 +2959,7 @@ def main() -> None:
         "semantic_concepts": ",".join(semantic_concepts) if semantic_concepts else None,
         "correlate_identifiers": correlate_identifiers,
         "related_docs": related_docs,
+        "unresolved_identifiers": ml_unresolved,
         "items": [asdict(item) for item in items],
     }
     fd, tmp_name = tempfile.mkstemp(
@@ -2842,7 +3008,7 @@ def _is_under_projects_base(directory: Path) -> bool:
 
         directory.resolve().relative_to(DEFAULT_OUTPUT_BASE.resolve())
         return True
-    except (ValueError, Exception):
+    except Exception:  # noqa: BLE001 - import/OS errors mean "not a project"
         return False
 
 
@@ -2874,10 +3040,10 @@ def _promote_to_project_concepts(src: Path, output_dir: Path) -> None:
     except OSError as exc:
         print(f"study-prep: promotion failed: {exc}", file=sys.stderr)
         if tmp:
-            try:
+            import contextlib
+
+            with contextlib.suppress(OSError):
                 Path(tmp).unlink(missing_ok=True)
-            except Exception:
-                pass
 
 
 if __name__ == "__main__":

@@ -68,13 +68,3 @@ class JoernTunables:
             import_timeout_s=import_timeout_s,
             query_timeout_s=query_timeout_s,
         )
-
-    def env_overlay(self) -> dict:
-        """Return env-var overrides to set JVM heap for Joern subprocesses.
-
-        Joern (and joern-parse) read ``_JAVA_OPTIONS`` to pick up JVM
-        flags.  Returns an empty dict when heap_mb is None (JVM default).
-        """
-        if self.heap_mb is None:
-            return {}
-        return {"_JAVA_OPTIONS": f"-Xmx{self.heap_mb}m"}

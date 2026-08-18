@@ -14,7 +14,6 @@ from core.llm.cwe_strategies import (
     load_strategy,
 )
 
-
 # ---------------------------------------------------------------------------
 # Real bundled strategies
 # ---------------------------------------------------------------------------
@@ -263,3 +262,67 @@ class TestLoadAll:
         names = [s.name for s in load_all(tmp_path)]
         # File order is alphabetical (aaa.yml, mmm.yml, zzz.yml).
         assert names == ["alpha", "middle", "zeta"]
+
+
+class TestProfiles:
+    """Signal profiles: target-kind supplements for the bundled
+    strategies (profiles/<name>.yml)."""
+
+    def test_builtin_linux_kernel_profile_loads(self):
+        from core.llm.cwe_strategies.loader import builtin_profile
+
+        prof = builtin_profile("linux_kernel")
+        assert prof is not None
+        assert "spin_lock" in prof["concurrency"].function_calls
+        assert "kmalloc" in prof["memory_management"].function_calls
+        assert "ns_capable" in prof["auth_privilege"].function_calls
+        assert "get_dumpable" in prof["lifecycle_drift"].function_calls
+        assert "linux/skbuff.h" in prof["input_handling"].includes
+
+    def test_missing_builtin_profile_is_none(self):
+        from core.llm.cwe_strategies.loader import builtin_profile
+
+        assert builtin_profile("no_such_profile") is None
+
+    def test_malformed_profile_raises(self, tmp_path):
+        from core.llm.cwe_strategies.loader import load_profile
+
+        bad = tmp_path / "bad.yml"
+        bad.write_text(
+            "name: bad\nstrategies:\n  concurrency:\n    typo_key: [x]\n"
+        )
+        with pytest.raises(StrategyLoadError):
+            load_profile(bad)
+
+    def test_unknown_top_level_key_raises(self, tmp_path):
+        from core.llm.cwe_strategies.loader import load_profile
+
+        bad = tmp_path / "bad.yml"
+        bad.write_text("name: bad\nstrategies: {}\nsurprise: 1\n")
+        with pytest.raises(StrategyLoadError):
+            load_profile(bad)
+
+    def test_apply_supplements_is_additive_and_ignores_unknown(self):
+        from core.llm.cwe_strategies.loader import apply_supplements
+        from core.llm.cwe_strategies.models import Signals, Strategy
+
+        base = Strategy(
+            name="concurrency",
+            description="d",
+            signals=Signals(function_calls=("pthread_mutex_lock",)),
+        )
+        out = apply_supplements(
+            [base],
+            {
+                "concurrency": Signals(
+                    function_calls=("spin_lock", "pthread_mutex_lock"),
+                ),
+                "not_in_pool": Signals(paths=("x/",)),
+            },
+        )
+        assert len(out) == 1
+        assert out[0].signals.function_calls == (
+            "pthread_mutex_lock", "spin_lock",
+        )
+        # Base object untouched (frozen dataclass, new instance).
+        assert base.signals.function_calls == ("pthread_mutex_lock",)

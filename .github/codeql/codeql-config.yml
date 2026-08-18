@@ -32,13 +32,21 @@ paths-ignore:
   # samples a future test adds.
   - "**/tests/fixtures/**"
   - "**/test_fixtures/**"
-  # SCA tests assert URL substrings against proxy_hosts allowlists, registry
-  # endpoints, and image refs (e.g. ``assert "registry.npmjs.org" in
-  # kwargs["proxy_hosts"]``). CodeQL's
-  # ``py/incomplete-url-substring-sanitization`` query reads these as
-  # host-validation checks — they aren't, they're shape assertions in
-  # tests. Same shape as the core/sandbox/tests/** exclusion above.
+  # Several test suites assert URL substrings or hostname membership
+  # against allowlists (e.g. ``assert "registry.npmjs.org" in
+  # kwargs["proxy_hosts"]``, ``assert "bigquery.googleapis.com" in
+  # hosts``).  CodeQL's ``py/incomplete-url-substring-sanitization``
+  # query reads these as host-validation checks — they aren't, they're
+  # shape assertions in tests.
   - packages/sca/**/tests/**
+  - core/llm/tests/**
+  - core/git/tests/**
+  - core/forensics/tests/**
+  # sandbox helpers_test.c sets directory permissions then calls
+  # validate_exec_target — inherently TOCTOU by test design.
+  # The write_file_mode TOCTOU is fixed (fchmod on fd), but the
+  # chmod→validate pairs are the test exercising the security check.
+  - core/sandbox/helpers/*_test*
   # Intentionally vulnerable testbeds used by /scan and /codeql self-tests
   # (python_sql_injection.py, javascript_xss.js, smt_codeql_testbench.c).
   - test/data/**

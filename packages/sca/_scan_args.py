@@ -31,10 +31,12 @@ parity between the two surfaces."""
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from .pipeline import RunOptions
 
+logger = logging.getLogger(__name__)
 
 _SCAN_HELP_EPILOG = """\
 Common invocations:
@@ -130,6 +132,15 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
              "transitive set)",
     )
     parser.add_argument(
+        "--allow-sdist-builds", action="store_true",
+        help="let the pip cascade resolver fall back to source "
+             "distributions. Default is wheels-only "
+             "(PIP_ONLY_BINARY=:all:) so a package's build backend "
+             "never executes; with this flag, sdist-only manifests "
+             "resolve at the cost of running build backends inside "
+             "the sandbox",
+    )
+    parser.add_argument(
         "--fallback-registry-metadata", action="store_true",
         help="when no toolchain is available, approximate transitives "
              "from registry metadata instead. Findings tagged as "
@@ -184,14 +195,20 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--trust-repo", action="store_true",
-        help="Set the process-wide ``cc_trust`` override. NO behaviour "
-             "change in raptor-sca itself — SCA's defenses (sandbox + "
-             "egress proxy + atomic write + signal-checked bumps) "
-             "are not trust-gated. Provided for cross-subcommand "
-             "consistency so the same flag works on every RAPTOR "
-             "entry point; the override IS consulted by adjacent "
-             "subsystems (``/agentic`` LLM dispatch, CodeQL build "
-             "trust check) when they run in the same process.",
+        help="Treat the scanned repo as operator-trusted: honour its "
+             "suppression overlay (.raptor-sca-suppress.yml) and "
+             "license policy file, which are otherwise reported but "
+             "ignored. Also sets the process-wide ``cc_trust`` "
+             "override consulted by adjacent subsystems (``/agentic`` "
+             "LLM dispatch, CodeQL build trust check) when they run "
+             "in the same process. The active project's ``config`` "
+             "trust marker implies this flag.",
+    )
+    parser.add_argument(
+        "--no-trust-repo", action="store_true",
+        help="Force repo-untrusted for this run, overriding both "
+             "``--trust-repo`` and the active project's ``config`` "
+             "trust marker (explicit negative wins).",
     )
     parser.add_argument(
         "--baseline", metavar="PATH",
@@ -305,6 +322,49 @@ def apply_no_llm_umbrella(args: argparse.Namespace) -> None:
         args.impact_analysis = False
 
 
+def resolve_repo_trust(args: argparse.Namespace) -> bool:
+    """Resolve the repo-trust umbrella ONCE and fan the result out to
+    every consumer.
+
+    Precedence (``core.project.trust.resolve_trust_flag``, shared with
+    /agentic and /codeql): ``--no-trust-repo`` > ``--trust-repo`` >
+    active project's ``config`` marker > off. When the marker decides,
+    the standard project-trust banner prints (via
+    ``apply_project_trust_flags``).
+
+    Mutates ``args.trust_repo`` to the effective value AND sets the
+    process-wide ``cc_trust`` / ``codeql_trust`` overrides to the SAME
+    value, so the pipeline plumbing (``RunOptions.trust_repo``) and the
+    process-wide gates cannot disagree. Entry points must NOT call
+    ``set_trust_override`` from the raw flag themselves — that path
+    missed marker-implied trust (override stayed off on marker-only
+    runs) and, when both flags were passed, left the override trusted
+    while the pipeline correctly resolved untrusted.
+
+    Idempotent: a second call re-resolves from the already-mutated
+    ``args`` to the same value, and the marker banner prints at most
+    once per run.
+    """
+    from core.project.trust import apply_project_trust_flags
+    apply_project_trust_flags(args)
+    resolved = bool(getattr(args, "trust_repo", False))
+    try:
+        from core.security.cc_trust import set_trust_override
+        set_trust_override(resolved)
+    except ImportError:
+        logger.debug("raptor-sca: cc_trust unavailable; repo-trust "
+                     "override not propagated")
+    try:
+        from core.security.codeql_trust import (
+            set_trust_override as _codeql_set_trust_override,
+        )
+        _codeql_set_trust_override(resolved)
+    except ImportError:
+        logger.debug("raptor-sca: codeql_trust unavailable; repo-trust "
+                     "override not propagated")
+    return resolved
+
+
 def options_from_args(args: argparse.Namespace) -> RunOptions:
     """Build :class:`RunOptions` from a parsed Namespace.
 
@@ -313,7 +373,14 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
     missing ``emit_spdx_sbom``, ``raptor-sca-run`` was missing
     ``enable_progress``. A new RunOptions field added here lands
     in both surfaces automatically.
+
+    Repo-trust is resolved here via :func:`resolve_repo_trust`
+    (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
+    marker > off) so both entry points share the precedence, the
+    marker banner, AND the propagation of the resolved value to
+    the process-wide ``cc_trust`` / ``codeql_trust`` overrides.
     """
+    resolve_repo_trust(args)
     return RunOptions(
         offline=args.offline,
         no_cache=args.no_cache,
@@ -332,6 +399,7 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         offline_db_path=(Path(args.offline_db_path)
                           if args.offline_db_path else None),
         enable_transitive_expansion=not args.no_resolve_transitive,
+        allow_sdist_builds=args.allow_sdist_builds,
         fallback_registry_metadata=args.fallback_registry_metadata,
         enable_llm_review=not args.skip_review,
         enable_triage=not args.skip_triage,
@@ -341,4 +409,5 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         enable_impact_analysis=args.impact_analysis,
         enable_progress=not args.no_progress,
         sbom_input=Path(args.sbom).resolve() if args.sbom else None,
+        trust_repo=bool(getattr(args, "trust_repo", False)),
     )

@@ -3,18 +3,19 @@
 // Returns the specific unguarded sink calls with their line numbers and
 // code, so the LLM knows exactly where the missing guard is.
 //
-// Template slot: __FUNCTION__ (substituted by runner after validation)
+// Template slots (substituted by core/analysis/reachability_gates.py
+// after validation):
+//   __FUNCTION__   — target function name
+//   __SINK_NAMES__ — sink-name list body, rendered from the single
+//                    authority _UNGUARDED_QUERY_SINKS (this file used
+//                    to hardcode a drifting copy of it)
 //
 // Output: JOERN_UNGUARDED: JSON per unguarded sink call.
 
 import io.shiftleft.semanticcpg.language._
 
 val fnName = "__FUNCTION__"
-val sinkNames = List(
-  "memcpy", "memmove", "strcpy", "strcat", "sprintf", "gets",
-  "strncpy", "strncat", "snprintf", "system", "popen", "execve",
-  "execvp", "fopen", "open"
-)
+val sinkNames = List(__SINK_NAMES__)
 
 val fn = cpg.method.name(fnName)
 val sinkCalls = fn.call.name(sinkNames.mkString("|")).l

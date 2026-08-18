@@ -106,26 +106,28 @@ add('accept', 'network', a => ({ fd: a[0].toInt32() }));
 add('getenv', 'process', a => ({ name: safeStr(a[0]) }));
 
 // Parser callsites are useful for narrowing a callback or protocol handler to
-// the function that actually crosses into a structured-data parser. Keep this
-// list explicit and small: these are known parser entry points, not arbitrary
-// string functions.
-add('XML_Parse', 'parser', a => ({ len: a[2].toInt32() }));
-add('XML_ParseBuffer', 'parser', a => ({ len: a[1].toInt32() }));
-add('xmlReadMemory', 'parser', a => ({ size: a[1].toInt32() }));
-add('json_loads', 'parser', a => ({ input: safeStr(a[0], 128) }));
-add('json_loadb', 'parser', a => ({ size: a[1].toInt32() }));
-add('cJSON_Parse', 'parser', a => ({ input: safeStr(a[0], 128) }));
-add('d2i_X509', 'parser', _a => ({}));
-add('d2i_X509_bio', 'parser', _a => ({}));
-add('d2i_PrivateKey', 'parser', _a => ({}));
-add('PEM_read_X509', 'parser', _a => ({}));
-add('PEM_read_PrivateKey', 'parser', _a => ({}));
-add('jpeg_read_header', 'parser', _a => ({}));
-add('png_read_info', 'parser', _a => ({}));
-add('inflate', 'parser', _a => ({}));
-add('BZ2_bzDecompress', 'parser', _a => ({}));
-add('lzma_code', 'parser', _a => ({}));
-add('ZSTD_decompress', 'parser', a => ({ size: a[3].toInt32() }));
-add('BrotliDecoderDecompress', 'parser', _a => ({}));
+// the function that actually crosses into a structured-data parser.
+//
+// The hook-name list is RENDERED from RAPTOR's central function taxonomy
+// (core/function_taxonomy PARSER_FUNCS) into the slot below when the
+// template is loaded — this file used to hand-copy a subset that silently
+// drifted as the taxonomy grew. Unrendered, the list is empty and the
+// template stays valid JS. The per-function argument readers stay explicit
+// here: they encode arg-position knowledge, not name vocabulary, and any
+// name without a reader gets a no-argument hook (absent exports are
+// skipped by hook()).
+const parserHookNames = /*__PARSER_HOOKS__*/ [];
+const parserArgReaders = {
+  'XML_Parse': a => ({ len: a[2].toInt32() }),
+  'XML_ParseBuffer': a => ({ len: a[1].toInt32() }),
+  'xmlReadMemory': a => ({ size: a[1].toInt32() }),
+  'json_loads': a => ({ input: safeStr(a[0], 128) }),
+  'json_loadb': a => ({ size: a[1].toInt32() }),
+  'cJSON_Parse': a => ({ input: safeStr(a[0], 128) }),
+  'ZSTD_decompress': a => ({ size: a[3].toInt32() }),
+};
+parserHookNames.forEach(function (name) {
+  add(name, 'parser', parserArgReaders[name] || (_a => ({})));
+});
 
 send({ _meta: 'binary-flow-trace loaded', hooks: hooks });

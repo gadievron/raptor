@@ -11,8 +11,12 @@ Scoring model:
   +6   Trust boundary (crosses privilege domains)
   +5   On a traced flow path (source → sink path passes through)
   +8   Large internal function (≥200 SLOC; parsers, state machines)
+  +6   Parse/decode-shaped (byte-buffer signature + cursor walk /
+       parser-API call — core.audit.parser_shape, structural/learned)
+  +4   Dense length/size arithmetic (bounds-bug substrate)
   +4   Complex function (≥80 SLOC)
   +3   Callee of an entry point (1-hop from attack surface)
+  +2   Dense error paths (validation-ordering substrate)
   +2   Moderate function (≥30 SLOC)
   +2   Has unchecked flows (context-map flagged unchecked)
   +1   In a file with any entry point
@@ -27,11 +31,17 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set
+from pathlib import Path
+from typing import Any
 
 from ._util import extract_context_map_set
+from .parser_shape import (
+    ERROR_PATH_DENSITY_FLOOR,
+    ERROR_PATH_SITES_FLOOR,
+    LENGTH_ARITH_DENSITY_FLOOR,
+    LENGTH_ARITH_SITES_FLOOR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +55,9 @@ SCORE_CALLEE_OF_ENTRY = 3
 SCORE_EXPORTED = 2
 SCORE_PARTIAL_TOOL_COVERAGE = 2
 SCORE_NOT_FUZZED = 2
+SCORE_PRIOR_SCAN_HIT = 3
+SCORE_FUZZ_UNREACHED = 3
+SCORE_FUZZ_REACHED_CLEAN = -1
 SCORE_UNCHECKED_FLOW = 2
 SCORE_FILE_HAS_ENTRY_POINT = 1
 SCORE_NEW_CODE = 3
@@ -57,28 +70,49 @@ SCORE_STRATEGY_MAX_BOOST = 5
 SCORE_BINARY_SINK = 6
 SCORE_BINARY_SURFACE = 4
 SCORE_PARSER_BOUNDARY = 3
+# Structural parse/decode-shape components (core.audit.parser_shape,
+# annotated onto gaps by compute_gaps). External-format decoders and
+# their bounds arithmetic are where the review yield is — receipts:
+# scoped-audit runs whose slots went to the thin exported siblings of
+# the actual byte-walking workhorse.
+SCORE_PARSER_SHAPED = 6
+SCORE_LENGTH_ARITH = 4
+SCORE_ERROR_PATHS = 2
+SCORE_VALIDATE_CONFIRMED = 6
+SCORE_VALIDATE_RULED_OUT = -3
+SCORE_BINARY_ABSENT = -10
 
 _COMPLEX_SLOC = 80
 _MODERATE_SLOC = 30
 _LARGE_SLOC = 200
 
+# "Substantial coverage" threshold for the mild reached-crash-free
+# demotion — mirrors gaps._FUZZ_HEAVY_ITERATIONS: below this a clean
+# fuzz record says little.
+FUZZ_SUBSTANTIAL_ITERATIONS = 10_000
+
 _EXPORTED_VISIBILITY = frozenset({"extern", "exported", "public"})
 
 
 def score_functions(
-    gaps: List[Dict[str, Any]],
+    gaps: list[dict[str, Any]],
     *,
-    context_map: Optional[Dict[str, Any]] = None,
-    flow_traces: Optional[List[Dict[str, Any]]] = None,
-    tool_coverage: Optional[Dict[str, Set[str]]] = None,
-    tool_failures: Optional[Set[str]] = None,
-    fuzz_coverage: Optional[Set[str]] = None,
-    new_functions: Optional[Set[str]] = None,
-    threat_model: Optional[Dict[str, Any]] = None,
-    open_constraint_keys: Optional[Set[str]] = None,
-    strategy_weights: Optional[Dict[str, float]] = None,
-    binary_bridge: Optional[Any] = None,
-) -> List[Dict[str, Any]]:
+    context_map: dict[str, Any] | None = None,
+    flow_traces: list[dict[str, Any]] | None = None,
+    tool_coverage: dict[str, set[str]] | None = None,
+    tool_failures: set[str] | None = None,
+    fuzz_coverage: set[str] | None = None,
+    fuzz_function_coverage: dict[str, Any] | None = None,
+    prior_scan_hit_keys: set[str] | None = None,
+    new_functions: set[str] | None = None,
+    threat_model: dict[str, Any] | None = None,
+    open_constraint_keys: set[str] | None = None,
+    strategy_weights: dict[str, float] | None = None,
+    binary_bridge: Any | None = None,
+    validate_confirmed_keys: set[str] | None = None,
+    validate_ruled_out_keys: set[str] | None = None,
+    binary_absent_keys: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Score and re-sort gaps by attack-surface proximity.
 
     Each gap gets a numeric 'priority_score' field (higher = more urgent).
@@ -92,6 +126,16 @@ def score_functions(
         tool_coverage: {file_path: set_of_tool_names} — files with no tools
             get SCORE_NO_TOOL_COVERAGE, files with only one tool get
             SCORE_PARTIAL_TOOL_COVERAGE.
+        fuzz_function_coverage: Per-function coverage-fuzz.json document
+            (``files.{path}.functions.{name}`` records with ``reached``,
+            ``iterations``, ``crashes``). Functions the fuzzer never
+            reached get SCORE_FUZZ_UNREACHED; functions reached with
+            substantial iterations and zero crashes get the mild
+            SCORE_FUZZ_REACHED_CLEAN demotion.
+        prior_scan_hit_keys: file:function keys with SARIF hits from a
+            prior sibling scan run. Gets SCORE_PRIOR_SCAN_HIT — a
+            scanner already flagged something here and no reviewer has
+            looked yet.
         new_functions: Set of file:function keys from inventory diff
             (added or modified functions). Gets SCORE_NEW_CODE.
         threat_model: Parsed threat model dict.  When it carries a
@@ -103,6 +147,18 @@ def score_functions(
         binary_bridge: BinaryBridgeResult from binary analysis output.
             Binary-confirmed sink callers, ranked surfaces, and parser
             boundaries boost the function's score.
+        validate_confirmed_keys: file:function keys a prior /validate
+            run confirmed as exploitable/confirmed — variant-dense
+            regions, boosted with SCORE_VALIDATE_CONFIRMED.
+        validate_ruled_out_keys: file:function keys a prior /validate
+            run ruled out with strong receipts on unchanged source.
+            Mildly deprioritised (SCORE_VALIDATE_RULED_OUT) — never
+            skipped; a fresh hypothesis may differ in mechanism.
+        binary_absent_keys: file:function keys the binary oracle says
+            are absent from every analysed binary (full-DWARF tier,
+            suppression-earning). Hard-deprioritised with
+            SCORE_BINARY_ABSENT so live functions win budget slots;
+            the triage classifier separately skips them.
 
     Returns:
         Gaps sorted by (priority ASC, priority_score DESC, sloc DESC).
@@ -119,9 +175,9 @@ def score_functions(
         ep.rsplit(":", 1)[0] for ep in entry_points if ":" in ep
     }
 
-    binary_sink_callers: Set[str] = set()
-    binary_surface_scores: Dict[str, float] = {}
-    binary_boundary_fns: Set[str] = set()
+    binary_sink_callers: set[str] = set()
+    binary_surface_scores: dict[str, float] = {}
+    binary_boundary_fns: set[str] = set()
     if binary_bridge is not None:
         binary_sink_callers = binary_bridge.sink_callers()
         binary_surface_scores = binary_bridge.surface_functions()
@@ -161,6 +217,29 @@ def score_functions(
         if fuzz_coverage is not None and gap["file"] not in fuzz_coverage:
             score += SCORE_NOT_FUZZED
 
+        if fuzz_function_coverage:
+            entry = _fuzz_function_entry(
+                fuzz_function_coverage, gap["file"], gap["name"],
+            )
+            if entry is not None:
+                if not entry.get("reached", True):
+                    # Fuzzing examined the file but never exercised
+                    # this function — dynamic analysis can't see it,
+                    # so audit review should.
+                    score += SCORE_FUZZ_UNREACHED
+                elif (
+                    entry.get("iterations", 0)
+                    >= FUZZ_SUBSTANTIAL_ITERATIONS
+                    and entry.get("crashes", 0) == 0
+                ):
+                    # Exercised a lot, never crashed: mild demotion
+                    # only — fuzzing finds shallow bugs, not logic
+                    # ones.
+                    score += SCORE_FUZZ_REACHED_CLEAN
+
+        if prior_scan_hit_keys and key in prior_scan_hit_keys:
+            score += SCORE_PRIOR_SCAN_HIT
+
         visibility = (gap.get("metadata") or {}).get("visibility", "")
         if visibility in _EXPORTED_VISIBILITY:
             score += SCORE_EXPORTED
@@ -183,6 +262,14 @@ def score_functions(
                 boost = int((max_weight - 1.0) * SCORE_STRATEGY_MAX_BOOST)
                 score += max(-SCORE_STRATEGY_MAX_BOOST, min(SCORE_STRATEGY_MAX_BOOST, boost))
 
+        if validate_confirmed_keys and key in validate_confirmed_keys:
+            score += SCORE_VALIDATE_CONFIRMED
+        elif validate_ruled_out_keys and key in validate_ruled_out_keys:
+            score += SCORE_VALIDATE_RULED_OUT
+
+        if binary_absent_keys and key in binary_absent_keys:
+            score += SCORE_BINARY_ABSENT
+
         func_name = gap.get("name", "")
         if key in binary_sink_callers or func_name in binary_sink_callers:
             score += SCORE_BINARY_SINK
@@ -190,6 +277,25 @@ def score_functions(
             score += SCORE_BINARY_SURFACE
         if key in binary_boundary_fns or func_name in binary_boundary_fns:
             score += SCORE_PARSER_BOUNDARY
+
+        # Structural parse/decode-shape components. Density floors
+        # live in core.audit.parser_shape so the classifier and the
+        # scorer can't drift apart.
+        shape = gap.get("parser_shape") or {}
+        if shape.get("parser_shaped"):
+            score += SCORE_PARSER_SHAPED
+        if (
+            shape.get("length_arith_sites", 0) >= LENGTH_ARITH_SITES_FLOOR
+            and shape.get("length_arith_density", 0.0)
+            >= LENGTH_ARITH_DENSITY_FLOOR
+        ):
+            score += SCORE_LENGTH_ARITH
+        if (
+            shape.get("error_path_sites", 0) >= ERROR_PATH_SITES_FLOOR
+            and shape.get("error_path_density", 0.0)
+            >= ERROR_PATH_DENSITY_FLOOR
+        ):
+            score += SCORE_ERROR_PATHS
 
         sloc = gap.get("sloc", 0)
         if sloc >= _LARGE_SLOC:
@@ -212,13 +318,27 @@ def score_functions(
     return scored
 
 
-def load_tool_coverage(run_dirs: List[Path]) -> Dict[str, Set[str]]:
+def _fuzz_function_entry(
+    fuzz_data: dict[str, Any],
+    file_path: str,
+    function_name: str,
+) -> dict[str, Any] | None:
+    """Per-function record lookup (same shapes as loaders.fuzz_coverage_for)."""
+    flat = fuzz_data.get(f"{file_path}:{function_name}")
+    if isinstance(flat, dict):
+        return flat
+    file_data = fuzz_data.get("files", {}).get(file_path, {})
+    entry = file_data.get("functions", {}).get(function_name)
+    return entry if isinstance(entry, dict) else None
+
+
+def load_tool_coverage(run_dirs: list[Path]) -> dict[str, set[str]]:
     """Build a file→tools mapping from coverage run directories.
 
     Uses file_level_view() which returns {tool: {files: [...]}} and
     inverts it to {file: {tool1, tool2, ...}}.
     """
-    result: Dict[str, Set[str]] = {}
+    result: dict[str, set[str]] = {}
     try:
         from core.coverage.store_summary import file_level_view
         view = file_level_view(run_dirs)
@@ -230,9 +350,9 @@ def load_tool_coverage(run_dirs: List[Path]) -> Dict[str, Set[str]]:
     return result
 
 
-def load_tool_failures(run_dirs: List[Path]) -> Set[str]:
+def load_tool_failures(run_dirs: list[Path]) -> set[str]:
     """Identify files where a tool attempted to scan but failed."""
-    failures: Set[str] = set()
+    failures: set[str] = set()
     for run_dir in run_dirs:
         for cov_file in run_dir.glob("coverage-*.json"):
             try:
@@ -245,9 +365,9 @@ def load_tool_failures(run_dirs: List[Path]) -> Set[str]:
     return failures
 
 
-def load_fuzz_coverage(run_dirs: List[Path]) -> Optional[Set[str]]:
+def load_fuzz_coverage(run_dirs: list[Path]) -> set[str] | None:
     """Load files examined by fuzzing from coverage-fuzz.json."""
-    fuzzed: Set[str] = set()
+    fuzzed: set[str] = set()
     found = False
     for run_dir in run_dirs:
         fuzz_path = run_dir / "coverage-fuzz.json"
@@ -266,13 +386,16 @@ def load_fuzz_coverage(run_dirs: List[Path]) -> Optional[Set[str]]:
 
 def load_new_functions(
     out_dir: Path,
-    checklist: Dict[str, Any],
-) -> Set[str]:
+    checklist: dict[str, Any],
+) -> set[str]:
     """Identify new/modified functions from inventory diff.
 
-    Reads inventory-diff.json (produced by compare_inventories) and
-    joins the affected files with the checklist to get function-level
-    keys in file:function format.
+    Reads inventory-diff.json. When the diff carries function-level
+    keys (``functions_added`` / ``functions_changed``, hash-based —
+    written by the inventory builder or ``ensure_inventory_diff``),
+    those are used directly. Legacy file-level diffs fall back to
+    joining the affected files with the checklist, marking every
+    function in a changed file.
     """
     diff_path = out_dir / "inventory-diff.json"
     if not diff_path.exists():
@@ -283,13 +406,17 @@ def load_new_functions(
     except (json.JSONDecodeError, OSError):
         return set()
 
+    if "functions_added" in diff or "functions_changed" in diff:
+        return (set(diff.get("functions_added") or [])
+                | set(diff.get("functions_changed") or []))
+
     affected_files = set(diff.get("added", []))
     affected_files.update(diff.get("modified", []))
 
     if not affected_files:
         return set()
 
-    new_fns: Set[str] = set()
+    new_fns: set[str] = set()
     for file_info in checklist.get("files", []):
         file_path = file_info.get("path", "")
         if file_path in affected_files:
@@ -300,11 +427,89 @@ def load_new_functions(
     return new_fns
 
 
+def _latest_sibling_checklist(
+    out_dir: Path, target_path: Path | None,
+) -> dict[str, Any] | None:
+    """The most recent sibling run's checklist.json, or None."""
+    try:
+        from .joern_backend import sibling_run_dirs
+        dirs = sibling_run_dirs(out_dir, target_path=target_path)
+    except Exception:
+        logger.debug("sibling run discovery failed", exc_info=True)
+        return None
+    best: Path | None = None
+    best_mtime = -1.0
+    for d in dirs:
+        p = d / "checklist.json"
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best, best_mtime = p, mtime
+    if best is None:
+        return None
+    try:
+        with open(best, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def ensure_inventory_diff(
+    out_dir: Path,
+    checklist: dict[str, Any],
+    *,
+    target_path: Path | None = None,
+) -> set[str]:
+    """Materialise ``inventory-diff.json`` for this run and return the
+    new/changed function keys.
+
+    The inventory builder writes the diff when it rebuilds in a
+    directory that already holds a previous checklist; a fresh run
+    directory has no previous checklist, so the production diff was
+    never emitted and the new-code priority signal stayed dark. When
+    the file is absent, diff the current checklist against the most
+    recent sibling run's checklist (function-level, span-hash based)
+    and persist the result so downstream loaders — gap computation and
+    ``score_functions`` — see one consistent artifact.
+
+    Best-effort: no discoverable previous inventory → empty set.
+    """
+    out_dir = Path(out_dir)
+    diff_path = out_dir / "inventory-diff.json"
+    if not diff_path.exists():
+        previous = _latest_sibling_checklist(out_dir, target_path)
+        if previous is None:
+            return set()
+        try:
+            from core.inventory.diff import (
+                compare_inventories,
+                function_level_diff,
+            )
+            payload: dict[str, Any] = {
+                "added": [], "removed": [], "modified": [],
+                "functions_added": [], "functions_changed": [],
+            }
+            file_diff = compare_inventories(previous, checklist)
+            if file_diff is not None:
+                for k in ("added", "removed", "modified"):
+                    payload[k] = list(file_diff.get(k) or [])
+                payload.update(function_level_diff(previous, checklist))
+            diff_path.write_text(json.dumps(payload, indent=2),
+                                 encoding="utf-8")
+        except Exception:
+            logger.debug("inventory-diff materialisation failed",
+                         exc_info=True)
+            return set()
+    return load_new_functions(out_dir, checklist)
+
+
 def detect_widely_used(
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
     *,
     threshold: int = 20,
-) -> Set[str]:
+) -> set[str]:
     """Identify widely-used functions (many consumers).
 
     Functions with >= threshold callers are likely correct themselves;
@@ -312,51 +517,54 @@ def detect_widely_used(
     Uses the callers_of() API from core.analysis.reachability.
     """
     try:
-        from core.analysis.reachability import callers_of, InternalFunction
+        from core.analysis.reachability import InternalFunction, callers_of
     except ImportError:
         return set()
 
-    widely_used: Set[str] = set()
-    _caller_count_cache: Dict[str, int] = {}
+    widely_used: set[str] = set()
     files_data = checklist.get("files", {})
     if isinstance(files_data, list):
         file_iter = ((f["path"], f.get("items", [])) for f in files_data if isinstance(f, dict))
     elif isinstance(files_data, dict):
-        file_iter = files_data.items()
+        file_iter = (
+            (k, v.get("items", []) if isinstance(v, dict) else v)
+            for k, v in files_data.items()
+        )
     else:
         return widely_used
+    # No memoisation: each (file, name) checklist item is visited
+    # exactly once per call, so a per-call cache could never hit —
+    # and a duplicate name within one file would silently reuse the
+    # first definition's count.
     for file_path, items in file_iter:
         for item in items:
             name = item.get("name", "")
             if not name:
                 continue
-            cache_key = f"{file_path}:{name}"
-            count = _caller_count_cache.get(cache_key)
-            if count is None:
-                line = item.get("line_start", 0) or 0
-                try:
-                    target = InternalFunction(
-                        file_path=file_path, name=name, line=line,
-                    )
-                    r = callers_of(checklist, target)
-                    count = len(r.all_callers)
-                except Exception:
-                    logger.debug(
-                        "callers_of failed for %s:%s", file_path, name,
-                        exc_info=True,
-                    )
-                    count = 0
-                _caller_count_cache[cache_key] = count
+            key = f"{file_path}:{name}"
+            line = item.get("line_start", 0) or 0
+            try:
+                target = InternalFunction(
+                    file_path=file_path, name=name, line=line,
+                )
+                r = callers_of(checklist, target)
+                count = len(r.all_callers)
+            except Exception:
+                logger.debug(
+                    "callers_of failed for %s:%s", file_path, name,
+                    exc_info=True,
+                )
+                count = 0
             if count >= threshold:
-                widely_used.add(cache_key)
+                widely_used.add(key)
     return widely_used
 
 
 def group_by_subsystem(
-    gaps: List[Dict[str, Any]],
+    gaps: list[dict[str, Any]],
     *,
     depth: int = 1,
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Group gaps by directory (subsystem).
 
     Groups functions by their file's parent directory at the given depth.
@@ -367,7 +575,7 @@ def group_by_subsystem(
     This enables the orchestrator to build per-subsystem context
     before reviewing individual functions within that subsystem.
     """
-    groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for gap in gaps:
         parts = Path(gap["file"]).parts
         if len(parts) > depth:
@@ -380,7 +588,7 @@ def group_by_subsystem(
     return dict(groups)
 
 
-def load_flow_traces(out_dir: Path) -> List[Dict[str, Any]]:
+def load_flow_traces(out_dir: Path) -> list[dict[str, Any]]:
     """Load all flow-trace-*.json files from the output directory."""
     traces = []
     for path in sorted(out_dir.glob("flow-trace-*.json")):
@@ -393,18 +601,18 @@ def load_flow_traces(out_dir: Path) -> List[Dict[str, Any]]:
 
 
 def _extract_unchecked_flows(
-    context_map: Optional[Dict[str, Any]],
-) -> Set[str]:
+    context_map: dict[str, Any] | None,
+) -> set[str]:
     if not context_map:
         return set()
 
-    ep_index: Dict[str, Dict[str, Any]] = {}
+    ep_index: dict[str, dict[str, Any]] = {}
     for ep in context_map.get("entry_points", []):
         ep_id = ep.get("id", "")
         if ep_id:
             ep_index[ep_id] = ep
 
-    sink_index: Dict[str, Dict[str, Any]] = {}
+    sink_index: dict[str, dict[str, Any]] = {}
     for sd in context_map.get("sink_details", []):
         sd_id = sd.get("id", "")
         if sd_id:
@@ -430,10 +638,10 @@ def _extract_unchecked_flows(
 
 
 def _extract_entry_callees(
-    context_map: Optional[Dict[str, Any]],
+    context_map: dict[str, Any] | None,
     *,
     max_depth: int = 2,
-) -> Set[str]:
+) -> set[str]:
     """Functions reachable from entry points within *max_depth* call hops."""
     if not context_map:
         return set()
@@ -443,14 +651,17 @@ def _extract_entry_callees(
         for ep in context_map.get("entry_points", [])
     }
 
-    result: Set[str] = set()
+    result: set[str] = set()
     for ep in context_map.get("entry_points", []):
         for callee in ep.get("callees", []):
             key = f"{callee.get('file', '')}:{callee.get('name', '')}"
-            if key != ":":
+            # Same exclusion as the BFS below: an entry point listed
+            # among another entry's callees already scores
+            # SCORE_ENTRY_POINT and must not double-count.
+            if key != ":" and key not in entry_keys:
                 result.add(key)
 
-    caller_to_callees: Dict[str, List[str]] = defaultdict(list)
+    caller_to_callees: dict[str, list[str]] = defaultdict(list)
     for edge in context_map.get("call_edges", []):
         caller_key = f"{edge.get('caller_file', '')}:{edge.get('caller', '')}"
         callee_key = f"{edge.get('callee_file', edge.get('caller_file', ''))}:{edge.get('callee', '')}"
@@ -460,7 +671,7 @@ def _extract_entry_callees(
     if caller_to_callees:
         frontier = set(entry_keys)
         for _ in range(max_depth):
-            next_frontier: Set[str] = set()
+            next_frontier: set[str] = set()
             for node in frontier:
                 for callee_key in caller_to_callees.get(node, ()):
                     if callee_key not in entry_keys and callee_key not in result:
@@ -474,8 +685,8 @@ def _extract_entry_callees(
 
 
 def _extract_flow_path_functions(
-    flow_traces: Optional[List[Dict[str, Any]]],
-) -> Set[str]:
+    flow_traces: list[dict[str, Any]] | None,
+) -> set[str]:
     """Functions that appear on any traced flow path.
 
     Flow trace steps use "definition": "file:line" format. We extract
@@ -501,8 +712,8 @@ def _extract_flow_path_functions(
 
 
 def _threat_model_boost(
-    gap: Dict[str, Any],
-    threat_model: Dict[str, Any],
+    gap: dict[str, Any],
+    threat_model: dict[str, Any],
 ) -> int:
     """Score boost when a gap matches operator-specified threat model focus."""
     focus_cwes = threat_model.get("focus_cwes")

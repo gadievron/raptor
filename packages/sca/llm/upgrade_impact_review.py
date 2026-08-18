@@ -18,13 +18,14 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Optional
 
 from core.llm.scorecard import (
+    fast_tier_model_name,
     prefilter_decision,
     record_prefilter_outcome,
 )
 from core.llm.task_types import TaskType
+
 from ..models import Dependency
 from . import (
     StageResult,
@@ -41,25 +42,9 @@ _MAX_CHANGELOG_CHARS = 10_000
 _MAX_CALLSITE_CHARS = 30_000
 
 
-def _fast_tier_model_name(client) -> str:
-    """Return the model_name routed to for ``TaskType.VERDICT_BINARY``.
-    Falls back to primary_model when no specialized fast model is
-    configured. Same idiom as the codeql consumer in #332 — kept
-    duplicated rather than extracted into a shared utility because
-    a shared util would muddy the dependency direction (sca → core,
-    not core → sca)."""
-    cfg = client.config
-    specialized = cfg.specialized_models.get(TaskType.VERDICT_BINARY)
-    if specialized is not None and specialized.enabled:
-        return specialized.model_name
-    if cfg.primary_model is not None:
-        return cfg.primary_model.model_name
-    return ""
-
-
 def _cheap_safe_check(
     client, dep: Dependency, new_version: str, changelog: str,
-) -> Optional[UpgradeImpactPrefilter]:
+) -> UpgradeImpactPrefilter | None:
     """Ask the fast-tier model whether this upgrade is clearly safe.
     Returns ``None`` on call failure (caller treats as "no signal"
     and runs full analysis). The prompt deliberately under-specifies
@@ -117,7 +102,7 @@ def assess_upgrade_impact(
     new_version: str,
     target: Path,
     changelog: str = "",
-) -> Optional[UpgradeImpactVerdict]:
+) -> UpgradeImpactVerdict | None:
     """Assess the impact of upgrading a dependency.
 
     Args:
@@ -148,7 +133,7 @@ def assess_upgrade_impact(
     # changelog conventions and stability profiles differ
     # significantly between (e.g.) PyPI and npm.
     decision_class = f"sca:major_bump:{dep.ecosystem}"
-    fast_model_name = _fast_tier_model_name(client)
+    fast_model_name = fast_tier_model_name(client.config)
     cheap = _cheap_safe_check(client, dep, new_version, changelog)
     # Defensive: tests sometimes stub ``run_stage`` to return the same
     # MagicMock for both the cheap and full calls, so ``cheap`` may
@@ -232,7 +217,7 @@ def assess_upgrade_impact(
     return verdict
 
 
-def _grep_call_sites(target: Path, dep: Dependency) -> List[str]:
+def _grep_call_sites(target: Path, dep: Dependency) -> list[str]:
     """Find call sites for a dependency in the project source.
 
     Returns lines in 'file:line: content' format.
@@ -242,7 +227,7 @@ def _grep_call_sites(target: Path, dep: Dependency) -> List[str]:
         return []
 
     from ..discovery import EXCLUDED_DIR_NAMES
-    results: List[str] = []
+    results: list[str] = []
     extensions = {".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go",
                   ".rs", ".rb", ".php", ".cs"}
     skip_dirs = EXCLUDED_DIR_NAMES
@@ -256,7 +241,7 @@ def _grep_call_sites(target: Path, dep: Dependency) -> List[str]:
             fpath = root_path / fname
             try:
                 text = fpath.read_text(encoding="utf-8", errors="replace")
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S112 — unreadable file: skip, grep is best-effort
                 continue
             for i, line in enumerate(text.splitlines(), 1):
                 for pat in import_patterns:
@@ -272,7 +257,7 @@ def _grep_call_sites(target: Path, dep: Dependency) -> List[str]:
     return results
 
 
-def _import_patterns(dep: Dependency) -> List[re.Pattern]:
+def _import_patterns(dep: Dependency) -> list[re.Pattern]:
     """Build regex patterns to find import/usage of a dependency."""
     name = dep.name
     patterns = []
@@ -298,7 +283,7 @@ def _import_patterns(dep: Dependency) -> List[re.Pattern]:
     elif dep.ecosystem == "NuGet":
         patterns.append(re.compile(rf"\busing\s+{re.escape(name)}\b"))
     elif dep.ecosystem == "Packagist":
-        ns = name.replace("/", "\\\\")
+        ns = name.replace("/", "\\")
         patterns.append(re.compile(rf"\buse\s+{re.escape(ns)}"))
 
     return patterns

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -56,6 +59,125 @@ _NEED_GCOV_BUILD = pytest.mark.skipif(
     not (_HAVE_GCOV and _HAVE_MAKE),
     reason="needs gcc/gcov + make",
 )
+
+
+# ---------------------------------------------------------------------------
+# Host-substrate probes — the driver e2e tests execute fetched build
+# systems through ``run_build_step`` (core.sandbox) and clone their
+# corpora through the sandboxed git substrate (in-process egress
+# proxy). On hosts where the sandbox cannot engage (e.g. GitHub
+# runners with ``kernel.apparmor_restrict_unprivileged_userns=1``) or
+# with no route to the corpus origin, those substrates fail before any
+# precision measurement happens — skip-with-reason instead of failing
+# red in a way that looks like a precision regression. Probes are
+# FUNCTIONAL (they exercise the real substrate, not a proxy signal)
+# and cached once per session.
+# ---------------------------------------------------------------------------
+
+
+@functools.cache
+def _sandboxed_build_unavailable() -> str | None:
+    """Compile a trivial C target via make through run_build_step.
+
+    Mirrors the synthetic driver's ``make -s demo`` shape (make →
+    shell probes → $(CC) writing into cwd) so a host where that
+    substrate cannot work is detected by the probe, not by a red
+    driver test. Returns None when the substrate works.
+    """
+    from core.inventory.binary_oracle_corpora._sandbox_exec import (
+        run_build_step,
+    )
+    with tempfile.TemporaryDirectory(prefix="oracle-probe-") as td:
+        work = Path(td)
+        (work / "probe.c").write_text("int main(void) { return 0; }\n")
+        (work / "Makefile").write_text(
+            "CC ?= cc\n"
+            "HAVE_CC := $(shell $(CC) --version >/dev/null 2>&1 "
+            "&& echo yes)\n"
+            "probe: probe.c\n"
+            "\t$(CC) probe.c -o probe\n"
+        )
+        try:
+            run_build_step(["make", "-s", "probe"], cwd=work, timeout=60)
+        except subprocess.CalledProcessError as e:
+            tail = (e.stderr or "")[-200:] if isinstance(e.stderr, str) \
+                else ""
+            return f"make/cc failed under the corpus build sandbox: {tail}"
+        except BaseException as e:  # noqa: BLE001 — SandboxSetupError
+            # is BaseException-derived by design (engage failures must
+            # not read as benign results); a probe must not die on it.
+            if isinstance(e, KeyboardInterrupt | SystemExit):
+                raise
+            return f"{type(e).__name__}: {e}"
+    return None
+
+
+_CORPUS_ORIGIN = "https://github.com/madler/zlib.git"
+
+
+@functools.cache
+def _corpus_origin_unreachable() -> str | None:
+    """ls-remote the corpus origin through the sandboxed git substrate."""
+    from core.git.clone import ls_remote
+    try:
+        refs = ls_remote(
+            _CORPUS_ORIGIN, proxy_hosts=["github.com"], timeout=30,
+        )
+    except BaseException as e:  # noqa: BLE001 — see above
+        if isinstance(e, KeyboardInterrupt | SystemExit):
+            raise
+        return f"{type(e).__name__}: {e}"
+    if not refs:
+        return "no refs advertised"
+    return None
+
+
+@functools.cache
+def _crates_io_unreachable() -> str | None:
+    """HEAD the crates.io index the way cargo's fetch step would.
+
+    The regex-rust driver's ``cargo build`` is a declared network
+    fetch step that keeps the operator proxy vars — mirror that:
+    honour env proxies. Restrictive egress proxies commonly allowlist
+    the corpus forges but not crates.io (CONNECT 403)."""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(
+        "https://index.crates.io/config.json", method="HEAD",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15):  # noqa: S310 — fixed https URL
+            return None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return f"{type(e).__name__}: {e}"
+
+
+def _require_corpus_substrate(
+    *, network: bool, crates_io: bool = False,
+) -> None:
+    reason = _sandboxed_build_unavailable()
+    if reason:
+        pytest.skip(
+            "sandboxed corpus-build substrate unavailable on this host "
+            "(e.g. kernel.apparmor_restrict_unprivileged_userns=1 "
+            f"blocks the sandbox): {reason}"
+        )
+    if network:
+        reason = _corpus_origin_unreachable()
+        if reason:
+            pytest.skip(
+                "corpus origin unreachable through the sandboxed git "
+                "substrate (offline host, blocked egress, or sandbox "
+                f"proxy cannot engage): {reason}"
+            )
+    if crates_io:
+        reason = _crates_io_unreachable()
+        if reason:
+            pytest.skip(
+                "crates.io unreachable from this host (the regex-rust "
+                "driver's cargo fetch needs it; restrictive egress "
+                f"proxies often refuse CONNECT to it): {reason}"
+            )
 
 
 def _w(cls: str, name: str = "") -> BinaryOracleWitness:
@@ -281,6 +403,7 @@ def test_synthetic_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Run the synthetic corpus through the full harness. The classifier
     is correct on the fixture (proven by ``test_binary_oracle.py``); the
     harness must return ``exact_match == 1.0`` and zero mismatches."""
+    _require_corpus_substrate(network=False)
     from core.inventory.binary_oracle_corpora import REGISTRY
     drv = REGISTRY["synthetic"]
     rep = run_corpus(drv, tmp_path)
@@ -461,6 +584,7 @@ def test_snappy_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → CMake build (clang+LLVM coverage) → ctest →
     llvm-cov export → classify → cross-tab. Marked ``slow`` so CI
     doesn't run it."""
+    _require_corpus_substrate(network=True)
     from core.inventory.binary_oracle_corpora import REGISTRY
     drv = REGISTRY["snappy"]
     rep = run_corpus(drv, tmp_path)
@@ -555,6 +679,7 @@ def test_regex_rust_strips_crate_hash_from_demangled_names() -> None:
 def test_regex_rust_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → cargo build (release + coverage + DWARF) → run test
     binary → llvm-cov export → classify. Slow (cargo build ~3 min)."""
+    _require_corpus_substrate(network=True, crates_io=True)
     from core.inventory.binary_oracle_corpora import REGISTRY
     drv = REGISTRY["regex-rust"]
     rep = run_corpus(drv, tmp_path)
@@ -574,6 +699,7 @@ def test_regex_rust_driver_end_to_end_via_harness(tmp_path: Path) -> None:
 def test_libsodium_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → autogen → configure × 2 → build × 2 → make check ×
     2 → targeted single-test rerun → gcov → classify. Slow."""
+    _require_corpus_substrate(network=True)
     from core.inventory.binary_oracle_corpora import REGISTRY
     drv = REGISTRY["libsodium"]
     rep = run_corpus(drv, tmp_path)
@@ -588,6 +714,7 @@ def test_libsodium_driver_end_to_end_via_harness(tmp_path: Path) -> None:
 def test_leveldb_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → patch CMake → CMake build (clang+LLVM coverage) →
     ctest → llvm-cov → classify. Slow."""
+    _require_corpus_substrate(network=True)
     from core.inventory.binary_oracle_corpora import REGISTRY
     drv = REGISTRY["leveldb"]
     rep = run_corpus(drv, tmp_path)
@@ -603,6 +730,7 @@ def test_zlib_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → build (×2) → test → gcov → classify → cross-tab.
     Marked ``slow`` so CI doesn't try to run it. The measurement itself
     is the substance — we assert only invariants the harness must hold."""
+    _require_corpus_substrate(network=True)
     from core.inventory.binary_oracle_corpora import REGISTRY
     drv = REGISTRY["zlib"]
     rep = run_corpus(drv, tmp_path)

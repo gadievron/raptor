@@ -39,35 +39,69 @@ Example:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    /crash-analysis                               │
 │                         │                                        │
-│  1. Fetch Bug Report ───┼──> WebFetch bug tracker URL           │
-│  2. Clone Repository ───┼──> git clone                          │
-│  3. Detect Build System ┼──> Read README, CMakeLists, etc       │
-│  4. Build with ASAN ────┼──> Rebuild with sanitizers            │
-│  5. Reproduce Crash ────┼──> Run with test input                │
+│  1. Fetch Bug Report ───┼──> crash-report-fetcher agent         │
+│                         │    (WebFetch, domain-pinned) writes    │
+│                         │    bug-report.json                     │
+│  2. Validate Report ────┼──> raptor-validate-schema bug-report  │
+│  3. Clone Repository ───┼──> raptor-clone-repo (sandboxed git)  │
+│  4. Fetch Attachments ──┼──> raptor-fetch-attachment            │
+│  5. Detect Build System ┼──> Read README, CMakeLists, etc       │
+│  6. Build with ASAN ────┼──> Rebuild with sanitizers            │
+│  7. Reproduce Crash ────┼──> Run with test input                │
 │                         │                                        │
 │  ┌──────────────────────┼────────────────────────────────────┐  │
 │  │ Data Collection      │                                    │  │
-│  │  6. Function Traces ─┼──> -finstrument-functions          │  │
-│  │  7. Coverage Data ───┼──> gcov                            │  │
-│  │  8. RR Recording ────┼──> rr record + rr pack             │  │
+│  │  8. Function Traces ─┼──> -finstrument-functions          │  │
+│  │  9. Coverage Data ───┼──> gcov                            │  │
+│  │ 10. RR Recording ────┼──> rr record + rr pack             │  │
 │  └──────────────────────┼────────────────────────────────────┘  │
 │                         │                                        │
 │  ┌──────────────────────┼────────────────────────────────────┐  │
 │  │ Analysis Loop        │                                    │  │
-│  │  9. crash-analyzer ──┼──> Generate hypothesis             │  │
-│  │ 10. checker ─────────┼──> Validate hypothesis             │  │
-│  │     │ REJECT ────────┼──> Loop back to step 9             │  │
+│  │ 11. crash-analyzer ──┼──> Generate hypothesis             │  │
+│  │ 12. checker ─────────┼──> Validate hypothesis             │  │
+│  │     │ REJECT ────────┼──> Loop back to step 11            │  │
 │  │     │ ACCEPT ────────┼──> Write confirmed hypothesis      │  │
 │  └──────────────────────┼────────────────────────────────────┘  │
 │                         │                                        │
-│ 11. Human Review ───────┼──> Wait for approval                  │
+│ 13. Human Review ───────┼──> Wait for approval                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Fetch / Build Split (Rule of Two)
+
+Bug-tracker content is untrusted, so fetching it is isolated in a
+dedicated reader agent, `crash-report-fetcher`:
+
+- **Fetcher** (`Read, Write, WebFetch` only): retrieves the tracker
+  page(s) and writes exactly one artifact, `bug-report.json` —
+  provenance-stamped `untrusted`, prose fields run through the
+  standard output sanitiser. A PreToolUse hook pins its WebFetch to
+  https URLs on the registrable domain of the operator-supplied URL
+  (anchor file `.claude/run/crash-report-fetcher.anchor`, written by
+  the orchestrator before dispatch); every fetch decision is logged
+  next to the anchor.
+- **Gate**: the orchestrator runs
+  `libexec/raptor-validate-schema bug-report <dir>/bug-report.json`
+  before anything downstream consumes the report. The gate refuses
+  unstamped or unsanitised artifacts.
+- **Orchestrator / builder / analyzer** have no WebFetch/WebSearch.
+  Cloning goes through `libexec/raptor-clone-repo`
+  (`core.git.clone`: URL allowlist + sandboxed git), attachment
+  downloads through `libexec/raptor-fetch-attachment` (URL must be
+  recorded in the validated report; egress-allowlisted HTTP client).
+
+Honest residual: the builder agents keep Bash — rr, gdb, and real
+builds need it — so network denial at the tool level is the enforced
+boundary, and Bash-level egress remains bounded by the sandbox and
+permission layers, not eliminated.
 
 ## Output Directory Structure
 
 ```
 crash-analysis-YYYYMMDD_HHMMSS/
+├── bug-report.json              # Structured bug-tracker facts (schema-gated)
+├── attachments/                 # Downloaded crash inputs from the report
 ├── rr-trace/                    # Packed rr recording (shareable)
 │   └── ...
 ├── traces/                      # Function execution traces
@@ -144,7 +178,8 @@ The crash analysis uses a multi-agent system:
 
 | Agent | Role |
 |-------|------|
-| `crash-analysis-agent` | Main orchestrator |
+| `crash-analysis-agent` | Main orchestrator (no network tools) |
+| `crash-report-fetcher-agent` | Fetch bug tracker, write `bug-report.json` |
 | `crash-analyzer-agent` | Deep root-cause analysis |
 | `crash-analyzer-checker-agent` | Rigorous validation |
 | `function-trace-generator-agent` | Execution tracing |
@@ -327,11 +362,12 @@ g++ -o line_checker line_checker.cpp
 
 ## Agents Reference
 
-The crash analysis uses five specialized agents in `.claude/agents/`:
+The crash analysis uses six specialized agents in `.claude/agents/`:
 
 | Agent | File | Purpose |
 |-------|------|---------|
 | **crash-analysis-agent** | `crash-analysis-agent.md` | Main orchestrator - coordinates the full workflow |
+| **crash-report-fetcher-agent** | `crash-report-fetcher-agent.md` | Fetch-only reader - retrieves the bug tracker page, writes `bug-report.json` |
 | **crash-analyzer-agent** | `crash-analyzer-agent.md` | Deep root-cause analysis using rr, traces, coverage |
 | **crash-analyzer-checker-agent** | `crash-analyzer-checker-agent.md` | Rigorous validation of hypotheses |
 | **function-trace-generator-agent** | `function-trace-generator-agent.md` | Builds and runs function tracing |
@@ -340,7 +376,14 @@ The crash analysis uses five specialized agents in `.claude/agents/`:
 ### Agent Workflow
 
 ```
-crash-analysis-agent (orchestrator)
+crash-analysis-agent (orchestrator, no WebFetch/WebSearch)
+    │
+    ├── crash-report-fetcher-agent (WebFetch domain-pinned)
+    │       └── Writes bug-report.json
+    │           (gated by raptor-validate-schema bug-report)
+    │
+    ├── raptor-clone-repo / raptor-fetch-attachment (libexec, mechanical)
+    │       └── Local clone + attachments/ from the validated report
     │
     ├── function-trace-generator-agent
     │       └── Generates traces/ directory

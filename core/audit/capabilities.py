@@ -29,7 +29,6 @@ class AuditCapabilities:
     cxxfilt: bool = False
     objdump: bool = False
     readelf: bool = False
-    nm: bool = False
     binary_available: bool = False
     dwarf_available: bool = False
     joern_issues: tuple = ()
@@ -49,15 +48,32 @@ def _has_dwarf(binary_path: Optional[Path]) -> bool:
     readelf = shutil.which("readelf")
     if not readelf:
         return False
-    import subprocess
     try:
-        from core.config import RaptorConfig
-        result = subprocess.run(
-            [readelf, "--debug-dump=info", "--dwarf-depth=1", str(binary_path)],
-            capture_output=True, timeout=10,
-            env=RaptorConfig.get_safe_env(),
+        resolved = binary_path.resolve()
+    except OSError:
+        return False
+    # Full sandbox, matching binary_oracle._run's posture for the same
+    # tools: readelf is RAPTOR-picked but the BYTES it parses are the
+    # operator's --binary of unverified provenance, and binutils'
+    # ELF/DWARF parsers have a long CVE history — a malformed ELF must
+    # not get parsed by a process holding the user's filesystem and
+    # network. The resolved ABSOLUTE path is what defuses argument
+    # injection: binutils' expandargv turns any argv element starting
+    # with `@` into a response file regardless of `--`, and an
+    # absolute path can start with neither `@` nor `-`. The `--` is
+    # belt-and-braces for the option case only.
+    from core.sandbox import run as _sandbox_run
+    try:
+        result = _sandbox_run(
+            [readelf, "--debug-dump=info", "--dwarf-depth=1",
+             "--", str(resolved)],
+            block_network=True, target=str(resolved.parent),
+            capture_output=True, timeout=30,
         )
-        return b"DW_TAG_compile_unit" in result.stdout
+        stdout = result.stdout
+        if isinstance(stdout, str):
+            stdout = stdout.encode(errors="replace")
+        return b"DW_TAG_compile_unit" in (stdout or b"")
     except Exception:
         return False
 
@@ -84,7 +100,6 @@ def probe_capabilities(
         cxxfilt=shutil.which("c++filt") is not None,
         objdump=shutil.which("objdump") is not None,
         readelf=shutil.which("readelf") is not None,
-        nm=shutil.which("nm") is not None,
         binary_available=binary_path is not None and binary_path.is_file(),
         dwarf_available=_has_dwarf(binary_path),
     )

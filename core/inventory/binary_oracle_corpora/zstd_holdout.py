@@ -18,13 +18,17 @@ zstd v1.5.6 — pure C, ~50k LOC, two compilation modes:
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Literal
+
+from core.inventory.binary_oracle_corpora._sandbox_exec import (
+    run_build_step,
+    run_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +45,7 @@ class _ZstdHoldoutDriver:
         "HELD OUT: classifier was never tuned against this corpus.")
     mode: Literal["gcov"] = "gcov"
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         tag_dir = work_dir / ZSTD_TAG.replace(".", "_")
         sentinel = tag_dir / "sentinel.ok"
@@ -99,10 +103,13 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             ["cp", "-a", f"{src}/.", str(build_dir)],
             check=True, timeout=120,
         )
-        env = {**os.environ, "CFLAGS": cflags, "LDFLAGS": ldflags}
-        subprocess.run(
+        # Fetched build system — sandboxed with sanitised env (see
+        # _sandbox_exec).
+        run_build_step(
             ["make", "-j4", "lib-mt", "zstd"],
-            cwd=build_dir, env=env, check=True, timeout=600,
+            cwd=build_dir,
+            extra_env={"CFLAGS": cflags, "LDFLAGS": ldflags},
+            timeout=600,
         )
         if run_target:
             # Exercise the CLI binary with a workload broad enough that
@@ -113,7 +120,7 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             # live_set is forced empty when live_set is empty).
             #
             # The workload now spans: 5 input files of different sizes
-            # and entropy classes; 6 compression levels (fast/normal/
+            # and entropy classes; 5 compression levels (fast/normal/
             # high); long-range mode; multi-threaded mode; dictionary
             # training + use; decompression of every produced artefact.
             # Combined ground-truth coverage of zstd's hot paths is
@@ -194,7 +201,7 @@ _GCOV_FN_RE = re.compile(r"^Function '([^']+)'")
 _GCOV_LINES_RE = re.compile(r"^Lines executed:([\d.]+)% of \d+")
 
 
-def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
+def _collect_gcov_liveness(build_dir: Path) -> set[str]:
     """Walk the build tree for .gcda files and harvest live function
     names from ``gcov -f``. zstd's Makefile statically links the lib
     sources into the CLI binary's object dir
@@ -205,12 +212,12 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
         logger.warning("zstd_holdout: %s missing", build_dir)
         return set()
 
-    live: Set[str] = set()
+    live: set[str] = set()
     for gcda in build_dir.rglob("*.gcda"):
         gcda_dir = gcda.parent
-        out = subprocess.run(
+        out = run_tool(
             ["gcov", "-f", gcda.name], cwd=gcda_dir,
-            capture_output=True, text=True, check=False, timeout=60,
+            check=False, timeout=60,
         ).stdout
         current = None
         for line in out.splitlines():
@@ -227,7 +234,7 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
     return live
 
 
-def _enumerate_candidates(build_o0: Path) -> List[str]:
+def _enumerate_candidates(build_o0: Path) -> list[str]:
     """nm on libzstd.a — candidates are every defined symbol in the
     O0 archive. The O0 build doesn't DCE, so this is the source-side
     surface (modulo macros that produce no symbol)."""
@@ -236,11 +243,10 @@ def _enumerate_candidates(build_o0: Path) -> List[str]:
     if not archive.exists():
         logger.warning("zstd_holdout: %s missing", archive)
         return []
-    out = subprocess.run(
-        ["nm", str(archive)], capture_output=True, text=True,
-        check=False, timeout=30,
+    out = run_tool(
+        ["nm", str(archive)], check=False, timeout=30,
     ).stdout
-    fns: Set[str] = set()
+    fns: set[str] = set()
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 3 and parts[-2] in ("T", "t", "W", "w"):

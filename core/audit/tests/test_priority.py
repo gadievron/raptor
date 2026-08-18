@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 from core.audit.priority import (
+    _COMPLEX_SLOC,
+    _MODERATE_SLOC,
     SCORE_CALLEE_OF_ENTRY,
     SCORE_COMPLEX,
     SCORE_ENTRY_POINT,
@@ -21,8 +23,9 @@ from core.audit.priority import (
     SCORE_THREAT_MODEL_FOCUS,
     SCORE_TRUST_BOUNDARY,
     SCORE_UNCHECKED_FLOW,
-    _COMPLEX_SLOC,
-    _MODERATE_SLOC,
+    SCORE_VALIDATE_CONFIRMED,
+    SCORE_VALIDATE_RULED_OUT,
+    _extract_entry_callees,
     detect_widely_used,
     group_by_subsystem,
     load_flow_traces,
@@ -212,6 +215,112 @@ class TestScoreFunctions:
     def test_empty_gaps(self):
         result = score_functions([])
         assert result == []
+
+
+def _entry_seeding_context_map():
+    """Context map where one entry point lists another among its callees."""
+    return {
+        "entry_points": [
+            {
+                "file": "src/a.c",
+                "name": "handle_request",
+                "callees": [
+                    {"file": "src/a.c", "name": "parse_body"},
+                    # Itself an entry point — must not be seeded.
+                    {"file": "src/a.c", "name": "handle_upload"},
+                ],
+            },
+            {"file": "src/a.c", "name": "handle_upload", "callees": []},
+        ],
+    }
+
+
+class TestExtractEntryCallees:
+    """The direct-callee seeding loop in _extract_entry_callees applies the
+    same entry-point exclusion as the BFS loop, so an entry point listed
+    among another entry's callees is not double-counted by the additive
+    scorer (SCORE_ENTRY_POINT + SCORE_CALLEE_OF_ENTRY)."""
+
+    def test_seeding_excludes_entry_points(self):
+        callees = _extract_entry_callees(_entry_seeding_context_map())
+        assert "src/a.c:parse_body" in callees
+        assert "src/a.c:handle_upload" not in callees
+
+    def test_bfs_exclusion_unchanged(self):
+        cm = _entry_seeding_context_map()
+        cm["call_edges"] = [
+            {
+                "caller_file": "src/a.c", "caller": "handle_request",
+                "callee_file": "src/a.c", "callee": "handle_upload",
+            },
+            {
+                "caller_file": "src/a.c", "caller": "handle_request",
+                "callee_file": "src/b.c", "callee": "helper",
+            },
+        ]
+        callees = _extract_entry_callees(cm)
+        assert "src/b.c:helper" in callees
+        assert "src/a.c:handle_upload" not in callees
+
+    def test_empty_map(self):
+        assert _extract_entry_callees(None) == set()
+        assert _extract_entry_callees({}) == set()
+
+
+class TestScoreFunctionsNoDoubleCount:
+    def test_entry_point_not_double_counted(self):
+        gaps = [{
+            "file": "src/a.c",
+            "name": "handle_upload",
+            "priority": 1,
+            "sloc": 10,
+        }]
+        scored = score_functions(gaps, context_map=_entry_seeding_context_map())
+        assert scored[0]["priority_score"] == (
+            SCORE_ENTRY_POINT + SCORE_FILE_HAS_ENTRY_POINT
+        )
+
+    def test_plain_callee_still_scores(self):
+        gaps = [{
+            "file": "src/a.c",
+            "name": "parse_body",
+            "priority": 1,
+            "sloc": 10,
+        }]
+        scored = score_functions(gaps, context_map=_entry_seeding_context_map())
+        assert scored[0]["priority_score"] == (
+            SCORE_CALLEE_OF_ENTRY + SCORE_FILE_HAS_ENTRY_POINT
+        )
+
+
+class TestValidateHistoryScoring:
+    def test_confirmed_boost(self):
+        gaps = [_gap("a.c", "f"), _gap("a.c", "g")]
+        result = score_functions(
+            gaps, validate_confirmed_keys={"a.c:f"},
+        )
+        by_name = {g["name"]: g for g in result}
+        assert by_name["f"]["priority_score"] == SCORE_VALIDATE_CONFIRMED
+        assert by_name["g"]["priority_score"] == 0
+
+    def test_ruled_out_mild_demotion(self):
+        gaps = [_gap("a.c", "f"), _gap("a.c", "g")]
+        result = score_functions(
+            gaps, validate_ruled_out_keys={"a.c:f"},
+        )
+        by_name = {g["name"]: g for g in result}
+        assert by_name["f"]["priority_score"] == SCORE_VALIDATE_RULED_OUT
+        assert SCORE_VALIDATE_RULED_OUT < 0
+        assert by_name["g"]["priority_score"] == 0
+
+    def test_confirmed_takes_precedence(self):
+        gaps = [_gap("a.c", "f")]
+        result = score_functions(
+            gaps,
+            validate_confirmed_keys={"a.c:f"},
+            validate_ruled_out_keys={"a.c:f"},
+        )
+        assert result[0]["priority_score"] == SCORE_VALIDATE_CONFIRMED
 
 
 class TestLoadFlowTraces:
@@ -503,10 +612,7 @@ class TestLoadToolCoverage:
                     "codeql": {"files": ["src/a.c"]},
                 },
             }
-            try:
-                result = load_tool_coverage([run_dir])
-            except Exception:
-                result = load_tool_coverage([run_dir])
+            result = load_tool_coverage([run_dir])
 
         if result:
             assert "semgrep" in result.get("src/a.c", set())

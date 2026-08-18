@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
+from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 
 _CONFIRMED_STATUSES = {
     "exploitable",
@@ -69,7 +71,7 @@ _SEVERITY_ORDER = {
 }
 
 
-def _finding_status(finding: Dict[str, Any]) -> str:
+def _finding_status(finding: dict[str, Any]) -> str:
     """Return the normalized validation status for a finding."""
     return (
         str(finding.get("final_status") or finding.get("status") or "needs_review")
@@ -78,7 +80,7 @@ def _finding_status(finding: Dict[str, Any]) -> str:
     )
 
 
-def _finding_bucket(finding: Dict[str, Any]) -> str:
+def _finding_bucket(finding: dict[str, Any]) -> str:
     """Map validation status to a stable findings/ subdirectory."""
     status = _finding_status(finding)
     if status in _CONFIRMED_STATUSES:
@@ -88,13 +90,13 @@ def _finding_bucket(finding: Dict[str, Any]) -> str:
     return "needs-review"
 
 
-def _finding_fingerprint(finding: Dict[str, Any]) -> str:
+def _finding_fingerprint(finding: dict[str, Any]) -> str:
     """Return a stable short fingerprint for filenames and cross-references."""
     payload = {
         "id": finding.get("id") or finding.get("finding_id"),
         "file": finding.get("file"),
         "function": finding.get("function"),
-        "line": finding.get("line"),
+        "line": finding.get("line") or finding.get("line_start"),
         "type": finding.get("vuln_type") or finding.get("type"),
     }
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
@@ -109,7 +111,7 @@ def _slug(value: Any, *, fallback: str = "finding") -> str:
     return text[:80] or fallback
 
 
-def _finding_title(finding: Dict[str, Any]) -> str:
+def _finding_title(finding: dict[str, Any]) -> str:
     for key in ("title", "name", "summary", "vuln_type", "type"):
         value = finding.get(key)
         if value:
@@ -120,7 +122,7 @@ def _finding_title(finding: Dict[str, Any]) -> str:
     return "Finding"
 
 
-def _finding_stem(finding: Dict[str, Any], index: int) -> str:
+def _finding_stem(finding: dict[str, Any], index: int) -> str:
     finding_id = finding.get("id") or finding.get("finding_id") or f"finding-{index:03d}"
     title = _finding_title(finding)
     return (
@@ -138,8 +140,25 @@ def _format_value(value: Any) -> str:
 
 
 def _md_escape_inline(value: Any) -> str:
+    # Table cells are one line each; finding-derived values are
+    # sanitised (markdown control chars defanged, ANSI/BIDI escaped)
+    # before the pipe escape so a cell can neither split columns nor
+    # render as live markup. Same policy as core.reporting.findings'
+    # `_md_table_cell` — the two report surfaces agree on escaping.
     text = _format_value(value).replace("\n", " ").strip()
+    text = sanitise_string(text, max_chars=2000)
     return text.replace("|", "\\|")
+
+
+def _md_heading(value: Any) -> str:
+    """Collapse a finding-derived string to a single sanitised heading line.
+
+    Newlines become spaces so a multi-line title cannot inject extra
+    heading/list lines below the real one; `sanitise_string` defangs
+    line-leading markdown and control bytes.
+    """
+    text = " ".join(_format_value(value).split()).strip()
+    return sanitise_string(text, max_chars=500)
 
 
 def _render_detail(label: str, value: Any) -> str:
@@ -147,14 +166,18 @@ def _render_detail(label: str, value: Any) -> str:
     if not rendered:
         return ""
     if "\n" in rendered or rendered.startswith(("{", "[")):
-        return f"## {label}\n\n```\n{rendered}\n```\n"
-    return f"## {label}\n\n{rendered}\n"
+        # `sanitise_code` neutralises embedded ``` runs (zero-width
+        # space after the second backtick) so a finding value cannot
+        # terminate the wrapping fence early and spill live markdown
+        # into the report.
+        return f"## {label}\n\n```\n{sanitise_code(rendered)}\n```\n"
+    return f"## {label}\n\n{sanitise_string(rendered, max_chars=10_000)}\n"
 
 
-def render_finding_markdown(finding: Dict[str, Any], *, index: int = 1) -> str:
+def render_finding_markdown(finding: dict[str, Any], *, index: int = 1) -> str:
     """Render one finding as a portable Markdown handoff artifact."""
     fingerprint = _finding_fingerprint(finding)
-    lines: List[str] = [f"# {_finding_title(finding)}", ""]
+    lines: list[str] = [f"# {_md_heading(_finding_title(finding))}", ""]
     lines.append(f"Stable fingerprint: `{fingerprint}`")
     lines.append("")
     lines.append("| Field | Value |")
@@ -176,31 +199,31 @@ def render_finding_markdown(finding: Dict[str, Any], *, index: int = 1) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _severity_key(finding: Dict[str, Any]) -> tuple[int, str]:
+def _severity_key(finding: dict[str, Any]) -> tuple[int, str]:
     severity = str(finding.get("severity") or "unknown").strip().lower()
     return (_SEVERITY_ORDER.get(severity, _SEVERITY_ORDER["unknown"]), severity)
 
 
 def render_grouped_findings_markdown(
-    findings: Iterable[Dict[str, Any]],
+    findings: Iterable[dict[str, Any]],
     project_name: str,
     *,
-    sca_findings: Iterable[Dict[str, Any]] = (),
+    sca_findings: Iterable[dict[str, Any]] = (),
 ) -> str:
     """Render all findings into one project-level Markdown report.
 
     Code findings are grouped by severity. SCA / dependency findings
-    (``sca_findings``) render in their own "Supply chain (SCA)" section
-    below — they're dep-level (no source file:line), so bucketing them
+    (``sca_findings``) render in their own "Supply chain / dependencies
+    (SCA)" section below — they're dep-level (no source file:line), so bucketing them
     separately keeps the severity-grouped code view clean. Mirrors the
     interactive ``/project findings`` view.
     """
     findings = sorted(
-        list(findings),
+        findings,
         key=lambda item: (*_severity_key(item), _finding_title(item).lower()),
     )
     sca_findings = sorted(
-        list(sca_findings),
+        sca_findings,
         key=lambda item: (*_severity_key(item), _finding_title(item).lower()),
     )
     lines = [f"# {project_name} findings", ""]
@@ -208,7 +231,7 @@ def render_grouped_findings_markdown(
         lines.append("No findings.")
         return "\n".join(lines) + "\n"
 
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for finding in findings:
         severity = str(finding.get("severity") or "unknown").strip().lower() or "unknown"
         grouped.setdefault(severity, []).append(finding)
@@ -228,8 +251,9 @@ def render_grouped_findings_markdown(
             location = finding.get("file") or finding.get("function") or "unknown location"
             status = _finding_status(finding).replace("_", "-")
             lines.append(
-                f"- **{_finding_title(finding)}** (`{finding_id}`) — "
-                f"{location} — {status}"
+                f"- **{_md_heading(_finding_title(finding))}** "
+                f"(`{_md_heading(finding_id)}`) — "
+                f"{_md_heading(location)} — {status}"
             )
         lines.append("")
 
@@ -248,14 +272,15 @@ def render_grouped_findings_markdown(
             package = f"{eco}:{name}" if eco else name
             severity = str(finding.get("severity") or "unknown").strip().lower() or "unknown"
             lines.append(
-                f"- **{_finding_title(finding)}** (`{finding_id}`) — "
-                f"{package} — {severity}"
+                f"- **{_md_heading(_finding_title(finding))}** "
+                f"(`{_md_heading(finding_id)}`) — "
+                f"{_md_heading(package)} — {severity}"
             )
             evidence = sca.get("evidence") or {}
             reasons = evidence.get("escalation_reasons") or []
             if isinstance(reasons, list):
                 for reason in reasons:
-                    lines.append(f"  - escalated: {reason}")
+                    lines.append(f"  - escalated: {_md_heading(reason)}")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
@@ -274,10 +299,10 @@ def _clear_generated_findings_dir(findings_dir: Path) -> None:
 
 
 def export_findings_directory(
-    findings: Iterable[Dict[str, Any]], output_dir: Path, *,
+    findings: Iterable[dict[str, Any]], output_dir: Path, *,
     project_name: str = "project",
-    sca_findings: Iterable[Dict[str, Any]] = (),
-) -> Dict[str, Any]:
+    sca_findings: Iterable[dict[str, Any]] = (),
+) -> dict[str, Any]:
     """Write grouped Markdown/JSON findings under ``output_dir/findings``.
 
     The directory is intended for handoff to issue trackers, disclosure notes,
@@ -352,7 +377,7 @@ def export_findings_directory(
     }
 
 
-def gather_project_annotations(project) -> List[Dict[str, Any]]:
+def gather_project_annotations(project) -> list[dict[str, Any]]:
     """Walk every run dir's ``annotations/`` subdir plus the project's
     own top-level ``annotations/`` dir, dedup on (file, function),
     project-level wins. Returns a list of dicts with ``file``,
@@ -395,18 +420,18 @@ def gather_project_annotations(project) -> List[Dict[str, Any]]:
     return out
 
 
-def render_annotations_markdown(records: List[Dict[str, Any]],
+def render_annotations_markdown(records: list[dict[str, Any]],
                                 project_name: str) -> str:
     """Render the deduped project-level annotation list as markdown
     suitable for ``annotations.md`` in the report dir."""
-    lines: List[str] = [f"# Annotations — {project_name}", ""]
+    lines: list[str] = [f"# Annotations — {project_name}", ""]
     if not records:
         lines.append("_No annotations._")
         return "\n".join(lines) + "\n"
 
     # Status counts up top.
-    status_counts: Dict[str, int] = {}
-    source_counts: Dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
     for r in records:
         s = r.get("status") or "—"
         src = r.get("source") or "—"
@@ -438,20 +463,23 @@ def render_annotations_markdown(records: List[Dict[str, Any]],
         if meta:
             lines.append(" · ".join(meta))
         if r["body"]:
+            # Annotation bodies are free-form prose (operator- or
+            # LLM-authored); sanitise so a body cannot inject live
+            # headings/fences/HTML into the aggregate report.
             lines.append("")
-            lines.append(r["body"])
+            lines.append(sanitise_string(r["body"], max_chars=20_000))
         lines.append("")
     return "\n".join(lines) + "\n"
 
 
-def generate_project_report(project) -> Dict[str, Any]:
+def generate_project_report(project) -> dict[str, Any]:
     """Generate a merged report across all runs in _report/ directory.
 
     Non-destructive — runs preserved.
     """
-    from core.project.merge import merge_findings
-    from core.project.findings_utils import merge_sca_findings
     from core.json import save_json
+    from core.project.findings_utils import merge_sca_findings
+    from core.project.merge import merge_findings
 
     report_dir = project.output_path / "_report"
     report_dir.mkdir(parents=True, exist_ok=True)

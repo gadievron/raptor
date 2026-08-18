@@ -1,8 +1,10 @@
 """Phase 2b: chaining detection for bug-first mode.
 
 After Phase 2 classifies individual bugs, this module finds pairs of
-quality-only bugs that compose into security issues.  Only considers
-pairs on the same call chain or flow trace — not O(N^2).
+quality-only bugs that compose into security issues.  Enumeration is
+O(N^2) over quality-classified bugs, but only pairs connected by a
+call-graph edge or a shared flow trace become candidates — everything
+else is filtered out before any LLM submission.
 """
 
 from __future__ import annotations
@@ -10,7 +12,10 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
+
+from core.llm.coerce import structured_result
+from core.security.prompt_framing import with_audit_framing
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +53,13 @@ CHAIN_SCHEMA = {
 }
 
 
-def _build_call_graph(outcomes: List[Any]) -> Dict[str, Set[str]]:
+def _build_call_graph(outcomes: list[Any]) -> dict[str, set[str]]:
     """Build adjacency from review_result caller/callee data.
 
     Returns a dict mapping ``file:function`` to the set of keys it
     directly connects to (callers + callees).
     """
-    graph: Dict[str, Set[str]] = {}
+    graph: dict[str, set[str]] = {}
     for o in outcomes:
         key = f"{o.file}:{o.function}"
         neighbours = graph.setdefault(key, set())
@@ -72,9 +77,9 @@ def _build_call_graph(outcomes: List[Any]) -> Dict[str, Set[str]]:
     return graph
 
 
-def _load_flow_trace_pairs(out_dir: Path) -> Set[Tuple[str, str]]:
+def _load_flow_trace_pairs(out_dir: Path) -> set[tuple[str, str]]:
     """Load pairs of functions on the same flow trace."""
-    pairs: Set[Tuple[str, str]] = set()
+    pairs: set[tuple[str, str]] = set()
     for ft_path in out_dir.glob("flow-trace-*.json"):
         try:
             ft = json.loads(ft_path.read_text(encoding="utf-8"))
@@ -88,15 +93,16 @@ def _load_flow_trace_pairs(out_dir: Path) -> Set[Tuple[str, str]]:
                     pair = tuple(sorted([a, b]))
                     pairs.add(pair)
         except Exception:
+            logger.debug("flow trace pair load failed", exc_info=True)
             continue
     return pairs
 
 
 def find_chain_candidates(
-    outcomes: List[Any],
+    outcomes: list[Any],
     out_dir: Path,
-    classifications: Dict[str, Dict[str, Any]],
-) -> List[Tuple[Any, Any]]:
+    classifications: dict[str, dict[str, Any]],
+) -> list[tuple[Any, Any]]:
     """Find candidate pairs for chaining evaluation.
 
     Only pairs where:
@@ -119,8 +125,8 @@ def find_chain_candidates(
     call_graph = _build_call_graph(outcomes)
     flow_pairs = _load_flow_trace_pairs(out_dir)
 
-    candidates: List[Tuple[Any, Any]] = []
-    seen: Set[Tuple[str, str]] = set()
+    candidates: list[tuple[Any, Any]] = []
+    seen: set[tuple[str, str]] = set()
 
     for i, a in enumerate(quality_outcomes):
         a_key = f"{a.file}:{a.function}"
@@ -141,33 +147,74 @@ def find_chain_candidates(
     return candidates
 
 
-def _build_chain_prompt(a: Any, b: Any) -> str:
+_CHAIN_SYSTEM = with_audit_framing(
+    "You are a security analyst.  Given two verified "
+    "code defects on the same call path, decide whether "
+    "they compose into a security vulnerability that "
+    "neither defect represents alone.\n\n"
+    "The two bugs were found in the same call graph / data flow "
+    "path.  Each bug's hypothesis and description arrive as "
+    "untrusted blocks (origin bug-a / bug-b); locations and bug "
+    "classes are in the slots.\n\n"
+    "Do these bugs compose into a security issue?  For example:\n"
+    "- Bug A weakens a bounds check + Bug B uses the unchecked value\n"
+    "- Bug A leaks a pointer + Bug B uses the leaked address\n"
+    "- Bug A skips authentication under error + Bug B triggers the error\n\n"
+    "If they do NOT compose, set is_chain to false.",
+)
+
+
+def _build_chain_prompt(
+    a: Any, b: Any, *, model_id: str = "",
+) -> tuple[str, str]:
+    """Build the enveloped chain-composition prompt.
+    Returns ``(user, system)``."""
+    from core.security.prompt_envelope import TaintedString, UntrustedBlock
+
+    from ._util import envelope_prompt
+
     rr_a = a.review_result or {}
     rr_b = b.review_result or {}
-    return (
-        f"These bugs were found in the same call graph / data flow path:\n\n"
-        f"Bug A: {a.file}:{a.function}\n"
-        f"  Hypothesis: {a.hypothesis}\n"
-        f"  Class: {rr_a.get('bug_class', 'unknown')}\n"
-        f"  Description: {a.body}\n\n"
-        f"Bug B: {b.file}:{b.function}\n"
-        f"  Hypothesis: {b.hypothesis}\n"
-        f"  Class: {rr_b.get('bug_class', 'unknown')}\n"
-        f"  Description: {b.body}\n\n"
-        "Do these bugs compose into a security issue?  For example:\n"
-        "- Bug A weakens a bounds check + Bug B uses the unchecked value\n"
-        "- Bug A leaks a pointer + Bug B uses the leaked address\n"
-        "- Bug A skips authentication under error + Bug B triggers the error\n\n"
-        "If they do NOT compose, set is_chain to false."
+    key_a = f"{a.file}:{a.function}"
+    key_b = f"{b.file}:{b.function}"
+
+    blocks = (
+        UntrustedBlock(
+            content=(
+                f"Hypothesis: {a.hypothesis}\n"
+                f"Description: {a.body}"
+            ),
+            kind="bug-a",
+            origin=key_a,
+        ),
+        UntrustedBlock(
+            content=(
+                f"Hypothesis: {b.hypothesis}\n"
+                f"Description: {b.body}"
+            ),
+            kind="bug-b",
+            origin=key_b,
+        ),
     )
+    slots = {
+        "bug_a_location": TaintedString(value=key_a, trust="untrusted"),
+        "bug_a_class": TaintedString(
+            value=str(rr_a.get("bug_class", "unknown")), trust="untrusted",
+        ),
+        "bug_b_location": TaintedString(value=key_b, trust="untrusted"),
+        "bug_b_class": TaintedString(
+            value=str(rr_b.get("bug_class", "unknown")), trust="untrusted",
+        ),
+    }
+    return envelope_prompt(_CHAIN_SYSTEM, blocks, slots, model_id=model_id)
 
 
 def evaluate_chains(
-    candidates: List[Tuple[Any, Any]],
+    candidates: list[tuple[Any, Any]],
     llm_client: Any,
     *,
-    model_name: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    model_name: str | None = None,
+) -> list[dict[str, Any]]:
     """Evaluate candidate pairs for security chaining.
 
     Returns a list of confirmed chain records.
@@ -175,7 +222,7 @@ def evaluate_chains(
     if not candidates:
         return []
 
-    kwargs: Dict[str, Any] = {"task_type": "audit"}
+    kwargs: dict[str, Any] = {"task_type": "audit"}
     if model_name:
         try:
             mc = llm_client.config.config_for_model(model_name)
@@ -183,22 +230,20 @@ def evaluate_chains(
         except (ValueError, AttributeError):
             pass
 
-    chains: List[Dict[str, Any]] = []
+    chains: list[dict[str, Any]] = []
     for a, b in candidates:
-        prompt = _build_chain_prompt(a, b)
+        prompt, system_prompt = _build_chain_prompt(
+            a, b,
+            model_id=model_name or getattr(llm_client, "model_name", "") or "",
+        )
         try:
             response = llm_client.generate_structured(
                 prompt,
                 CHAIN_SCHEMA,
-                system_prompt=(
-                    "You are a security analyst.  Given two verified "
-                    "code defects on the same call path, decide whether "
-                    "they compose into a security vulnerability that "
-                    "neither defect represents alone."
-                ),
+                system_prompt=system_prompt,
                 **kwargs,
             )
-            result = response.result if hasattr(response, "result") else response[0]
+            result = structured_result(response, default={})
         except Exception:
             logger.warning(
                 "chain evaluation failed for %s:%s + %s:%s",

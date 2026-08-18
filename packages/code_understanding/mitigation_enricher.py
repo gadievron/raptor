@@ -1,7 +1,7 @@
 """Enrich ``context-map.json`` sinks with target-mitigation context.
 
 Reads ``exploit_feasibility.analyze_binary`` output and enriches each
-sink under ``context-map.json``'s ``sinks[]`` with a
+sink under ``context-map.json``'s ``sink_details[]`` with a
 ``mitigation_context`` blob describing which classical exploitation
 primitives (arbitrary write, `%n` write, GOT overwrite, `.fini_array`,
 hook overwrite, stack smash) the target's build actually permits.
@@ -438,8 +438,8 @@ def enrich_context_map_file(
         generated_at=generated_at,
     )
 
-    from core.atomic_fs import atomic_write_text
-    atomic_write_text(path, json.dumps(cm, indent=2, sort_keys=True) + "\n")
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, json.dumps(cm, indent=2, sort_keys=True) + "\n")
 
 
 __all__ = [

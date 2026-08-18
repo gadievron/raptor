@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,17 @@ def read_function_source(
 
 
 def increment_tier_dict(
-    tier_counters: Dict[str, Any],
+    tier_counters: dict[str, Any],
     tier: str,
     field: str,
-    value: int = 1,
+    value: float = 1,
 ) -> None:
-    """Increment a counter field on a tier_counters dict entry."""
+    """Increment a counter field on a tier_counters dict entry.
+
+    ``value`` accepts floats for the wall-clock fields
+    (``wall_time_s`` / ``cpg_build_s``); count fields keep passing
+    ints.
+    """
     if tier in tier_counters:
         current = getattr(tier_counters[tier], field, 0)
         setattr(tier_counters[tier], field, current + value)
@@ -64,7 +69,7 @@ def increment_tier(
 
 
 def format_tier_diagnostics(
-    tier_counters: Dict[str, Any],
+    tier_counters: dict[str, Any],
 ) -> str:
     """Format tier diagnostics as a human-readable table."""
     lines = ["Mechanical tier effectiveness:"]
@@ -93,7 +98,7 @@ def format_tier_diagnostics(
 
 
 def inject_discovered_evidence(
-    discovered: Dict[str, Any],
+    discovered: dict[str, Any],
     file_path: str,
     function_name: str,
     tool: str,
@@ -115,7 +120,7 @@ def inject_discovered_evidence(
 
 
 def write_tier_diagnostics(
-    tier_counters: Dict[str, Any],
+    tier_counters: dict[str, Any],
     out_dir: Path,
 ) -> None:
     """Write tier-diagnostics.json to the output directory."""
@@ -131,6 +136,16 @@ def write_tier_diagnostics(
         }
         if tc.cpg_build_s > 0:
             data[name]["cpg_build_s"] = round(tc.cpg_build_s, 2)
+    # Scoped-run slot-allocation report (see gaps.truncate_gaps_to_
+    # budget): surfaced here so an operator reading tier diagnostics
+    # sees which in-scope files got zero review slots.
+    sc_path = out_dir / "scope-coverage.json"
+    if sc_path.is_file():
+        try:
+            with open(sc_path, encoding="utf-8") as f:
+                data["scope_coverage"] = json.load(f)
+        except (OSError, ValueError):
+            logger.debug("scope-coverage.json unreadable", exc_info=True)
     path = out_dir / "tier-diagnostics.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -138,8 +153,9 @@ def write_tier_diagnostics(
 
 def iris_candidate_to_spec(candidate):
     """Convert an IRIS CandidateFunction to a TaintSpec via name heuristics."""
-    from .iris_specs import TaintSpec
     from core.evidence import EvidenceTier
+
+    from .iris_specs import TaintSpec
     name = candidate.function.lower()
     role = "propagator"
     if any(p in name for p in ("sanitize", "sanitise", "escape", "encode", "filter", "clean", "purify")):

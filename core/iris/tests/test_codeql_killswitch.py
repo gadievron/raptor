@@ -207,3 +207,89 @@ class TestCompileCodeqlConfigPureFunction:
         ]
         result = compile_codeql_config(specs)
         assert "select" not in result
+
+
+class TestPropagatorPredicate:
+    """``_propagator_predicate`` — generator for the
+    ``isAdditionalTaintStep`` body ``compile_codeql_config`` embeds
+    for propagator specs."""
+
+    @staticmethod
+    def _prop(fn):
+        from core.iris.specs import TaintSpec
+        return TaintSpec(function=fn, file="src/db.py", role="propagator")
+
+    def test_single_spec_exact_shape(self):
+        from core.iris.specs import _propagator_predicate
+
+        out = _propagator_predicate([self._prop("wrap")])
+        assert out == (
+            '    exists(DataFlow::CallNode c | '
+            'c.getTarget().hasName("wrap") '
+            "and pred = c.getAnArgument() and succ = c)"
+        )
+
+    def test_multiple_specs_joined_with_or(self):
+        from core.iris.specs import _propagator_predicate
+
+        out = _propagator_predicate([
+            self._prop("wrap"),
+            self._prop("adapt"),
+        ])
+        assert out.count(" or\n") == 1
+        assert 'hasName("wrap")' in out
+        assert 'hasName("adapt")' in out
+
+    def test_escapes_codeql_string_chars(self):
+        from core.iris.specs import _propagator_predicate
+
+        out = _propagator_predicate([self._prop('we"ird\\name')])
+        assert 'hasName("we\\"ird\\\\name")' in out
+
+
+class TestCompileCodeqlConfigPropagators:
+    """The propagator step predicate inside the compiled query comes
+    from ``_propagator_predicate`` and only appears when propagator
+    specs are present."""
+
+    @staticmethod
+    def _specs():
+        from core.iris.specs import TaintSpec
+        return [
+            TaintSpec(function="read_input", file="src/db.py", role="source"),
+            TaintSpec(function="exec_cmd", file="src/db.py", role="sink"),
+            TaintSpec(function="wrap", file="src/db.py", role="propagator"),
+        ]
+
+    def test_additional_taint_step_present(self):
+        from core.iris.specs import compile_codeql_config
+
+        query = compile_codeql_config(self._specs())
+        assert (
+            "predicate isAdditionalTaintStep"
+            "(DataFlow::Node pred, DataFlow::Node succ) {"
+        ) in query
+
+    def test_generated_step_matches_helper_output(self):
+        from core.iris.specs import (
+            TaintSpec,
+            _propagator_predicate,
+            compile_codeql_config,
+        )
+
+        # The predicate body must be exactly what the (previously
+        # inlined) loop emitted — the factoring is behaviour-neutral.
+        query = compile_codeql_config(self._specs())
+        wrap = TaintSpec(function="wrap", file="src/db.py",
+                         role="propagator")
+        assert _propagator_predicate([wrap]) in query
+
+    def test_no_propagators_no_step_predicate(self):
+        from core.iris.specs import TaintSpec, compile_codeql_config
+
+        query = compile_codeql_config([
+            TaintSpec(function="read_input", file="src/db.py",
+                      role="source"),
+            TaintSpec(function="exec_cmd", file="src/db.py", role="sink"),
+        ])
+        assert "isAdditionalTaintStep" not in query

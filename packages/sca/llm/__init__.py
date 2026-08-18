@@ -15,19 +15,19 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type
+from typing import Any
 
 from pydantic import BaseModel
 
+from core.security.llm_response_schema import validate_response
+from core.security.prompt_defense_profiles import get_profile_for
 from core.security.prompt_envelope import (
-    UntrustedBlock,
     TaintedString,
+    UntrustedBlock,
     build_prompt,
 )
-from core.security.prompt_defense_profiles import get_profile_for
-from core.security.prompt_input_preflight import preflight, PreflightResult
+from core.security.prompt_input_preflight import PreflightResult, preflight
 from core.security.prompt_output_sanitise import sanitise_string
-from core.security.llm_response_schema import validate_response
 from core.security.prompt_telemetry import defense_telemetry
 
 logger = logging.getLogger(__name__)
@@ -40,16 +40,25 @@ _TASK_TYPE = "sca_review"
 # ------------------------------------------------------------------
 
 def get_llm_client():
-    """Return a configured :class:`LLMClient`, or ``None`` if unavailable."""
+    """Return a configured :class:`LLMClient`, or ``None`` if
+    unavailable. SCA keeps its full-``LLMConfig`` shape (specialized
+    fast-tier routing included) and its ``enabled`` gate; the client
+    construction itself delegates to the soft-fail factory in
+    :mod:`core.llm.factory`."""
     try:
-        from core.llm.client import LLMClient
         from core.llm.config import LLMConfig
+        from core.llm.factory import get_client
         config = LLMConfig()
         if not config.primary_model or not config.primary_model.enabled:
             logger.info("sca.llm: no enabled LLM model — LLM stages disabled")
             return None
-        return LLMClient(config)
-    except Exception:  # noqa: BLE001
+        client = get_client(config)
+        if client is None:
+            logger.info(
+                "sca.llm: LLM client unavailable — LLM stages disabled",
+            )
+        return client
+    except Exception:
         logger.info("sca.llm: LLM client unavailable — LLM stages disabled",
                      exc_info=True)
         return None
@@ -62,12 +71,12 @@ def get_llm_client():
 @dataclass
 class StageResult:
     """Outcome of a single LLM stage invocation."""
-    model: Optional[BaseModel]
-    raw: Optional[str]
+    model: BaseModel | None
+    raw: str | None
     preflight_hit: bool
     confidence_haircut: float
     cost: float
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ------------------------------------------------------------------
@@ -79,9 +88,9 @@ def run_stage(
     client,
     system: str,
     untrusted_blocks: tuple[UntrustedBlock, ...],
-    slots: Dict[str, TaintedString],
-    schema_cls: Type[BaseModel],
-    model_id: Optional[str] = None,
+    slots: dict[str, TaintedString],
+    schema_cls: type[BaseModel],
+    model_id: str | None = None,
     task_type: str = _TASK_TYPE,
     _record_preflight: bool = True,
 ) -> StageResult:
@@ -98,7 +107,7 @@ def run_stage(
     fails or the response doesn't validate after re-prompt.
     """
     # 1. Preflight — aggregate across all untrusted blocks.
-    pf_results: List[PreflightResult] = []
+    pf_results: list[PreflightResult] = []
     for block in untrusted_blocks:
         pf_results.append(preflight(block.content))
     any_hit = any(pf.has_injection_indicators for pf in pf_results)
@@ -198,8 +207,8 @@ def cross_family_check(
     client,
     system: str,
     untrusted_blocks: tuple[UntrustedBlock, ...],
-    slots: Dict[str, TaintedString],
-    schema_cls: Type[BaseModel],
+    slots: dict[str, TaintedString],
+    schema_cls: type[BaseModel],
     primary_result: StageResult,
     verdict_field: str = "verdict",
     high_severity_values: tuple[str, ...] = ("malicious", "suspicious"),
@@ -280,7 +289,7 @@ def cross_family_check(
     )
 
 
-def _select_checker(client) -> Optional[str]:
+def _select_checker(client) -> str | None:
     """Pick a cross-family model from the client's config."""
     try:
         from core.security.llm_family import select_cross_family_checker
@@ -318,8 +327,8 @@ def _resolve_model_id(client) -> str:
 def _sanitise_model(m: BaseModel) -> BaseModel:
     """Apply ``sanitise_string`` to every ``str`` / ``list[str]`` field,
     recursing into nested Pydantic models and lists thereof."""
-    updates: Dict[str, Any] = {}
-    for name, field_info in m.__class__.model_fields.items():
+    updates: dict[str, Any] = {}
+    for name in m.__class__.model_fields:
         val = getattr(m, name)
         if isinstance(val, str):
             updates[name] = sanitise_string(val, max_chars=1000)
@@ -337,8 +346,8 @@ def _sanitise_model(m: BaseModel) -> BaseModel:
 
 __all__ = [
     "StageResult",
-    "UntrustedBlock",
     "TaintedString",
+    "UntrustedBlock",
     "get_llm_client",
     "run_stage",
     "sanitise_string",

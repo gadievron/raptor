@@ -17,10 +17,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,14 @@ class CachedSummary:
     function: str
     library: str
     version: str
-    param_preconditions: List[Dict[str, str]] = field(default_factory=list)
-    return_postconditions: List[Dict[str, str]] = field(default_factory=list)
-    taint_rules: List[Dict[str, str]] = field(default_factory=list)
-    error_behaviour: Dict[str, Any] = field(default_factory=dict)
-    state_transitions: List[Dict[str, str]] = field(default_factory=list)
+    param_preconditions: list[dict[str, str]] = field(default_factory=list)
+    return_postconditions: list[dict[str, str]] = field(default_factory=list)
+    taint_rules: list[dict[str, str]] = field(default_factory=list)
+    error_behaviour: dict[str, Any] = field(default_factory=dict)
+    state_transitions: list[dict[str, str]] = field(default_factory=list)
     confidence: str = "high"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "function": self.function,
             "library": self.library,
@@ -60,7 +61,7 @@ class SummaryCache:
     """Persistent cache of library function summaries."""
 
     cache_dir: Path
-    _index: Dict[str, Dict[str, CachedSummary]] = field(
+    _index: dict[str, dict[str, CachedSummary]] = field(
         default_factory=dict,
     )
 
@@ -69,7 +70,7 @@ class SummaryCache:
         library: str,
         version: str,
         function: str,
-    ) -> Optional[CachedSummary]:
+    ) -> CachedSummary | None:
         key = f"{library}/{version}"
         lib_cache = self._index.get(key)
         if lib_cache is None:
@@ -81,7 +82,7 @@ class SummaryCache:
         self,
         library: str,
         version: str,
-    ) -> Dict[str, CachedSummary]:
+    ) -> dict[str, CachedSummary]:
         if not self._safe_component(library) or not self._safe_component(version):
             return {}
         key = f"{library}/{version}"
@@ -93,15 +94,13 @@ class SummaryCache:
     def _safe_component(value: str) -> bool:
         if not value or ".." in value or "/" in value or "\\" in value:
             return False
-        if Path(value).is_absolute():
-            return False
-        return True
+        return not Path(value).is_absolute()
 
     def store(
         self,
         library: str,
         version: str,
-        summaries: List[CachedSummary],
+        summaries: list[CachedSummary],
     ) -> Path:
         if not self._safe_component(library) or not self._safe_component(version):
             raise ValueError(f"unsafe cache key: {library!r}/{version!r}")
@@ -134,8 +133,8 @@ class SummaryCache:
         path = self.cache_dir / library / version / "summaries.json"
         return path.is_file()
 
-    def available_libraries(self) -> List[Dict[str, str]]:
-        result: List[Dict[str, str]] = []
+    def available_libraries(self) -> list[dict[str, str]]:
+        result: list[dict[str, str]] = []
         if not self.cache_dir.is_dir():
             return result
         for lib_dir in sorted(self.cache_dir.iterdir()):
@@ -156,7 +155,7 @@ class SummaryCache:
         libs = self.available_libraries()
         if not libs:
             return "Summary cache: empty"
-        lib_names = sorted(set(entry["library"] for entry in libs))
+        lib_names = sorted({entry["library"] for entry in libs})
         return (
             f"Summary cache: {len(libs)} versions across "
             f"{len(lib_names)} libraries ({', '.join(lib_names[:5])})"
@@ -166,7 +165,7 @@ class SummaryCache:
         self,
         library: str,
         version: str,
-    ) -> Dict[str, CachedSummary]:
+    ) -> dict[str, CachedSummary]:
         if not self._safe_component(library) or not self._safe_component(version):
             return {}
         path = self.cache_dir / library / version / "summaries.json"
@@ -181,7 +180,7 @@ class SummaryCache:
             )
             return {}
 
-        result: Dict[str, CachedSummary] = {}
+        result: dict[str, CachedSummary] = {}
         for item in data:
             try:
                 cs = CachedSummary(
@@ -196,13 +195,13 @@ class SummaryCache:
                     confidence=item.get("confidence", "high"),
                 )
                 result[cs.function] = cs
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 — one malformed cache row must not sink the load
                 continue
 
         return result
 
 
-def load_summary_cache(cache_dir: Optional[Path] = None) -> SummaryCache:
+def load_summary_cache(cache_dir: Path | None = None) -> SummaryCache:
     """Load or create the summary cache."""
     if cache_dir is None:
         raptor_dir = os.environ["RAPTOR_DIR"]
@@ -213,7 +212,7 @@ def load_summary_cache(cache_dir: Optional[Path] = None) -> SummaryCache:
 def detect_library_version(
     target_path: Path,
     library: str,
-) -> Optional[str]:
+) -> str | None:
     """Detect the version of a library used by the target.
 
     Checks common dependency manifest files (requirements.txt,
@@ -222,7 +221,7 @@ def detect_library_version(
     detectors = [
         ("requirements.txt", _parse_requirements_txt),
         ("setup.cfg", _parse_requirements_txt),
-        ("Pipfile", _parse_requirements_txt),
+        ("Pipfile.lock", _parse_pipfile_lock),
         ("package.json", _parse_package_json),
         ("go.mod", _parse_go_mod),
         ("Cargo.toml", _parse_cargo_toml),
@@ -235,13 +234,13 @@ def detect_library_version(
                 version = parser(manifest.read_text(), library)
                 if version:
                     return version
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 — per-manifest parse: try the next candidate
                 continue
 
     return None
 
 
-def _parse_requirements_txt(content: str, library: str) -> Optional[str]:
+def _parse_requirements_txt(content: str, library: str) -> str | None:
     for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -255,10 +254,23 @@ def _parse_requirements_txt(content: str, library: str) -> Optional[str]:
     return None
 
 
-def _parse_package_json(content: str, library: str) -> Optional[str]:
+def _parse_pipfile_lock(content: str, library: str) -> str | None:
     try:
         data = json.loads(content)
-    except Exception:
+    except Exception:  # noqa: BLE001 — malformed lockfile: no version claim
+        return None
+    for section in ("default", "develop"):
+        entry = data.get(section, {}).get(library)
+        if entry and isinstance(entry, dict):
+            version = entry.get("version", "")
+            return version.lstrip("=") if version else None
+    return None
+
+
+def _parse_package_json(content: str, library: str) -> str | None:
+    try:
+        data = json.loads(content)
+    except Exception:  # noqa: BLE001 — malformed manifest: no version claim
         return None
     for section in ("dependencies", "devDependencies"):
         deps = data.get(section, {})
@@ -268,20 +280,41 @@ def _parse_package_json(content: str, library: str) -> Optional[str]:
     return None
 
 
-def _parse_go_mod(content: str, library: str) -> Optional[str]:
+def _parse_go_mod(content: str, library: str) -> str | None:
+    """Match by exact module path, or by suffix on a '/' boundary —
+    "crypto" matches golang.org/x/crypto but NOT github.com/x/cryptoutil.
+    Substring matching returned whichever unrelated module happened to
+    contain the name first."""
     for line in content.splitlines():
         parts = line.strip().split()
-        if len(parts) >= 2 and library in parts[0]:
-            return parts[1].lstrip("v")
+        if parts and parts[0] == "require" and len(parts) >= 3:
+            # single-line `require example.com/mod v1.2.3`
+            parts = parts[1:]
+        if len(parts) >= 2:
+            module = parts[0]
+            if module == library or module.endswith("/" + library):
+                return parts[1].lstrip("v")
     return None
 
 
-def _parse_cargo_toml(content: str, library: str) -> Optional[str]:
+_CARGO_INLINE_VERSION_RE = re.compile(r'version\s*=\s*"([^"]+)"')
+
+
+def _parse_cargo_toml(content: str, library: str) -> str | None:
     for line in content.splitlines():
         line = line.strip()
-        if line.startswith(f'{library} ') or line.startswith(f'{library}='):
-            for sep in ("=",):
-                if sep in line:
-                    rhs = line.split(sep, 1)[1].strip().strip('"').strip("'")
-                    return rhs.lstrip("^~>=<").split(",")[0].strip()
+        if line.startswith((f'{library} ', f'{library}=')):
+            if "=" not in line:
+                continue
+            rhs = line.split("=", 1)[1].strip()
+            if rhs.startswith("{"):
+                # Inline table: foo = { version = "1.0", features = [...] }
+                # Naive quote-stripping returned '{ version = "1.0' here,
+                # which then became the cache directory / version key.
+                m = _CARGO_INLINE_VERSION_RE.search(rhs)
+                if m:
+                    return m.group(1).lstrip("^~>=<").split(",")[0].strip()
+                return None  # git/path dependency — no version key
+            rhs = rhs.strip('"').strip("'")
+            return rhs.lstrip("^~>=<").split(",")[0].strip()
     return None

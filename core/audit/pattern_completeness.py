@@ -158,12 +158,6 @@ _NEGATED_CLASS_RE = re.compile(
     r"""\[\^([^\]]+)\]"""
 )
 
-# Matches re.compile(...) or re pattern string assignment.
-_RE_PATTERN_RE = re.compile(
-    r"""(?:re\.compile|_RE\s*=\s*re\.compile|_PATTERN)\s*\(\s*r?["'](.*?)["']""",
-    re.DOTALL,
-)
-
 
 def _nearby_text(lines: List[str], line_idx: int, window: int = 10) -> str:
     """Return source text around a line for domain hinting."""

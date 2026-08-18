@@ -19,17 +19,16 @@ import gzip
 import io
 import json
 import tarfile
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
-
+from core.oci.manifest import IndexEntry
 from packages.sca.bump.image_binary_extract import (
     _resolve_entrypoint_path,
     _select_platform,
     fetch_image_binary,
 )
-from core.oci.manifest import IndexEntry
-
 
 # ---------------------------------------------------------------------------
 # Stub OCI client
@@ -38,9 +37,9 @@ from core.oci.manifest import IndexEntry
 
 @dataclass
 class _StubResp:
-    parsed: Dict[str, Any]
+    parsed: dict[str, Any]
     content_type: str
-    digest: Optional[str] = None
+    digest: str | None = None
     raw: bytes = b""
 
 
@@ -57,9 +56,9 @@ class _StubClient:
     """
 
     def __init__(self):
-        self.manifests: Dict[str, _StubResp] = {}
-        self.blobs: Dict[str, bytes] = {}
-        self.calls: List[str] = []  # diagnostics
+        self.manifests: dict[str, _StubResp] = {}
+        self.blobs: dict[str, bytes] = {}
+        self.calls: list[str] = []  # diagnostics
 
     def fetch_manifest(self, ref, *, reference=None):
         key = f"{ref.repository}:{reference or ref.reference}"
@@ -81,21 +80,21 @@ class _StubClient:
 # ---------------------------------------------------------------------------
 
 
-def _make_layer_tar(files: Dict[str, bytes]) -> bytes:
+def _make_layer_tar(files: dict[str, bytes]) -> bytes:
     """Build a gzipped tar with the supplied (path, content)
     entries. Matches the layer format ``extract_files_from_layer``
     expects."""
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-        with tarfile.open(fileobj=gz, mode="w") as tar:
-            for path, content in files.items():
-                info = tarfile.TarInfo(name=path)
-                info.size = len(content)
-                tar.addfile(info, io.BytesIO(content))
+    with gzip.GzipFile(fileobj=buf, mode="wb") as gz, \
+            tarfile.open(fileobj=gz, mode="w") as tar:
+        for path, content in files.items():
+            info = tarfile.TarInfo(name=path)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
     return buf.getvalue()
 
 
-def _make_manifest_resp(config_digest: str, layers: List[Dict]) -> _StubResp:
+def _make_manifest_resp(config_digest: str, layers: list[dict]) -> _StubResp:
     return _StubResp(
         parsed={
             "mediaType":
@@ -113,9 +112,9 @@ def _make_manifest_resp(config_digest: str, layers: List[Dict]) -> _StubResp:
     )
 
 
-def _make_config_blob(entrypoint: Optional[List[str]] = None,
-                      cmd: Optional[List[str]] = None) -> bytes:
-    config: Dict[str, Any] = {"config": {}}
+def _make_config_blob(entrypoint: list[str] | None = None,
+                      cmd: list[str] | None = None) -> bytes:
+    config: dict[str, Any] = {"config": {}}
     if entrypoint is not None:
         config["config"]["Entrypoint"] = entrypoint
     if cmd is not None:
@@ -376,9 +375,12 @@ class TestFetchImageBinary:
         )
         assert out is None
 
-    def test_output_filename_includes_digest(self, tmp_path):
-        """Two different image versions reusing the same out_dir
-        produce different filenames (digest-prefixed)."""
+    def test_output_filename_derived_from_content_hash(self, tmp_path):
+        """Two different binary versions reusing the same out_dir
+        produce different filenames (content-hash-prefixed). The
+        registry-supplied manifest digest never feeds the name."""
+        import hashlib
+
         client = _StubClient()
         layer = _make_layer_tar({"usr/bin/foo": b"data"})
         client.blobs["sha256:layer1"] = layer
@@ -397,5 +399,59 @@ class TestFetchImageBinary:
             binary_path="/usr/bin/foo", out_dir=tmp_path,
         )
         assert out is not None
-        assert "sha256_abc123" in out.name
-        assert out.name.endswith("foo")
+        expected = hashlib.sha256(b"data").hexdigest()[:32]
+        assert out.name == f"{expected}-foo"
+        assert "abc123" not in out.name
+
+    def test_output_filename_independent_of_hostile_digest(self, tmp_path):
+        """A crafted manifest digest carrying ``/`` and ``..`` must
+        never influence the written path — the file lands inside
+        out_dir under a content-hash name."""
+        client = _StubClient()
+        layer = _make_layer_tar({"usr/bin/foo": b"payload"})
+        client.blobs["sha256:layer1"] = layer
+        mr = _make_manifest_resp(
+            config_digest="sha256:cfg",
+            layers=[{
+                "digest": "sha256:layer1", "size": len(layer),
+                "mediaType":
+                    "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            }],
+        )
+        mr.digest = "sha256:../../../../tmp/evil"
+        client.manifests["library/test:1"] = mr
+        out = fetch_image_binary(
+            "docker.io/library/test:1", client=client,
+            binary_path="/usr/bin/foo", out_dir=tmp_path,
+        )
+        assert out is not None
+        assert out.parent == tmp_path
+        assert ".." not in out.name and "/" not in out.name
+        assert out.read_bytes() == b"payload"
+
+    def test_output_basename_sanitised(self, tmp_path):
+        """Basename characters outside ``[A-Za-z0-9._-]`` are replaced
+        and the component is length-capped."""
+        client = _StubClient()
+        weird = "usr/bin/we ird$name" + "x" * 100
+        layer = _make_layer_tar({weird: b"bin"})
+        client.blobs["sha256:layer1"] = layer
+        client.manifests["library/test:1"] = _make_manifest_resp(
+            config_digest="sha256:cfg",
+            layers=[{
+                "digest": "sha256:layer1", "size": len(layer),
+                "mediaType":
+                    "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            }],
+        )
+        out = fetch_image_binary(
+            "docker.io/library/test:1", client=client,
+            binary_path="/" + weird, out_dir=tmp_path,
+        )
+        assert out is not None
+        assert out.parent == tmp_path
+        basename = out.name.split("-", 1)[1]
+        assert all(
+            c.isalnum() or c in "._-" for c in basename
+        ), f"unsanitised char in {basename!r}"
+        assert len(basename) <= 64

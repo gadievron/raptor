@@ -321,3 +321,24 @@ class TestWriteEvaluation:
         assert data["detection_rate"] == 1.0
         assert data["precision"] == 1.0
         assert data["f1"] == 1.0
+
+
+class TestDuplicateGroundTruthKeys:
+    def test_duplicate_key_keeps_first(self, tmp_path):
+        gt = [
+            GroundTruthEntry(
+                id="GT-1", file="a.c", function="f",
+                line=10, vuln_type="overflow", description="first",
+            ),
+            GroundTruthEntry(
+                id="GT-2", file="a.c", function="f",
+                line=20, vuln_type="uaf", description="second",
+            ),
+        ]
+        out = tmp_path / "run"
+        out.mkdir()
+        (out / "findings.json").write_text(json.dumps([]))
+        result = evaluate_run(out, gt)
+        assert result.total_ground_truth == 2
+        assert len(result.false_negatives) == 1
+        assert result.false_negatives[0].id == "GT-1"

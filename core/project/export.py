@@ -209,12 +209,14 @@ def export_project(project_output_dir: Path, dest_path: Path,
         project_output_dir: The project's output directory to archive.
         dest_path: Destination path for the zip file.
         project_json_path: Optional project metadata JSON to include in the zip.
+        force: Overwrite dest_path if it already exists.
 
     Returns:
         Dict with 'path' (zip file path) and 'sha256' (hex digest).
 
     Raises:
         FileNotFoundError: If the source directory doesn't exist.
+        FileExistsError: If dest_path exists and force is False.
     """
     project_output_dir = Path(project_output_dir)
     dest_path = Path(dest_path)

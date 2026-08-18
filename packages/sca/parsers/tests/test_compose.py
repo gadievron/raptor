@@ -227,3 +227,15 @@ def test_fragment_file_skipped_quietly(tmp_path, caplog):
         f"fragment compose file emitted WARN: "
         f"{[r.getMessage() for r in warn]}"
     )
+
+
+def test_floating_tags_consistent_across_parsers():
+    from packages.sca.parsers.compose import _FLOATING_TAGS as compose_tags
+    from packages.sca.parsers.kubernetes import _FLOATING_TAGS as k8s_tags
+    from packages.sca.parsers.gitlab_ci import _FLOATING_TAGS as gitlab_tags
+    assert compose_tags == k8s_tags, (
+        f"compose vs kubernetes: {compose_tags.symmetric_difference(k8s_tags)}"
+    )
+    assert compose_tags == gitlab_tags, (
+        f"compose vs gitlab_ci: {compose_tags.symmetric_difference(gitlab_tags)}"
+    )

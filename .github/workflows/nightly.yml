@@ -61,6 +61,13 @@ jobs:
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
+          # semgrep is deliberately NOT a requirements dep (optional
+          # tool, same as radare2/LLVM below), but the audit-pipeline
+          # slow tests exercise real sweeps: G2's receipt gate demands
+          # an EXECUTED confirmed sweep, so without the binary those
+          # tests can only skip. Installed here so the nightly keeps
+          # covering the sweep → record → report → feedback chain.
+          uv pip install semgrep==1.172.0
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
         continue-on-error: true
@@ -87,7 +94,10 @@ jobs:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -m slow core packages -q --durations=25
+          # .github test dirs included for their slow-marked
+          # whole-repo import-graph classes (excluded from ci-lint's
+          # bounded PR job by the default addopts marker filter).
+          python -m pytest -m slow core packages .github/tests .github/scripts/tests -q --durations=25
 
       - name: Run integration tests (retry once on external outage)
         env:

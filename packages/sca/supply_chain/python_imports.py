@@ -7,14 +7,17 @@ fires the moment ``import malicious_pkg`` runs — before any code
 written by the operator gets a chance to vet it. ``setup.py`` is the
 classic vector but ``__init__.py`` works just as well.
 
-We AST-walk every ``.py`` under the target's source tree and flag
+We AST-walk every ``.py`` under the target's vendored / third-party
+trees (``vendor/``, ``third_party/``, … — see ``_VENDOR_DIR_NAMES``
+below; first-party code is deliberately out of scope) and flag
 top-level statements whose semantics imply *execution at import time*:
 
-- ``subprocess`` / ``os.system`` / ``os.popen`` calls
-- ``socket`` connect / ``urllib`` / ``urllib2`` / ``urllib3`` /
-  ``requests`` / ``httpx`` / ``http.client`` calls
-- ``eval`` / ``exec`` / ``compile`` / ``__import__`` / ``importlib``
-  dynamic-import calls
+- any call on the ``subprocess`` / ``os`` / ``socket`` / ``urllib`` /
+  ``urllib2`` / ``urllib3`` / ``requests`` / ``httpx`` / ``http``
+  module surfaces (the whole module, not just the shell-out
+  functions — this walk only sees vendored code)
+- bare ``eval`` / ``exec`` / ``compile`` / ``__import__`` calls
+- ``importlib`` dynamic-import calls
 - File IO at module scope (``open(...)``)
 
 Tolerates the common legitimate shapes:
@@ -103,17 +106,12 @@ _SUSPICIOUS_BARE_CALLS: Set[str] = {
     "eval", "exec", "compile", "__import__", "open",
 }
 
-# Specific (module, attr) pairs we always want to flag.
+# Specific (module, attr) pairs we always want to flag. Only list
+# pairs whose root module is NOT in _SUSPICIOUS_MODULE_PREFIXES —
+# ``_is_suspicious_call`` matches the prefix set first and flags
+# every call on those modules, so a pair entry for a prefix-listed
+# module would be unreachable dead config.
 _SUSPICIOUS_ATTR_PAIRS: Set["tuple[str, str]"] = {
-    ("os", "system"), ("os", "popen"),
-    ("subprocess", "run"), ("subprocess", "call"),
-    ("subprocess", "Popen"), ("subprocess", "check_call"),
-    ("subprocess", "check_output"),
-    ("socket", "create_connection"), ("socket", "connect"),
-    ("urllib", "urlopen"), ("urllib2", "urlopen"),
-    ("requests", "get"), ("requests", "post"), ("requests", "put"),
-    ("httpx", "get"), ("httpx", "post"),
-    ("http", "client"),
     ("importlib", "import_module"), ("importlib", "__import__"),
 }
 
@@ -139,7 +137,8 @@ def scan_target(
     max_depth: int = _DEFAULT_MAX_DEPTH,
     cache=None,
 ) -> List[ImportTimeFinding]:
-    """Walk ``target`` Python sources; return per-file flagged statements.
+    """Walk ``target``'s vendored Python sources (see
+    ``_VENDOR_DIR_NAMES``); return per-file flagged statements.
 
     ``cache`` (a :class:`core.json.JsonCache`) caches the per-file
     flagged-call list (line + label) keyed by file content hash —

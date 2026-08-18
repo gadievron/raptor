@@ -259,7 +259,7 @@ def _detect_directory(path: Path) -> TargetInfo:
 
 def _detect_elf(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
     arch = "unknown"
-    if len(magic) > 18:
+    if len(magic) >= 20:
         ei_class = magic[4]   # 1=32-bit, 2=64-bit
         machine = int.from_bytes(magic[18:20], "little")
         machine_map = {
@@ -268,7 +268,7 @@ def _detect_elf(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
             0xF3: "riscv",
         }
         arch = machine_map.get(machine, f"machine_{machine:#x}")
-        if ei_class == 1 and arch == "unknown":
+        if ei_class == 1 and machine not in machine_map:
             arch = "32-bit"
 
     if path.suffix.lower() == ".ko":
@@ -328,11 +328,14 @@ def _detect_macho(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
         can_fuzz_here=can_fuzz,
         recommended_fuzzer="libfuzzer" if can_fuzz else None,
     )
-    if not can_fuzz and sys_platform != "Darwin":
-        info.blockers.append(
-            f"Mach-O binaries do not run on {sys_platform}. "
-            "Run on macOS or under qemu-darwin."
-        )
+    if not can_fuzz:
+        if sys_platform != "Darwin":
+            info.blockers.append(
+                f"Mach-O binaries do not run on {sys_platform}. "
+                "Run on macOS or under qemu-darwin."
+            )
+        if not is_executable:
+            info.blockers.append("File is not executable. Run 'chmod +x' first.")
     if can_fuzz:
         info.hints.append(
             "On macOS, libFuzzer is generally more reliable than AFL++. "
@@ -455,12 +458,13 @@ def _pe_arch(path: Path) -> str:
 def _detect_rust_crate(crate_dir: Path) -> TargetInfo:
     has_cargo = shutil.which("cargo") is not None
     has_cargo_fuzz = shutil.which("cargo-fuzz") is not None
+    can_fuzz = has_cargo and has_cargo_fuzz
     info = TargetInfo(
         path=crate_dir,
         kind="rust-crate",
         description="Rust crate (Cargo.toml present)",
-        can_fuzz_here=has_cargo and has_cargo_fuzz,
-        recommended_fuzzer="cargo-fuzz",
+        can_fuzz_here=can_fuzz,
+        recommended_fuzzer="cargo-fuzz" if can_fuzz else None,
     )
     if not has_cargo:
         info.blockers.append("cargo not installed. Install Rust: https://rustup.rs")
@@ -487,7 +491,7 @@ def _detect_python_pkg(pkg_dir: Path) -> TargetInfo:
         kind="python-pkg",
         description="Python package",
         can_fuzz_here=has_atheris,
-        recommended_fuzzer="atheris",
+        recommended_fuzzer="atheris" if has_atheris else None,
     )
     if not has_atheris:
         info.blockers.append("atheris not installed. Install with: pip install atheris")

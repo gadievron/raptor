@@ -8,12 +8,12 @@ verify caching prevented re-fetches.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
-from core.json import JsonCache
 from core.http import HttpError
+from core.json import JsonCache
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.osv import (
     OSV_VULN_URL_TEMPLATE,
@@ -22,7 +22,6 @@ from packages.sca.osv import (
     parse_osv_record,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fake HTTP client
 # ---------------------------------------------------------------------------
@@ -30,8 +29,8 @@ from packages.sca.osv import (
 class FakeHttp:
     def __init__(
         self,
-        batch_results: List[List[str]] | None = None,
-        vuln_records: Dict[str, Dict[str, Any]] | None = None,
+        batch_results: list[list[str]] | None = None,
+        vuln_records: dict[str, dict[str, Any]] | None = None,
         post_error: Exception | None = None,
         get_error: Exception | None = None,
     ) -> None:
@@ -39,8 +38,8 @@ class FakeHttp:
         self.vuln_records = vuln_records or {}
         self.post_error = post_error
         self.get_error = get_error
-        self.posts: List[tuple[str, dict]] = []
-        self.gets: List[str] = []
+        self.posts: list[tuple[str, dict]] = []
+        self.gets: list[str] = []
 
     def post_json(self, url: str, body: dict, timeout: int = 30) -> dict:
         self.posts.append((url, body))
@@ -321,7 +320,7 @@ def test_osssfuzz_fallback_fires_when_primary_empty(
     vcpkg ecosystem (empty), one for OSS-Fuzz (hits)."""
     dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
     osssfuzz_record = {
         "id": "OSV-2024-001",
         "aliases": [],
@@ -368,7 +367,7 @@ def test_osssfuzz_fallback_skipped_when_primary_has_hits(
     deterministic."""
     dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
 
     class TrackingHttp(FakeHttp):
         def post_json(self, url, body, timeout=30):
@@ -393,7 +392,7 @@ def test_osssfuzz_fallback_not_fired_for_non_cpp_ecosystem(
     — PyPI deps don't have C/C++ analogues."""
     dep = _dep("nonexistent", "1.0", ecosystem="PyPI")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
 
     class TrackingHttp(FakeHttp):
         def post_json(self, url, body, timeout=30):
@@ -414,7 +413,7 @@ def test_osssfuzz_fallback_caches_result(tmp_path: Path) -> None:
     BOTH primary AND OSS-Fuzz — no network calls."""
     dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
     record = {
         "id": "OSV-2024-001", "aliases": [], "summary": "x",
         "details": "", "affected": [], "references": [],
@@ -615,3 +614,58 @@ def test_query_batch_translates_cargo_to_crates_io(tmp_path: Path) -> None:
         f"Cargo must be translated to crates.io before reaching "
         f"OSV; got {posted_ecosystems}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache-key injectivity
+# ---------------------------------------------------------------------------
+
+def test_query_key_injective_for_slash_vs_underscore() -> None:
+    """``@babel/traverse`` and a literal ``@babel_traverse`` must map
+    to different cache keys — the old ``"/" → "_"`` flattening
+    collided them, letting one package's advisory list serve (or
+    poison) the other's."""
+    scoped = OsvClient._query_key(_dep("@babel/traverse"))
+    literal = OsvClient._query_key(_dep("@babel_traverse"))
+    assert scoped != literal
+
+
+def test_query_key_components_are_single_path_segments() -> None:
+    """Every encoded component is one path segment — names carrying
+    ``/`` or ``..`` can't traverse into another key's cache file."""
+    key = OsvClient._query_key(_dep("@babel/traverse", version="7.23.2"))
+    parts = key.split("/")
+    assert parts[0] == "queries"
+    assert len(parts) == 4, f"unexpected key shape: {key}"
+    assert ".." not in parts
+
+
+def test_osssfuzz_query_key_injective() -> None:
+    d = _dep("x", version="1.0.0", ecosystem="vcpkg")
+    a = OsvClient._osssfuzz_query_key(d, "lib/name")
+    b = OsvClient._osssfuzz_query_key(d, "lib_name")
+    assert a != b
+
+
+# ---------------------------------------------------------------------------
+# CWE extraction (P40 — audit-side advisory priors)
+# ---------------------------------------------------------------------------
+
+def test_parse_osv_record_extracts_cwe_ids() -> None:
+    record = dict(_LOG4J_RECORD)
+    record["database_specific"] = {
+        "cwe_ids": ["CWE-502", "cwe-400", "CWE-502", "not-a-cwe", 7],
+    }
+    a = parse_osv_record(record)
+    assert a.cwe_ids == ["CWE-502", "CWE-400"]
+
+
+def test_parse_osv_record_no_database_specific() -> None:
+    a = parse_osv_record(_LOG4J_RECORD)
+    assert a.cwe_ids == []
+
+
+def test_parse_osv_record_malformed_cwe_field() -> None:
+    record = dict(_LOG4J_RECORD)
+    record["database_specific"] = {"cwe_ids": "CWE-79"}
+    assert parse_osv_record(record).cwe_ids == []

@@ -6,6 +6,7 @@ import textwrap
 
 import pytest
 
+import core.audit.pattern_completeness as mod
 from core.audit.pattern_completeness import (
     PatternGap,
     detect_pattern_gaps,
@@ -328,3 +329,27 @@ class TestPatternGapValidation:
                 confidence="low",
             )
             assert g.gap_type == gt
+
+
+# -------------------------------------------------------------------
+# Module-level pattern constants
+# -------------------------------------------------------------------
+
+class TestDeadConstantRemoved:
+    """Only the pattern regexes actually consumed by detection exist."""
+
+    def test_re_pattern_re_gone(self):
+        assert not hasattr(mod, "_RE_PATTERN_RE")
+
+    def test_sibling_patterns_intact(self):
+        for name in ("_GLOB_RE", "_ENDSWITH_RE", "_STARTSWITH_RE",
+                     "_NEGATED_CLASS_RE"):
+            assert hasattr(mod, name), name
+
+    def test_detection_still_works(self):
+        source = 'files = glob("*.yml")\n'
+        gaps = mod.detect_pattern_gaps({"loader.py": source})
+        assert any(
+            g.gap_type == "missing_synonym" and ".yaml" in g.suggestion
+            for g in gaps
+        )

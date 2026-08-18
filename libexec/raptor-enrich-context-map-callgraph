@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Enrich a context-map.json with substrate-derived forward-reachable
 closures per entry point. Runs after raptor-normalize-context-map.
 
@@ -12,16 +14,11 @@ Best-effort: missing checklist / inventory build failure / unresolved
 host functions log warnings but never abort the run.
 """
 import argparse
-import faulthandler
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -31,13 +28,13 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
-from core.json import load_json, save_json
-from core.orchestration.context_map_callgraph import (
+from core.json import load_json, save_json  # noqa: E402
+from core.orchestration.context_map_callgraph import (  # noqa: E402
     DEFAULT_MAX_DEPTH,
     enrich_with_call_edges,
     enrich_with_forward_reachable,
@@ -96,6 +93,17 @@ def main() -> int:
             "target_path; skipping enrichment", file=sys.stderr,
         )
         return 0
+
+    # checklist.json is a mutable run artefact — corroborate against
+    # the target_path sealed into .raptor-run.json at run start.
+    from core.run.metadata import corroborate_target_path
+    mismatch = corroborate_target_path(understand_dir, target_path)
+    if mismatch:
+        print(
+            f"raptor-enrich-context-map-callgraph: {mismatch}; refusing "
+            "recovered target", file=sys.stderr,
+        )
+        return 1
 
     checklist_path = understand_dir / "checklist.json"
     edge_count = enrich_with_call_edges(

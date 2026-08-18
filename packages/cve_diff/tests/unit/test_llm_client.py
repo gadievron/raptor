@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from cve_diff.llm.client import (
     CostBudgetExceeded,
     LLMCallFailed,
@@ -59,9 +58,9 @@ def test_provider_error_raises_llm_call_failed():
     provider = _mock_provider()
     provider.generate.side_effect = RuntimeError("API down")
     client = ResilientLLMClient()
-    with patch.object(client, "_get_provider", return_value=provider):
-        with pytest.raises(LLMCallFailed, match="API down"):
-            client.complete("m", "p")
+    with patch.object(client, "_get_provider", return_value=provider), \
+            pytest.raises(LLMCallFailed, match="API down"):
+        client.complete("m", "p")
 
 
 def test_cost_tracked_on_successful_call():
@@ -148,3 +147,50 @@ def test_provider_for_model_falls_back_to_claudecode(monkeypatch):
         _provider_for_model("claude-opus-4-7", 120.0)
     config = cp.call_args[0][0]
     assert config.provider == "claudecode"
+
+
+# ── retry classification ──────────────────────────────────────────────
+# The retry loop must distinguish transient failures (retry with
+# backoff) from hard failures (401/403, billing caps, validation) that
+# no retry will fix — pre-fix every exception burned the full backoff
+# schedule.
+
+def test_non_retryable_error_fails_fast(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("cve_diff.llm.client.time.sleep", sleeps.append)
+    provider = _mock_provider()
+    provider.generate.side_effect = RuntimeError(
+        "401 authentication_error: invalid x-api-key")
+    client = ResilientLLMClient(max_retries=3)
+    with patch.object(client, "_get_provider", return_value=provider), \
+            pytest.raises(LLMCallFailed):
+        client.complete("claude-opus-4-7", "hello")
+    assert provider.generate.call_count == 1, "hard failure was retried"
+    assert sleeps == [], "hard failure slept through backoff"
+
+
+def test_transient_error_retries_then_succeeds(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("cve_diff.llm.client.time.sleep", sleeps.append)
+    provider = _mock_provider()
+    provider.generate.side_effect = [
+        ConnectionError("connection reset by peer"),
+        _FakeLLMResponse(content="recovered"),
+    ]
+    client = ResilientLLMClient(max_retries=3)
+    with patch.object(client, "_get_provider", return_value=provider):
+        result = client.complete("claude-opus-4-7", "hello")
+    assert result.text == "recovered"
+    assert provider.generate.call_count == 2
+    assert len(sleeps) == 1
+
+
+def test_transient_error_exhausts_retries(monkeypatch):
+    monkeypatch.setattr("cve_diff.llm.client.time.sleep", lambda _s: None)
+    provider = _mock_provider()
+    provider.generate.side_effect = TimeoutError("timed out")
+    client = ResilientLLMClient(max_retries=2)
+    with patch.object(client, "_get_provider", return_value=provider), \
+            pytest.raises(LLMCallFailed):
+        client.complete("claude-opus-4-7", "hello")
+    assert provider.generate.call_count == 3  # initial + 2 retries

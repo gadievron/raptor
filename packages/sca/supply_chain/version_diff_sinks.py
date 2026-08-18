@@ -19,33 +19,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any
+
+from .sink_vocab import SHARED_SUPPLY_CHAIN_SINKS, VERSION_DIFF_EXTRA_SINKS
 
 logger = logging.getLogger(__name__)
 
-_DIFF_SINKS: FrozenSet[str] = frozenset({
-    "os.system", "os.popen",
-    "subprocess.call", "subprocess.run", "subprocess.Popen",
-    "subprocess.check_output", "subprocess.check_call",
-    "system", "popen", "exec", "eval", "compile",
-    "pickle.loads", "pickle.load", "marshal.loads", "yaml.load",
-    "__import__",
-    "requests.get", "requests.post", "urllib.request.urlopen",
-    "socket.connect",
-    "os.remove", "os.unlink", "shutil.rmtree",
-    "open", "io.open", "os.open",
-    "Command::new",
-    "child_process.exec", "child_process.spawn",
-    "child_process.execSync",
-    "Runtime.exec", "ProcessBuilder",
-    "passthru", "shell_exec",
-    "Kernel.system", "Kernel.exec", "Kernel.eval",
-    "Marshal.load",
-    "exec.Command",
-    "loadstring", "dofile",
-    "cursor.execute", "cursor.executemany",
-    "memcpy", "strcpy", "strcat", "sprintf", "gets",
-})
+# Composed from the shared supply-chain authority plus the
+# version-diff-specific extras (see sink_vocab.py for the rationale).
+_DIFF_SINKS: frozenset[str] = (
+    SHARED_SUPPLY_CHAIN_SINKS | VERSION_DIFF_EXTRA_SINKS
+)
 
 
 @dataclass
@@ -58,12 +42,12 @@ class SinkChange:
     change_type: str  # "added" | "removed" | "guard_added" | "guard_removed"
     guard_count_old: int = 0
     guard_count_new: int = 0
-    was_unconditional: Optional[bool] = None
-    is_unconditional: Optional[bool] = None
-    guard_categories: List[str] = field(default_factory=list)
+    was_unconditional: bool | None = None
+    is_unconditional: bool | None = None
+    guard_categories: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "file": self.file_path,
             "sink_api": self.sink_api,
             "line": self.line,
@@ -85,9 +69,9 @@ class SinkChange:
 class VersionDiffSinkResult:
     """Aggregate sink changes between two versions."""
 
-    added_sinks: List[SinkChange]
-    removed_sinks: List[SinkChange]
-    guard_changes: List[SinkChange]
+    added_sinks: list[SinkChange]
+    removed_sinks: list[SinkChange]
+    guard_changes: list[SinkChange]
 
     @property
     def total_changes(self) -> int:
@@ -103,7 +87,7 @@ class VersionDiffSinkResult:
             s.is_unconditional for s in self.added_sinks
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "added_sinks": [s.to_dict() for s in self.added_sinks],
             "removed_sinks": [s.to_dict() for s in self.removed_sinks],
@@ -114,7 +98,7 @@ class VersionDiffSinkResult:
 
     def summary_line(self) -> str:
         """One-line summary for the LLM prompt context."""
-        parts: List[str] = []
+        parts: list[str] = []
         if self.added_sinks:
             n_uncond = sum(
                 1 for s in self.added_sinks if s.is_unconditional
@@ -139,12 +123,12 @@ class VersionDiffSinkResult:
 
 
 def analyze_version_diff_sinks(
-    old_files: Dict[str, str],
-    new_files: Dict[str, str],
+    old_files: dict[str, str],
+    new_files: dict[str, str],
     *,
-    sink_names: Optional[FrozenSet[str]] = None,
+    sink_names: frozenset[str] | None = None,
     changed_files_only: bool = True,
-    out_dir: Optional[Any] = None,
+    out_dir: Any | None = None,
 ) -> VersionDiffSinkResult:
     """Compare sinks between two versions of a dependency.
 
@@ -183,8 +167,10 @@ def analyze_version_diff_sinks(
             iris_sinks = get_project_sinks(out_dir=out_dir)
             if iris_sinks:
                 sinks = sinks | iris_sinks
-        except Exception:
-            pass
+        except Exception:  # graceful: IRIS enrichment is a no-op on failure
+            logger.debug(
+                "version_diff_sinks: IRIS sink merge failed", exc_info=True,
+            )
 
     if changed_files_only:
         files_to_check = _changed_files(old_files, new_files)
@@ -195,8 +181,8 @@ def analyze_version_diff_sinks(
         f for f in files_to_check if language_for_file(f) is not None
     }
 
-    old_sinks: Dict[str, list] = {}
-    new_sinks: Dict[str, list] = {}
+    old_sinks: dict[str, list] = {}
+    new_sinks: dict[str, list] = {}
 
     for fp in parseable:
         if fp in old_files:
@@ -208,9 +194,9 @@ def analyze_version_diff_sinks(
                 new_files[fp], fp, sink_names=sinks,
             )
 
-    added: List[SinkChange] = []
-    removed: List[SinkChange] = []
-    guard_changes: List[SinkChange] = []
+    added: list[SinkChange] = []
+    removed: list[SinkChange] = []
+    guard_changes: list[SinkChange] = []
 
     for fp in parseable:
         old_guards = old_sinks.get(fp, [])
@@ -219,7 +205,7 @@ def analyze_version_diff_sinks(
         old_by_api = _group_by_api(old_guards)
         new_by_api = _group_by_api(new_guards)
 
-        all_apis: Set[str] = set(old_by_api) | set(new_by_api)
+        all_apis: set[str] = set(old_by_api) | set(new_by_api)
         for api in all_apis:
             old_count = len(old_by_api.get(api, []))
             new_count = len(new_by_api.get(api, []))
@@ -263,11 +249,11 @@ def analyze_version_diff_sinks(
 
 
 def _changed_files(
-    old_files: Dict[str, str],
-    new_files: Dict[str, str],
-) -> Set[str]:
+    old_files: dict[str, str],
+    new_files: dict[str, str],
+) -> set[str]:
     """Return files that differ between versions."""
-    changed: Set[str] = set()
+    changed: set[str] = set()
     for fp in set(old_files) | set(new_files):
         old_src = old_files.get(fp)
         new_src = new_files.get(fp)
@@ -276,9 +262,9 @@ def _changed_files(
     return changed
 
 
-def _group_by_api(guards: list) -> Dict[str, list]:
+def _group_by_api(guards: list) -> dict[str, list]:
     """Group SinkGuard objects by sink_api."""
-    by_api: Dict[str, list] = {}
+    by_api: dict[str, list] = {}
     for sg in guards:
         by_api.setdefault(sg.sink_api, []).append(sg)
     return by_api
@@ -289,7 +275,7 @@ def _detect_guard_changes(
     api: str,
     old_guards: list,
     new_guards: list,
-    out: List[SinkChange],
+    out: list[SinkChange],
 ) -> None:
     """Detect guard additions/removals for sinks present in both."""
     old_total = sum(sg.guard_count for sg in old_guards)
@@ -300,34 +286,36 @@ def _detect_guard_changes(
     if old_total == new_total and old_uncond == new_uncond:
         return
 
-    if new_total > old_total or (old_uncond > 0 and new_uncond == 0):
-        representative = new_guards[0]
+    # Unconditional-count movement outranks raw guard totals: a call
+    # site losing its sole guard is a removal even when another
+    # (guarded) call site pushes the aggregate guard count up, and
+    # vice versa for a site gaining its first guard.
+    if new_uncond > old_uncond:
+        change_type = "guard_removed"
+    elif new_uncond < old_uncond:
+        change_type = "guard_added"
+    elif new_total > old_total:
+        change_type = "guard_added"
+    else:
+        change_type = "guard_removed"
+
+    representative = new_guards[0]
+    categories: list[str] = []
+    if change_type == "guard_added":
         categories = sorted(
             {g.category for sg in new_guards for g in sg.guards}
         )
-        out.append(SinkChange(
-            file_path=file_path,
-            sink_api=api,
-            line=representative.sink_line,
-            change_type="guard_added",
-            guard_count_old=old_total,
-            guard_count_new=new_total,
-            was_unconditional=old_uncond > 0,
-            is_unconditional=new_uncond > 0,
-            guard_categories=categories,
-        ))
-    elif new_total < old_total or (old_uncond == 0 and new_uncond > 0):
-        representative = new_guards[0]
-        out.append(SinkChange(
-            file_path=file_path,
-            sink_api=api,
-            line=representative.sink_line,
-            change_type="guard_removed",
-            guard_count_old=old_total,
-            guard_count_new=new_total,
-            was_unconditional=old_uncond > 0,
-            is_unconditional=new_uncond > 0,
-        ))
+    out.append(SinkChange(
+        file_path=file_path,
+        sink_api=api,
+        line=representative.sink_line,
+        change_type=change_type,
+        guard_count_old=old_total,
+        guard_count_new=new_total,
+        was_unconditional=old_uncond > 0,
+        is_unconditional=new_uncond > 0,
+        guard_categories=categories,
+    ))
 
 
 __all__ = [

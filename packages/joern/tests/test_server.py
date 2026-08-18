@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import base64
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from packages.joern.server import (
     JoernServer,
     _find_free_port,
     _repl_bridge_path,
+    _server_auth_supported,
 )
 from packages.joern.tunables import JoernTunables
 
@@ -192,7 +196,7 @@ class TestJoernServerRunTieredSweep:
         assert "not found" in result.errors[0]
 
     def test_substitutes_lang_profile_sinks(self, tmp_path):
-        from packages.joern.lang_config import PYTHON, C_CPP
+        from packages.joern.lang_config import C_CPP, PYTHON
         script_path = (
             __import__("pathlib").Path(__file__).resolve().parent.parent
             / "queries" / "tiered_taint.sc"
@@ -238,11 +242,18 @@ class TestJoernServerRunTieredSweep:
 
 
 class TestJoernServerZGCFlags:
-    def test_start_cmd_includes_zgc(self):
-        """Verify ZGC and ForkJoinPool flags are in the server launch command."""
-        from unittest.mock import MagicMock
+    @staticmethod
+    def _safe_stop(srv):
+        # The mocked Popen carries a fake pid — stop() must never reach the
+        # real os.killpg, or it signals whatever live process group owns
+        # that pgid (this killed operator screen sessions).
+        with patch("packages.joern.server.os.killpg",
+                   side_effect=ProcessLookupError):
+            srv.stop()
 
-        srv = JoernServer(heap_mb=8192)
+    @staticmethod
+    def _start_and_capture(srv):
+        from unittest.mock import MagicMock
 
         captured_cmd = []
 
@@ -255,19 +266,84 @@ class TestJoernServerZGCFlags:
             mock_proc.wait = MagicMock()
             return mock_proc
 
-        with patch("packages.joern.server.subprocess.Popen", side_effect=fake_popen):
-            with patch.object(srv, "_wait_for_ready", return_value=True):
-                with patch.object(srv, "_warmup_imports"):
-                    srv.start()
+        with (
+            patch("packages.joern.server._server_auth_supported",
+                  return_value=True),
+            patch("packages.joern.server.os.killpg",
+                  side_effect=ProcessLookupError),
+            patch("packages.joern.server.subprocess.Popen",
+                  side_effect=fake_popen),
+            patch.object(srv, "_wait_for_ready", return_value=True),
+            patch.object(srv, "_warmup_imports"),
+        ):
+            srv.start()
+        return captured_cmd
 
+    def test_start_cmd_includes_zgc_jdk21(self):
+        """JDK 21-23: ZGC selected, G1 disabled, ZGenerational passed."""
+        srv = JoernServer(heap_mb=8192)
+        with patch("packages.joern.prereqs._java_version", return_value=21):
+            captured_cmd = self._start_and_capture(srv)
+
+        assert "-J-XX:-UseG1GC" in captured_cmd
         assert "-J-XX:+UseZGC" in captured_cmd
         assert "-J-XX:+ZGenerational" in captured_cmd
         assert "-J-XX:+UseStringDeduplication" in captured_cmd
         assert "-J-Djava.util.concurrent.ForkJoinPool.common.parallelism=6" in captured_cmd
-        assert "-J-Xms8192m" in captured_cmd
+        assert "-J-Xms8192m" not in captured_cmd  # ceiling only, no Xms pin
         assert "-J-Xmx8192m" in captured_cmd
 
-        srv.stop()
+        self._safe_stop(srv)
+
+    def test_start_cmd_omits_zgenerational_jdk24_plus(self):
+        """JDK >= 24 removed ZGenerational — must not be passed."""
+        srv = JoernServer()
+        with patch("packages.joern.prereqs._java_version", return_value=25):
+            captured_cmd = self._start_and_capture(srv)
+
+        assert "-J-XX:+UseZGC" in captured_cmd
+        assert "-J-XX:+ZGenerational" not in captured_cmd
+
+        self._safe_stop(srv)
+
+    def test_boot_retries_without_gc_flags_when_jvm_dies(self):
+        """First boot dies (e.g. GC flag conflict) → retry with defaults."""
+        from unittest.mock import MagicMock
+
+        srv = JoernServer()
+        launches = []
+
+        def fake_popen(cmd, **kwargs):
+            launches.append(list(cmd))
+            mock_proc = MagicMock()
+            mock_proc.pid = 12345
+            # First launch: dead process; second: alive.
+            mock_proc.poll.return_value = 1 if len(launches) == 1 else None
+            mock_proc.stderr = MagicMock()
+            mock_proc.wait = MagicMock()
+            return mock_proc
+
+        ready_results = iter([False, True])
+
+        with (
+            patch("packages.joern.prereqs._java_version", return_value=25),
+            patch("packages.joern.server._server_auth_supported",
+                  return_value=True),
+            patch("packages.joern.server.os.killpg",
+                  side_effect=ProcessLookupError),
+            patch("packages.joern.server.subprocess.Popen",
+                  side_effect=fake_popen),
+            patch.object(srv, "_wait_for_ready",
+                         side_effect=lambda: next(ready_results)),
+            patch.object(srv, "_warmup_imports"),
+        ):
+            srv.start()
+
+        assert len(launches) == 2
+        assert any(a.startswith("-J-XX:") for a in launches[0])
+        assert not any(a.startswith("-J-XX:") for a in launches[1])
+
+        self._safe_stop(srv)
 
 
 class TestQueryCancellable:
@@ -494,3 +570,258 @@ class TestWarmupDataflow:
         assert "reachableBy" in query
         assert "__RAPTOR_WARMUP_NONEXISTENT__" in query
         assert "dataflowengineoss" in query
+
+
+class TestJoernServerIsolatedWorkspace:
+    """The server boots in a fresh temp cwd, never the caller's.
+
+    Joern loads every project in $CWD/workspace/ at startup; a corrupt
+    entry left by a killed run (overlays but no project.json) wedged
+    the REPL bridge before it bound the port — every subsequent boot
+    on the machine failed with "failed to start within 120s".
+    """
+
+    def test_start_uses_fresh_temp_cwd(self):
+        import os as _os
+        from unittest.mock import MagicMock, patch
+
+        srv = JoernServer()
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured.update(kwargs)
+            mock_proc = MagicMock()
+            mock_proc.pid = 12345
+            mock_proc.poll.return_value = None
+            mock_proc.stderr = MagicMock()
+            mock_proc.wait = MagicMock()
+            return mock_proc
+
+        with (
+            patch("packages.joern.prereqs._java_version", return_value=25),
+            patch("packages.joern.server._server_auth_supported",
+                  return_value=True),
+            patch("packages.joern.server.subprocess.Popen",
+                  side_effect=fake_popen),
+            patch.object(srv, "_wait_for_ready", return_value=True),
+            patch.object(srv, "_warmup_imports"),
+        ):
+            srv.start()
+
+        workdir = captured.get("cwd")
+        assert workdir, "server must not inherit the caller's cwd"
+        assert workdir != _os.getcwd()
+        assert _os.path.isdir(workdir)
+        assert _os.path.basename(workdir).startswith("raptor-joern-ws-")
+
+        with patch("packages.joern.server.os.killpg",
+                   side_effect=ProcessLookupError):
+            srv.stop()
+        assert not _os.path.isdir(workdir), "stop() must clean the workdir"
+
+
+class TestServerAuthSupportProbe:
+    """--server-auth-* capability probe on the launcher's --help output."""
+
+    def _probe(self, binary, *, stdout=None, error=None):
+        from packages.joern import server as server_mod
+        server_mod._AUTH_SUPPORT_CACHE.pop(binary, None)
+        proc = MagicMock()
+        proc.stdout = stdout or ""
+        proc.stderr = ""
+        kwargs = (
+            {"side_effect": error} if error else {"return_value": proc}
+        )
+        try:
+            with patch("packages.joern.server.subprocess.run", **kwargs):
+                return _server_auth_supported(binary)
+        finally:
+            server_mod._AUTH_SUPPORT_CACHE.pop(binary, None)
+
+    def test_detects_auth_flags_in_help(self):
+        stdout = (
+            "REST server mode\n  --server\n"
+            "  --server-auth-username <value>\n"
+            "  --server-auth-password <value>\n"
+        )
+        assert self._probe("/fake/joern-with-auth", stdout=stdout) is True
+
+    def test_missing_auth_flags(self):
+        stdout = "REST server mode\n  --server\n  --server-port <value>\n"
+        assert self._probe("/fake/joern-without-auth", stdout=stdout) is False
+
+    def test_probe_failure_fails_closed(self):
+        assert self._probe("/fake/joern-broken", error=OSError("boom")) is False
+
+
+class TestJoernServerAuth:
+    """Every boot generates a random Basic-auth credential; every
+    client request carries the matching Authorization header."""
+
+    @staticmethod
+    def _start_and_capture(srv):
+        captured_cmd = []
+
+        def fake_popen(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            mock_proc = MagicMock()
+            mock_proc.pid = 12345
+            mock_proc.poll.return_value = None
+            mock_proc.stderr = MagicMock()
+            mock_proc.wait = MagicMock()
+            return mock_proc
+
+        with (
+            patch("packages.joern.prereqs._java_version", return_value=25),
+            patch("packages.joern.server._server_auth_supported",
+                  return_value=True),
+            patch("packages.joern.server.subprocess.Popen",
+                  side_effect=fake_popen),
+            patch.object(srv, "_wait_for_ready", return_value=True),
+            patch.object(srv, "_warmup_imports"),
+        ):
+            srv.start()
+        return captured_cmd
+
+    @staticmethod
+    def _safe_stop(srv):
+        with patch("packages.joern.server.os.killpg",
+                   side_effect=ProcessLookupError):
+            srv.stop()
+
+    @staticmethod
+    def _expected_header(srv):
+        token = base64.b64encode(
+            f"{srv._auth_user}:{srv._auth_password}".encode()
+        ).decode("ascii")
+        return f"Basic {token}"
+
+    def test_start_argv_contains_auth_flags_with_credential(self):
+        srv = JoernServer()
+        cmd = self._start_and_capture(srv)
+
+        assert "--server-auth-username" in cmd
+        assert "--server-auth-password" in cmd
+        user = cmd[cmd.index("--server-auth-username") + 1]
+        password = cmd[cmd.index("--server-auth-password") + 1]
+        assert user
+        assert len(password) >= 32
+        assert srv._auth_user == user
+        assert srv._auth_password == password
+
+        self._safe_stop(srv)
+
+    def test_credential_rotates_per_boot(self):
+        srv = JoernServer()
+        cmd1 = self._start_and_capture(srv)
+        pw1 = cmd1[cmd1.index("--server-auth-password") + 1]
+        self._safe_stop(srv)
+        assert srv._auth_password is None  # cleared on stop
+
+        cmd2 = self._start_and_capture(srv)
+        pw2 = cmd2[cmd2.index("--server-auth-password") + 1]
+        self._safe_stop(srv)
+        assert pw1 != pw2
+
+    def test_auth_unsupported_refuses_unauthenticated_server(self):
+        srv = JoernServer()
+        with (
+            patch("packages.joern.server._server_auth_supported",
+                  return_value=False),
+            patch("packages.joern.server.subprocess.Popen",
+                  side_effect=AssertionError("must not spawn a server")),
+            pytest.raises(RuntimeError, match="server-auth"),
+        ):
+            srv.start()
+        assert srv._proc is None
+        assert srv.port is None
+
+    def _authed_server(self):
+        srv = JoernServer()
+        srv._auth_user = "raptor"
+        srv._auth_password = "secret-token"
+        srv._base_url = "http://127.0.0.1:9999"
+        return srv
+
+    def test_post_urllib_sends_authorization_header(self):
+        srv = self._authed_server()
+        opener = MagicMock()
+        resp = opener.open.return_value.__enter__.return_value
+        resp.read.return_value = b'{"success": true}'
+        with patch("packages.joern.server._NO_PROXY_OPENER", opener):
+            data = srv._post_urllib(
+                f"{srv._base_url}/query-sync", {"query": "1+1"}, 5,
+            )
+        assert data == {"success": True}
+        req = opener.open.call_args[0][0]
+        assert req.get_header("Authorization") == self._expected_header(srv)
+
+    def test_post_httpx_sends_authorization_header(self):
+        srv = self._authed_server()
+        stub_httpx = MagicMock()
+        client = stub_httpx.Client.return_value
+        client.post.return_value.json.return_value = {"success": True}
+        with patch("packages.joern.server._httpx", stub_httpx):
+            data = srv._post_sync("1+1", timeout=5)
+        assert data == {"success": True}
+        headers = client.post.call_args.kwargs["headers"]
+        assert headers["Authorization"] == self._expected_header(srv)
+
+    def test_post_async_sends_authorization_header(self):
+        srv = self._authed_server()
+        opener = MagicMock()
+        resp = opener.open.return_value.__enter__.return_value
+        resp.read.return_value = b'{"uuid": "u-1"}'
+        with (
+            patch("packages.joern.server._NO_PROXY_OPENER", opener),
+            patch("packages.joern.server._httpx", None),
+        ):
+            uuid = srv._post_async("1+1")
+        assert uuid == "u-1"
+        req = opener.open.call_args[0][0]
+        assert req.get_header("Authorization") == self._expected_header(srv)
+
+    def test_get_result_sends_authorization_header(self):
+        srv = self._authed_server()
+        opener = MagicMock()
+        resp = opener.open.return_value.__enter__.return_value
+        resp.read.return_value = b'{"success": true, "stdout": ""}'
+        with (
+            patch("packages.joern.server._NO_PROXY_OPENER", opener),
+            patch("packages.joern.server._httpx", None),
+        ):
+            data = srv._get_result("u-1")
+        assert data is not None
+        req = opener.open.call_args[0][0]
+        assert req.get_header("Authorization") == self._expected_header(srv)
+
+    def test_no_credential_means_no_header(self):
+        srv = JoernServer()
+        assert srv._auth_headers() == {}
+
+
+class TestHasScalaError:
+    """Error detection must scan the full stdout — the REPL echoes the
+    submitted script first, so long batch scripts push compiler
+    diagnostics past any fixed prefix window."""
+
+    def test_error_marker_beyond_2000_bytes_detected(self):
+        from packages.joern.server import _has_scala_error
+        echoed_script = "val step = cpg.call.name(\"memcpy\").l\n" * 200
+        stdout = echoed_script + "-- [E006] Not Found Error: value cpgx"
+        assert len(echoed_script) > 2000
+        assert _has_scala_error(stdout)
+
+    def test_clean_output_not_flagged(self):
+        from packages.joern.server import _has_scala_error
+        stdout = 'res0: List[String] = List("a")\n' * 200
+        assert not _has_scala_error(stdout)
+
+    def test_empty_output_not_flagged(self):
+        from packages.joern.server import _has_scala_error
+        assert not _has_scala_error("")
+
+    def test_ansi_wrapped_marker_detected(self):
+        from packages.joern.server import _has_scala_error
+        stdout = ("x" * 3000) + "\x1b[31m-- [E007]\x1b[0m mismatch"
+        assert _has_scala_error(stdout)

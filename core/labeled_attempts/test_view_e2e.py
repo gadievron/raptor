@@ -28,6 +28,7 @@ from core.labeled_attempts.view import (
     VerifiedOutcome,
     collect_outcomes,
     exemplar_block_for_finding,
+    from_barrier_synthesis,
     from_labeled_attempt,
     rank_outcomes_for_finding,
     render_outcome_summary,
@@ -476,3 +477,65 @@ class TestWitnessOutcomeValidation:
             observed_outcome="",
         )
         assert e.observed_outcome == ""
+
+
+# ---------------------------------------------------------------------------
+# Barrier-synthesis adapter — provenance pass-through, no freshening
+# ---------------------------------------------------------------------------
+
+
+class _Proposal:
+    """Duck-typed BarrierProposal stand-in (the adapter contract)."""
+
+    sink_class = "sqli"
+    finding_id = "F-BAR"
+
+
+class _SynthResult:
+    """Duck-typed SynthResult stand-in."""
+
+    after_count = 0
+    before_count = 1
+    is_sound = True
+    suppressed_fp = True
+    preserved_tp = True
+
+
+class TestBarrierSynthesisAdapter:
+    def test_absent_timestamp_lands_at_min_not_now(self):
+        """No-freshening discipline (same rule as ``_parse_ts``): a
+        record with unknown age must sort to the back of recency
+        rankings, not cut in front via a ``now()`` default."""
+        from datetime import datetime, timezone
+        vo = from_barrier_synthesis(_Proposal(), _SynthResult())
+        assert vo.timestamp == datetime.min.replace(tzinfo=timezone.utc)
+        assert vo.produced_by is None
+
+    def test_timestamp_and_produced_by_pass_through(self):
+        from datetime import datetime, timezone
+        ts = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        vo = from_barrier_synthesis(
+            _Proposal(), _SynthResult(),
+            produced_by="model-x", timestamp=ts,
+        )
+        assert vo.timestamp == ts
+        assert vo.produced_by == "model-x"
+        # Adapter semantics unchanged: sound barrier → REFUTED.
+        assert vo.status is OutcomeStatus.REFUTED
+        assert vo.oracle is Oracle.CODEQL
+
+    def test_undated_record_sorts_behind_dated_in_ranking(self):
+        from datetime import datetime, timezone
+        dated = VerifiedOutcome(
+            finding_id="F-BAR", oracle=Oracle.CODEQL,
+            status=OutcomeStatus.REFUTED, reproducible=True,
+            cwe_id="CWE-89",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        undated = from_barrier_synthesis(_Proposal(), _SynthResult())
+        ranked = rank_outcomes_for_finding(
+            [undated, dated], {"id": "F-BAR"},
+            statuses=(OutcomeStatus.REFUTED,),
+        )
+        assert ranked[0].outcome is dated
+        assert ranked[1].outcome is undated

@@ -38,9 +38,11 @@ suppressor handles the case where a sanitizer is in a sibling
 ``if/elif`` branch that doesn't lexically precede the sink but is on
 every dynamic path to it.
 
-This module is pure: no IO, no logging side-effects, no scorecard
-writes. The Phase 7b helper :func:`record_sanitizer_cut_suppression`
-bridges the result into ``suppressions.jsonl`` for the audit trail.
+This module does no IO and no scorecard writes, with two narrow
+carve-outs: :func:`_propagate_taint` logs a single diagnostic
+warning if its fixed-point loop hits the iteration cap, and the
+Phase 7b helper :func:`record_sanitizer_cut_suppression` bridges
+the result into ``suppressions.jsonl`` for the audit trail.
 """
 from __future__ import annotations
 
@@ -133,10 +135,15 @@ class SanitizerCutResult:
 
     * ``value_bound_bindings`` — the bindings that satisfied gate
       conditions 2 AND 3 (taint flows in AND output reaches sink).
-      Non-empty for ``VERDICT_SUPPRESS``; empty for the other two
-      verdicts.
+      Non-empty for a value-bound ``VERDICT_SUPPRESS``; also
+      carried on the value-bound gate's ``candidate_only`` results
+      (the may_escape downgrade and the value-binding-unproven
+      case both attach whatever bindings satisfied the gate);
+      empty for ``VERDICT_NO_SUPPRESS``.
     * ``all_matched_bindings`` — every catalog match in the CFG,
-      regardless of value binding. Non-empty for both
+      plus any Phase 14 inter-procedural synthetic bindings folded
+      in via ``extra_bindings``, regardless of value binding.
+      Non-empty for both
       ``VERDICT_SUPPRESS`` and ``VERDICT_CANDIDATE_ONLY`` (the
       ``candidate_only`` audit record needs them so operators can
       see what was tried).
@@ -702,8 +709,9 @@ def record_sanitizer_cut_suppression(
     * ``bindings`` — list of value-bound binding records
       (callable, input_symbols, output_symbols, lineno). For
       ``suppress`` these are the bindings whose nodes formed the
-      cut; for ``candidate_only`` this is empty (no binding
-      satisfied the value gate).
+      cut; for ``candidate_only`` these are the bindings that
+      satisfied the value gate without yielding a suppressing
+      cut (empty when none did).
     * ``catalog_matches`` — list of ALL catalog-matched binding
       records in the CFG (a superset of ``bindings`` for
       ``suppress``; the full set for ``candidate_only`` so

@@ -164,7 +164,7 @@ class CompositionalAnalyzer:
 
         findings: list[BypassFinding] = []
         for file, func in sorted(unsafe):
-            if func == assumption.target or func == "main":
+            if (file, func) == (assumption.file, assumption.target) or func == "main":
                 continue
 
             via = self._find_intermediate(file, func, assumption.target)
@@ -219,7 +219,10 @@ class CompositionalAnalyzer:
                     ((file, func), enforcer), [],
                 )
                 e_lines = [ln for ln in e_lines if ln > 0]
-                if e_lines and min(u_lines) >= min(e_lines):
+                if not e_lines:
+                    all_undermined = False
+                    break
+                if min(u_lines) >= min(e_lines):
                     all_undermined = False
                     break
                 if e_lines:

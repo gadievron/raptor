@@ -102,6 +102,8 @@ Rank variants by exploitability:
 
 ```json
 {
+  "provenance": {"generator": "understand:hunt", "untrusted": true, "schema_validated": false},
+  "raptor_schema_version": 2,
   "meta": {
     "seed": "FIND-001 | pattern description",
     "pattern": "cursor.execute() with non-parameterized string",
@@ -156,6 +158,14 @@ Rank variants by exploitability:
 ## Output
 
 OUTPUT: `$WORKDIR/variants.json`
+
+Include the `provenance` block and `raptor_schema_version` exactly as shown in the template — your output is LLM-derived, so `untrusted` is always `true`. Keep free-text fields (`notes`, `description`, `fix_strategy`) as plain prose (no line-leading markdown, no ANSI escapes). Then validate:
+
+```bash
+libexec/raptor-validate-schema variants "$WORKDIR/variants.json"
+```
+
+Fix any reported errors before displaying the summary.
 
 Display a summary to the user:
 - N total matches

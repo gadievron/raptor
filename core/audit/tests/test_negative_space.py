@@ -579,8 +579,13 @@ class TestProtocolAmbiguity:
 
 class TestMissingAppFeatures:
     def test_detects_missing_rate_limit(self):
+        # Framework evidence present (flask import): the checklist runs.
         gaps = [
-            {"name": "login", "file": "auth.py", "source": "def login(user, pw): ..."},
+            {
+                "name": "login",
+                "file": "auth.py",
+                "source": "from flask import Flask\ndef login(user, pw): ...",
+            },
         ]
         findings = check_missing_app_features(gaps)
         assert any("Rate limiting" in f.title for f in findings)
@@ -599,10 +604,37 @@ class TestMissingAppFeatures:
 
     def test_detects_missing_csrf(self):
         gaps = [
-            {"name": "form", "file": "forms.py", "source": "def submit(): pass"},
+            {
+                "name": "form",
+                "file": "forms.py",
+                "source": "import django\ndef submit(): pass",
+            },
         ]
         findings = check_missing_app_features(gaps)
         assert any("CSRF" in f.title for f in findings)
+
+    def test_gated_off_for_pure_c_target(self):
+        # A C crypto library has no web-application obligations: the
+        # checklist previously emitted all six "Missing: …" findings
+        # against pure C (observed on a real run).
+        gaps = [
+            {"name": "bio_ctrl", "file": "crypto/bio/bss_file.c",
+             "source": "static long file_ctrl(BIO *b) { return 0; }"},
+            {"name": "xsyslog", "file": "crypto/bio/bss_log.c",
+             "source": "static void xsyslog(BIO *bp) {}"},
+        ]
+        findings = check_missing_app_features(gaps)
+        assert findings == []
+
+    def test_gated_off_without_framework_evidence(self):
+        # Web-capable language but no framework/HTTP-server marker
+        # (e.g. a Python CLI tool): still no CSRF surface.
+        gaps = [
+            {"name": "main", "file": "cli.py",
+             "source": "def main():\n    print('hello')"},
+        ]
+        findings = check_missing_app_features(gaps)
+        assert findings == []
 
 
 class TestUBPatterns:
@@ -754,6 +786,26 @@ class TestCheckLockOrdering:
         gaps = [{"name": "f", "file": "a.c", "source": "return 0;"}]
         assert check_lock_ordering(gaps) == []
 
+    def test_domain_vocab_lock_names_captured(self):
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class _Vocab:
+            lock_acquires: frozenset = field(default_factory=frozenset)
+            lock_releases: frozenset = field(default_factory=frozenset)
+
+        vocab = _Vocab(
+            lock_acquires=frozenset({"spin_lock", "rw_lock"}),
+            lock_releases=frozenset({"spin_unlock", "rw_unlock"}),
+        )
+        gaps = [{"name": "work", "file": "drv.c", "source": (
+            "spin_lock(a);\nrw_lock(b);\n"
+            "do_work();\n"
+            "rw_unlock(b);\nspin_unlock(a);\n"
+        )}]
+        results = check_lock_ordering(gaps, domain_vocab=vocab)
+        assert any(f.cwe == "CWE-764" for f in results)
+
 
 class TestDeadGapExclusion:
     """Dead gaps must not pollute convention baselines or sibling votes."""
@@ -830,9 +882,12 @@ class TestPostLoopHydration:
         assert any(f.check_type == "lock_ordering" for f in findings)
 
     def test_missing_app_features_from_disk(self, tmp_path):
-        body = "def index(req):\n    return render(req, 'index.html')\n"
+        body = (
+            "@app.route('/')\n"
+            "def index(req):\n    return render(req, 'index.html')\n"
+        )
         (tmp_path / "views.py").write_text(body)
-        gap = self._gap("views.py", "index", 1, 2)
+        gap = self._gap("views.py", "index", 1, 3)
         findings = check_missing_app_features([gap], target_path=tmp_path)
         assert len(findings) > 0
 
@@ -863,3 +918,138 @@ class TestPostLoopHydration:
         gap = self._gap("all.py", "f", 1, body.count("\n") + 1)
         findings = check_missing_app_features([gap], target_path=tmp_path)
         assert findings == []
+
+
+class TestVocabAuthConventionDiscovery:
+    """Study-learned auth predicates extend convention discovery.
+
+    Coverage gain: a project whose auth gate is a bespoke predicate
+    (``foo_may_access``) has no convention discoverable from the
+    framework/generic seed patterns; the learned vocabulary makes the
+    convention (and therefore the missing-auth negative-space check)
+    visible. No vocab → behaviour unchanged.
+    """
+
+    def _project_gaps(self):
+        gaps = []
+        for i in range(4):
+            gaps.append({
+                "file": f"srv/handler_{i}.c",
+                "name": f"handle_req_{i}",
+                "source": (
+                    "int handle_req(struct req *r) {\n"
+                    "    if (!foo_may_access(r->ctx))\n"
+                    "        return -EPERM;\n"
+                    "    return do_work(r);\n"
+                    "}\n"
+                ),
+                "strategies": ["auth"],
+            })
+        gaps.append({
+            "file": "srv/handler_missing.c",
+            "name": "handle_req_missing",
+            "source": (
+                "int handle_req_missing(struct req *r) {\n"
+                "    return do_work(r);\n"
+                "}\n"
+            ),
+            "strategies": ["auth"],
+        })
+        return gaps
+
+    def _vocab(self):
+        from core.audit.condition_smt import DomainVocabulary
+
+        return DomainVocabulary.from_domain_model({
+            "auth_predicates": [
+                {"name": "foo_may_access", "kind": "permission"},
+            ],
+        })
+
+    def test_without_vocab_no_auth_convention(self):
+        convs = discover_conventions(self._project_gaps())
+        assert [c for c in convs if c.concern == "auth"] == []
+
+    def test_learned_predicate_discovers_convention(self):
+        convs = discover_conventions(
+            self._project_gaps(), domain_vocab=self._vocab(),
+        )
+        auth_convs = [c for c in convs if c.concern == "auth"]
+        assert len(auth_convs) == 1
+        assert auth_convs[0].occurrences == 4
+        assert "foo_may_access" in auth_convs[0].pattern
+
+    def test_discovered_convention_flags_the_outlier(self):
+        convs = discover_conventions(
+            self._project_gaps(), domain_vocab=self._vocab(),
+        )
+        outlier = {
+            "file": "srv/handler_missing.c",
+            "name": "handle_req_missing",
+            "source": (
+                "int handle_req_missing(struct req *r) {\n"
+                "    return do_work(r);\n"
+                "}\n"
+            ),
+            "sloc": 10,
+            "is_entry_point": True,
+            "callers": [],
+        }
+        findings = check_negative_space(outlier, convs, "auth")
+        assert any(f.check_type == "missing_auth" for f in findings)
+
+    def test_none_vocab_is_equivalent_to_omitting_it(self):
+        gaps = self._project_gaps()
+        assert (
+            discover_conventions(gaps)
+            == discover_conventions(gaps, domain_vocab=None)
+        )
+
+
+class TestProtocolEvidenceGate:
+    """v4 misfire: TLS session-cache C code was flagged with an HTTP
+    CRLF-injection question purely on the word "session". HTTP checks
+    now require actual HTTP evidence in the source (the
+    check_missing_app_features gating precedent)."""
+
+    def test_tls_session_code_not_flagged_as_http(self):
+        gaps = [{
+            "name": "ssl_get_prev_session",
+            "file": "ssl/ssl_sess.c",
+            "source": (
+                "int ssl_get_prev_session(SSL_CONNECTION *s) {\n"
+                "    SSL_SESSION *ret = lookup_sess_in_cache(s, sess_id,"
+                " sess_id_len);\n"
+                "    if (ret->session_id_length == 0) return 0;\n"
+                "    ssl_session_calculate_timeout(ret);\n"
+                "}\n"
+            ),
+        }]
+        findings = check_protocol_ambiguity(gaps)
+        assert not any(f.protocol == "HTTP" if hasattr(f, "protocol")
+                       else "HTTP" in f.title for f in findings)
+
+    def test_real_http_response_code_still_flagged(self):
+        gaps = [{
+            "name": "write_session_cookie",
+            "file": "web/session.py",
+            "source": (
+                "def write_session_cookie(response, session_id):\n"
+                "    response.headers['Set-Cookie'] = "
+                "'session=' + session_id\n"
+            ),
+        }]
+        findings = check_protocol_ambiguity(gaps)
+        assert any("CRLF" in f.title for f in findings)
+
+    def test_cl_te_literals_are_their_own_evidence(self):
+        # The CL/TE check's trigger literals ARE HTTP evidence — the
+        # gate must not suppress it.
+        gaps = [{
+            "name": "parse_headers",
+            "file": "http.c",
+            "source": "if (has_content_length && strstr(h, "
+                      "\"Transfer-Encoding\")) reject();",
+        }]
+        findings = check_protocol_ambiguity(gaps)
+        assert any("CL vs TE" in f.title for f in findings)

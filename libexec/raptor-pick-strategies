@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Print CWE-strategy guidance for a function under review.
 
 Usage:
@@ -6,6 +8,7 @@ Usage:
                          [--calls call1,call2,...] [--includes h1,h2,...]
                          [--max-strategies N]
                          [--no-general]
+                         [--target TARGET_ROOT] [--profile NAME]
 
 Outputs the matching strategies as a markdown block ready to inject
 into reasoning. Used by /validate stage skills, /audit's driver, and
@@ -29,16 +32,11 @@ Exit codes:
   1  — invalid arguments
   2  — substrate not installed (older deployments)
 """
-import faulthandler
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -48,12 +46,13 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
-import argparse
+import argparse  # noqa: E402
 
 
 def _split_csv(value):
@@ -91,6 +90,17 @@ def main():
         "--no-general", action="store_true",
         help="don't pin the always-on general strategy",
     )
+    p.add_argument(
+        "--target", default="",
+        help="target root under analysis — a detected Linux kernel "
+             "tree/module merges the linux_kernel signal profile "
+             "(the kernel API signal bulk) into the strategies",
+    )
+    p.add_argument(
+        "--profile", default="",
+        help="explicit signal-profile name (e.g. linux_kernel) — "
+             "merged regardless of target detection",
+    )
     args = p.parse_args()
 
     try:
@@ -116,8 +126,10 @@ def main():
             candidate_cwes=candidate_cwes,
             max_strategies=args.max_strategies,
             always_include_general=not args.no_general,
+            target_path=args.target or None,
+            profile=args.profile or None,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — report and exit nonzero
         sys.stderr.write(f"raptor-pick-strategies: picker error: {e}\n")
         return 1
 

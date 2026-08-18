@@ -120,6 +120,20 @@ def test_compare_dispatcher_picks_right_comparator() -> None:
     assert compare("Packagist", "1.0.0-alpha", "1.0.0") == -1
 
 
+def test_composer_rejects_garbage_version() -> None:
+    """Non-version strings must raise, not silently compare as 0."""
+    with pytest.raises(ValueError):
+        composer_cmp("hello", "1.0.0")
+    with pytest.raises(ValueError):
+        composer_cmp("1.0.0", "not-a-version")
+
+
+def test_composer_garbage_surfaces_as_version_error_via_dispatcher() -> None:
+    from packages.sca.versions import VersionError
+    with pytest.raises(VersionError):
+        compare("Packagist", "hello", "1.0.0")
+
+
 def test_compare_dispatcher_normalises_value_error_to_version_error():
     """Per-ecosystem comparators historically raise plain
     ``ValueError`` for unparseable versions. The dispatcher must

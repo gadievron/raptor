@@ -6,18 +6,20 @@ import json
 from pathlib import Path
 
 from core.audit.feedback import (
-    import_validation_results,
     _classify_verdict,
     _compute_transition,
-    _extract_reason,
-    _extract_lesson,
+    _deduplicate_findings,
     _extract_findings,
-    _format_feedback_block,
+    _extract_lesson,
+    _extract_reason,
+    import_validation_results,
 )
 from core.coverage.journal import (
-    ReviewJournalEntry, append_entry, latest_entries, now_iso,
+    ReviewJournalEntry,
+    append_entry,
+    latest_entries,
+    now_iso,
 )
-
 
 # ---- helpers ----
 
@@ -70,21 +72,6 @@ def _latest_journal_entry(out_dir: Path, file_path: str,
                            function_name: str) -> ReviewJournalEntry | None:
     entries = latest_entries(out_dir)
     return entries.get(f"{file_path}:{function_name}")
-
-
-def _write_coverage_audit(out_dir: Path, entries: dict) -> None:
-    """Write a coverage-audit.json for testing."""
-    data = {"tool": "audit", "files": {}, "files_examined": []}
-    for file_path, functions in entries.items():
-        data["files"][file_path] = {"functions": {}}
-        data["files_examined"].append(file_path)
-        for fn_name, status in functions.items():
-            data["files"][file_path]["functions"][fn_name] = {
-                "status": status,
-                "hash": None,
-                "strategies": [],
-            }
-    (out_dir / "coverage-audit.json").write_text(json.dumps(data, indent=2))
 
 
 # ---- _classify_verdict ----
@@ -250,29 +237,6 @@ class TestExtractFindings:
 
     def test_none_like(self):
         assert _extract_findings("unexpected") == []
-
-
-# ---- _format_feedback_block ----
-
-class TestFormatFeedbackBlock:
-    def test_basic_format(self):
-        t = {"description": "Downgraded finding → clean"}
-        block = _format_feedback_block("disproven", "dead code", "", t)
-        assert "### /validate feedback" in block
-        assert "disproven" in block
-        assert "dead code" in block
-
-    def test_with_lesson(self):
-        t = {"description": "Upgraded clean → finding"}
-        block = _format_feedback_block(
-            "confirmed", "real bug", "Lesson: missed it", t,
-        )
-        assert "Lesson: missed it" in block
-
-    def test_no_reason(self):
-        t = {"description": "corroborated"}
-        block = _format_feedback_block("confirmed", "", "", t)
-        assert "Reason:" not in block
 
 
 # ---- Integration: import_validation_results ----
@@ -649,3 +613,428 @@ class TestImportValidationResults:
         assert "## injected_fn" not in ann.body
         # The meta comment should be defanged
         assert "<!-- meta:" not in ann.body
+
+
+# ---- Dedup identity + confirmed-beats-disproven ----
+
+class TestDeduplicateFindings:
+    def test_distinct_cwe_same_function_both_kept(self):
+        """Two findings in the same function with different CWEs are
+        different findings — dedup must keep both."""
+        findings = [
+            {"file": "a.c", "function": "f", "cwe": "CWE-787", "line": 10,
+             "ruling": {"status": "confirmed"}},
+            {"file": "a.c", "function": "f", "cwe": "CWE-476", "line": 40,
+             "ruling": {"status": "ruled_out"}},
+        ]
+        assert len(_deduplicate_findings(findings)) == 2
+
+    def test_distinct_line_same_function_both_kept(self):
+        findings = [
+            {"file": "a.c", "function": "f", "line": 10},
+            {"file": "a.c", "function": "f", "line": 40},
+        ]
+        assert len(_deduplicate_findings(findings)) == 2
+
+    def test_same_identity_keeps_last(self):
+        findings = [
+            {"file": "a.c", "function": "f", "cwe": "787", "line": 10,
+             "ruling": {"status": "ruled_out"}},
+            {"file": "a.c", "function": "f", "cwe": "CWE-787", "line": 10,
+             "ruling": {"status": "confirmed"}},
+        ]
+        out = _deduplicate_findings(findings)
+        assert len(out) == 1
+        assert out[0]["ruling"]["status"] == "confirmed"
+
+    def test_finding_id_wins_over_field_identity(self):
+        findings = [
+            {"id": "F-1", "file": "a.c", "function": "f"},
+            {"id": "F-1", "file": "a.c", "function": "f", "extra": 1},
+            {"id": "F-2", "file": "a.c", "function": "f"},
+        ]
+        out = _deduplicate_findings(findings)
+        assert len(out) == 2
+        assert {f.get("id") for f in out} == {"F-1", "F-2"}
+
+
+class TestConfirmedBeatsDisproven:
+    def _seed_with_span(self, out_dir: Path, cwe: str,
+                        line_start: int, line_end: int) -> None:
+        entry = ReviewJournalEntry(
+            ts=now_iso(),
+            run_id="test",
+            file="src/a.c",
+            function="fn_a",
+            verdict="finding",
+            source_hash="",
+            line_start=line_start,
+            line_end=line_end,
+            cwe=cwe,
+            body="Bug found",
+        )
+        append_entry(out_dir, entry)
+
+    def _run(self, tmp_path: Path, report: list) -> dict:
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir(exist_ok=True)
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir(exist_ok=True)
+        report_path = tmp_path / "findings.json"
+        report_path.write_text(json.dumps(report))
+        return import_validation_results(
+            validation_report=report_path,
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+
+    def test_confirmed_then_disproven_decoy_keeps_finding(self, tmp_path):
+        """A disproven decoy processed after a confirmed finding in
+        the same function must not downgrade the journal to clean."""
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/a.c", "fn_a",
+                            "finding", "Bug found")
+        self._run(tmp_path, [
+            {"file": "src/a.c", "function": "fn_a",
+             "cwe": "CWE-787", "line": 10,
+             "ruling": {"status": "confirmed"}},
+            {"file": "src/a.c", "function": "fn_a",
+             "cwe": "CWE-476", "line": 40,
+             "ruling": {"status": "ruled_out", "reason": "decoy"}},
+        ])
+        assert _latest_journal_verdict(
+            audit_out, "src/a.c", "fn_a") == "finding"
+
+    def test_disproven_decoy_then_confirmed_keeps_finding(self, tmp_path):
+        """Reversed report order: the later confirmed finding must win
+        (its journal entry is the most recent)."""
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/a.c", "fn_a",
+                            "finding", "Bug found")
+        self._run(tmp_path, [
+            {"file": "src/a.c", "function": "fn_a",
+             "cwe": "CWE-476", "line": 40,
+             "ruling": {"status": "ruled_out", "reason": "decoy"}},
+            {"file": "src/a.c", "function": "fn_a",
+             "cwe": "CWE-787", "line": 10,
+             "ruling": {"status": "confirmed"}},
+        ])
+        assert _latest_journal_verdict(
+            audit_out, "src/a.c", "fn_a") == "finding"
+
+    def test_disproven_mismatched_cwe_does_not_downgrade(self, tmp_path):
+        """The journal entry records CWE-787; disproving a CWE-476
+        finding in the same function is not evidence against it."""
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        self._seed_with_span(audit_out, "CWE-787", 5, 30)
+        result = self._run(tmp_path, [
+            {"file": "src/a.c", "function": "fn_a",
+             "cwe": "CWE-476", "line": 10,
+             "ruling": {"status": "ruled_out", "reason": "decoy"}},
+        ])
+        assert result["downgraded"] == 0
+        assert _latest_journal_verdict(
+            audit_out, "src/a.c", "fn_a") == "finding"
+
+    def test_disproven_line_outside_span_does_not_downgrade(self, tmp_path):
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        self._seed_with_span(audit_out, "", 5, 30)
+        result = self._run(tmp_path, [
+            {"file": "src/a.c", "function": "fn_a", "line": 200,
+             "ruling": {"status": "ruled_out"}},
+        ])
+        assert result["downgraded"] == 0
+        assert _latest_journal_verdict(
+            audit_out, "src/a.c", "fn_a") == "finding"
+
+    def test_disproven_matching_cwe_and_line_still_downgrades(self, tmp_path):
+        """The guards must not block legitimate Reflexion downgrades."""
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        self._seed_with_span(audit_out, "CWE-787", 5, 30)
+        result = self._run(tmp_path, [
+            {"file": "src/a.c", "function": "fn_a",
+             "cwe": "787", "line": 10,
+             "ruling": {"status": "ruled_out", "reason": "test code",
+                        "disqualifier": "D-1"}},
+        ])
+        assert result["downgraded"] == 1
+        assert _latest_journal_verdict(
+            audit_out, "src/a.c", "fn_a") == "clean"
+
+    def test_disproven_without_cwe_or_line_still_downgrades(self, tmp_path):
+        """Lenient when there is nothing to compare — historical
+        behaviour preserved."""
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/a.c", "fn_a",
+                            "finding", "Bug found")
+        result = self._run(tmp_path, [
+            {"file": "src/a.c", "function": "fn_a",
+             "ruling": {"status": "ruled_out", "reason": "nope"}},
+        ])
+        assert result["downgraded"] == 1
+        assert _latest_journal_verdict(
+            audit_out, "src/a.c", "fn_a") == "clean"
+
+
+
+class TestValidateFeedbackScorecardProducer:
+    """The Reflexion importer is the live producer of audit:<CWE>
+    reliability cells (2d): each processed finding with a prior model
+    verdict and a concrete /validate verdict yields one
+    VALIDATE_FEEDBACK record."""
+
+    def _seed(self, out_dir: Path, verdict: str = "finding") -> None:
+        entry = ReviewJournalEntry(
+            ts=now_iso(),
+            run_id="test",
+            file="src/a.c",
+            function="f",
+            verdict=verdict,
+            source_hash="",
+            body="prior body",
+            model="claude-test-1",
+            cwe="CWE-787",
+        )
+        append_entry(out_dir, entry)
+
+    def _import(self, tmp_path: Path, ruling_status: str,
+                monkeypatch) -> list:
+        captured: list = []
+
+        def _capture(records, scorecard=None):
+            captured.extend(records)
+            return len(records)
+
+        monkeypatch.setattr(
+            "core.llm.scorecard.validate_feedback."
+            "record_validate_feedback_outcomes",
+            _capture,
+        )
+        ann = tmp_path / "annotations"
+        ann.mkdir(exist_ok=True)
+        report = tmp_path / "findings.json"
+        report.write_text(json.dumps({
+            "findings": [{
+                "file": "src/a.c", "function": "f",
+                "cwe_id": "CWE-787",
+                "ruling": {"status": ruling_status,
+                           "reason": "traced the path"},
+            }],
+        }))
+        import_validation_results(
+            validation_report=report,
+            annotations_dir=ann,
+            audit_out_dir=tmp_path,
+        )
+        return captured
+
+    def test_confirmed_finding_records_correct_signal(
+            self, tmp_path: Path, monkeypatch):
+        self._seed(tmp_path, verdict="finding")
+        records = self._import(tmp_path, "exploitable", monkeypatch)
+        assert len(records) == 1
+        rec = records[0]
+        assert rec["model"] == "claude-test-1"
+        assert rec["cwe"] == "CWE-787"
+        assert rec["prior_verdict"] == "finding"
+        assert rec["validate_verdict"] == "confirmed"
+
+    def test_disproven_finding_records_signal(
+            self, tmp_path: Path, monkeypatch):
+        self._seed(tmp_path, verdict="finding")
+        records = self._import(tmp_path, "ruled_out", monkeypatch)
+        assert len(records) == 1
+        assert records[0]["validate_verdict"] == "disproven"
+
+    def test_no_prior_model_records_nothing(
+            self, tmp_path: Path, monkeypatch):
+        # Journal entry without a model attribution — no cell to train.
+        entry = ReviewJournalEntry(
+            ts=now_iso(), run_id="test", file="src/a.c", function="f",
+            verdict="finding", source_hash="", body="",
+        )
+        append_entry(tmp_path, entry)
+        records = self._import(tmp_path, "exploitable", monkeypatch)
+        assert records == []
+
+    def test_decoy_disproval_not_recorded(self, tmp_path: Path,
+                                          monkeypatch):
+        # /validate disproved a finding whose CWE doesn't match the
+        # journal entry — the transition is vetoed AND no reliability
+        # event fires (the disproven finding isn't the model's claim).
+        entry = ReviewJournalEntry(
+            ts=now_iso(), run_id="test", file="src/a.c", function="f",
+            verdict="finding", source_hash="", body="",
+            model="claude-test-1", cwe="CWE-787", line_start=10,
+        )
+        append_entry(tmp_path, entry)
+        captured: list = []
+
+        def _capture(records, scorecard=None):
+            captured.extend(records)
+            return len(records)
+
+        monkeypatch.setattr(
+            "core.llm.scorecard.validate_feedback."
+            "record_validate_feedback_outcomes",
+            _capture,
+        )
+        ann = tmp_path / "annotations"
+        ann.mkdir(exist_ok=True)
+        report = tmp_path / "findings.json"
+        report.write_text(json.dumps({
+            "findings": [{
+                "file": "src/a.c", "function": "f",
+                "cwe_id": "CWE-89",   # different CWE — decoy
+                "line": 999,
+                "ruling": {"status": "ruled_out"},
+            }],
+        }))
+        import_validation_results(
+            validation_report=report,
+            annotations_dir=ann,
+            audit_out_dir=tmp_path,
+        )
+        assert captured == []
+
+
+# ---- Provenance-gated human veto ----
+
+def _write_annotation_meta(annotations_dir: Path, file_path: str,
+                           function_name: str, meta: str,
+                           body: str) -> None:
+    """Write an annotation file with a verbatim meta line — lets
+    tests exercise stamped, legacy, and forged provenance shapes."""
+    ann_path = annotations_dir / f"{file_path}.md"
+    ann_path.parent.mkdir(parents=True, exist_ok=True)
+    ann_path.write_text(
+        f"# {file_path}\n\n"
+        f"## {function_name}\n"
+        f"<!-- meta: {meta} -->\n\n"
+        f"{body}\n"
+    )
+
+
+class TestProvenanceGatedVeto:
+    """The Reflexion veto requires human GRADE — source=human plus an
+    interactive-TTY stamp (or a legacy stamp-less note). Everything
+    else demotes to the machine tier: no veto, but the note's status
+    still serves as the prior claim when no journal entry exists."""
+
+    def _report(self, tmp_path: Path) -> Path:
+        report_path = tmp_path / "findings.json"
+        report_path.write_text(json.dumps([{
+            "file": "src/vuln.c",
+            "function": "vuln_fn",
+            "ruling": {"status": "ruled_out", "reason": "dead code"},
+        }]))
+        return report_path
+
+    def test_stamped_interactive_human_vetoes(self, tmp_path: Path):
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        _write_annotation_meta(
+            ann_dir, "src/vuln.c", "vuln_fn",
+            "status=finding source=human "
+            "provenance=interactive-tty tty=stdin",
+            "Manually verified by operator",
+        )
+        result = import_validation_results(
+            validation_report=self._report(tmp_path),
+            annotations_dir=ann_dir,
+        )
+        assert result["skipped"] == 1
+        assert result["updated"] == 0
+
+    def test_legacy_human_without_stamp_vetoes(self, tmp_path: Path):
+        # Pre-stamp corpus keeps benefit-of-doubt: the write-path
+        # audit found zero mechanical writers at HEAD.
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        _write_annotation_meta(
+            ann_dir, "src/vuln.c", "vuln_fn",
+            "status=finding source=human",
+            "Old operator note",
+        )
+        result = import_validation_results(
+            validation_report=self._report(tmp_path),
+            annotations_dir=ann_dir,
+        )
+        assert result["skipped"] == 1
+        assert result["updated"] == 0
+
+    def test_forged_human_non_tty_does_not_veto(self, tmp_path: Path):
+        # source=human with a non-tty stamp is the laundering shape:
+        # no veto; the note is demoted to prior-claim duty and the
+        # /validate correction lands in the journal.
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _write_annotation_meta(
+            ann_dir, "src/vuln.c", "vuln_fn",
+            "status=finding source=human provenance=non-tty tty=none",
+            "Claimed manual, piped context",
+        )
+        result = import_validation_results(
+            validation_report=self._report(tmp_path),
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+        assert result["skipped"] == 0
+        assert result["downgraded"] == 1
+        assert _latest_journal_verdict(
+            audit_out, "src/vuln.c", "vuln_fn",
+        ) == "clean"
+
+    def test_agent_annotation_does_not_veto_but_stays_useful(
+        self, tmp_path: Path,
+    ):
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _write_annotation_meta(
+            ann_dir, "src/vuln.c", "vuln_fn",
+            "status=finding source=agent provenance=non-tty tty=none",
+            "Agent-recorded suspicion",
+        )
+        result = import_validation_results(
+            validation_report=self._report(tmp_path),
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+        # Machine tier: no veto, but the agent note's status was the
+        # prior claim, so the disproof produces a correction.
+        assert result["skipped"] == 0
+        assert result["downgraded"] == 1
+
+    def test_journal_entry_beats_machine_annotation(self, tmp_path: Path):
+        # When a journal entry exists it stays the prior; the machine
+        # annotation neither vetoes nor overrides it.
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                            "finding", "journal prior")
+        _write_annotation_meta(
+            ann_dir, "src/vuln.c", "vuln_fn",
+            "status=clean source=agent provenance=non-tty tty=none",
+            "Agent thinks it is fine",
+        )
+        result = import_validation_results(
+            validation_report=self._report(tmp_path),
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+        assert result["downgraded"] == 1
+        assert _latest_journal_verdict(
+            audit_out, "src/vuln.c", "vuln_fn",
+        ) == "clean"

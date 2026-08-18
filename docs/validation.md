@@ -27,8 +27,9 @@ assessment work.
 | `--skip-feasibility` | Skip Stage E entirely (useful when no binary is available) |
 | `--out <dir>` | Write output to a specific directory instead of the default |
 
-The canonical entry point is `python3 raptor.py validate` or the `/validate`
-slash command.
+The canonical entry point is the `/validate` slash command, which
+dispatches as a skill driven by `libexec/raptor-validation-helper`
+(there is no `raptor.py validate` mode).
 
 ### Typical workflows
 
@@ -71,8 +72,9 @@ and function inventory that every subsequent stage checks against.  It:
 - Enumerates all source files (12+ languages supported).
 - Excludes test, mock, vendor, generated, and build output files (with reasons
   recorded).
-- Extracts every function and method per file (AST for Python, regex for
-  others).
+- Extracts every function and method per file (AST for Python,
+  tree-sitter grammars for C/C++, Java, JS/TS, Go, Rust, C#, Ruby, PHP,
+  Lua, Scala, Kotlin, and Swift when available, regex fallback).
 - Computes a SHA-256 checksum per file.
 - Carries forward `checked_by` coverage from prior runs when a file has not
   changed.
@@ -110,7 +112,7 @@ The LLM then:
    and what would trigger reconsideration.
 
 Stage A also applies sanitisation-gate detection (parameterisation, escaping,
-whitelist validation, length checks, type-narrowing casts) and cross-class
+allowlist validation, length checks, type-narrowing casts) and cross-class
 escalation for persistent-storage sources (e.g. a database row flowing to an
 HTML render is flagged as a stored-XSS candidate regardless of how safe the
 sink looks in isolation).
@@ -158,6 +160,11 @@ PoC input values directly.
 Stage B also annotates attack paths with [Frida](frida.md) runtime evidence
 when available.  If a function was observed executing at runtime, reachability
 is empirically confirmed and PROXIMITY is floored at 6.
+
+When a Joern CPG is available, Stage B additionally enriches the attack
+surface with taint reachability (`core/orchestration/validate_joern.py`)
+and can confirm a per-finding source-to-sink flow; a Joern-confirmed
+flow floors PROXIMITY at 2.
 
 **Output:** `stage-b.json`, `attack-tree.json`, `hypotheses.json`,
 `disproven.json`, `attack-paths.json`, `attack-surface.json`.
@@ -236,7 +243,7 @@ finding (`exploitable`, `confirmed`, or `ruled_out`).
 ### Stage E -- Binary Feasibility (Mechanical + LLM)
 
 Applies **only** to memory corruption vulnerability types.  The canonical set
-of 13 applicable types lives in `core/schema_constants.py` as
+of 13 applicable types lives in `core/schema_constants/` as
 `MEMORY_CORRUPTION_TYPES` and includes buffer overflow, format string,
 use-after-free, heap overflow, double free, integer overflow, out-of-bounds
 read/write, null dereference, and type confusion.  Non-memory-corruption
@@ -279,11 +286,18 @@ each, and attaches an `empirical_mitigation_map` to the finding.
 
 | Source Validation | Feasibility Verdict | Final Status |
 |-------------------|---------------------|--------------|
-| confirmed | likely_exploitable | `exploitable` |
+| confirmed | exploitable | `exploitable` |
+| confirmed | likely_exploitable | `likely_exploitable` |
 | confirmed | difficult | `confirmed_constrained` |
 | confirmed | unlikely | `confirmed_blocked` |
+| confirmed | unknown / error | `confirmed_unverified` |
 | confirmed | not_applicable | `confirmed` |
 | confirmed | binary_not_found | `confirmed_unverified` |
+
+This mapping is identical in both implementations (the skill helper's
+`VERDICT_MAP` and the Python orchestrator's `verdict_to_status`);
+`likely_exploitable` is a distinct final status, never collapsed into
+`exploitable`.
 
 When a binary cannot be located, the finding is marked `confirmed_unverified`
 with guidance on how to provide one (`/validate --binary /path/to/binary`).
@@ -383,6 +397,7 @@ live in the individual scripts and packages.
 | `raptor-smt-check-oob` | Array out-of-bounds access | CWE-125, CWE-787 |
 | `raptor-smt-check-null-deref` | Null pointer dereference | CWE-476 |
 | `raptor-smt-check-overflow-to-oob` | Chained overflow then OOB | CWE-680 |
+| `raptor-smt-check-negative-bypass` | Signed comparison bypass with negative values | CWE-839 |
 
 Z3 is a soft dependency (`pip install z3-solver`).  When absent, all tools
 return `feasible: null` and the pipeline falls back to LLM reasoning alone.
@@ -429,7 +444,7 @@ ctx = load_exploit_context(finding.feasibility.context_file)
 A completed `/validate` run produces the following directory structure:
 
 ```
-out/exploitability-validation-<timestamp>/
+out/validate_<target>_<timestamp>/     (project mode: <project>/validate-<timestamp>/)
   checklist.json            -- Ground truth inventory (Stage 0)
   findings.json             -- Final validated findings with all stage data
   attack-tree.json          -- Knowledge graph (Stage B)
@@ -441,7 +456,7 @@ out/exploitability-validation-<timestamp>/
   diagrams.md               -- Mermaid visual maps (Stage 1)
   summary.txt               -- Tabular summary (Stage 1)
   build/                    -- Compiled PoCs (Stage A)
-  coverage-record.json      -- Coverage tracking data
+  coverage-llm.json         -- Coverage tracking data (Stage 1)
 ```
 
 ### Validation gates

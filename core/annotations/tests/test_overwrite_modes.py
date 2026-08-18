@@ -15,7 +15,6 @@ Plus the per-function source-line hash used by ``/annotate stale``:
 
 from __future__ import annotations
 
-
 import pytest
 
 from core.annotations import (
@@ -25,7 +24,6 @@ from core.annotations import (
     read_file_annotations,
     write_annotation,
 )
-
 
 # ---------------------------------------------------------------------------
 # overwrite="all" (default)

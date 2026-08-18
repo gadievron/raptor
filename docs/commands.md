@@ -32,8 +32,12 @@ Static analysis scan using Semgrep (and optionally CodeQL and Coccinelle).
 | `--no-cocci` | Disable Coccinelle (spatch) analysis |
 | `--languages <langs>` | Restrict to specific languages |
 | `--build-command <cmd>` | Build command for compiled languages (CodeQL) |
+| `--traced-build` / `--no-traced-build` | Opt into (or force off) traced-build C/C++ CodeQL extraction |
+| `--compiler-scan` / `--no-compiler-scan` | Enable/disable the compiler-analyzer channel (gcc `-fanalyzer` / clang `--analyze`) |
+| `--compiler-scan-max-tus <n>` | Cap on translation units for `--compiler-scan` (default 2000) |
+| `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
 | `--keep` | Keep intermediate scan artefacts |
-| `--sequential` | Run scanners sequentially instead of in parallel |
+| `--sequential` | Fully serial run: packs one at a time and stages in order (no Semgrep/CodeQL overlap) |
 | `--out <dir>` | Output directory override |
 | `--exclude-dir <glob>` | Exclude directories matching glob (repeatable) |
 | `--extra-config <path>` | Additional Semgrep config file (repeatable) |
@@ -68,7 +72,6 @@ patches.
 | `--sarif-out <file>` | Write merged SARIF output to file |
 | `--reanalyze <dir>` | Re-analyse a previous run directory |
 | `--out <dir>` | Output directory override |
-| `--mode {fast,thorough}` | Analysis depth |
 | `--sequential` | Bypass parallel orchestration |
 | `--verbose` | Verbose output |
 | `--log-level <level>` | Logging level |
@@ -97,6 +100,10 @@ patches.
 | `--build-command <cmd>` | Build command for compiled languages |
 | `--extended` | Enable extended CodeQL query suites |
 | `--codeql-cli <path>` | Path to CodeQL CLI binary |
+| `--traced-build` / `--no-traced-build` | Opt into (or force off) traced-build C/C++ CodeQL extraction |
+| `--compiler-scan` / `--no-compiler-scan` | Enable/disable the compiler-analyzer scan channel (gcc `-fanalyzer` / clang `--analyze`) |
+| `--compiler-scan-max-tus <n>` | Cap on translation units for `--compiler-scan` (default 2000) |
+| `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
 
 **Output control**
 
@@ -114,11 +121,10 @@ patches.
 | `--binary <path>` | Explicit debug binary for reachability filtering (repeatable) |
 | `--binary-auto` | Auto-detect locally-built binaries |
 | `--binary-edges` | Extract call edges and vtable resolution via r2 |
-| `--no-binary-oracle` | Disable binary-oracle filtering entirely |
+| `--no-binary-oracle` | Disable binary-oracle filtering |
 | `--target-kind {auto,library,hybrid,application}` | Target kind for binary oracle |
 | `--allow-unreachable` | Do not suppress unreachable findings |
 | `--check-mitigations` | Run binary mitigation checks |
-| `--skip-mitigation-checks` | Skip binary mitigation checks |
 
 **Sanitiser cut**
 
@@ -164,6 +170,8 @@ patches.
 | `--skip-sca-triage` | Skip SCA triage |
 | `--accept-weakened-defenses` | Accept findings in weakened-defence categories |
 | `--trust-repo` | Trust the repository (skip untrusted-repo sanitisation) |
+| `--no-trust-repo` | Keep strict trust checks, overriding `--trust-repo` and the project's `config` trust marker |
+| `--max-cost-usd <usd>` | LLM budget cap for the run (default $10) |
 
 **Sandbox** (see [sandbox](sandbox.md))
 
@@ -244,7 +252,7 @@ Coverage-guided fuzzing with automatic harness generation.
 | `--seed-out <path>` | Seed output directory |
 | `--seed-max-size <bytes>` | Maximum seed file size |
 | `--seed-include-lockfiles` | Include lockfiles in seed corpus |
-| `--dict <path>` | Fuzzer dictionary file |
+| `--dict <path>` | Fuzzer dictionary file (when omitted, an audit-generated `fuzz.dict` is auto-discovered from the run's own or newest sibling run directory) |
 | `--input-mode {stdin,file}` | How to feed input to the target |
 
 **Execution**
@@ -254,7 +262,7 @@ Coverage-guided fuzzing with automatic harness generation.
 | `--duration <secs>` | Fuzz duration in seconds (default 3600) |
 | `--parallel <n>` | Number of parallel fuzzing jobs |
 | `--max-crashes <n>` | Stop after N unique crashes (default 10) |
-| `--timeout <secs>` | Per-execution timeout |
+| `--timeout <ms>` | Per-execution timeout in milliseconds (default 1000) |
 | `--out <dir>` | Output directory override |
 | `--check-sanitizers` | Verify sanitiser availability |
 | `--recompile-guide` | Emit recompilation guidance for instrumentation |
@@ -349,14 +357,13 @@ Analyse existing SARIF findings with LLM without re-scanning.
 | `--max-findings <n>` | Maximum findings to analyse |
 | `--prefer <glob>` | Prioritise findings matching glob (repeatable) |
 | `--exclude-dir <glob>` | Exclude directories matching glob (repeatable) |
-| `--checklist` | Generate a review checklist |
+| `--checklist <file>` | Inventory `checklist.json` for function metadata lookup |
 | `--no-journal` | Skip journal updates |
 | `--no-checker-synthesis` | Skip checker synthesis |
 | `--no-verify-exploits` | Skip exploit verification |
 | `--no-judge-intent` | Skip intent judgement |
 | `--no-record-witnesses` | Skip witness recording |
 | `--no-verified-exemplars` | Skip verified exemplar generation |
-| `--sage-precall <path>` | SAGE pre-call context file |
 | `--prep-only` | Prepare context only, do not analyse |
 | `--max-parallel <n>` | Maximum parallel analysis workers |
 | `--model <model>` | LLM model (repeatable) |
@@ -384,14 +391,21 @@ code as vulnerable -- tool output is the verdict.
 |------|-------------|
 | `--strategy <name>` | Filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing |
 | `--budget <N>` | Maximum functions to review (default: all gaps) |
-| `--scope <dir>` | Restrict to a subdirectory (successive scoped runs accumulate) |
+| `--scope <dir>` | Restrict to a subdirectory (repeatable; successive scoped runs accumulate) |
 | `--out <dir>` | Output directory |
 | `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep |
 | `--max-cost <USD>` | Stop after spending this many dollars on LLM calls |
+| `--deepen-reserve <fraction>` | Slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables) |
 | `--max-time <seconds>` | Wall-clock time limit |
 | `--review-passes <N>` | Independent review passes per function for self-consistency |
 | `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
 | `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated) |
+| `--include-kinds <list>` | Extra item kinds beyond functions/methods: `top_level`, `macro`, `global` |
+| `--batch-sloc-threshold <N>` | Batch small functions per file into combined reviews (default 15; 0 disables) |
+| `--no-verdict-reuse` | Disable cross-run verdict reuse for unchanged functions |
+| `--schedule {cost,priority}` | Parallel review ordering |
+| `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation for confirmed findings |
+| `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment |
 | `--model <name>` | Model ID (repeatable for multi-model consensus) |
 | `--adversarial` | Adversarial reviewer that challenges positive verdicts |
 | `--no-validate` | Skip the /validate post-pass |
@@ -462,17 +476,17 @@ Accepts the same flags as [/agentic](#agentic) minus `--no-patches`.
 
 ### /understand
 
-Deep, adversarial code comprehension for security research.  Four mutually
-exclusive modes.
+Deep, adversarial code comprehension for security research.  Five modes.
 
 ```
 /understand <target> --map
 /understand <target> --trace <entry>
 /understand <target> --hunt <pattern>
 /understand <target> --teach <subject>
+/understand <target> --study <scope>
 ```
 
-**Mode flags** (exactly one required)
+**Mode flags**
 
 | Flag | Description |
 |------|-------------|
@@ -480,6 +494,14 @@ exclusive modes.
 | `--trace <entry>` | Follow one data-flow path source to sink |
 | `--hunt <pattern>` | Find all variants of a vulnerability pattern |
 | `--teach <subject>` | Explain a framework, library, or pattern |
+| `--study <scope>` | Extract semantic concepts (ownership, lifetime, contracts) |
+
+`--study` runs as its own pipeline and must not be combined with other
+modes; the `libexec/raptor-understand` substrate (binary `--map`,
+multi-model `--hunt`/`--trace`) accepts exactly one of its three
+modes per invocation.  Study is multi-language: C/C++ resolve through
+the study-prep corpus; Python, Go, Java, JavaScript/TypeScript, and
+Rust identifiers resolve in-process.
 
 **Common flags**
 
@@ -500,6 +522,7 @@ exclusive modes.
 - `--trace` produces `flow-trace-<id>.json`
 - `--hunt` produces `variants.json`
 - `--teach` is inline (no file output)
+- `--study` produces `domain-model.json`
 
 Pipeline integration: [/validate](#validate) Stage 0 automatically imports
 `/understand` output via the bridge.  See [architecture](architecture.md) for
@@ -539,10 +562,13 @@ Skill-dispatched multi-agent orchestration.
 | Flag | Description |
 |------|-------------|
 | `--max-followups <n>` | Maximum follow-up investigation rounds (default 3) |
-| `--max-retries <n>` | Maximum retries on transient failures (default 3) |
+| `--max-retries <n>` | Maximum hypothesis revision rounds (default 3) |
 
 Agents query GH Archive (BigQuery), live GitHub API, Wayback Machine, and
-local git history.  Requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery.
+local git history.  Requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery
+(read-only `BigQuery User` role; queries run through the typed
+`libexec/raptor-bq-query` wrapper — single read-only statement,
+bytes-billed cap, egress-pinned sandbox).
 
 Output: `.out/oss-forensics-<timestamp>/forensic-report.md`
 
@@ -565,6 +591,11 @@ Find vulnerable dependencies, gate CI, fix and pin.  Alias: `/raptor-sca`.
 /sca purl <ecosystem> <name> <version>
 /sca render <findings.json>
 /sca clean-cache --max-age <days>
+/sca dt-push <sbom> --url <url> --api-key <key>
+/sca suppress <list|check> <path>
+/sca bump <path> ...
+/sca fingerprint <path-or-image-ref> [--save|--check]
+/sca triage <path>
 ```
 
 **Scan flags** (default subcommand)
@@ -687,9 +718,8 @@ Dynamic instrumentation via Frida.  Skill-dispatched.
 **Bundled templates:** `api-trace`, `ssl-unpin`, `binary-flow-trace`,
 `bb-coverage`.
 
-See [Frida quickstart](frida/QUICKSTART.md) for installation and
-platform-specific setup ([Linux](frida/SETUP_LINUX.md),
-[macOS](frida/SETUP_MACOS.md)).
+See the [Frida guide](frida.md) for installation and platform-specific
+setup.
 
 ---
 
@@ -700,7 +730,7 @@ platform-specific setup ([Linux](frida/SETUP_LINUX.md),
 Named workspaces that corral analysis runs into a shared directory.
 
 ```
-/project create <name> --target <path> [-d <description>]
+/project create <name> --target <path> [-d <description>] [--output-dir <dir>] [--binary <path> ...] [--require-target-type <kind>]
 /project list
 /project status [<name>]
 /project use [<name>]
@@ -708,23 +738,31 @@ Named workspaces that corral analysis runs into a shared directory.
 /project delete <name> [--purge] [--yes]
 /project rename <old> <new>
 /project notes <name> [<text>] [--file <path>]
-/project description <name> [<text>]
 /project add <name> <dir> [--target <path>]
 /project remove <name> <run> --to <path>
 /project report [<name>]
 /project diff <name> <run1> <run2>
 /project merge [<name>] [--type <type>] [--yes]
 /project findings [<name>] [--detailed]
-/project coverage [<name>] [--detailed]
+/project coverage [<name>] [--detailed] [--fail-under <pct>]
+/project correlate [<name>]
+/project provenance [<name>]
+/project show <run>
+/project threat-model <action> [args]
 /project annotations [<name>]
 /project annotations-diff <run-a> <run-b>
-/project clean [<name>] [--keep <n>] [--dry-run] [--yes]
+/project clean [<name>] [--keep <n>] [--dedup] [--dry-run] [--yes]
 /project export <name> <path> [--force]
 /project import <path> [--force] [--sha256 <hash>]
 /project binary add <path>
 /project binary list
 /project binary remove <path>
 /project binary clear
+/project trust [<marker>]
+/project untrust <marker>
+/project set [<key> <value>]
+/project unset <key>
+/project get <key>
 /project help
 ```
 
@@ -740,14 +778,17 @@ Named workspaces that corral analysis runs into a shared directory.
 | `delete` | Delete a project (`--purge` removes output directory, `--yes` skips confirmation) |
 | `rename` | Rename a project |
 | `notes` | View or set project notes (inline text or `--file`) |
-| `description` | View or set project description |
 | `add` | Add a run directory to the project |
 | `remove` | Remove a run, moving it to `--to <path>` |
 | `report` | Generate a merged report across all runs |
 | `diff` | Diff two runs within a project |
 | `merge` | Merge findings across runs (`--type` selects merge strategy) |
 | `findings` | Show merged findings (`--detailed` for per-finding breakdown) |
-| `coverage` | Show tool coverage summary (`--detailed` for per-file table) |
+| `coverage` | Show tool coverage summary (`--detailed` for per-file table, `--fail-under <pct>` for CI gating) |
+| `correlate` | Cross-run finding correlation |
+| `provenance` | Provenance rollup across all runs (SHAs, engines, models, reproducibility) |
+| `show` | Show one run's provenance detail |
+| `threat-model` | Manage the project threat-model artefact (init/show/export/sync/lint/diff/report/add/remove) |
 | `annotations` | Show annotations across runs |
 | `annotations-diff` | Diff annotations between two runs |
 | `clean` | Delete old runs (`--keep <n>` retains the N most recent, `--dry-run` previews) |
@@ -757,10 +798,49 @@ Named workspaces that corral analysis runs into a shared directory.
 | `binary list` | List persisted binaries |
 | `binary remove` | Remove a persisted binary |
 | `binary clear` | Clear all persisted binaries |
+| `trust` | List trust assertions (markers + persisted binaries count), or set a marker (`config`/`build`/`dynamic`) |
+| `untrust` | Remove a trust marker |
+| `set` | List settings, or set a registry key (`description`, `notes`, `threat-model`, `target-kind`, `build-command[.<lang>]`) |
+| `unset` | Remove a setting |
+| `get` | Print one setting's bare value (exit 1 when unset — script-friendly) |
 
 Persisted binaries are auto-loaded by `/agentic`, `/codeql`, and `/validate`
 runs.  See [architecture](architecture.md) for run lifecycle and output
 directory conventions.
+
+**Trust markers.** `trust` / `untrust` persist operator trust
+assertions on the project (schema v4), stored as marker → timestamp in
+the project JSON under `~/.raptor/projects/` — never inside the
+scanned repo, and never set automatically. Each marker only loosens a
+gate its per-run flag already loosens:
+
+| Marker | Equivalent per-run flag | Effect |
+|--------|------------------------|--------|
+| `config` | `--trust-repo` | Lifts BOTH the Claude Code config check (`cc_trust`) and the CodeQL pack-config check (`codeql_trust`) |
+| `build` | `--traced-build` | Traced-build C/C++ CodeQL extraction (executes the repo's build system) |
+| `dynamic` | `--dynamic` (audit) | Dynamic validation: Frida observation / target execution defaults on |
+
+Markers are consumed where `/agentic` and `/codeql` load the project's
+persisted binaries, and where the audit pipeline builds
+`dynamic_validation`. Per-run flags always win, in both directions:
+explicit negative flag (`--no-trust-repo`, `--no-traced-build`,
+`--no-dynamic`) > explicit positive flag > project marker > default
+(off). Whenever a marker affects a run, one banner line prints at
+start: `[*] project trust: build, dynamic (per-run flags override)`.
+`build` deliberately does NOT imply `config` — a traced run that hits
+unsafe CodeQL pack config still refuses (see
+[docs/codeql.md](codeql.md)).
+
+**Settings.** `set` / `unset` / `get` manage a small, registry-
+validated key/value surface — unknown keys are rejected with the valid
+list (not an open KV store), and identity fields (name, target,
+output_dir, created) are not settable. `description` and `notes` map
+to the existing project fields; `threat-model` points at an existing
+threat-model JSON (updates `threat_model_path`); `target-kind` is one
+of `library|hybrid|application|auto`; `build-command` stores per-
+language commands (`build-command.<lang>`; the bare key writes the
+`default` slot). `get <key>` prints the bare value and exits 1 when
+unset, for scripting.
 
 ---
 
@@ -841,8 +921,9 @@ Markdown files mirroring the source tree, with `## function_name` sections.
 | `--lines <N-M>` | Source line range |
 | `--target <repo_root>` | Repository root for hash computation |
 | `--meta <KEY=VALUE>` | Metadata key-value pair (repeatable) |
-| `--source <value>` | Attribution source (`human` or `llm`) |
-| `--overwrite {all,respect-manual}` | Overwrite policy |
+| `--checklist <path>` | Inventory `checklist.json` for auto-discovering function bounds when `--lines` is omitted |
+| `--source <value>` | Attribution source (`human`, `llm`, or `agent`; defaults to `human` for interactive invocations — any std fd a TTY — and `agent` otherwise) |
+| `--overwrite {all,respect-manual}` | Overwrite policy (`respect-manual` skips rather than overwrite `source=human` records) |
 
 **Ls flags**
 
@@ -864,10 +945,14 @@ Markdown files mirroring the source tree, with `## function_name` sections.
 
 Status values: `clean` (reviewed, no concern), `suspicious` (real bug, not
 exploitable), `finding` (exploitable), `dormant` (unreachable / dead code),
-`entry_point`, `sink`, `trust_boundary`, `flow_step`, `unchecked_flow`,
 `error`.
 
-Annotations are emitted automatically by `/agentic` and `/understand`.
+Annotations are human-only for new writes: no pipeline writes them, and
+operators add them via `/annotate add`.  Every add/edit stamps the
+invocation context (which std fds were TTYs); only `source=human` notes
+with an interactive-TTY stamp (or legacy pre-stamp notes) earn
+human-grade weight in readers.  LLM review outcomes are recorded in the
+review journal instead.
 
 ---
 
@@ -878,8 +963,13 @@ natural-language questions about model competence.
 
 ```
 /scorecard [list]
+/scorecard summary
+/scorecard recommend <decision_class>
+/scorecard chain-closure [--cwe <CWE-XX>]
 /scorecard compare <model-a> <model-b>
 /scorecard samples <decision_class>
+/scorecard mark <decision_class> --model <model> ...
+/scorecard tool-evidence <decision_class> --model <model> ...
 /scorecard pin <decision_class> --model <model> --as <mode>
 /scorecard unpin <decision_class> --model <model>
 /scorecard reset [<decision_class>] [--model <model>]
@@ -891,11 +981,13 @@ natural-language questions about model competence.
 |------|-------------|
 | `--by-savings` | Sort by cost savings |
 | `--by-miss-rate` | Sort by miss rate |
+| `--by-cost` | Sort by cost |
 | `--untrusted` | Show untrusted-only decisions |
 | `--learning` | Show learning-phase decisions |
 | `--prefix <prefix>` | Filter decision classes by prefix |
+| `--event-type <type>` | Filter by event type |
 | `--since <interval>` | Filter by recency (`Nd`, `Nh`) |
-| `--recency <days>` | Recency window in days |
+| `--freshness <days>` | Weight recent behaviour more heavily (half-life in days) |
 
 **Pin flags**
 
@@ -1012,7 +1104,8 @@ knowledge layer.
 | `get <id>` | Show a single memory in full |
 
 Requires the SAGE Docker sidecar.  Run `libexec/raptor-sage-setup` to
-install it.
+install it.  See the [SAGE guide](sage.md) for setup, the HMAC
+row-authentication key, and upgrade paths.
 
 ---
 
@@ -1050,7 +1143,9 @@ operator annotations.
 | `stats` | Entry counts, costs, coverage % |
 | `compact` | Compact project journal index |
 
-Options: `--out DIR` (explicit output directory), `--raw` (JSON output).
+Options: `--out DIR` (explicit output directory), `--project DIR`
+(explicit project directory), `--raw` (JSON output). `stale` also
+accepts `--source annotation|journal|both` and `--target <repo>`.
 
 ---
 
@@ -1072,41 +1167,18 @@ Send a free-form prompt to any configured LLM model and print the response.  Dev
 | `--max-tokens N` | `4096` | Maximum output tokens |
 | `--temperature F` | model default | Sampling temperature |
 | `--json-schema PATH` | *(none)* | Path to a JSON schema file for structured output |
+| `--system-file PATH` | *(none)* | Load system prompt from a file |
+| `--raw` | off | Print response text only (compact JSON for structured output) |
 | `--debug` | off | Show model metadata, cost, provider logging, and scorecard summary |
 
 By default only the model's response text is printed — no logging, no scorecard line, no metadata.  Pass `--debug` to see the full diagnostic output.
 
+When no positional prompt is given and stdin is a pipe, stdin is the prompt.
+Multiple `--file` flags concatenate in order, followed by the prompt text.
+
 Natural-language routing: when the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, Claude routes through this tool automatically.
 
 **Implementation:** `libexec/raptor-llm-ask`
-
----
-
-### /ask
-
-Send a prompt to any configured LLM model.  Developer tool for cross-model
-diagnosis, debugging model reasoning, or comparing verdicts.
-
-```
-/ask --model <name> "prompt text"
-/ask --model <name> --file context.c "Why is this vulnerable?"
-/ask --model <name> --system-file system.txt --file code.c "Review this"
-```
-
-| Flag | Description |
-|------|-------------|
-| `--model <name>` | Model to query (required) |
-| `--file <path>` | Prepend file contents as context (repeatable) |
-| `--system <text>` | System prompt (inline) |
-| `--system-file <path>` | Load system prompt from a file |
-| `--json-schema <path>` | Path to a JSON schema file for structured output |
-| `--max-tokens <n>` | Maximum output tokens (default: 4096) |
-| `--temperature <f>` | Sampling temperature |
-| `--raw` | Print response text only (compact JSON for structured output) |
-| `--debug` | Show model metadata, cost, and provider logging |
-
-When no positional prompt is given and stdin is a pipe, stdin is the prompt.
-Multiple `--file` flags concatenate in order, followed by the prompt text.
 
 ---
 

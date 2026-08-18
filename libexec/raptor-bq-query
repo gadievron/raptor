@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Typed BigQuery query wrapper for GH Archive forensics.
+
+Replaces raw ``bq`` / ad-hoc Python BigQuery invocations in the
+oss-forensics pipeline with a single, narrow surface: one read-only
+statement in, one JSON envelope out.
+
+Usage:
+    raptor-bq-query --query 'SELECT ... FROM `githubarchive.day.20250713` ...'
+    raptor-bq-query --query-file query.sql --max-bytes-billed 50000000000
+    raptor-bq-query --query-file query.sql --dry-run
+    raptor-bq-query --query-file - --output rows.json   # query on stdin
+
+Validation (misuse prevention, NOT SQL sandboxing): the query must be a
+single statement whose leading keyword — after comment stripping — is
+SELECT or WITH. DML/DDL/scripting and multi-statement input are
+rejected. The actual security boundary is BigQuery's credential
+scoping: use a service account holding only the read-only ``BigQuery
+User`` role.
+
+Egress posture: by default the query runs in a sandboxed child
+(``core.sandbox.run_untrusted_networked``) whose only network path is
+the RAPTOR egress proxy, pinned to {bigquery.googleapis.com,
+oauth2.googleapis.com, www.googleapis.com} plus the ``token_uri`` host
+declared in the service-account key (legacy keys use
+accounts.google.com). The proxy honours the operator's outbound
+HTTPS_PROXY (corporate proxy chaining) and the allowlist can be
+replaced via ~/.config/raptor/bq-proxy-hosts.json. Sandboxed mode
+requires GOOGLE_APPLICATION_CREDENTIALS (key-file path or inline JSON)
+— gcloud ADC under $HOME and the GCE metadata server are unreachable
+from inside the sandbox by design. ``--no-sandbox`` runs the client
+in-process with the host's ambient (unpinned) egress; use it only when
+the sandbox is unavailable or ADC is required.
+
+Exit codes (see core/forensics/bq_query.py):
+    0 ok | 2 trust/usage | 3 validation | 4 input | 5 dependency
+    6 credentials | 7 query | 8 timeout | 9 sandbox
+
+Errors are one structured JSON line on stderr:
+    {"error": "<kind>", "message": "...", "exit_code": N}
+"""
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+_RAPTOR_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_RAPTOR_ROOT))
+import core.startup.process_init  # noqa: E402,F401
+from core.forensics import bq_query as bq  # noqa: E402
+
+_CHILD_SCRIPT = _RAPTOR_ROOT / "core" / "forensics" / "bq_query.py"
+
+# Margin added to the subprocess timeout so the child's own query
+# timeout (exit 8 with a structured error) fires first; the hard
+# subprocess kill is the backstop for a wedged interpreter.
+_CHILD_TIMEOUT_MARGIN_S = 60
+
+
+def _read_query(args) -> str:
+    if args.query is not None:
+        return args.query
+    if args.query_file == "-":
+        return sys.stdin.read()
+    path = Path(args.query_file)
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise bq.RequestInputError(
+            f"could not read query file {args.query_file!r}: {exc}"
+        ) from exc
+
+
+def _emit_result(result: dict, output: str | None) -> None:
+    text = json.dumps(result, default=bq._json_default)
+    if output:
+        Path(output).write_text(text + "\n", encoding="utf-8")
+        summary = {"output": output, "dry_run": result.get("dry_run", False)}
+        if "row_count" in result:
+            summary["row_count"] = result["row_count"]
+        print(json.dumps(summary))
+    else:
+        print(text)
+
+
+def _run_sandboxed(request: dict, args, creds_value: str) -> int:
+    """Execute the query in the networked sandbox; relay child output."""
+    from core.config import RaptorConfig
+    from core.sandbox import run_untrusted_networked
+    from core.sandbox.python_paths import python_runtime_tool_paths
+
+    env = RaptorConfig.get_safe_env()
+    env["GOOGLE_APPLICATION_CREDENTIALS"] = creds_value
+
+    readable = python_runtime_tool_paths() + [str(_CHILD_SCRIPT.parent)]
+    if not creds_value.lstrip().startswith("{"):
+        creds_path = Path(creds_value)
+        if creds_path.is_file():
+            readable.append(str(creds_path))
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="raptor-bq-") as scratch:
+            proc = run_untrusted_networked(
+                [sys.executable, str(_CHILD_SCRIPT)],
+                output=scratch,
+                proxy_hosts=bq.proxy_hosts_for_bq(),
+                readable_paths=readable,
+                env=env,
+                input=json.dumps(request),
+                capture_output=True,
+                text=True,
+                timeout=args.timeout + _CHILD_TIMEOUT_MARGIN_S,
+                caller_label="bq-query",
+            )
+    except subprocess.TimeoutExpired:
+        return bq.write_error_json(sys.stderr, bq.QueryTimeoutError(
+            f"sandboxed query child exceeded "
+            f"{args.timeout + _CHILD_TIMEOUT_MARGIN_S}s"
+        ))
+    except Exception as exc:  # noqa: BLE001 — sandbox machinery varies
+        return bq.write_error_json(
+            sys.stderr, "sandbox",
+            f"could not launch the sandboxed query child: {exc!r} — "
+            "if this host cannot sandbox, re-run with --no-sandbox "
+            "(egress will not be pinned)",
+            bq.EXIT_SANDBOX,
+        )
+
+    if proc.returncode == 0 and args.output:
+        try:
+            result = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            return bq.write_error_json(
+                sys.stderr, "query",
+                f"child produced unparseable JSON: {exc}", bq.EXIT_QUERY,
+            )
+        _emit_result(result, args.output)
+    else:
+        sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    return proc.returncode
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run one read-only BigQuery statement, print JSON",
+    )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--query", help="SQL text (single read-only statement)",
+    )
+    source.add_argument(
+        "--query-file",
+        help="Read the SQL from this file ('-' for stdin)",
+    )
+    parser.add_argument(
+        "--project", default=None,
+        help="GCP project to bill (default: from credentials)",
+    )
+    parser.add_argument(
+        "--max-bytes-billed", type=int,
+        default=bq.DEFAULT_MAX_BYTES_BILLED,
+        help="Hard cap on bytes billed; the job fails if it would scan "
+             f"more (default: {bq.DEFAULT_MAX_BYTES_BILLED})",
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=bq.DEFAULT_TIMEOUT_S,
+        help=f"Query timeout in seconds (default: {bq.DEFAULT_TIMEOUT_S:g})",
+    )
+    parser.add_argument(
+        "--format", choices=["json"], default="json",
+        help="Output format (json only)",
+    )
+    parser.add_argument(
+        "--output", default=None,
+        help="Write the JSON envelope to this file instead of stdout "
+             "(stdout gets a one-line summary)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Estimate bytes scanned / cost without running the query",
+    )
+    parser.add_argument(
+        "--no-sandbox", action="store_true",
+        help="Run the BigQuery client in-process instead of the "
+             "egress-pinned sandbox (ambient network posture)",
+    )
+    args = parser.parse_args()
+
+    if args.max_bytes_billed <= 0:
+        parser.error("--max-bytes-billed must be a positive integer")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+
+    try:
+        sql = _read_query(args)
+        sql = bq.validate_query(sql)
+    except bq.BQQueryError as exc:
+        return bq.write_error_json(sys.stderr, exc)
+
+    request = {
+        "sql": sql,
+        "project": args.project,
+        "max_bytes_billed": args.max_bytes_billed,
+        "timeout_s": args.timeout,
+        "dry_run": args.dry_run,
+    }
+
+    if not args.no_sandbox:
+        creds_value = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        if not creds_value:
+            return bq.write_error_json(sys.stderr, bq.CredentialsError(
+                "GOOGLE_APPLICATION_CREDENTIALS is not set — sandboxed "
+                "mode needs an explicit key file or inline JSON (gcloud "
+                "ADC under $HOME is unreadable inside the sandbox). Set "
+                "it, or use --no-sandbox for ADC."
+            ))
+        return _run_sandboxed(request, args, creds_value)
+
+    sys.stderr.write(
+        "raptor-bq-query: --no-sandbox — egress is NOT pinned; the "
+        "BigQuery client uses the host's ambient network posture\n"
+    )
+    try:
+        result = bq.execute(
+            sql,
+            project=args.project,
+            max_bytes_billed=args.max_bytes_billed,
+            timeout_s=args.timeout,
+            dry_run=args.dry_run,
+        )
+    except bq.BQQueryError as exc:
+        return bq.write_error_json(sys.stderr, exc)
+    _emit_result(result, args.output)
+    return bq.EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

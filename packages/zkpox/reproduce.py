@@ -37,11 +37,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 from core.sandbox import SandboxSetupError
 from core.witness.types import WitnessOutcome
-
 from packages.zkpox.bundle import ZKPoXBundle
 
 logger = logging.getLogger(__name__)
@@ -66,7 +64,7 @@ class ReproductionResult:
     attempted: bool
     runs: int
     expected_outcome: str
-    observed_outcomes: List[str] = field(default_factory=list)
+    observed_outcomes: list[str] = field(default_factory=list)
     reproduced: bool = False        # every run matched expected
     deterministic: bool = False     # every run produced the SAME outcome
     reason: str = ""
@@ -85,7 +83,7 @@ class ReproductionResult:
 
 def _finalize(
     expected: str,
-    observed: List[str],
+    observed: list[str],
     n: int,
     *,
     reason: str = "",
@@ -121,10 +119,10 @@ def reproduce_witness(
     bundle: ZKPoXBundle,
     witness_bytes: bytes,
     *,
-    binary_path: Optional[Path] = None,
+    binary_path: Path | None = None,
     n: int = 3,
     sandbox_timeout: int = 5,
-    logger_: Optional[logging.Logger] = None,
+    logger_: logging.Logger | None = None,
 ) -> ReproductionResult:
     """Re-run ``bundle``'s witness ``n`` times; confirm the recorded
     outcome reproduces.
@@ -138,8 +136,8 @@ def reproduce_witness(
             target binary to feed the witness to. Its sha256 is
             verified against ``bundle.target_binary_hash`` before
             use. Ignored for LLM_EMIT_RUN (recompile) sources.
-        n: number of consecutive runs (default 3). The recorded
-            outcome must reproduce in ALL of them for
+        n: number of consecutive runs (default 3, must be >= 1).
+            The recorded outcome must reproduce in ALL of them for
             ``reproduced=True``.
         sandbox_timeout: per-run timeout in seconds.
         logger_: optional logger.
@@ -154,6 +152,33 @@ def reproduce_witness(
     ``reproduced=False`` with a reason.
     """
     log = logger_ if logger_ is not None else logger
+
+    # Zero runs can't confirm anything — without this guard both
+    # dispatch paths would skip their loops and report a misleading
+    # "non-deterministic" reason over an empty outcome list.
+    if n < 1:
+        return ReproductionResult(
+            attempted=False, runs=0,
+            expected_outcome=bundle.observed_outcome,
+            reason=f"n must be >= 1 (got {n}); nothing to reproduce",
+        )
+
+    # Verify we're reproducing the RIGHT witness — the bytes the
+    # bundle was assembled from — before running anything. Mirrors
+    # the binary-hash check in _reproduce_replay.
+    if bundle.witness_hash:
+        from core.hash import sha256_bytes
+        actual = sha256_bytes(witness_bytes)
+        if actual != bundle.witness_hash:
+            return ReproductionResult(
+                attempted=False, runs=0,
+                expected_outcome=bundle.observed_outcome,
+                reason=(
+                    f"witness hash mismatch: supplied {actual[:16]}... "
+                    f"!= recorded {bundle.witness_hash[:16]}...; "
+                    f"refusing to reproduce a different witness"
+                ),
+            )
 
     if bundle.source == "llm_emit_run":
         return _reproduce_source(
@@ -199,7 +224,7 @@ def _reproduce_source(
         if flag:
             sanitizers = [flag]
 
-    observed: List[str] = []
+    observed: list[str] = []
     for i in range(n):
         compiled, errors, outcome, _detail = compile_and_execute(
             exploit_code,
@@ -227,7 +252,7 @@ def _reproduce_replay(
     bundle: ZKPoXBundle,
     witness_bytes: bytes,
     *,
-    binary_path: Optional[Path],
+    binary_path: Path | None,
     n: int,
     sandbox_timeout: int,
     log: logging.Logger,
@@ -268,7 +293,7 @@ def _reproduce_replay(
 
     try:
         from core.config import RaptorConfig
-        from core.sandbox import run as sandbox_run
+        from core.sandbox import run_untrusted as sandbox_run_untrusted
         from core.witness import outcome_from_sandbox_info
     except ImportError as e:
         return ReproductionResult(
@@ -276,12 +301,17 @@ def _reproduce_replay(
             reason=f"sandbox unavailable: {e}",
         )
 
-    observed: List[str] = []
+    observed: list[str] = []
     for _i in range(n):
         try:
-            result = sandbox_run(
+            # run_untrusted, not run: the target binary is untrusted
+            # and the witness is attacker data, so reads must be
+            # pinned to system dirs + the binary's own dir
+            # (restrict_reads) with a credential-free fake $HOME —
+            # a compromised target can't read ~/.ssh or ~/.aws.
+            # block_network + strict_env are forced by the helper.
+            result = sandbox_run_untrusted(
                 [str(binary_path)],
-                block_network=True,
                 target=str(binary_path.parent),
                 output=str(binary_path.parent),
                 capture_output=True,
@@ -289,7 +319,6 @@ def _reproduce_replay(
                 input=witness_bytes,
                 timeout=sandbox_timeout,
                 env=RaptorConfig.get_safe_env(),
-                strict_env=True,
             )
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result

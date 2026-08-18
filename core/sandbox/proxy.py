@@ -46,8 +46,9 @@ Safety hooks baked in:
   No mid-tunnel re-resolution — removes the DNS-rebinding window.
 - Idle timeout: 300s. Total tunnel duration cap: 3600s. Either bound
   limits how long one compromised child can hold resources open.
-- Concurrent tunnels: capped at 64 (configurable). Hard limit on
-  resource consumption by a runaway child.
+- Concurrent tunnels: capped at 4096 (configurable; sized for npm
+  install's CONNECT bursts — see _DEFAULT_MAX_TUNNELS history). Hard
+  limit on resource consumption by a runaway child.
 - Buffer size: 64 KiB per direction. Bounds memory per tunnel.
 - Audit log: every CONNECT logs {host, port, result, bytes}, INFO level.
 - No Proxy-Authorization: localhost-only bind + same-UID trust model.
@@ -71,12 +72,17 @@ Error responses:
 
 import asyncio
 import atexit
+import contextlib
 import ipaddress
+import itertools
 import logging
+import os
 import socket
 import threading
 import time
-from typing import Iterable, List, Optional, Set, Tuple
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Optional
 
 # Module-top so the import doesn't run on every CONNECT — the proxy
 # tunnel handler used to do `from core.security.log_sanitisation
@@ -84,6 +90,39 @@ from typing import Iterable, List, Optional, Set, Tuple
 # first call but still a dict lookup + module attribute access per
 # request.
 from core.security.log_sanitisation import has_nonprintable
+
+# Process-unique lane ids. Labels are NOT unique (two concurrent
+# contexts may share caller_label="sandbox"), so event->buffer
+# subscription matching keys on this id, never the label.
+_LANE_IDS = itertools.count(1)
+
+
+@dataclass
+class _Lane:
+    """One attributed ingress transport with its own policy bits.
+
+    A lane is how the proxy knows WHICH sandbox a CONNECT came from:
+    netns-tier sandboxes each own a dedicated unix socket; no-netns
+    tiers (Landlock-TCP, seatbelt) each own a dedicated loopback
+    listener. The main TCP listener has no lane — in-process
+    consumers (LLM clients, EgressClient) ride it and are always
+    judged by the legacy global flag, which nothing in production
+    sets any more. Handler closures capture the lane OBJECT at
+    accept time, so a connection racing lane teardown is decided by
+    the lane that accepted it — deterministic, never a lookup miss.
+    """
+
+    label: str
+    audit_log_only: bool = False
+    # Per-lane hostname allowlist (lowercased). None = no lane
+    # restriction: the connection is governed by the process-global
+    # allowlist alone. A set scopes this lane's CONNECTs to ITS
+    # sandbox's registered hosts — the global set is a union across
+    # concurrent runs, and without lane scoping any sandbox could
+    # egress to hosts a sibling run allowlisted.
+    allowed_hosts: "frozenset[str] | None" = None
+    lane_id: int = field(default_factory=lambda: next(_LANE_IDS))
+
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +165,9 @@ _DEFAULT_TOTAL_TIMEOUT = 3600.0      # absolute cap on a single tunnel
 _DEFAULT_MAX_TUNNELS = 4096
 _DEFAULT_BUFFER_SIZE = 64 * 1024     # relay buffer per direction
 
-# DNS cache TTL. Holds (expires_at, addrinfo_list) per (host, port,
-# socktype) key. 60s is a balance: short enough that a legit DNS
+# DNS cache TTL. Holds (expires_at, addrinfo_list) per (host, port)
+# key (lookups are pinned to SOCK_STREAM, so socktype adds no
+# discrimination). 60s is a balance: short enough that a legit DNS
 # rotation propagates within a normal scan run, long enough that the
 # typical npm/pip-style burst (dozens of CONNECTs to one registry host
 # in seconds) only pays the resolver cost once. Gate 2 (resolved-IP
@@ -150,6 +190,18 @@ _HAPPY_EYEBALLS_DELAY = 0.25
 # happy-eyeballs eat into the window.
 _PROXY_READ_TIMEOUT_S = 10.0
 _PROXY_CONNECT_TIMEOUT_S = 30.0
+
+# TCP keepalive for established tunnel legs. Corporate proxies, NAT
+# gateways, and stateful firewalls drop connection state for tunnels
+# that go quiet — a thinking model can be silent for minutes while
+# its tunnel carries zero bytes, and the response then lands on a
+# dead connection. Keepalive probes refresh that per-TCP-leg state.
+# They are TCP-level, not tunnel payload: an upstream proxy applying
+# an application-level idle timer to RELAYED bytes still fires — the
+# probes only keep the transport under the tunnel alive.
+_TCP_KEEPALIVE_IDLE_S = 30
+_TCP_KEEPALIVE_INTERVAL_S = 10
+_TCP_KEEPALIVE_COUNT = 3
 
 # Canonical filename for the per-run proxy events JSONL. Written by
 # context.py (post-sandbox flush of unregister_sandbox events). Defined
@@ -194,7 +246,7 @@ _lock = threading.Lock()
 _instance: Optional["EgressProxy"] = None
 
 
-def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
+def _record_proxy_denial(host: str, port: int, resolved_ip: str | None,
                          would_deny: str) -> None:
     """Route a proxy-side audit-mode denial into the per-run sandbox
     summary via core.sandbox.summary.record_denial.
@@ -238,7 +290,7 @@ def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
         if resolved_ip is not None:
             details["resolved_ip"] = resolved_ip
         record_denial(cmd, 0, "network", **details)
-    except Exception:  # noqa: BLE001 — best-effort; never fail a CONNECT
+    except Exception:
         # Deliberate scope: Exception, not BaseException. SystemExit and
         # KeyboardInterrupt SHOULD propagate so the process can exit.
         # record_denial is documented to never raise either of those —
@@ -255,6 +307,18 @@ def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
         # effort recorder), same rationale (default-log visibility).
         logger.warning("_record_proxy_denial: record_denial failed",
                        exc_info=True)
+
+
+# RFC 6052 NAT64 well-known prefix — see _ip_is_blocked.
+_NAT64_NET = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _normalise_lane_hosts(hosts) -> "frozenset[str] | None":
+    """Lowercased frozenset for a lane allowlist; None/empty -> None
+    (no lane restriction — global allowlist alone governs)."""
+    if not hosts:
+        return None
+    return frozenset(h.lower() for h in hosts if h)
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -277,10 +341,34 @@ def _ip_is_blocked(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # unparseable → reject, fail-closed
-    return not ip.is_global
+    if not ip.is_global:
+        return True
+    # IPv6 forms that EMBED an IPv4 address evade the is_global check
+    # for the embedded target: NAT64 well-known prefix
+    # (64:ff9b::/96, RFC 6052 — a NAT64 gateway forwards to the
+    # embedded IPv4) and the deprecated IPv4-compatible ::a.b.c.d
+    # form both classify as global while smuggling
+    # 169.254.169.254/RFC 1918 targets past gate 2 (verified live:
+    # 64:ff9b::169.254.169.254 has is_global=True). ipv4_mapped
+    # (::ffff:) is already handled by is_global itself; sixtofour
+    # (2002::/16) is classified non-global wholesale. Extract every
+    # embedded IPv4 and re-check it.
+    if isinstance(ip, ipaddress.IPv6Address):
+        embedded = []
+        if ip in _NAT64_NET:
+            embedded.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+        # IPv4-compatible ::a.b.c.d (deprecated, ::/96 minus ::/112).
+        if (int(ip) >> 32) == 0 and int(ip) > 1:
+            embedded.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+        if ip.ipv4_mapped is not None:
+            embedded.append(ip.ipv4_mapped)
+        for v4 in embedded:
+            if not v4.is_global:
+                return True
+    return False
 
 
-def _parse_proxy_url(url: Optional[str]) -> Optional[tuple]:
+def _parse_proxy_url(url: str | None) -> tuple | None:
     """Parse a proxy URL like `http://corp-proxy:3128` into (host, port).
 
     Returns None if url is None/empty. Raises ValueError for malformed
@@ -313,7 +401,7 @@ def _parse_proxy_url(url: Optional[str]) -> Optional[tuple]:
     return (parsed.hostname, port)
 
 
-def _parse_no_proxy(value: Optional[str]) -> list:
+def _parse_no_proxy(value: str | None) -> list:
     """Parse NO_PROXY (comma-separated host patterns).
 
     Each entry is a host suffix: `internal.corp` matches
@@ -343,9 +431,85 @@ def _host_in_no_proxy(host: str, patterns: list) -> bool:
     return False
 
 
+# Env knob for the upstream-proxy handshake budget (see
+# _upstream_handshake_timeout). Distinct from the per-IO read budget:
+# widening THAT would also slow failure detection on dead targets.
+_UPSTREAM_HANDSHAKE_TIMEOUT_ENV = "RAPTOR_PROXY_UPSTREAM_HANDSHAKE_TIMEOUT_S"
+
+
+def _upstream_handshake_timeout() -> float:
+    """Budget for connecting to + CONNECT-negotiating with the
+    operator's upstream proxy.
+
+    Defaults to the per-IO budget (``_PROXY_READ_TIMEOUT_S``). Slow /
+    authenticated / loaded corporate proxies can legitimately need
+    more; a too-small budget turns a working-but-slow proxy into a
+    502 + full SDK retry cycle. Invalid or non-positive values fall
+    back to the default.
+    """
+    raw = os.environ.get(_UPSTREAM_HANDSHAKE_TIMEOUT_ENV)
+    if raw is None:
+        return _PROXY_READ_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a number — using default %ss",
+            _UPSTREAM_HANDSHAKE_TIMEOUT_ENV, raw, _PROXY_READ_TIMEOUT_S,
+        )
+        return _PROXY_READ_TIMEOUT_S
+    if value <= 0:
+        logger.warning(
+            "%s=%r must be positive — using default %ss",
+            _UPSTREAM_HANDSHAKE_TIMEOUT_ENV, raw, _PROXY_READ_TIMEOUT_S,
+        )
+        return _PROXY_READ_TIMEOUT_S
+    return value
+
+
+def _enable_tcp_keepalive(writer: asyncio.StreamWriter) -> None:
+    """Turn on TCP keepalive for one tunnel leg.
+
+    Only meaningful for TCP legs — unix-socket client legs (sandbox
+    lanes) are skipped by the family check. Platform spelling: Linux
+    exposes TCP_KEEPIDLE, macOS calls the same idle knob
+    TCP_KEEPALIVE; interval/count set where the platform has them.
+    Failure is non-fatal — keepalive is a resilience optimisation,
+    never worth killing an established tunnel over.
+    """
+    sock = writer.get_extra_info("socket")
+    if sock is None or sock.family not in (socket.AF_INET, socket.AF_INET6):
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPIDLE,
+                _TCP_KEEPALIVE_IDLE_S,
+            )
+        elif hasattr(socket, "TCP_KEEPALIVE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPALIVE,
+                _TCP_KEEPALIVE_IDLE_S,
+            )
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPINTVL,
+                _TCP_KEEPALIVE_INTERVAL_S,
+            )
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPCNT,
+                _TCP_KEEPALIVE_COUNT,
+            )
+    except OSError:
+        logger.debug("egress proxy: TCP keepalive setup failed",
+                     exc_info=True)
+
+
 def _split_addrinfo_by_family(
     addrinfo: list,
-) -> Tuple[list, list]:
+) -> tuple[list, list]:
     """Partition an addrinfo list into (v6, v4) buckets, preserving
     each bucket's internal order.
 
@@ -381,12 +545,12 @@ class EgressProxy:
                  total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
                  max_tunnels: int = _DEFAULT_MAX_TUNNELS,
                  buffer_size: int = _DEFAULT_BUFFER_SIZE,
-                 upstream_proxy: Optional[str] = None,
-                 no_proxy: Optional[str] = None,
+                 upstream_proxy: str | None = None,
+                 no_proxy: str | None = None,
                  audit_log_only: bool = False,
                  audit_enforce: bool = False):
         self._hosts_lock = threading.Lock()
-        self._allowed_hosts: Set[str] = {h.lower() for h in allowed_hosts}
+        self._allowed_hosts: set[str] = {h.lower() for h in allowed_hosts}
         # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
         # event AND a record_denial entry, then falls through to the
         # connect path — operator workflows that hit gate 1 keep working
@@ -397,13 +561,15 @@ class EgressProxy:
         # loopback IP is purely an attack signal). In audit mode gate 2
         # additionally records the deny into the summary.
         #
-        # Operator-facing wiring: context.py engages this via
-        # acquire_audit_log_only() / release_audit_log_only() when an
-        # audit-mode sandbox enters/exits. The constructor kwarg here
-        # remains for direct test construction. Tests of the toggle
-        # itself MUST use the acquire/release API to exercise the ref-
-        # counting; concurrent mixed-profile sandbox correctness depends
-        # on it.
+        # Scope: this global flag now governs ONLY connections with
+        # no lane — i.e. the shared main TCP listener that in-process
+        # consumers ride. Sandbox contexts get per-lane audit bits
+        # (set_lane_audit on their unix socket / TCP lane), so a
+        # concurrent non-audit sandbox is never downgraded by an
+        # audit sibling. Production code no longer calls
+        # acquire/release_audit_log_only; the API and the constructor
+        # kwarg remain for direct test construction and as the legacy
+        # main-listener toggle.
         self._audit_log_only = audit_log_only
         # When True, gate 1 in audit mode switches from log-and-allow to
         # log-and-deny — the allowlist is enforced even in audit mode.
@@ -428,6 +594,14 @@ class EgressProxy:
         # because a sibling audit sandbox flipped the singleton's flag.
         self._audit_lock = threading.Lock()
         self._audit_count = 1 if audit_log_only else 0
+        # Lane registries: unix lanes keyed by socket path, TCP lanes
+        # by listener port. Guarded by _lanes_lock; handler closures
+        # hold direct lane references so decisions never require the
+        # registry after accept.
+        self._lanes_lock = threading.Lock()
+        self._unix_lanes: dict[str, _Lane] = {}
+        self._tcp_lanes: dict[int, _Lane] = {}
+        self._tcp_lane_servers: dict[int, object] = {}
         self._idle_timeout = idle_timeout
         self._idle_timeout_lock = threading.Lock()
         self._total_timeout = total_timeout
@@ -441,12 +615,21 @@ class EgressProxy:
         # stored as (host, port) tuple; None = direct connect. The
         # upstream host is trusted to resolve to any IP (private
         # corporate addresses are expected), unlike target hostnames.
-        self._upstream: Optional[tuple] = _parse_proxy_url(upstream_proxy)
+        self._upstream: tuple | None = _parse_proxy_url(upstream_proxy)
+        # Budget for the upstream-proxy leg: TCP connect to the
+        # corporate proxy plus the CONNECT negotiation round-trip.
+        # Slow, authenticated, or loaded corporate proxies can
+        # legitimately exceed the 10s per-IO default — and each 502
+        # this side returns costs the caller a full SDK retry cycle.
+        # Read once at construction (the proxy is a long-lived
+        # singleton); the default stays at the per-IO budget so a
+        # genuinely dead upstream keeps failing fast.
+        self._upstream_handshake_timeout = _upstream_handshake_timeout()
         # NO_PROXY honoured when an upstream is configured: any host
         # matching a pattern bypasses the upstream and connects directly
         # (so internal services like git-server.corp remain reachable).
         self._no_proxy_patterns: list = _parse_no_proxy(no_proxy)
-        # Per-(host, port, socktype) DNS cache. Map key → (expires_at,
+        # Per-(host, port) DNS cache. Map key → (expires_at,
         # addrinfo_list). Bursty resolvers (npm install, pip-compile)
         # hit the same registry host dozens of times in seconds; without
         # caching, each CONNECT pays a fresh getaddrinfo. The cache lives
@@ -465,8 +648,10 @@ class EgressProxy:
         #
         # Per-sandbox buffers. Each active sandbox() context registers
         # via register_sandbox(), receives a token, and on exit reads
-        # back its accumulated event list via unregister_sandbox(). The
-        # proxy fans every recorded event into every registered buffer.
+        # back its accumulated event list via unregister_sandbox().
+        # Fan-out is lane-aware (D3): run-global buffers get every
+        # event; lane-subscribed buffers get only their own lane's
+        # events (see _record for the rule).
         # Per-sandbox buffers (rather than one shared ring) eliminate
         # the flood-masks-attack evasion of the old time-windowed deque
         # design: a child making 10 000 CONNECTs to allow-listed hosts
@@ -476,6 +661,12 @@ class EgressProxy:
         # ~300 bytes per event per active sandbox.
         self._sandbox_buffers: dict = {}
         self._sandbox_labels: dict = {}
+        # Per-token lane subscription (lane_id or None). None = the
+        # run-global view: the buffer receives EVERY event (the
+        # pre-lane fan-out behaviour). A lane_id-subscribed buffer
+        # receives only its own lane's events, so concurrent runs no
+        # longer see each other's would-deny records (design doc D3).
+        self._sandbox_lane_subs: dict = {}
         self._next_token = 0
         self._buffer_lock = threading.Lock()
         # Atomic snapshot of the buffer-list refs for the hot path.
@@ -493,16 +684,17 @@ class EgressProxy:
         # caller's view — same end-state as the previous design where
         # the late event would have been recorded into a buffer the
         # caller had already left behind.
-        self._sandbox_buffers_snapshot: Tuple[list, ...] = ()
+        # Snapshot entries are (buffer, lane_subscription) pairs.
+        self._sandbox_buffers_snapshot: tuple = ()
 
         # Synchronise startup: the thread runs the asyncio loop and signals
         # `_ready` once the server is bound and port is known. The calling
         # thread blocks on _ready before returning from __init__, so
         # callers see a fully-ready proxy or an exception.
         self._ready = threading.Event()
-        self._start_error: Optional[BaseException] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._server: Optional[asyncio.AbstractServer] = None
+        self._start_error: BaseException | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._server: asyncio.AbstractServer | None = None
         self.port: int = 0
         self._unix_servers: dict = {}
         self._unix_lock = threading.Lock()
@@ -580,6 +772,11 @@ class EgressProxy:
         """Increment the audit-mode reference count and ensure
         audit-log mode is engaged on the hostname gate.
 
+        LEGACY SCOPE: after lane scoping, this global flag decides
+        only un-laned connections (the shared main listener).
+        Sandbox contexts use set_lane_audit on their own transport
+        instead; production code has no callers of this API.
+
         Ref-counted to prevent concurrent mixed-profile sandboxes
         from racing on the singleton: when an audit-mode sandbox
         enters via use_egress_proxy=True, it acquires; on exit it
@@ -637,7 +834,8 @@ class EgressProxy:
                     "ENFORCING mode (no audit-mode sandbox active)"
                 )
 
-    def bind_unix(self, path: str) -> None:
+    def bind_unix(self, path: str, *, label: str = "sandbox",
+                  allowed_hosts: "Iterable[str] | None" = None) -> None:
         """Start an additional asyncio Unix socket server at *path*.
 
         Reuses ``_handle_client`` — the CONNECT protocol is transport-
@@ -652,21 +850,115 @@ class EgressProxy:
             raise RuntimeError("proxy event loop not running")
 
         import os as _os
-        old_umask = _os.umask(0o077)
-        try:
-            async def _bind():
-                srv = await asyncio.start_unix_server(
-                    self._handle_unix_client, path=path,
-                )
-                with self._unix_lock:
-                    self._unix_servers[path] = srv
-                return srv
 
-            future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
-            future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
-        finally:
-            _os.umask(old_umask)
+        lane = _Lane(label=label,
+                     allowed_hosts=_normalise_lane_hosts(allowed_hosts))
+        with self._lanes_lock:
+            self._unix_lanes[path] = lane
+
+        async def _bind():
+            old_umask = _os.umask(0o077)
+            try:
+                srv = await asyncio.start_unix_server(
+                    lambda r, w: self._handle_unix_client(r, w, lane=lane),
+                    path=path,
+                )
+            finally:
+                _os.umask(old_umask)
+            with self._unix_lock:
+                self._unix_servers[path] = srv
+            return srv
+
+        future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
+        future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
         logger.info("egress proxy: unix socket bound at %s", path)
+
+    def bind_tcp_lane(self, *, label: str = "sandbox",
+                      allowed_hosts: "Iterable[str] | None" = None) -> int:
+        """Start a dedicated loopback listener with its own lane.
+
+        For sandbox tiers that cannot use a unix socket (Landlock-TCP
+        children pinned by ``allowed_tcp_ports``, macOS seatbelt
+        children pinned by SBPL): a per-context port gives their
+        connections the same attribution the netns tier gets from its
+        per-context unix socket — and pins the children AWAY from the
+        shared main listener that in-process consumers ride.
+
+        Returns the kernel-assigned port. Raises RuntimeError if the
+        event loop is not running or the bind fails; callers treat
+        that as "no lane" and fail CLOSED (audit leniency unavailable,
+        enforcement intact).
+        """
+        if self._loop is None or not self._loop.is_running():
+            raise RuntimeError("proxy event loop not running")
+
+        lane = _Lane(label=label,
+                     allowed_hosts=_normalise_lane_hosts(allowed_hosts))
+
+        async def _bind():
+            srv = await asyncio.start_server(
+                lambda r, w: self._handle_unix_client(r, w, lane=lane),
+                host="127.0.0.1", port=0,
+            )
+            port = srv.sockets[0].getsockname()[1]
+            with self._lanes_lock:
+                self._tcp_lanes[port] = lane
+                self._tcp_lane_servers[port] = srv
+            return port
+
+        future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
+        port = future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
+        logger.info("egress proxy: tcp lane %r bound at 127.0.0.1:%d",
+                    label, port)
+        return port
+
+    def close_tcp_lane(self, port: int) -> None:
+        """Stop the TCP lane listener at *port*. Idempotent.
+
+        Mirrors unbind_unix: stops accepting, does not cancel tunnels
+        already relaying (their handler holds the lane object).
+        """
+        with self._lanes_lock:
+            srv = self._tcp_lane_servers.pop(port, None)
+            self._tcp_lanes.pop(port, None)
+        if srv is None:
+            return
+        if self._loop is not None and self._loop.is_running():
+            async def _close():
+                srv.close()
+            # Loop may shut down between the is_running() check and
+            # scheduling (RuntimeError); a wedged loop times out the
+            # future (TimeoutError).
+            with contextlib.suppress(RuntimeError, TimeoutError):
+                future = asyncio.run_coroutine_threadsafe(
+                    _close(), self._loop,
+                )
+                future.result(timeout=2.0)
+        logger.info("egress proxy: tcp lane at 127.0.0.1:%d closed", port)
+
+    def set_lane_audit(self, key: "str | int", value: bool) -> bool:
+        """Set the audit-log-only bit on one lane.
+
+        *key* is the unix socket path (netns tier) or the TCP lane
+        port. Returns False when no such lane exists — callers MUST
+        treat False as "leniency unavailable" and stay enforcing,
+        never fall back to the global flag.
+        """
+        with self._lanes_lock:
+            lane = (self._unix_lanes.get(key) if isinstance(key, str)
+                    else self._tcp_lanes.get(key))
+        if lane is None:
+            return False
+        with self._audit_lock:
+            lane.audit_log_only = value
+        if value:
+            logger.warning(
+                "egress proxy: lane %r switched to AUDIT-LOG mode "
+                "(this sandbox's CONNECTs to non-allowlisted hosts "
+                "will be ALLOWED and logged; other lanes and the "
+                "main listener stay ENFORCING).", lane.label,
+            )
+        return True
 
     def unbind_unix(self, path: str) -> None:
         """Stop the Unix socket server at *path* and unlink the file.
@@ -676,19 +968,21 @@ class EgressProxy:
         """
         with self._unix_lock:
             srv = self._unix_servers.pop(path, None)
+        with self._lanes_lock:
+            self._unix_lanes.pop(path, None)
         if srv is None:
             return
 
         if self._loop is not None and self._loop.is_running():
             async def _close():
                 srv.close()
-            try:
+            # Same failure modes as close_tcp_lane: loop shutdown race
+            # (RuntimeError) or a wedged loop (TimeoutError).
+            with contextlib.suppress(RuntimeError, TimeoutError):
                 future = asyncio.run_coroutine_threadsafe(
                     _close(), self._loop,
                 )
                 future.result(timeout=2.0)
-            except Exception:
-                pass
         import os as _os
         try:
             _os.unlink(path)
@@ -699,6 +993,7 @@ class EgressProxy:
     async def _handle_unix_client(
         self, reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
+        lane: "_Lane | None" = None,
     ) -> None:
         """Wrapper for Unix socket connections.
 
@@ -712,7 +1007,7 @@ class EgressProxy:
         if task is not None:
             self._unix_tasks.add(task)
         try:
-            await self._handle_client(reader, writer)
+            await self._handle_client(reader, writer, lane=lane)
         finally:
             if task is not None:
                 self._unix_tasks.discard(task)
@@ -722,31 +1017,64 @@ class EgressProxy:
         with self._hosts_lock:
             return host.lower() in self._allowed_hosts
 
-    def register_sandbox(self, caller_label: Optional[str] = None) -> int:
+    def register_sandbox(self, caller_label: str | None = None,
+                         lane_key: "str | int | None" = None) -> int:
         """Register an active sandbox and receive a token.
 
-        While registered, every tunnel event the proxy records is
-        fanned into this sandbox's private event list. `caller_label`
+        While registered, tunnel events the proxy records are fanned
+        into this sandbox's private event list. `caller_label`
         (if provided) is stamped onto each event as `event["caller"]`
         so post-mortem filtering can separate, e.g., claude-sub-agent
         traffic from codeql-pack-download even when they share the
         proxy singleton.
 
+        ``lane_key`` scopes the buffer to ONE lane (the unix socket
+        path or TCP lane port the caller's sandbox transport rides):
+        only events attributed to that lane land in this buffer, so
+        concurrent runs no longer see each other's would-deny records.
+        With ``lane_key=None`` (default) the buffer is run-global and
+        receives every event — the pre-lane behaviour, and the home
+        for events that carry no lane attribution (main-listener
+        traffic, handler errors): un-laned events are never dropped
+        from the global view, and never leak into lane-scoped views.
+
+        Fail-open on lookup miss BY DESIGN for the audit trail: a
+        ``lane_key`` that matches no live lane degrades to the
+        run-global subscription (over-capture, never under-capture) —
+        the caller keeps a complete event view rather than a silently
+        empty one.
+
         Must be paired with `unregister_sandbox(token)` — typically via
         try/finally around the sandboxed subprocess invocation. The
         token is opaque; callers must not inspect it.
         """
+        lane_sub = None
+        if lane_key is not None:
+            with self._lanes_lock:
+                lane = (self._unix_lanes.get(lane_key)
+                        if isinstance(lane_key, str)
+                        else self._tcp_lanes.get(lane_key))
+            if lane is not None:
+                lane_sub = lane.lane_id
+            else:
+                logger.warning(
+                    "egress proxy: register_sandbox lane_key %r matches "
+                    "no live lane — buffer degrades to the run-global "
+                    "view (over-capture, never dropped).", lane_key,
+                )
         with self._buffer_lock:
             self._next_token += 1
             token = self._next_token
             self._sandbox_buffers[token] = []
             self._sandbox_labels[token] = caller_label
+            self._sandbox_lane_subs[token] = lane_sub
             self._sandbox_buffers_snapshot = tuple(
-                self._sandbox_buffers.values()
+                (buf, self._sandbox_lane_subs[tok])
+                for tok, buf in self._sandbox_buffers.items()
             )
             return token
 
-    def unregister_sandbox(self, token: int) -> List[dict]:
+    def unregister_sandbox(self, token: int) -> list[dict]:
         """Stop forwarding events to this sandbox and return its buffer.
 
         The returned list is a fresh copy of each event with the
@@ -765,8 +1093,10 @@ class EgressProxy:
         with self._buffer_lock:
             events = self._sandbox_buffers.pop(token, [])
             label = self._sandbox_labels.pop(token, None)
+            self._sandbox_lane_subs.pop(token, None)
             self._sandbox_buffers_snapshot = tuple(
-                self._sandbox_buffers.values()
+                (buf, self._sandbox_lane_subs[tok])
+                for tok, buf in self._sandbox_buffers.items()
             )
             # Pre-fix the copy `[{**e, "caller": label} for e in events]`
             # happened OUTSIDE the lock. Per the docstring some event
@@ -779,17 +1109,47 @@ class EgressProxy:
             # counters not yet. Operators reading the audit trail saw
             # nonsensical inconsistencies they had to filter out.
             #
-            # Move the copy inside the lock. The recorder's mutate
-            # path also takes `_buffer_lock` (see `_record`), so the
-            # spread now happens with the recorder serialised out.
+            # Move the copy inside the lock. The one post-record
+            # mutate path — the close-time counters/duration update in
+            # `_serve_tunnel`'s finally — goes through
+            # `_finalize_tunnel_event`, which also takes
+            # `_buffer_lock`, so the spread happens with the mutator
+            # serialised out. (`_record` itself stays lock-free — it
+            # only APPENDS references; it never mutates event fields.)
             # Cost: a few extra microseconds per event in unregister;
             # benefit: consistent snapshots in the audit trail.
             if label is not None:
                 return [{**e, "caller": label} for e in events]
             return [dict(e) for e in events]
 
+    def _finalize_tunnel_event(self, event: dict, **fields) -> None:
+        """Apply the close-time in-place update (byte counters,
+        duration, outcome) to an already-recorded event.
+
+        MUST hold ``_buffer_lock``: ``unregister_sandbox`` copies the
+        buffered events under that lock precisely so a concurrent
+        mutation can't be observed half-applied (bytes_c2u updated,
+        duration stale). This runs once per tunnel CLOSE — not the
+        hot path — so the lock cost is irrelevant; without it the
+        torn-snapshot race the unregister comment describes is back.
+        """
+        with self._buffer_lock:
+            event.update(**fields)
+
     def _record(self, event: dict) -> None:
-        """Fan a tunnel event into every registered sandbox's buffer.
+        """Fan a tunnel event into the subscribed sandbox buffers.
+
+        Fan-out rule (design doc D3 — lane-scoped buffers):
+
+          - run-global buffers (registered with ``lane_key=None``)
+            receive EVERY event — the pre-lane behaviour;
+          - lane-subscribed buffers receive only events whose
+            ``lane_id`` matches their subscription, so concurrent
+            runs' events segregate;
+          - an event with no lane attribution (``lane_id`` absent or
+            None: main-listener traffic, handler errors) goes to the
+            run-global buffers only — never dropped from the global
+            view, never leaked into another run's lane view.
 
         Each buffer holds a REFERENCE to the same event dict, NOT a
         copy. That's deliberate: the tunnel handler records at CONNECT
@@ -810,8 +1170,10 @@ class EgressProxy:
         Under bursty traffic this avoids serialising every recorder on
         a single mutex shared with register/unregister.
         """
-        for buf in self._sandbox_buffers_snapshot:
-            buf.append(event)
+        lane_id = event.get("lane_id")
+        for buf, sub in self._sandbox_buffers_snapshot:
+            if sub is None or (lane_id is not None and sub == lane_id):
+                buf.append(event)
 
     async def _cached_getaddrinfo(self, host: str, port: int) -> list:
         """Resolve `host:port` with a TTL cache.
@@ -847,7 +1209,7 @@ class EgressProxy:
 
     async def _happy_eyeballs_connect(
         self, addrinfo: list, port: int,
-    ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
         """RFC 8305 happy-eyeballs dial across an addrinfo list.
 
         Returns ``(reader, writer, dialed_ip)`` for the first address
@@ -870,38 +1232,10 @@ class EgressProxy:
         """
         v6, v4 = _split_addrinfo_by_family(addrinfo)
 
-        # Single-family path: no race needed, just walk in order.
-        if not v6 or not v4:
-            ordered = v6 if v6 else v4
-            last_exc: Optional[Exception] = None
-            for entry in ordered:
-                family, socktype, proto, _, sockaddr = entry
-                ip = sockaddr[0]
-                if _ip_is_blocked(ip):
-                    last_exc = OSError(f"IP {ip} blocked by gate 2")
-                    continue
-                try:
-                    reader, writer = await asyncio.wait_for(
-                        asyncio.open_connection(host=ip, port=port,
-                                                 family=family),
-                        timeout=_PROXY_READ_TIMEOUT_S,
-                    )
-                    return reader, writer, ip
-                except (OSError, asyncio.TimeoutError) as e:
-                    last_exc = e
-                    continue
-            raise last_exc if last_exc is not None else OSError(
-                "no addresses to dial"
-            )
-
-        # Dual-family: race v6 first, kick v4 _HAPPY_EYEBALLS_DELAY later.
-        # Take the first connector to succeed; cancel the other. Note
-        # we only race the FIRST address of each family — if both fail
-        # we then walk the rest serially as a single-family fallback.
-        # (Most upstream registries return one address per family, so
-        # the common case is exactly two attempts.)
+        # Gate-2 (resolved-IP block) lives in _attempt so EVERY dialed
+        # address — raced or walked as fallback — is re-checked.
         async def _attempt(entry):
-            family, socktype, proto, _, sockaddr = entry
+            family, _socktype, _proto, _, sockaddr = entry
             ip = sockaddr[0]
             if _ip_is_blocked(ip):
                 raise OSError(f"IP {ip} blocked by gate 2")
@@ -912,8 +1246,38 @@ class EgressProxy:
             )
             return reader, writer, ip
 
+        async def _walk_serial(entries):
+            last_exc: Exception | None = None
+            for entry in entries:
+                try:
+                    return await _attempt(entry)
+                except (OSError, asyncio.TimeoutError) as e:
+                    last_exc = e
+                    continue
+            raise last_exc if last_exc is not None else OSError(
+                "no addresses to dial"
+            )
+
+        # Single-family path: no race needed, just walk in order.
+        if not v6 or not v4:
+            return await _walk_serial(v6 if v6 else v4)
+
+        # Dual-family: race v6 first, kick v4 _HAPPY_EYEBALLS_DELAY later.
+        # Take the first connector to succeed; cancel the other. We only
+        # race the FIRST address of each family — if both fail, the
+        # remaining addresses (interleaved v6/v4, preserving resolver
+        # order within each family) are walked serially below. (Most
+        # upstream registries return one address per family, so the
+        # common case is exactly two attempts and an empty remainder.)
+        remainder = []
+        for i in range(1, max(len(v6), len(v4))):
+            if i < len(v6):
+                remainder.append(v6[i])
+            if i < len(v4):
+                remainder.append(v4[i])
+
         v6_task = asyncio.ensure_future(_attempt(v6[0]))
-        v4_task: Optional[asyncio.Task] = None
+        v4_task: asyncio.Task | None = None
 
         try:
             done, pending = await asyncio.wait(
@@ -927,32 +1291,47 @@ class EgressProxy:
                 try:
                     return v6_task.result()
                 except (OSError, asyncio.TimeoutError):
-                    return await _attempt(v4[0])
+                    try:
+                        return await _attempt(v4[0])
+                    except (OSError, asyncio.TimeoutError):
+                        if not remainder:
+                            raise
+                        return await _walk_serial(remainder)
             # v6 still pending after delay: kick off v4 in parallel.
             v4_task = asyncio.ensure_future(_attempt(v4[0]))
             done, pending = await asyncio.wait(
                 {v6_task, v4_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            # First to finish — if it succeeded, take it; if it failed,
-            # wait on the other.
+            # First to finish — if it succeeded, take it; close/cancel
+            # the loser. When both land in `done` simultaneously,
+            # cancel() is a no-op — close the writer explicitly.
+            winner = None
             for t in done:
                 try:
                     result = t.result()
-                    # Cancel the loser.
-                    for p in pending:
-                        p.cancel()
-                    return result
+                    if winner is None:
+                        winner = result
+                    else:
+                        result[1].close()
                 except (OSError, asyncio.TimeoutError):
                     pass
+            if winner is not None:
+                for p in pending:
+                    p.cancel()
+                return winner
             # Both done in this iteration with failures? Wait the rest.
-            last_err: Optional[Exception] = None
+            last_err: Exception | None = None
             for t in pending:
                 try:
                     result = await t
                     return result
                 except (OSError, asyncio.TimeoutError) as e:
                     last_err = e
+            # First address of each family failed — walk the rest
+            # serially before giving up.
+            if remainder:
+                return await _walk_serial(remainder)
             raise last_err if last_err is not None else OSError(
                 "all dual-stack attempts failed"
             )
@@ -994,10 +1373,11 @@ class EgressProxy:
         with self._unix_lock:
             unix_paths = list(self._unix_servers.keys())
         for p in unix_paths:
-            try:
+            # unbind_unix handles its own loop/unlink failures; what
+            # can still escape at teardown is logging to an already-
+            # closed stream (ValueError) or a broken fd (OSError).
+            with contextlib.suppress(OSError, ValueError):
                 self.unbind_unix(p)
-            except Exception:
-                pass
         if drain_timeout > 0 and self._server is not None and self._loop.is_running():
             async def _graceful():
                 try:
@@ -1105,7 +1485,7 @@ class EgressProxy:
             )
             self._ready.set()
             self._loop.run_forever()
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001
             self._start_error = e
             self._ready.set()
             return
@@ -1115,10 +1495,11 @@ class EgressProxy:
             self._client_tasks.clear()
             if self._server is not None and self._loop is not None:
                 self._server.close()
-                try:
+                # run_until_complete on a loop that crashed or was
+                # stopped above raises RuntimeError; socket teardown
+                # can surface OSError.
+                with contextlib.suppress(RuntimeError, OSError):
                     self._loop.run_until_complete(self._server.wait_closed())
-                except Exception:
-                    pass
             if self._loop is not None:
                 self._loop.close()
 
@@ -1132,7 +1513,8 @@ class EgressProxy:
         task.add_done_callback(self._client_tasks.discard)
 
     async def _handle_client(self, reader: asyncio.StreamReader,
-                             writer: asyncio.StreamWriter) -> None:
+                             writer: asyncio.StreamWriter,
+                             lane: "_Lane | None" = None) -> None:
         peer = writer.get_extra_info("peername")
         # Unix socket peers: peername is "" (empty string) or None.
         if peer is None or peer == "" or peer == b"":
@@ -1179,15 +1561,15 @@ class EgressProxy:
                 # The reject path used to `return` before the try/finally
                 # below the cap-counter, so the writer was never closed
                 # on rejection — every 429 leaked the inbound socket.
-                try:
+                # Peer may already be gone (OSError); transport may be
+                # detached during loop shutdown (RuntimeError).
+                with contextlib.suppress(OSError, RuntimeError):
                     writer.close()
                     await writer.wait_closed()
-                except Exception:
-                    pass
             return
 
         try:
-            await self._serve_tunnel(reader, writer)
+            await self._serve_tunnel(reader, writer, lane=lane)
         except asyncio.CancelledError:
             # Event-loop shutdown or tunnel-guard timeout — propagate.
             raise
@@ -1212,18 +1594,25 @@ class EgressProxy:
         finally:
             with self._active_lock:
                 self._active_tunnels -= 1
-            try:
+            # Peer may already be gone (OSError); transport may be
+            # detached during loop shutdown (RuntimeError).
+            with contextlib.suppress(OSError, RuntimeError):
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def _serve_tunnel(self, reader: asyncio.StreamReader,
-                            writer: asyncio.StreamWriter) -> None:
+                            writer: asyncio.StreamWriter,
+                            lane: "_Lane | None" = None) -> None:
         t_start = time.monotonic()
         event = {
             "t": t_start, "host": None, "port": None,
             "result": None, "reason": None, "resolved_ip": None,
+            "lane": lane.label if lane is not None else "main",
+            # Subscription key for lane-scoped buffers (labels are not
+            # unique across concurrent contexts; the id is). None =
+            # main listener — such events reach only run-global
+            # (unsubscribed) buffers.
+            "lane_id": lane.lane_id if lane is not None else None,
             "bytes_c2u": 0, "bytes_u2c": 0, "duration": 0.0,
         }
 
@@ -1305,8 +1694,20 @@ class EgressProxy:
             if hdr is None or hdr == "":
                 break
 
-        # Policy gate 1: hostname allowlist.
-        if not self.is_host_allowed(host):
+        # Policy gate 1: hostname allowlist. A lane carrying its own
+        # allowlist additionally scopes the connection to the hosts
+        # ITS sandbox registered: the process-global set is a UNION
+        # across concurrent runs (get_proxy semantics), so without
+        # the lane check any sandbox could ride hosts a sibling run
+        # allowlisted (cross-run confused-deputy egress).
+        _lane_blocked = (
+            lane is not None
+            and lane.allowed_hosts is not None
+            and host.lower() not in lane.allowed_hosts
+        )
+        if not self.is_host_allowed(host) or _lane_blocked:
+            _reason = ("host not in lane allowlist" if _lane_blocked
+                       else "host not in allowlist")
             # Snapshot the audit-log flag under the audit lock at the
             # decision point. The flag is mutated by acquire/release
             # ref-counting from other threads; an unlocked read here
@@ -1316,8 +1717,14 @@ class EgressProxy:
             # release dropped the count to zero. The snapshot pattern
             # makes the race window explicit and the outcome
             # consistent with the count value at the snapshot moment.
+            # Lane-scoped decision: an attributed connection is
+            # judged by ITS sandbox's audit bit; only the un-laned
+            # main listener consults the legacy global flag (which
+            # production no longer sets — direct-construction tests
+            # do). Enforce stays a global operator knob.
             with self._audit_lock:
-                _audit_now = self._audit_log_only
+                _audit_now = (lane.audit_log_only if lane is not None
+                              else self._audit_log_only)
                 _enforce_now = self._audit_enforce
             if _audit_now:
                 # Audit mode: record the would-deny event. When
@@ -1328,10 +1735,10 @@ class EgressProxy:
                 _action = "denying" if _enforce_now else "allowing"
                 logger.warning(
                     f"egress proxy: AUDIT would-deny {host}:{port} — "
-                    f"not in allowlist (audit mode: {_action})"
+                    f"{_reason} (audit mode: {_action})"
                 )
                 audit_event = {**event, "result": "would_deny_host",
-                               "reason": "host not in allowlist (audit mode)",
+                               "reason": f"{_reason} (audit mode)",
                                "duration": time.monotonic() - t_start,
                                "audit_enforce": _enforce_now}
                 self._record(audit_event)
@@ -1343,9 +1750,9 @@ class EgressProxy:
                 # Fall through to the connect path (audit_enforce=False).
             else:
                 logger.warning(
-                    f"egress proxy: DENY {host}:{port} — not in allowlist"
+                    f"egress proxy: DENY {host}:{port} — {_reason}"
                 )
-                event.update(result="denied_host", reason="host not in allowlist",
+                event.update(result="denied_host", reason=_reason,
                              duration=time.monotonic() - t_start)
                 self._record(event)
                 await self._write_error(writer, 403, "Forbidden")
@@ -1365,7 +1772,7 @@ class EgressProxy:
             try:
                 up_reader, up_writer = await asyncio.wait_for(
                     asyncio.open_connection(host=up_host, port=up_port),
-                    timeout=_PROXY_READ_TIMEOUT_S,
+                    timeout=self._upstream_handshake_timeout,
                 )
             except (OSError, asyncio.TimeoutError) as e:
                 logger.warning(
@@ -1386,9 +1793,13 @@ class EgressProxy:
                    f"Host: {host}:{port}\r\n\r\n").encode("latin-1")
             up_writer.write(req)
             try:
-                await asyncio.wait_for(up_writer.drain(), timeout=_PROXY_READ_TIMEOUT_S)
+                await asyncio.wait_for(
+                    up_writer.drain(),
+                    timeout=self._upstream_handshake_timeout,
+                )
                 resp_line = await asyncio.wait_for(
-                    up_reader.readuntil(b"\r\n"), timeout=_PROXY_READ_TIMEOUT_S,
+                    up_reader.readuntil(b"\r\n"),
+                    timeout=self._upstream_handshake_timeout,
                 )
             except (asyncio.TimeoutError, asyncio.IncompleteReadError,
                     ConnectionError) as e:
@@ -1464,7 +1875,7 @@ class EgressProxy:
             # still gets caught. The "first record wins gate 2" semantic
             # matches the original code; happy-eyeballs only changes
             # which record we end up CONNECTING to, not which we VET.
-            family, socktype, proto, _, sockaddr = addrinfo[0]
+            _family, _socktype, _proto, _, sockaddr = addrinfo[0]
             resolved_ip = sockaddr[0]
             event["resolved_ip"] = resolved_ip
             if _ip_is_blocked(resolved_ip):
@@ -1497,7 +1908,9 @@ class EgressProxy:
                 # threads need a happens-before edge to make the
                 # snapshot consistent with the count.
                 with self._audit_lock:
-                    _audit_now = self._audit_log_only
+                    _audit_now = (lane.audit_log_only
+                                  if lane is not None
+                                  else self._audit_log_only)
                 if _audit_now:
                     _record_proxy_denial(host, port, resolved_ip,
                                          "resolved_ip_blocked")
@@ -1528,6 +1941,11 @@ class EgressProxy:
         # Acknowledge tunnel established, then relay bytes both ways.
         writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
         await writer.drain()
+        # Both legs get TCP keepalive so middlebox/NAT state survives
+        # long silent stretches (thinking models). The client leg is
+        # a no-op when the child rides a unix-socket lane.
+        _enable_tcp_keepalive(writer)
+        _enable_tcp_keepalive(up_writer)
         # Pull resolved_ip from the event dict — the direct path sets it
         # as a local variable, but the upstream-proxy branch only populates
         # event["resolved_ip"]. Referencing a bare `resolved_ip` here would
@@ -1553,7 +1971,7 @@ class EgressProxy:
 
         total = {"c2u": 0, "u2c": 0}  # byte counters
         result = "allowed"
-        reason: Optional[str] = None
+        reason: str | None = None
         # `asyncio.wait_for` is the correct primitive for "cap this block
         # at N seconds": it raises `asyncio.TimeoutError` when the deadline
         # fires AND cancels the inner coroutine cleanly. The previous
@@ -1578,25 +1996,28 @@ class EgressProxy:
                 f"egress proxy: TIMEOUT {host}:{port} "
                 f"(c2u={total['c2u']} u2c={total['u2c']})"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             reason = f"relay ended: {e.__class__.__name__}"
             logger.debug(
                 f"egress proxy: relay ended {host}:{port}: {e.__class__.__name__}"
             )
         finally:
-            try:
+            # Upstream may already be gone (OSError); transport may be
+            # detached during loop shutdown (RuntimeError).
+            with contextlib.suppress(OSError, RuntimeError):
                 up_writer.close()
                 await up_writer.wait_closed()
-            except Exception:
-                pass
             # Update the already-recorded event with final byte counts
             # and outcome. Ring buffer holds a reference; consumers who
             # called events_since() between establishment and close will
             # see the in-progress state (result="allowed", bytes=0) and
-            # those calling after close see the final state.
-            event.update(result=result, reason=reason,
-                         bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
-                         duration=time.monotonic() - t_start)
+            # those calling after close see the final state. Serialised
+            # against unregister_sandbox's copy via _buffer_lock — see
+            # _finalize_tunnel_event.
+            self._finalize_tunnel_event(
+                event, result=result, reason=reason,
+                bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
+                duration=time.monotonic() - t_start)
             if not self._stopping:
                 logger.debug(
                     "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
@@ -1639,14 +2060,14 @@ class EgressProxy:
     async def _write_error(self, writer: asyncio.StreamWriter,
                            code: int, reason: str) -> None:
         body = f"HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        try:
+        # Client may have hung up before the error line (OSError);
+        # transport may be detached during loop shutdown (RuntimeError).
+        with contextlib.suppress(OSError, RuntimeError):
             writer.write(body.encode("ascii"))
             await writer.drain()
-        except Exception:
-            pass
 
 
-async def _read_line(reader: asyncio.StreamReader, max_len: int) -> Optional[str]:
+async def _read_line(reader: asyncio.StreamReader, max_len: int) -> str | None:
     """Read one CRLF-terminated line, max_len bytes. None on error/EOF."""
     try:
         data = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=_PROXY_CONNECT_TIMEOUT_S)
@@ -1699,16 +2120,31 @@ def get_proxy(
                 "egress proxy: singleton thread has died — "
                 "discarding stale instance and creating a fresh one"
             )
-            try:
+            # Broad by design: stop() on a proxy whose loop thread
+            # already died runs against violated internal invariants —
+            # any failure mode is acceptable as long as the stale
+            # instance is discarded below.
+            with contextlib.suppress(Exception):
                 _instance.stop()
-            except Exception:
-                pass
             _instance = None
 
         if _instance is None:
             import os as _os
+            # Fall back through the whole conventional family: an
+            # HTTP_PROXY-only or ALL_PROXY-only host is still a
+            # mandatory-proxy host, and every value here is an HTTP
+            # CONNECT-capable proxy URL usable for our tunnels.
             upstream = (_os.environ.get("HTTPS_PROXY")
-                        or _os.environ.get("https_proxy"))
+                        or _os.environ.get("https_proxy")
+                        or _os.environ.get("ALL_PROXY")
+                        or _os.environ.get("all_proxy")
+                        or _os.environ.get("HTTP_PROXY")
+                        or _os.environ.get("http_proxy"))
+            if upstream:
+                from core.security.env_sanitisation import (
+                    normalise_proxy_url,
+                )
+                upstream = normalise_proxy_url(upstream) or None
             no_proxy = (_os.environ.get("NO_PROXY")
                         or _os.environ.get("no_proxy"))
             # bool(env_var) treats any non-empty string as truthy,
@@ -1717,7 +2153,7 @@ def get_proxy(
             # direction (the operator gets MORE security than they
             # asked for), but it contradicts the standard env-var
             # convention and confuses anyone scripting against the
-            # documented "=1" example. Whitelist the truthy spellings
+            # documented "=1" example. Allowlist the truthy spellings
             # explicitly; everything else (including "0" / "false" /
             # the absent var) leaves audit-mode in its default log-
             # only behaviour.

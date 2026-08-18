@@ -12,38 +12,40 @@ Usage:
 """
 
 from .builder import build_inventory
-from .languages import LANGUAGE_MAP, detect_language
+from .coverage import format_coverage_summary, get_coverage_stats, update_coverage
+from .diff import compare_inventories
 from .exclusions import (
     DEFAULT_EXCLUDES,
     GENERATED_MARKERS,
     is_binary_file,
     is_generated_file,
-    should_exclude,
     match_exclusion_reason,
+    should_exclude,
 )
 from .extractors import (
-    CodeItem,
-    FunctionInfo,
-    FunctionMetadata,
+    _REGEX_EXTRACTORS as EXTRACTORS,  # Backward compat
+)
+from .extractors import (
+    KIND_CLASS,
     KIND_FUNCTION,
     KIND_GLOBAL,
     KIND_MACRO,
-    KIND_CLASS,
+    CExtractor,
+    CodeItem,
+    FunctionInfo,
+    FunctionMetadata,
+    GenericExtractor,
+    GoExtractor,
+    JavaExtractor,
+    JavaScriptExtractor,
+    PythonExtractor,
+    _get_ts_languages,
+    count_sloc,
     extract_functions,
     extract_items,
-    count_sloc,
-    PythonExtractor,
-    JavaScriptExtractor,
-    CExtractor,
-    JavaExtractor,
-    GoExtractor,
-    GenericExtractor,
-    _REGEX_EXTRACTORS as EXTRACTORS,  # Backward compat
-    _get_ts_languages,
 )
+from .languages import LANGUAGE_MAP, detect_language
 from .lookup import lookup_function, normalise_path
-from .diff import compare_inventories
-from .coverage import update_coverage, get_coverage_stats, format_coverage_summary
 
 # Public re-export surface. Each name below is imported above purely
 # to make `from core.inventory import X` work for downstream callers
@@ -51,56 +53,48 @@ from .coverage import update_coverage, get_coverage_stats, format_coverage_summa
 # CodeQL prefilter). Without `__all__`, ruff F401 flags them all as
 # "unused import"; with it, ruff recognises the re-export intent and
 # `from core.inventory import *` exposes exactly this list.
-# Order follows the import statements above (grouped by submodule)
-# rather than strict alphabetical, to keep the audit trail between
-# import-site and re-export-list trivial. `save_checklist` /
-# `get_items` are module-level functions defined below — included
-# here because they're part of the public surface too.
+# Sorted (RUF022); the import statements above show which submodule
+# each name comes from. `save_checklist` / `read_checklist` /
+# `update_checklist` / `get_items` are module-level functions defined
+# below — included here because they're part of the public surface too.
 __all__ = [
-    # .builder
-    "build_inventory",
-    # .languages
-    "LANGUAGE_MAP",
-    "detect_language",
-    # .exclusions
     "DEFAULT_EXCLUDES",
+    "EXTRACTORS",
     "GENERATED_MARKERS",
-    "is_binary_file",
-    "is_generated_file",
-    "should_exclude",
-    "match_exclusion_reason",
-    # .extractors
-    "CodeItem",
-    "FunctionInfo",
-    "FunctionMetadata",
+    "KIND_CLASS",
     "KIND_FUNCTION",
     "KIND_GLOBAL",
     "KIND_MACRO",
-    "KIND_CLASS",
+    "LANGUAGE_MAP",
+    "CExtractor",
+    "CodeItem",
+    "FunctionInfo",
+    "FunctionMetadata",
+    "GenericExtractor",
+    "GoExtractor",
+    "JavaExtractor",
+    "JavaScriptExtractor",
+    "PythonExtractor",
+    "_get_ts_languages",
+    "build_inventory",
+    "compare_inventories",
+    "count_sloc",
+    "detect_language",
     "extract_functions",
     "extract_items",
-    "count_sloc",
-    "PythonExtractor",
-    "JavaScriptExtractor",
-    "CExtractor",
-    "JavaExtractor",
-    "GoExtractor",
-    "GenericExtractor",
-    "EXTRACTORS",
-    "_get_ts_languages",
-    # .lookup
-    "lookup_function",
-    "normalise_path",
-    # .diff
-    "compare_inventories",
-    # .coverage
-    "update_coverage",
-    "get_coverage_stats",
     "format_coverage_summary",
-    # module-level functions defined below
-    "save_checklist",
-    "update_checklist",
+    "get_coverage_stats",
     "get_items",
+    "is_binary_file",
+    "is_generated_file",
+    "lookup_function",
+    "match_exclusion_reason",
+    "normalise_path",
+    "read_checklist",
+    "save_checklist",
+    "should_exclude",
+    "update_checklist",
+    "update_coverage",
 ]
 
 
@@ -131,7 +125,7 @@ class _checklist_lock:
     (read-modify-write) so the lock covers the entire critical section.
     """
 
-    __slots__ = ("_lock_path", "_lock_file")
+    __slots__ = ("_lock_file", "_lock_path")
 
     def __init__(self, checklist_path):
         self._lock_path = checklist_path.with_suffix(".lock")
@@ -186,11 +180,61 @@ def save_checklist(output_dir, data):
 
     In standalone mode, writes directly to output_dir/checklist.json.
     """
+    from core.artifacts.provenance import stamp_provenance
     from core.json import save_json
+
+    # Provenance chokepoint for checklist.json. The mechanical
+    # inventory writer path contains no LLM-derived content, so the
+    # default stamp is untrusted:false; callers persisting LLM-enriched
+    # checklists (e.g. understand_bridge.enrich_checklist) pre-stamp
+    # untrusted:true, which stamp_provenance never downgrades.
+    if isinstance(data, dict):
+        stamp_provenance(data, "core-inventory", untrusted=False,
+                         overwrite_generator=False)
 
     checklist_path = _resolve_checklist_path(output_dir)
     with _checklist_lock(checklist_path):
         save_json(checklist_path, data)
+
+
+def read_checklist(output_dir):
+    """Read checklist.json under the writers' flock + symlink resolution.
+
+    Read-side counterpart of :func:`save_checklist` /
+    :func:`update_checklist`. A raw ``json.load`` on
+    ``output_dir/checklist.json`` bypasses two properties the write
+    accessors guarantee:
+
+    - **project-symlink resolution** — in project mode the run-dir
+      checklist is a symlink to the project-level file; reading the
+      resolved path keeps read and write sides pointed at the same
+      inode;
+    - **flock over the read** — a concurrent :func:`update_checklist`
+      holds the lock across its whole read-modify-write, so taking the
+      same lock here prevents torn/mid-write reads.
+
+    Returns ``{}`` when the file is missing, malformed, or not a JSON
+    object (a non-dict checklist is corrupt for every consumer that
+    calls ``.get`` on it).
+    """
+    import json
+    import logging as _logging
+    from pathlib import Path
+
+    # Missing file → {} without side effects (_resolve_checklist_path
+    # would mkdir the output dir, which a pure read must not do).
+    if not (Path(output_dir) / "checklist.json").exists():
+        return {}
+    checklist_path = _resolve_checklist_path(output_dir)
+    with _checklist_lock(checklist_path):
+        try:
+            data = json.loads(checklist_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            _logging.getLogger(__name__).error(
+                "malformed JSON in %s", checklist_path,
+            )
+            return {}
+    return data if isinstance(data, dict) else {}
 
 
 def update_checklist(output_dir, transform_fn):
@@ -206,6 +250,7 @@ def update_checklist(output_dir, transform_fn):
     an existing checklist.
     """
     import json
+
     from core.json import save_json
 
     checklist_path = _resolve_checklist_path(output_dir)
@@ -219,4 +264,9 @@ def update_checklist(output_dir, transform_fn):
             except (json.JSONDecodeError, OSError):
                 pass
         updated = transform_fn(current)
+        if isinstance(updated, dict):
+            # Same provenance policy as save_checklist above.
+            from core.artifacts.provenance import stamp_provenance
+            stamp_provenance(updated, "core-inventory", untrusted=False,
+                             overwrite_generator=False)
         save_json(checklist_path, updated)

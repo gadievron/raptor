@@ -56,12 +56,12 @@
 - SQL injection needs: Parameterized queries OR proper SQL escaping
 - XSS needs: HTML entity encoding (context-aware: HTML/JS/CSS/URL)
 - Command injection needs: Input validation OR safe APIs (no shell)
-- Path traversal needs: Canonicalization + whitelist validation
+- Path traversal needs: Canonicalization + allowlist validation
 
 **Can it be bypassed?** (Common bypass techniques)
 - Incomplete sanitization (only filters some characters)
 - Encoding bypasses (URL encoding, double encoding, Unicode normalization)
-- Case sensitivity issues (blacklist checks uppercase only)
+- Case sensitivity issues (blocklist checks uppercase only)
 - Logic errors (sanitizes variable A, uses variable B)
 - Order of operations (validate → sanitize → use UNSANITIZED)
 

@@ -437,3 +437,59 @@ def test_extract_direct_call_edges_on_synthetic_fixture(
     callees = idx.callees
     # main calls leaf — this is the canonical direct edge.
     assert "leaf" in callees or any("leaf" in c for c in callees)
+
+
+def test_load_cached_edge_index_is_cache_only(tmp_path, monkeypatch) -> None:
+    """``load_cached_edge_index`` never invokes r2: a cold cache is a
+    plain ``None`` even when r2 is on PATH, and a warm cache hits
+    without any subprocess."""
+    from core.analysis import binary_oracle_edges as _edges
+    from core.analysis.binary_oracle_edges import (
+        BinaryCallEdge,
+        BinaryEdgeIndex,
+        _cache_path_for,
+        _save_cached_index,
+        load_cached_edge_index,
+    )
+    from core.config import RaptorConfig
+
+    monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
+    monkeypatch.setattr(_edges.shutil, "which", lambda _n: "/usr/bin/r2")
+
+    class _NullProc:
+        stdout = ""
+        stderr = ""
+        returncode = 1
+
+    def _no_r2(argv, *_a, **_k):
+        # readelf (build-id probe) is a cheap allowed lookup; only an
+        # r2 invocation would mean the loader fell through to full
+        # extraction.
+        if argv and "r2" in str(argv[0]):  # pragma: no cover
+            raise AssertionError("cache-only loader invoked r2")
+        return _NullProc()
+
+    import core.sandbox as _sb
+    monkeypatch.setattr(_sb, "run", _no_r2, raising=False)
+
+    binary = tmp_path / "app"
+    binary.write_bytes(b"\x7fELF-not-really" * 8)
+
+    # Missing file → None
+    assert load_cached_edge_index(tmp_path / "nope") is None
+    # Cold cache → None, no r2
+    assert load_cached_edge_index(binary) is None
+
+    # Warm the cache under the content-hash key (no build-id note in
+    # the fake ELF) and re-load.
+    from core.analysis.binary_oracle_edges import _content_hash
+    cache_file = _cache_path_for(_content_hash(binary))
+    idx = BinaryEdgeIndex(binary_path=str(binary))
+    idx.edges = [BinaryCallEdge("main", "foo", str(binary))]
+    idx.callees = {"foo"}
+    _save_cached_index(cache_file, idx)
+
+    loaded = load_cached_edge_index(binary)
+    assert loaded is not None
+    assert [(e.caller, e.callee) for e in loaded.edges] == [("main", "foo")]
+    assert loaded.callees == {"foo"}

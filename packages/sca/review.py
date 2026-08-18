@@ -30,17 +30,18 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Sequence
 from io import StringIO
 from pathlib import Path
-from typing import List, Optional, Sequence
 
-from core.json import JsonCache
-from . import SCA_CACHE_ROOT
-from core.cve import EpssClient
-from .findings import build_vuln_findings, severity_rank
+from core.cve import EpssClient, KevClient
 from core.http import HttpClient
-from . import default_client
-from core.cve import KevClient
+from core.json import JsonCache
+from core.security.log_sanitisation import escape_nonprintable
+from core.security.prompt_output_sanitise import sanitise_string
+
+from . import SCA_CACHE_ROOT, default_client
+from .findings import build_vuln_findings, severity_rank
 from .models import (
     Confidence,
     Dependency,
@@ -51,9 +52,12 @@ from .models import (
 from .osv import OsvClient
 from .supply_chain.slopsquat import (
     SlopsquatFinding,
+)
+from .supply_chain.slopsquat import (
     check_dep as _slop_check,
 )
-from .supply_chain.typosquat import TyposquatFinding, scan_deps as _typo_scan
+from .supply_chain.typosquat import TyposquatFinding
+from .supply_chain.typosquat import scan_deps as _typo_scan
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +69,28 @@ _VERDICT_CLEAN, _VERDICT_REVIEW, _VERDICT_BLOCK = 0, 1, 2
 def main(
     argv: Sequence[str],
     *,
-    http: Optional[HttpClient] = None,
-    cache: Optional[JsonCache] = None,
+    http: HttpClient | None = None,
+    cache: JsonCache | None = None,
 ) -> int:
-    """``raptor-sca check`` entry point."""
-    from .cli import _configure_logging      # local import: avoid cycle
+    """``raptor-sca check`` entry point.
+
+    Exit-code contract (module docstring): verdicts map to 0/1/2;
+    invalid arguments and internal errors map to 3.
+    """
+    try:
+        return _checked_main(argv, http=http, cache=cache)
+    except Exception:
+        logger.exception("raptor-sca check: internal error")
+        return 3
+
+
+def _checked_main(
+    argv: Sequence[str],
+    *,
+    http: HttpClient | None = None,
+    cache: JsonCache | None = None,
+) -> int:
+    from .cli import _configure_logging  # local import: avoid cycle
 
     args = _parse_args(argv)
     _configure_logging(args.verbose)
@@ -82,7 +103,9 @@ def main(
             f"expected one of {known_list()}",
             file=sys.stderr,
         )
-        return 2
+        # Invalid arguments — exit 3 per the module exit-code
+        # contract (2 is reserved for the block verdict).
+        return 3
 
     if cache is None:
         cache = JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT)
@@ -94,8 +117,8 @@ def main(
     osv = OsvClient(http, cache, offline=args.offline,
                     query_ttl=0 if args.no_cache else 24 * 3600,
                     vuln_ttl=0 if args.no_cache else 24 * 3600)
-    kev: Optional[KevClient] = None
-    epss: Optional[EpssClient] = None
+    kev: KevClient | None = None
+    epss: EpssClient | None = None
     if not args.no_kev:
         kev = KevClient(http, cache, offline=args.offline,
                         ttl_seconds=0 if args.no_cache else 24 * 3600)
@@ -111,7 +134,7 @@ def main(
     # only (no LLM verdict here — that lives in the main scan
     # pipeline behind ``--review-slopsquats``).
     slop_finding = _slop_check(dep)
-    slop_findings: List[SlopsquatFinding] = (
+    slop_findings: list[SlopsquatFinding] = (
         [slop_finding] if slop_finding is not None else []
     )
 
@@ -123,7 +146,8 @@ def main(
     seed_metadata_unverifiable = False
     if not args.offline:
         from .registry_metadata_walk import (
-            package_version_exists, supported_ecosystems,
+            package_version_exists,
+            supported_ecosystems,
         )
         if canonical_eco in supported_ecosystems():
             exists = package_version_exists(
@@ -139,13 +163,14 @@ def main(
     # Transitive surface — what does installing this dep actually pull
     # in? The whole point of pre-add review is "is this safe to add",
     # which is incomplete if we only check the named package.
-    transitive_deps: List[Dependency] = []
-    transitive_findings: List[VulnFinding] = []
+    transitive_deps: list[Dependency] = []
+    transitive_findings: list[VulnFinding] = []
     transitive_walk_attempted = False
     transitive_walk_supported = False
     if not args.no_transitive and not args.offline:
         from .registry_metadata_walk import (
-            supported_ecosystems, walk_transitive,
+            supported_ecosystems,
+            walk_transitive,
         )
         transitive_walk_attempted = True
         transitive_walk_supported = canonical_eco in supported_ecosystems()
@@ -257,13 +282,13 @@ def _synthesise_dep(ecosystem: str, name: str, version: str) -> Dependency:
 
 
 def _compute_verdict(
-    vuln_findings: List[VulnFinding],
-    typo_findings: List[TyposquatFinding],
-    transitive_findings: Optional[List[VulnFinding]] = None,
+    vuln_findings: list[VulnFinding],
+    typo_findings: list[TyposquatFinding],
+    transitive_findings: list[VulnFinding] | None = None,
     *,
     seed_metadata_unverifiable: bool = False,
-    bump_supply_chain_findings: Optional[List[SupplyChainFinding]] = None,
-    slop_findings: Optional[List[SlopsquatFinding]] = None,
+    bump_supply_chain_findings: list[SupplyChainFinding] | None = None,
+    slop_findings: list[SlopsquatFinding] | None = None,
 ) -> int:
     """Map signals onto clean / review / block.
 
@@ -381,16 +406,16 @@ def _compute_verdict(
 
 def _render_review_markdown(
     dep: Dependency,
-    vuln_findings: List[VulnFinding],
-    typo_findings: List[TyposquatFinding],
+    vuln_findings: list[VulnFinding],
+    typo_findings: list[TyposquatFinding],
     verdict: int,
     *,
-    transitive_deps: Optional[List[Dependency]] = None,
-    transitive_findings: Optional[List[VulnFinding]] = None,
+    transitive_deps: list[Dependency] | None = None,
+    transitive_findings: list[VulnFinding] | None = None,
     transitive_walk_attempted: bool = False,
     transitive_walk_supported: bool = False,
     seed_metadata_unverifiable: bool = False,
-    slop_findings: Optional[List[SlopsquatFinding]] = None,
+    slop_findings: list[SlopsquatFinding] | None = None,
 ) -> str:
     label = {_VERDICT_CLEAN: "Clean",
              _VERDICT_REVIEW: "Review",
@@ -415,19 +440,28 @@ def _render_review_markdown(
             if not f.advisories:
                 continue
             primary = f.advisories[0]
-            tags: List[str] = [f.severity.title()]
+            tags: list[str] = [f.severity.title()]
             if f.in_kev:
                 tags.append("**KEV**")
             if f.cvss_score is not None:
                 tags.append(f"CVSS {f.cvss_score:.1f}")
             if f.epss is not None:
                 tags.append(f"EPSS {f.epss:.2f}")
-            buf.write(f"- [{' / '.join(tags)}] **{primary.osv_id}**")
+            # OSV-sourced fields (id / aliases / summary) are
+            # untrusted registry content headed for the operator's
+            # terminal — same escaping treatment as report.py.
+            buf.write(
+                f"- [{' / '.join(tags)}] "
+                f"**{escape_nonprintable(primary.osv_id)}**"
+            )
             if primary.aliases:
-                buf.write(f" ({', '.join(primary.aliases[:2])})")
+                aliases = ", ".join(
+                    escape_nonprintable(a) for a in primary.aliases[:2]
+                )
+                buf.write(f" ({aliases})")
             buf.write("\n")
             if primary.summary:
-                buf.write(f"  - {primary.summary}\n")
+                buf.write(f"  - {sanitise_string(primary.summary)}\n")
             if f.fixed_version:
                 buf.write(f"  - Fix available: **{f.fixed_version}**\n")
             else:
@@ -533,8 +567,10 @@ def _render_review_markdown(
                     if f.cvss_score is not None:
                         tags.append(f"CVSS {f.cvss_score:.1f}")
                     buf.write(
-                        f"- [{' / '.join(tags)}] **{f.dependency.name}"
-                        f"@{f.dependency.version}** — {primary.osv_id}"
+                        f"- [{' / '.join(tags)}] "
+                        f"**{escape_nonprintable(f.dependency.name)}"
+                        f"@{escape_nonprintable(f.dependency.version or '*')}"
+                        f"** — {escape_nonprintable(primary.osv_id)}"
                     )
                     if f.fixed_version:
                         buf.write(f" (fix: {f.fixed_version})")

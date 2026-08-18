@@ -10,9 +10,11 @@ run a focused tool sweep and feed any discovered flows back to the LLM.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Set
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +28,8 @@ class RefinementContext:
 
     prior_hypothesis: str
     prior_status: str
-    tool_results: List[Dict[str, str]]
-    tools_dispatched: Set[str]
+    tool_results: list[dict[str, str]]
+    tools_dispatched: set[str]
     round_number: int
     tool_query_suggestion: str = ""
 
@@ -59,25 +61,34 @@ def should_refine(
 
     from .evidence_grade import is_tool_evidence
     evidence_tool = getattr(outcome, "evidence_tool", "") or ""
-    if is_tool_evidence(evidence_tool):
-        return False
-
-    return True
+    return not is_tool_evidence(evidence_tool)
 
 
 def build_refinement_prompt(
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     refinement: RefinementContext,
 ) -> str:
     """Build the refinement section injected into the review context.
 
     Tells the LLM what it hypothesised, what the tools found, and
-    asks it to refine.
+    asks it to refine.  Prior-LLM and tool-output free text is
+    untrusted — it lands inside the main review prompt, so it is
+    wrapped with ``wrap_untrusted`` (per-call nonce, autofetch-markup
+    strip, tag-forgery neutralisation): forged envelope tags or
+    markdown headings in a poisoned hypothesis / tool result must
+    not read as trusted prompt structure.
     """
+    from core.security.prompt_envelope import wrap_untrusted
+
     lines = [
         f"## Refinement round {refinement.round_number}",
         "",
-        f"Your prior hypothesis: \"{refinement.prior_hypothesis}\"",
+        "Your prior hypothesis:",
+        wrap_untrusted(
+            refinement.prior_hypothesis,
+            kind="prior-hypothesis",
+            origin="audit-prior-round",
+        ),
         f"Prior verdict: {refinement.prior_status}",
         "",
         f"Tools dispatched: {', '.join(sorted(refinement.tools_dispatched))}",
@@ -85,16 +96,26 @@ def build_refinement_prompt(
     ]
 
     if refinement.tool_results:
+        body = "\n".join(
+            f"- **{tr.get('tool', 'unknown')}**: {tr.get('result', 'no output')}"
+            for tr in refinement.tool_results
+        )
         lines.append("Tool results:")
-        for tr in refinement.tool_results:
-            tool = tr.get("tool", "unknown")
-            result = tr.get("result", "no output")
-            lines.append(f"- **{tool}**: {result}")
+        lines.append(
+            wrap_untrusted(
+                body, kind="tool-results", origin="audit-refinement-tools",
+            )
+        )
         lines.append("")
 
     if refinement.tool_query_suggestion:
         lines.extend([
-            f"Your prior suggested check: \"{refinement.tool_query_suggestion}\"",
+            "Your prior suggested check:",
+            wrap_untrusted(
+                refinement.tool_query_suggestion,
+                kind="prior-tool-suggestion",
+                origin="audit-prior-round",
+            ),
             "",
         ])
 
@@ -102,14 +123,14 @@ def build_refinement_prompt(
         "None of the mechanical tools confirmed your hypothesis.",
         "",
         "Refine your hypothesis based on this evidence:",
-        "- If the tool missed an indirect path, specify the intermediate "
-        "functions in your revised hypothesis.",
+        ("- If the tool missed an indirect path, specify the intermediate "
+         "functions in your revised hypothesis."),
         "- If the tool refuted your hypothesis, try an alternative mechanism.",
-        "- If you believe the hypothesis is correct despite no tool confirmation, "
-        "explain why the tools would miss it (e.g. context-dependent flow, "
-        "runtime-only reachability).",
-        "- If after reconsideration you believe the function is clean, "
-        "say so — do not force a finding.",
+        ("- If you believe the hypothesis is correct despite no tool confirmation, "
+         "explain why the tools would miss it (e.g. context-dependent flow, "
+         "runtime-only reachability)."),
+        ("- If after reconsideration you believe the function is clean, "
+         "say so — do not force a finding."),
     ])
 
     return "\n".join(lines)
@@ -123,24 +144,46 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     - If refined promotes from suspicious to finding, use refined
     - If refined demotes from finding to clean, keep original (don't regress)
     - Otherwise use refined
+
+    Whichever verdict wins, the surviving outcome carries the SUMMED
+    cost / duration / token usage of both rounds. The merge picks a
+    verdict, not a bill — replacing the ledger fields silently dropped
+    every earlier refinement round's spend from the journal and
+    cost-breakdown (one measured run under-reported by $5.27, which
+    then surfaced as an unexplained budget death).
     """
     from .evidence_grade import is_tool_evidence
     refined_tool = getattr(refined, "evidence_tool", "") or ""
     original_tool = getattr(original, "evidence_tool", "") or ""
 
+    def _summed(winner: Any) -> Any:
+        for attr in (
+            "cost_usd", "duration_s", "tokens_in", "tokens_out",
+            "cache_read_tokens", "cache_write_tokens",
+        ):
+            total = (
+                (getattr(original, attr, 0) or 0)
+                + (getattr(refined, attr, 0) or 0)
+            )
+            try:
+                setattr(winner, attr, total)
+            except AttributeError:
+                pass  # duck-typed outcome without the field
+        return winner
+
     if is_tool_evidence(refined_tool):
-        return refined
+        return _summed(refined)
 
     orig_status = getattr(original, "status", "")
     ref_status = getattr(refined, "status", "")
 
     if orig_status == "finding" and ref_status == "clean":
-        return original
+        return _summed(original)
 
     if ref_status == "finding" and not refined_tool and original_tool:
         refined.evidence_tool = original_tool
 
-    return refined
+    return _summed(refined)
 
 
 def should_clean_check(
@@ -167,35 +210,36 @@ def should_clean_check(
     if triage_bucket == "deep_dive":
         return True
 
-    if is_entry_point or is_sink:
-        return True
-
-    return False
+    return bool(is_entry_point or is_sink)
 
 
 def build_clean_check_prompt(
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     tool_flows: str,
 ) -> str:
     """Build the clean-check prompt injected into the review context.
 
     Tells the LLM it marked the function clean, but the mechanical tool
-    found flows it didn't mention. Asks it to reconsider.
+    found flows it didn't mention. Asks it to reconsider.  The flow
+    text quotes target identifiers via the tool output, so it is
+    defanged with ``neutralize_tag_forgery`` before interpolation.
     """
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
     lines = [
         "## Clean-check: tool found flows you did not mention",
         "",
         "You marked this function clean. However, the mechanical tool found:",
         "",
-        tool_flows,
+        neutralize_tag_forgery(tool_flows),
         "",
-        "Is this flow security-relevant? Could it represent a vulnerability "
-        "you missed on first review?",
+        ("Is this flow security-relevant? Could it represent a vulnerability "
+         "you missed on first review?"),
         "",
-        "Answer with a revised assessment. If the flow is benign (e.g. "
-        "sanitized before the sink, bounds-checked, or not reachable from "
-        "untrusted input), explain why and confirm clean. If it represents "
-        "a real issue, revise your status to finding or suspicious.",
+        ("Answer with a revised assessment. If the flow is benign (e.g. "
+         "sanitized before the sink, bounds-checked, or not reachable from "
+         "untrusted input), explain why and confirm clean. If it represents "
+         "a real issue, revise your status to finding or suspicious."),
     ]
 
     return "\n".join(lines)
@@ -204,13 +248,13 @@ def build_clean_check_prompt(
 def collect_tool_results(
     outcome: Any,
     evidence_index: Any = None,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Collect tool result summaries for the refinement prompt.
 
     Gathers what each dispatched tool found (or didn't find) so the
     LLM understands what was checked.
     """
-    results: List[Dict[str, str]] = []
+    results: list[dict[str, str]] = []
     dispatched = getattr(outcome, "tools_dispatched", None) or set()
 
     key = f"{getattr(outcome, 'file', '')}:{getattr(outcome, 'function', '')}"
@@ -267,9 +311,9 @@ def _describe_tool_result(
 def dispatch_suggestion(
     suggestion: str,
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Dispatch a tool_query_suggestion as a real tool call.
 
     Parses the free-text suggestion and routes to the appropriate
@@ -279,14 +323,14 @@ def dispatch_suggestion(
     if not suggestion:
         return []
 
-    results: List[Dict[str, str]] = []
+    results: list[dict[str, str]] = []
     suggestion_lower = suggestion.lower()
 
     try:
         from .hypothesis_mapping import (
-            hypothesis_to_smt_verb,
             hypothesis_to_cocci_check,
             hypothesis_to_semgrep_rule,
+            hypothesis_to_smt_verb,
         )
 
         smt_verb = hypothesis_to_smt_verb(suggestion)
@@ -314,12 +358,16 @@ def dispatch_suggestion(
                 suggestion, ctx.get("file", ""),
             )
             if rule_path:
-                result = _dispatch_semgrep(
-                    rule_path, outcome, ctx, config,
-                )
-                if result:
-                    results.append(result)
-                    return results
+                try:
+                    result = _dispatch_semgrep(
+                        rule_path, outcome, ctx, config,
+                    )
+                    if result:
+                        results.append(result)
+                        return results
+                finally:
+                    with contextlib.suppress(OSError):
+                        os.unlink(rule_path)
 
     except ImportError:
         logger.debug("hypothesis_mapping import failed", exc_info=True)
@@ -331,9 +379,9 @@ def _dispatch_smt(
     smt_verb: str,
     suggestion: str,
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
-) -> Dict[str, str] | None:
+) -> dict[str, str] | None:
     """Run an SMT check based on the suggestion."""
     try:
         from .sweep import run_smt_verb_direct
@@ -342,12 +390,14 @@ def _dispatch_smt(
         hypothesis = getattr(outcome, "hypothesis", "") or suggestion
         file_path = ctx.get("file", "")
 
+        target = getattr(config, "target_path", None)
         result = run_smt_verb_direct(
             verb=smt_verb,
             source=source,
             hypothesis=hypothesis,
             file_path=file_path,
             function_name=ctx.get("function", ""),
+            target_path=str(target) if target else None,
         )
         if result:
             status = "confirmed" if result.outcome == "confirmed" else result.outcome
@@ -363,13 +413,14 @@ def _dispatch_smt(
 def _dispatch_coccinelle(
     rule_path: str,
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
-) -> Dict[str, str] | None:
+) -> dict[str, str] | None:
     """Run a Coccinelle rule based on the suggestion."""
     try:
-        from .sweep import run_coccinelle_sweep
         from pathlib import Path
+
+        from .sweep import run_coccinelle_sweep
 
         target = getattr(config, "target_path", None)
         if not target:
@@ -401,13 +452,14 @@ def _dispatch_coccinelle(
 def _dispatch_semgrep(
     rule_path: str,
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
-) -> Dict[str, str] | None:
+) -> dict[str, str] | None:
     """Run a Semgrep rule based on the suggestion."""
     try:
-        from .sweep import run_semgrep_sweep
         from pathlib import Path
+
+        from .sweep import run_semgrep_sweep
 
         target = getattr(config, "target_path", None)
         if not target:

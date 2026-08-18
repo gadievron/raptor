@@ -156,7 +156,11 @@ def evaluate_run(
 
     truth_keys: Dict[str, GroundTruthEntry] = {}
     for entry in ground_truth:
-        truth_keys[entry.key()] = entry
+        k = entry.key()
+        if k in truth_keys:
+            logger.warning("duplicate ground-truth key %r — keeping first", k)
+            continue
+        truth_keys[k] = entry
 
     found_keys: Set[str] = set()
 

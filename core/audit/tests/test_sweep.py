@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -10,9 +11,9 @@ from core.audit.sweep import (
     SarifCache,
     SweepResult,
     mechanical_check_to_semgrep,
+    run_codeql_sweep,
     run_consistency_check,
     run_smt_sweep,
-    run_codeql_sweep,
 )
 
 
@@ -209,6 +210,101 @@ class TestRunCodeqlSweep:
         assert result.outcome == "error"
         assert result.tool == "codeql"
 
+    @staticmethod
+    def _fake_analyze(results):
+        """Stand-in for codeql_augmented_run.analyze with its real
+        signature: (db_path, queries, output_path, *, ...) -> AnalysisResult.
+        Writes a minimal SARIF file exactly like the real function."""
+        import json
+        from types import SimpleNamespace
+
+        def fake(db_path, queries, output_path, *, extension_pack=None,
+                 codeql_bin="codeql", timeout_seconds=0, runner=None,
+                 extra_args=()):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps({"runs": [{"results": results}]}),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(
+                sarif_path=output_path,
+                queries=tuple(queries),
+                extension_pack=extension_pack,
+                elapsed_seconds=0.0,
+            )
+
+        return fake
+
+    @staticmethod
+    def _sarif_result(uri: str, line: int) -> dict:
+        return {
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": uri},
+                    "region": {"startLine": line},
+                }
+            }]
+        }
+
+    def _setup(self, tmp_path: Path):
+        (tmp_path / "codeql-db").mkdir()
+        query = tmp_path / "test.ql"
+        query.write_text("select 1")
+        return query
+
+    def test_match_in_function_confirmed(self, tmp_path: Path, monkeypatch):
+        query = self._setup(tmp_path)
+        import core.dataflow.codeql_augmented_run as car
+        monkeypatch.setattr(
+            car, "analyze",
+            self._fake_analyze([self._sarif_result("src/a.c", 12)]),
+        )
+        result = run_codeql_sweep(
+            target_path=tmp_path,
+            file_path="a.c",
+            function_name="foo",
+            query_path=str(query),
+            line_start=10,
+            line_end=20,
+        )
+        assert result.outcome == "confirmed"
+        assert len(result.matches) == 1
+
+    def test_match_outside_function_refuted(self, tmp_path: Path, monkeypatch):
+        query = self._setup(tmp_path)
+        import core.dataflow.codeql_augmented_run as car
+        monkeypatch.setattr(
+            car, "analyze",
+            self._fake_analyze([self._sarif_result("src/a.c", 99)]),
+        )
+        result = run_codeql_sweep(
+            target_path=tmp_path,
+            file_path="a.c",
+            function_name="foo",
+            query_path=str(query),
+            line_start=10,
+            line_end=20,
+        )
+        assert result.outcome == "refuted"
+        assert result.matches == []
+
+    def test_analyze_failure_reported(self, tmp_path: Path, monkeypatch):
+        query = self._setup(tmp_path)
+        import core.dataflow.codeql_augmented_run as car
+
+        def boom(db_path, queries, output_path, **kw):
+            raise car.CodeQLRunError("codeql analyze exited 2")
+
+        monkeypatch.setattr(car, "analyze", boom)
+        result = run_codeql_sweep(
+            target_path=tmp_path,
+            file_path="a.c",
+            function_name="foo",
+            query_path=str(query),
+        )
+        assert result.outcome == "error"
+        assert any("exited 2" in e for e in result.errors)
+
 
 class TestConsistencyCheck:
     def test_invalid_function_name_rejected(self, tmp_path: Path):
@@ -250,13 +346,14 @@ class TestConsistencyCheck:
 
     def test_no_findings_means_refuted(self, monkeypatch, tmp_path: Path):
         """When coccinelle finds no inconsistencies, outcome is refuted."""
-        import types
         import sys
+        import types
 
         class FakeResult:
-            matches = []
+            matches: ClassVar[list] = []
 
-        def fake_run_rule(target, rule, *, defines=None, timeout=300):
+        def fake_run_rule(target, rule, *, defines=None, timeout=300,
+                          allow_scripting=False):
             return FakeResult()
 
         def fake_is_available():
@@ -277,13 +374,14 @@ class TestConsistencyCheck:
 
     def test_findings_means_confirmed(self, monkeypatch, tmp_path: Path):
         """When coccinelle finds inconsistencies, outcome is confirmed."""
-        import types
         import sys
+        import types
 
         class FakeResult:
-            matches = [{"file": "src/a.c", "line": 10}]
+            matches: ClassVar[list] = [{"file": "src/a.c", "line": 10}]
 
-        def fake_run_rule(target, rule, *, defines=None, timeout=300):
+        def fake_run_rule(target, rule, *, defines=None, timeout=300,
+                          allow_scripting=False):
             return FakeResult()
 
         def fake_is_available():
@@ -304,15 +402,16 @@ class TestConsistencyCheck:
 
     def test_passes_function_name_as_define(self, monkeypatch, tmp_path: Path):
         """Verifies function_name is passed as -D func=<name>."""
-        import types
         import sys
+        import types
 
         captured_defines = {}
 
         class FakeResult:
-            matches = []
+            matches: ClassVar[list] = []
 
-        def fake_run_rule(target, rule, *, defines=None, timeout=300):
+        def fake_run_rule(target, rule, *, defines=None, timeout=300,
+                          allow_scripting=False):
             captured_defines.update(defines or {})
             return FakeResult()
 
@@ -443,7 +542,7 @@ class TestExtractOverflowToOobOperands:
     def test_stop_words_not_matched(self):
         from core.audit.sweep import _extract_overflow_to_oob_operands
         h = "The loop writes buf[write_pos] where write_pos derives from total_records and elem_size without an overflow check"
-        count, elem, index = _extract_overflow_to_oob_operands(h, "")
+        count, _elem, index = _extract_overflow_to_oob_operands(h, "")
         assert count != "and"
         assert index != "writes"
         if count is not None:
@@ -463,13 +562,13 @@ class TestExtractOverflowToOobOperands:
         from core.audit.sweep import _extract_overflow_to_oob_operands
         h = "the multiplication overflows and buf_offset indexes past the buffer"
         src = "int nelem = get_count();"
-        count, elem, index = _extract_overflow_to_oob_operands(h, src)
+        count, _elem, _index = _extract_overflow_to_oob_operands(h, src)
         assert count == "nelem"
 
     def test_default_elem_size(self):
         from core.audit.sweep import _extract_overflow_to_oob_operands
         h = "num_items multiplied by something overflows, write_offset used as index"
-        count, elem, index = _extract_overflow_to_oob_operands(h, "")
+        _count, elem, _index = _extract_overflow_to_oob_operands(h, "")
         assert elem == "4"
 
 
@@ -569,7 +668,7 @@ class TestRunJoernPreSweep:
         from core.audit.sweep import run_joern_pre_sweep
 
         try:
-            import packages.joern.prereqs as prereqs
+            from packages.joern import prereqs
             monkeypatch.setattr(prereqs, "is_available", lambda: False)
         except ImportError:
             pass
@@ -584,6 +683,33 @@ class TestRunJoernPreSweep:
         f.write_text("int main() {}")
         result = run_joern_pre_sweep(f, {})
         assert result == {}
+
+    def test_build_pins_frontend_from_detected_language(
+        self, monkeypatch, tmp_path: Path,
+    ):
+        """The local CPG build must pass the curated per-profile
+        joern-parse frontend for the detected dominant language."""
+        from core.audit.sweep import run_joern_pre_sweep
+
+        (tmp_path / "main.c").write_text("int main() { return 0; }")
+
+        from packages.joern import prereqs, runner
+        monkeypatch.setattr(prereqs, "is_available", lambda: True)
+
+        captured: dict = {}
+
+        def fake_build_cpg(target, **kwargs):
+            captured.update(kwargs)
+            from packages.joern.models import JoernCPG
+            return JoernCPG(
+                path=tmp_path / "nonexistent-cpg.bin", target=target,
+            )
+
+        monkeypatch.setattr(runner, "build_cpg", fake_build_cpg)
+
+        result = run_joern_pre_sweep(tmp_path, {})
+        assert result == {}  # fake CPG doesn't exist → empty
+        assert captured.get("languages") == {"c"}
 
 
 class TestMechanicalCheckToSemgrep:
@@ -781,22 +907,46 @@ class TestPromoteCleanRefuted:
         assert result.outcomes[0].status == "finding"
         assert len(calls) == 1
 
-    @pytest.mark.parametrize("mechanism,verb", [
-        ("integer overflow in size calc", "check-overflow"),
-        ("buffer overflow in memcpy", "check-oob"),
-        ("integer overflow leading to heap", "check-overflow-to-oob"),
+    @pytest.mark.parametrize("mechanism,verb,smt_lane_runs", [
+        # Verification-role vacuous verbs now REACH the tool chain —
+        # the vacuity policy lives in the sweep layer, which returns
+        # inconclusive (never confirmed) without guard premises, so
+        # the chain reports no confirmation and clean stands.
+        ("integer overflow in size calc", "check-overflow", True),
+        ("buffer overflow in memcpy", "check-oob", True),
+        # Detection-role verbs are still skipped before the SMT lane;
+        # the cheap-channel lane still gets to test the hypothesis.
+        ("integer overflow leading to heap", "check-overflow-to-oob", False),
     ])
-    def test_vacuous_verbs_skipped(self, tmp_path, monkeypatch, mechanism, verb):
-        """Overflow/OOB verbs are vacuous without guards — must not override LLM clean."""
+    def test_vacuous_verbs_cannot_promote(
+        self, tmp_path, monkeypatch, mechanism, verb, smt_lane_runs,
+    ):
+        """Guardless overflow/OOB SAT must not override LLM clean."""
         from core.audit.orchestrator import _promote_clean_refuted
         outcome = self._outcome("a.c", "f", hypotheses=[
             {"mechanism": mechanism, "confidence": "refuted"},
         ])
         result = self._result([outcome])
         calls = []
+
+        def chain(*a, **kw):
+            calls.append(kw.get("hypothesis", ""))
+            # Sweep-layer vacuity policy: SAT without premises comes
+            # back "inconclusive" → no confirmations from the chain.
+            return []
+
+        monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", chain)
+        # Deterministic cheap-channel lane: one semgrep entry.
         monkeypatch.setattr(
-            "core.audit.orchestrator._run_tool_chain",
-            lambda *a, **kw: (calls.append(1), [f"smt:{verb}"])[1],
+            "core.audit.orchestrator._hypothesis_to_tool_chain",
+            lambda *a, **kw: [
+                {"type": "semgrep", "config": {"rule": "r.yaml"}},
+            ],
+        )
+        # Pin the SMT-verb source to the hypothesis-string mapping so
+        # the CWE-inference fallback can't supply a different verb.
+        monkeypatch.setattr(
+            "core.audit.cwe_dispatch.smt_verb_for_cwe", lambda c: None,
         )
         monkeypatch.setattr(
             "core.audit.orchestrator._read_raw_source",
@@ -805,7 +955,233 @@ class TestPromoteCleanRefuted:
         _promote_clean_refuted(result, self._config(tmp_path))
         assert result.outcomes[0].status == "clean"
         assert result.sweep_promoted == 0
-        assert len(calls) == 0
+        # SMT lane (verification-role verbs only) plus the
+        # cheap-channel lane; the vacuity policy holds in both.
+        assert len(calls) == (2 if smt_lane_runs else 1)
+
+
+class TestRefutedHypothesisDispatch:
+    """Self-refuted hypotheses with concrete mechanisms still get
+    mechanical verification through cheap channels (bounded per
+    function), and a tool confirmation surfaces distinctly as a
+    clean → suspicious promotion with the tool receipt."""
+
+    def _outcome(self, hypotheses, line=0):
+        from core.audit.orchestrator import ReviewOutcome
+        o = ReviewOutcome(
+            file="a.c", function="f", status="clean",
+            body="prior body", hypothesis="", line=line,
+        )
+        o.hypotheses = hypotheses
+        o.review_result = {"hypotheses": hypotheses}
+        return o
+
+    def _result(self, outcomes):
+        from core.audit.orchestrator import OrchestratorResult
+        r = OrchestratorResult()
+        r.outcomes = list(outcomes)
+        r.clean = sum(1 for o in outcomes if o.status == "clean")
+        return r
+
+    def _config(self, tmp_path):
+        from core.audit.orchestrator import OrchestratorConfig
+        out = tmp_path / "out"
+        out.mkdir(exist_ok=True)
+        return OrchestratorConfig(target_path=tmp_path, out_dir=out)
+
+    def _no_smt(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.audit.orchestrator._hypothesis_to_smt_verb",
+            lambda h: None,
+        )
+        # The CWE-inference fallback can also supply an SMT verb for
+        # mechanisms that keyword-map to a CWE — pin it off so these
+        # tests exercise the cheap-channel lane deterministically.
+        monkeypatch.setattr(
+            "core.audit.cwe_dispatch.smt_verb_for_cwe", lambda c: None,
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._read_raw_source",
+            lambda *a, **kw: "int f(int x) { return x + 1; }",
+        )
+
+    def test_cheap_channel_confirmation_promotes_to_suspicious(
+        self, tmp_path, monkeypatch,
+    ):
+        """Refuted hypothesis + no SMT verb → cheap chain dispatch;
+        confirmation promotes clean → suspicious with the receipt."""
+        from core.audit.orchestrator import _promote_clean_refuted
+        outcome = self._outcome([{
+            "mechanism": "missing bounds check before memcpy(dst, src, len)",
+            "confidence": "refuted",
+            "counter": "",
+        }])
+        result = self._result([outcome])
+        self._no_smt(monkeypatch)
+        monkeypatch.setattr(
+            "core.audit.orchestrator._hypothesis_to_tool_chain",
+            lambda *a, **kw: [
+                {"type": "semgrep", "config": {"rule": "r.yaml"}},
+            ],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: ["semgrep:audit_sweep_x"],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._check_sink_guarded_cached",
+            lambda fn, js: "unguarded",
+        )
+        _promote_clean_refuted(result, self._config(tmp_path))
+        rescued = result.outcomes[0]
+        assert rescued.status == "suspicious"
+        assert rescued.evidence_tool == "semgrep:audit_sweep_x"
+        assert rescued.body.startswith("[refuted-hypothesis-confirmed")
+        assert rescued.review_result["refuted_hypothesis_confirmed"] is True
+        assert result.refuted_rescued == 1
+        assert result.clean == 0
+        assert result.suspicious == 1
+        assert result.tier_counters["refuted_sweep"].confirmed == 1
+
+    def test_high_confidence_refutation_skips_expensive_channels(
+        self, tmp_path, monkeypatch,
+    ):
+        """A substantive counter-argument demotes to cheap channels only:
+        Joern/CodeQL entries are stripped from the dispatched chain."""
+        from core.audit.orchestrator import _promote_clean_refuted
+        outcome = self._outcome([{
+            "mechanism": "tainted index reaches array write in parse_hdr()",
+            "confidence": "refuted",
+            "counter": (
+                "the caller validates idx against table_size on every "
+                "path before this function is reached"
+            ),
+        }])
+        result = self._result([outcome])
+        self._no_smt(monkeypatch)
+        monkeypatch.setattr(
+            "core.audit.orchestrator._hypothesis_to_tool_chain",
+            lambda *a, **kw: [
+                {"type": "semgrep", "config": {"rule": "r.yaml"}},
+                {"type": "joern", "config": {"sinks": ["memcpy"]}},
+                {"type": "codeql", "config": {"query": "q"}},
+                {"type": "coccinelle", "config": {"rule": "r.cocci"}},
+            ],
+        )
+        dispatched = []
+
+        def chain(chain_arg, **kw):
+            dispatched.extend(e["type"] for e in chain_arg)
+            return []
+
+        monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", chain)
+        _promote_clean_refuted(result, self._config(tmp_path))
+        assert dispatched == ["semgrep", "coccinelle"]
+        assert result.outcomes[0].status == "clean"
+
+    def test_weak_refutation_keeps_full_chain(self, tmp_path, monkeypatch):
+        """No counter-argument → weak retraction → full chain allowed."""
+        from core.audit.orchestrator import _promote_clean_refuted
+        outcome = self._outcome([{
+            "mechanism": "tainted index reaches array write in parse_hdr()",
+            "confidence": "refuted",
+            "counter": "",
+        }])
+        result = self._result([outcome])
+        self._no_smt(monkeypatch)
+        monkeypatch.setattr(
+            "core.audit.orchestrator._hypothesis_to_tool_chain",
+            lambda *a, **kw: [
+                {"type": "semgrep", "config": {"rule": "r.yaml"}},
+                {"type": "joern", "config": {"sinks": ["memcpy"]}},
+                {"type": "codeql", "config": {"query": "q"}},
+            ],
+        )
+        dispatched = []
+
+        def chain(chain_arg, **kw):
+            dispatched.extend(e["type"] for e in chain_arg)
+            return []
+
+        monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", chain)
+        _promote_clean_refuted(result, self._config(tmp_path))
+        assert dispatched == ["semgrep", "joern", "codeql"]
+
+    def test_dispatch_cap_and_specificity_ranking(self, tmp_path, monkeypatch):
+        """At most _MAX_REFUTED_DISPATCHES_PER_FN hypotheses dispatch,
+        picked by mechanism specificity (most concrete first)."""
+        from core.audit.orchestrator import (
+            _MAX_REFUTED_DISPATCHES_PER_FN,
+            _promote_clean_refuted,
+        )
+        hyps = [
+            {"mechanism": "bad", "confidence": "refuted", "counter": ""},
+            {"mechanism": "maybe wrong somewhere", "confidence": "refuted",
+             "counter": ""},
+            {"mechanism": (
+                "integer overflow in alloc_size = count * elem_size at "
+                "line 142 feeding kmalloc()"
+            ), "confidence": "refuted", "counter": ""},
+            {"mechanism": (
+                "use-after-free of ctx->buf when process_packet() frees "
+                "it on the error path (CWE-416)"
+            ), "confidence": "refuted", "counter": ""},
+            {"mechanism": (
+                "missing null_check() on ret of parse_config() before "
+                "deref at line 88"
+            ), "confidence": "refuted", "counter": ""},
+        ]
+        outcome = self._outcome(hyps)
+        result = self._result([outcome])
+        self._no_smt(monkeypatch)
+        monkeypatch.setattr(
+            "core.audit.orchestrator._hypothesis_to_tool_chain",
+            lambda *a, **kw: [
+                {"type": "semgrep", "config": {"rule": "r.yaml"}},
+            ],
+        )
+        seen = []
+
+        def chain(chain_arg, **kw):
+            seen.append(kw.get("hypothesis", ""))
+            return []
+
+        monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", chain)
+        _promote_clean_refuted(result, self._config(tmp_path))
+        assert len(seen) == _MAX_REFUTED_DISPATCHES_PER_FN
+        # The two vague mechanisms lost the specificity ranking.
+        assert "bad" not in seen
+        assert "maybe wrong somewhere" not in seen
+
+    def test_detection_only_confirmation_does_not_promote(
+        self, tmp_path, monkeypatch,
+    ):
+        """Detection-role confirmations never override an LLM clean."""
+        from core.audit.orchestrator import _promote_clean_refuted
+        outcome = self._outcome([{
+            "mechanism": "overflow in size calc feeding memcpy at line 20",
+            "confidence": "refuted",
+            "counter": "",
+        }])
+        result = self._result([outcome])
+        self._no_smt(monkeypatch)
+        monkeypatch.setattr(
+            "core.audit.orchestrator._hypothesis_to_tool_chain",
+            lambda *a, **kw: [
+                {"type": "smt", "config": {"verb": "check-overflow-to-oob"}},
+            ],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: ["smt:check-overflow-to-oob"],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._is_detection_only",
+            lambda t: True,
+        )
+        _promote_clean_refuted(result, self._config(tmp_path))
+        assert result.outcomes[0].status == "clean"
+        assert result.refuted_rescued == 0
 
 
 class TestSweepValidateDetectionFilter:
@@ -882,3 +1258,276 @@ class TestSweepValidateDetectionFilter:
 
         result = _sweep_validate(outcome, config)
         assert "smt:check-overflow" in (result.evidence_tool or "")
+
+
+# ── Vacuity policy for unconstrained-arithmetic SMT verbs ───────────────
+
+
+def _z3_installed() -> bool:
+    try:
+        from core.smt_solver import z3_available
+        return z3_available()
+    except Exception:  # noqa: BLE001 — availability probe, never raise
+        return False
+
+
+needs_z3 = pytest.mark.skipif(not _z3_installed(), reason="z3 not installed")
+
+
+class TestComparisonPremiseExtraction:
+    def test_extracts_guard_mentioning_operand(self):
+        from core.audit.sweep import _extract_comparison_premises
+        src = "if (count < max_len) { total = count * size; }"
+        premises = _extract_comparison_premises(["count", "size"], src)
+        assert "count < max_len" in premises
+
+    def test_ignores_comparisons_of_other_identifiers(self):
+        from core.audit.sweep import _extract_comparison_premises
+        src = "if (other < limit) { total = count * size; }"
+        premises = _extract_comparison_premises(["count", "size"], src)
+        assert premises == []
+
+    def test_comments_and_strings_stripped(self):
+        from core.audit.sweep import _extract_comparison_premises
+        src = '// count < max\nchar *s = "count < max";\nreturn count;\n'
+        assert _extract_comparison_premises(["count"], src) == []
+
+    def test_shift_operators_not_comparisons(self):
+        from core.audit.sweep import _extract_comparison_premises
+        src = "x = count << 2; y = count >> 3;"
+        assert _extract_comparison_premises(["count"], src) == []
+
+    def test_deduplicates_and_caps(self):
+        from core.audit.sweep import _MAX_PREMISES, _extract_comparison_premises
+        lines = ["if (count < 10) {}"] * 3
+        lines += [f"if (count < {i}) {{}}" for i in range(20)]
+        premises = _extract_comparison_premises(["count"], "\n".join(lines))
+        assert premises.count("count < 10") == 1
+        assert len(premises) <= _MAX_PREMISES
+
+    def test_literal_operands_do_not_anchor(self):
+        from core.audit.sweep import _extract_comparison_premises
+        # "4" is a literal operand — it must not anchor extraction.
+        src = "if (x < 4) {}"
+        assert _extract_comparison_premises(["4"], src) == []
+
+
+class TestArithOperatorExtraction:
+    def test_backtick_expression_wins(self):
+        from core.audit.sweep import _extract_arith_operator
+        assert _extract_arith_operator(
+            "integer overflow in `count * size` calculation",
+        ) == "*"
+
+    def test_prose_spaced_operator(self):
+        from core.audit.sweep import _extract_arith_operator
+        assert _extract_arith_operator(
+            "integer overflow when count * size exceeds uint32",
+        ) == "*"
+
+    def test_keyword_multiplication(self):
+        from core.audit.sweep import _extract_arith_operator
+        assert _extract_arith_operator(
+            "multiplication of count and size can wrap",
+        ) == "*"
+
+    def test_keyword_underflow_is_subtraction(self):
+        from core.audit.sweep import _extract_arith_operator
+        assert _extract_arith_operator(
+            "underflow when len is subtracted from offset",
+        ) == "-"
+
+    def test_default_is_addition(self):
+        from core.audit.sweep import _extract_arith_operator
+        assert _extract_arith_operator("integer overflow in size calc") == "+"
+
+    def test_spaced_hyphen_is_punctuation(self):
+        from core.audit.sweep import _extract_arith_operator
+        assert _extract_arith_operator(
+            "integer overflow in size calc - see report",
+        ) == "+"
+
+
+class TestPremiseGate:
+    def test_no_premises_is_vacuous(self):
+        from core.audit.sweep import _premise_gate
+        reason = _premise_gate([], "uint32")
+        assert reason is not None
+        assert "no source-level guard premises" in reason
+
+    @needs_z3
+    def test_satisfiable_premises_pass(self):
+        from core.audit.sweep import _premise_gate
+        assert _premise_gate(["count < 100"], "uint32") is None
+
+    @needs_z3
+    def test_contradictory_premises_are_vacuous(self):
+        from core.audit.sweep import _premise_gate
+        reason = _premise_gate(["count > 10", "count < 5"], "uint32")
+        assert reason == "vacuous premises"
+
+    @needs_z3
+    def test_unencodable_premises_inconclusive(self):
+        from core.audit.sweep import _premise_gate
+        reason = _premise_gate(["p->len < q->cap"], "uint32")
+        assert reason is not None
+        assert "unencodable" in reason or "vacuous" in reason
+
+
+@needs_z3
+class TestVacuousVerbPolicyDirect:
+    """SAT on check-overflow / check-oob / check-overflow-to-oob can
+    only mean something when source-level guard premises are encoded
+    as Z3 constraints.  Exercises ``_run_smt_verb_inner`` in-process."""
+
+    def _run(self, verb, source, hypothesis, file_path="a.c"):
+        from core.audit.sweep import _run_smt_verb_inner
+        return _run_smt_verb_inner(
+            file_path=file_path,
+            function_name="f",
+            verb=verb,
+            source=source,
+            hypothesis=hypothesis,
+        )
+
+    def test_overflow_guardless_source_is_inconclusive(self):
+        result = self._run(
+            "check-overflow",
+            "int f(int count, int size) { return count * size; }",
+            "integer overflow in `count` * `size`",
+        )
+        assert result.outcome == "inconclusive"
+        assert "no source-level guard premises" in (
+            (result.details or {}).get("summary", "")
+        )
+
+    def test_overflow_with_open_guard_confirms(self):
+        # Guard exists but doesn't bound the product: max_len is a
+        # free variable, so a wrap inside the guarded space exists.
+        result = self._run(
+            "check-overflow",
+            "int f(unsigned count, unsigned size) {\n"
+            "    if (count < max_len) { return count * size; }\n"
+            "    return 0;\n"
+            "}\n",
+            "integer overflow in `count` * `size`",
+        )
+        assert result.outcome == "confirmed"
+
+    def test_overflow_with_tight_guards_refutes(self):
+        # a <= 10 and b <= 10 → a + b <= 20, cannot wrap uint32.
+        result = self._run(
+            "check-overflow",
+            "int f(unsigned a, unsigned b) {\n"
+            "    if (a <= 10 && b <= 10) { return a + b; }\n"
+            "    return 0;\n"
+            "}\n",
+            "integer overflow in `a` + `b`",
+        )
+        assert result.outcome == "refuted"
+
+    def test_operator_from_hypothesis_is_honoured(self):
+        # Bounds 65536 × 65536 = 2^32 wraps under '*' but the sum
+        # 131072 cannot wrap under '+'.  A hardcoded '+' would refute;
+        # honouring the hypothesis's '*' confirms.
+        src = (
+            "int f(unsigned a, unsigned b) {\n"
+            "    if (a <= 65536 && b <= 65536) { return a * b; }\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        mul = self._run("check-overflow", src, "integer overflow in `a` * `b`")
+        assert mul.outcome == "confirmed"
+        add_src = src.replace("a * b", "a + b")
+        add = self._run(
+            "check-overflow", add_src, "integer overflow in `a` + `b`",
+        )
+        assert add.outcome == "refuted"
+
+    def test_contradictory_premises_never_refute(self):
+        # Premises a > 10 AND a < 5 are jointly UNSAT — the full query
+        # would be UNSAT too, but that must read as "vacuous premises"
+        # (inconclusive), not as an authoritative refutation.
+        result = self._run(
+            "check-overflow",
+            "int f(unsigned a, unsigned b) {\n"
+            "    if (a > 10 && a < 5) { return a + b; }\n"
+            "    return 0;\n"
+            "}\n",
+            "integer overflow in `a` + `b`",
+        )
+        assert result.outcome == "inconclusive"
+        assert (result.details or {}).get("summary") == "vacuous premises"
+
+    def test_oob_guardless_source_is_inconclusive(self):
+        result = self._run(
+            "check-oob",
+            "int f(unsigned idx) { return arr[idx]; }",
+            "`idx` is used as an array index into buffer of size `buflen`",
+        )
+        assert result.outcome == "inconclusive"
+
+    def test_overflow_to_oob_guardless_is_inconclusive(self):
+        result = self._run(
+            "check-overflow-to-oob",
+            "void f(unsigned count, unsigned index) {\n"
+            "    p = malloc(count * 4);\n"
+            "    p[index] = 1;\n"
+            "}\n",
+            "overflow of `count` * `elem_size` leads to OOB at `index`",
+        )
+        assert result.outcome == "inconclusive"
+
+
+class TestRunSmtSweepVacuityPolicy:
+    """The shim (subprocess) path applies the same centralised policy:
+    sat on a vacuous verb without ``--guard`` args is inconclusive."""
+
+    def _patch_shim(self, monkeypatch, payload):
+        import core.audit.sweep as sweep_mod
+
+        class _Proc:
+            returncode = 0
+            stdout = payload
+            stderr = ""
+
+        monkeypatch.setattr(
+            sweep_mod.subprocess, "run", lambda *a, **kw: _Proc(),
+        )
+
+    def test_sat_without_guards_is_inconclusive(self, monkeypatch):
+        self._patch_shim(monkeypatch, '{"result": "sat"}')
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f",
+            verb="check-overflow",
+            smt_args={"op": "*", "operand": ["count", "size"]},
+        )
+        assert result.outcome == "inconclusive"
+
+    def test_sat_with_guards_confirms(self, monkeypatch):
+        self._patch_shim(monkeypatch, '{"result": "sat"}')
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f",
+            verb="check-overflow",
+            smt_args={"op": "*", "operand": ["count", "size"],
+                      "guard": ["count < max_len"]},
+        )
+        assert result.outcome == "confirmed"
+
+    def test_unsat_stays_refuted_without_guards(self, monkeypatch):
+        self._patch_shim(monkeypatch, '{"result": "unsat"}')
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f",
+            verb="check-overflow",
+            smt_args={"op": "+", "operand": ["a", "b"]},
+        )
+        assert result.outcome == "refuted"
+
+    def test_non_vacuous_verb_sat_still_confirms(self, monkeypatch):
+        self._patch_shim(monkeypatch, '{"result": "sat"}')
+        result = run_smt_sweep(
+            file_path="a.c", function_name="f",
+            verb="check-null-deref",
+            smt_args={"ptr": "p"},
+        )
+        assert result.outcome == "confirmed"

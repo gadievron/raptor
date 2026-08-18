@@ -5,11 +5,15 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from core.dataflow.structural_validator import (
     StructuralResult,
+    _EXTRACTORS,
     _build_all_steps,
     _check_call_link,
     _extract_branch_guards_from_content,
+    _extract_graph,
     _identify_sanitizer_calls,
     _resolve_file,
     validate_structurally,
@@ -240,6 +244,102 @@ class TestBranchGuards:
         guards = _extract_branch_guards_from_content("x = 1\n", 99, "python")
         assert guards == []
 
+    def test_exact_guard_text_extracted(self):
+        content = (
+            "def f(x):\n"
+            "    if x > 0:\n"
+            "        sink(x)\n"
+        )
+        guards = _extract_branch_guards_from_content(content, 3, "python")
+        assert guards == ["x > 0"]
+
+    def test_out_of_range_line_returns_empty(self):
+        content = "a = 1\nb = 2\n"
+        assert _extract_branch_guards_from_content(content, 3, "python") == []
+        assert _extract_branch_guards_from_content(content, 0, "python") == []
+
+    def test_line_one_no_negative_scan(self):
+        assert _extract_branch_guards_from_content("x = 1\n", 1, "python") == []
+
+
+# ── _extract_graph grammar selection ─────────────────────────────
+
+
+TS_CONTENT = """\
+interface Req { body: string }
+
+function helper(x: string): string {
+    return x.trim();
+}
+
+export function main(req: Req): void {
+    helper(req.body);
+}
+"""
+
+
+class TestTypescriptGrammar:
+    def test_extractor_table_binds_ts_grammars(self):
+        assert _EXTRACTORS["typescript"].keywords["language"] == "typescript"
+        assert _EXTRACTORS["tsx"].keywords["language"] == "tsx"
+
+    def test_typed_ts_produces_call_edges(self):
+        pytest.importorskip("tree_sitter_typescript")
+        graph = _extract_graph(TS_CONTENT, "typescript")
+        assert graph is not None
+        edges = [(c.caller, tuple(c.chain)) for c in graph.calls]
+        assert ("main", ("helper",)) in edges
+
+    def test_tsx_grammar_parses_jsx(self):
+        pytest.importorskip("tree_sitter_typescript")
+        tsx = (
+            "function App(): JSX.Element {\n"
+            "    const v = render();\n"
+            "    return <div>{v}</div>;\n"
+            "}\n"
+        )
+        graph = _extract_graph(tsx, "tsx")
+        assert graph is not None
+        assert any(tuple(c.chain) == ("render",) for c in graph.calls)
+
+
+class TestGrammarMissingIsNoEvidence:
+    def test_extract_graph_returns_none_without_grammar(self, monkeypatch):
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_ts_language", lambda lang: None)
+        assert _extract_graph("int main(void) { return 0; }\n", "c") is None
+
+    def test_extract_graph_returns_none_without_tree_sitter(self, monkeypatch):
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        assert _extract_graph("function f() {}\n", "javascript") is None
+
+    def test_python_unaffected_by_missing_grammars(self, monkeypatch):
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        graph = _extract_graph("def f():\n    g()\n", "python")
+        assert graph is not None
+        assert any(tuple(c.chain) == ("g",) for c in graph.calls)
+
+    def test_no_high_confidence_refutation_without_grammar(
+        self, monkeypatch, tmp_path,
+    ):
+        """An environment gap (grammar not installed) must not become a
+        high-confidence refutation that suppresses a finding."""
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_ts_language", lambda lang: None)
+        src = tmp_path / "vuln.c"
+        src.write_text(
+            "void sink(char *s) { system(s); }\n"
+            "void source(char *s) { sink(s); }\n"
+        )
+        path = {
+            "source": {"file": "vuln.c", "line": 2, "label": "source"},
+            "sink": {"file": "vuln.c", "line": 1, "label": "sink"},
+        }
+        result = validate_structurally(path, tmp_path)
+        assert result.verdict != "refuted"
+
 
 # ── validate_structurally (integration) ─────────────────────────
 
@@ -375,3 +475,30 @@ class TestValidateStructurally:
             assert "step_index" in ev
             assert "file" in ev
             assert "exists" in ev
+
+
+# ── line-count convention: N trailing-newline lines means N lines ──
+
+
+class TestLineCountConvention:
+    def test_phantom_trailing_line_rejected(self, tmp_path):
+        src = tmp_path / "f.py"
+        src.write_text("x = a()\ny = b(x)\n")   # 2 real lines
+        path = {
+            "source": {"file": "f.py", "line": 1, "label": "source"},
+            "sink": {"file": "f.py", "line": 3, "label": "sink"},
+        }
+        result = validate_structurally(path, tmp_path)
+        sink_ev = result.evidence[1]
+        assert sink_ev["exists"] is False
+        assert "exceeds file length 2" in sink_ev["detail"]
+
+    def test_last_real_line_accepted(self, tmp_path):
+        src = tmp_path / "f.py"
+        src.write_text("x = a()\ny = b(x)\n")
+        path = {
+            "source": {"file": "f.py", "line": 1, "label": "source"},
+            "sink": {"file": "f.py", "line": 2, "label": "sink"},
+        }
+        result = validate_structurally(path, tmp_path)
+        assert all(ev["exists"] for ev in result.evidence)

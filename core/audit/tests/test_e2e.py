@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,13 +20,23 @@ _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _AUDIT_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-audit")
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
 
+# G2's receipt gate demands an EXECUTED confirmed sweep — a missing
+# semgrep binary turns every sweep into outcome=error, so the record/
+# report/feedback chains below cannot be exercised at all. semgrep is
+# deliberately not a Python requirement (same treatment as the other
+# optional tools); skip-with-reason instead of failing red on hosts
+# without it. The nightly workflow installs semgrep so these run in CI.
+needs_semgrep = pytest.mark.skipif(
+    shutil.which("semgrep") is None, reason="semgrep not installed",
+)
+
 
 def _run(args, **kwargs):
     env = dict(os.environ, CLAUDECODE="1", _RAPTOR_TRUSTED="1",
                PYTHONPATH=str(_RAPTOR_DIR))
     return subprocess.run(
         [sys.executable] + args,
-        env=env, capture_output=True, text=True, **kwargs,
+        env=env, capture_output=True, text=True, check=False, **kwargs,
     )
 
 
@@ -120,6 +131,7 @@ class TestAuditE2E:
         assert r.returncode == 0, r.stderr
         assert "sprintf" in r.stdout
 
+    @needs_semgrep
     def test_record_finding_emits_findings_json(self, setup):
         target, out_dir = setup
         _run([_CHECKLIST_CLI, str(target), str(out_dir)])
@@ -186,6 +198,7 @@ class TestAuditE2E:
         assert r.returncode != 0
         assert "G5 READ-FIRST" in r.stderr
 
+    @needs_semgrep
     def test_g7_blocks_finding_no_reach_via(self, setup):
         target, out_dir = setup
         _run([_CHECKLIST_CLI, str(target), str(out_dir)])
@@ -219,6 +232,7 @@ class TestAuditE2E:
         assert r.returncode != 0
         assert "G7 REACHABILITY" in r.stderr
 
+    @needs_semgrep
     def test_report_counts_match(self, setup):
         target, out_dir = setup
         _run([_CHECKLIST_CLI, str(target), str(out_dir)])
@@ -256,11 +270,12 @@ class TestAuditE2E:
         r = _run([_AUDIT_CLI, "report",
                   "--out", str(out_dir), "--target", str(target)])
         assert r.returncode == 0, r.stderr
-        assert "Functions reviewed: 3" in r.stdout
+        assert "Functions LLM-reviewed: 3" in r.stdout
         assert "Clean: 2" in r.stdout
         assert "Finding: 1" in r.stdout
         assert "Tool-confirmed findings: 1" in r.stdout
 
+    @needs_semgrep
     def test_critique_identifies_mode2_gap(self, setup):
         """Critique identifies confirmed findings without codebase-wide rules."""
         target, out_dir = setup
@@ -341,6 +356,7 @@ class TestAuditE2E:
         # General strategy exemplars should always appear
         assert "CVE-2022-0995" in r.stdout or "Strategy exemplars" in r.stdout
 
+    @needs_semgrep
     def test_feedback_downgrades_disproven_finding(self, setup):
         """Feedback loop: /validate disproved → annotation downgraded."""
         target, out_dir = setup
@@ -530,7 +546,7 @@ class TestAuditE2E:
 
     def test_rules_save_and_list(self, setup):
         """Rules subcommand: save and list."""
-        target, out_dir = setup
+        _target, out_dir = setup
 
         rule_content = (
             "rules:\n"

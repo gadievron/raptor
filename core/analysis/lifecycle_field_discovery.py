@@ -165,7 +165,7 @@ def _score_field(
 
     for line_num in sites.get("reads", []):
         if 0 < line_num <= len(source_lines):
-            context_start = max(0, line_num - 5)
+            context_start = max(0, line_num - 6)
             context_end = min(len(source_lines), line_num + 2)
             context = "\n".join(source_lines[context_start:context_end])
             for pat in _SECURITY_GUARD_PATTERNS:
@@ -175,7 +175,7 @@ def _score_field(
 
     for line_num in sites.get("writes", []):
         if 0 < line_num <= len(source_lines):
-            context_start = max(0, line_num - 3)
+            context_start = max(0, line_num - 4)
             context_end = min(len(source_lines), line_num + 1)
             context = "\n".join(source_lines[context_start:context_end])
             for pat in _LIFECYCLE_FUNCTION_PATTERNS:

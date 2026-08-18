@@ -2,7 +2,7 @@
 
 Reads ``tuning.json`` from the repo root, resolves ``"auto"`` values
 using hardware detection, validates per-key, and exposes resolved
-integers to consumers via ``get_tuning()``.
+integers and booleans to consumers via ``get_tuning()``.
 
 Invalid keys warn and fall back to defaults per-key — a single typo
 never blocks a session.
@@ -64,14 +64,14 @@ _KEY_COMMENTS = {
     "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
     "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
     "joern_enabled": "set false to disable Joern CPG analysis across all runs",
-    "joern_heap_mb": "MB of JVM heap for Joern (auto = 25% system RAM, clamped 1024-4096)",
+    "joern_heap_mb": "MB of JVM heap for Joern (auto = 25% system RAM, min 1024)",
     "joern_cpg_timeout_s": "seconds before CPG generation is killed",
     "joern_query_timeout_s": "seconds before a single Joern query is killed",
     "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
     "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
     "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
     "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
-    "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",
+    "max_json_memo_mb": "MB budget for JsonCache in-process memo; oldest entries evicted past this",
     "max_llm_workers": "parallel LLM API calls (consumed by core/llm/concurrency.py)",
     "throttle_cooldown_s": "seconds to wait between LLM batches when rate-limited",
 }
@@ -88,9 +88,13 @@ _DEFAULTS = {
     "joern_heap_mb": "auto",
     "joern_cpg_timeout_s": 300,
     "joern_query_timeout_s": 300,
-    "max_semgrep_workers": 4,
-    "max_codeql_workers": 2,
-    "max_fuzz_parallel": 4,
+    # Worker counts default to hardware-aware auto: the per-process
+    # jobs/threads division at the dispatch sites makes half-CPU
+    # worker pools safe on any host size (previously pinned at
+    # small-host literals 4/2/4).
+    "max_semgrep_workers": "auto",
+    "max_codeql_workers": "auto",
+    "max_fuzz_parallel": "auto",
     "max_inventory_workers": "auto",
     "max_json_memo_mb": 128,
 }
@@ -140,10 +144,38 @@ def _detect_fuzz_parallel() -> int:
     return _detect_half_cpu_parallelism()
 
 
+# Compressed-oops boundary: above ~32 GiB heaps HotSpot disables
+# UseCompressedOops (verified with -XX:+PrintFlagsFinal on this
+# JDK: true at -Xmx31g, false at -Xmx126916m) and every object
+# reference doubles to 8 bytes. A heap in the (32, ~48] GiB band is
+# strictly worse than 31 GiB: it pays the doubled references without
+# holding more objects than the compressed 31 GiB heap does. CPGs
+# are exactly the pointer-dense workload where this bites.
+_JOERN_OOPS_SAFE_MB = 31 * 1024          # stay under the 32 GiB flip
+_JOERN_OOPS_DEAD_ZONE_TOP_MB = 48 * 1024
+
+
 def _detect_joern_heap_mb() -> int:
-    """25% of system RAM, clamped to [1024, 4096] MB."""
+    """25% of system RAM, floor 1024 MB, compressed-oops-aware.
+
+    -Xmx is a ceiling, not a reservation — the JVM commits only what
+    it uses (measured: a 124 GiB -Xms/-Xmx pair held RSS at ~0.9 GiB
+    on an nginx-sized CPG) — and RAPTOR runs a single Joern server
+    per run, so a proportional ceiling is safe. The former 4096 MB
+    cap starved CPG queries on large targets when the host had RAM
+    to spare (a 500 GB box was clamped to a laptop-sized heap).
+
+    One exception: a proportional value landing in the compressed-
+    oops dead zone (see _JOERN_OOPS_SAFE_MB) is clamped DOWN to the
+    31 GiB compressed maximum — more effective capacity, not less.
+    Values above the dead zone keep the proportional size: there the
+    raw capacity genuinely exceeds what compressed 31 GiB can hold.
+    """
     total_mb = _detect_total_ram_mb()
-    return max(1024, min(total_mb // 4, 4096))
+    heap = max(1024, total_mb // 4)
+    if _JOERN_OOPS_SAFE_MB < heap <= _JOERN_OOPS_DEAD_ZONE_TOP_MB:
+        return _JOERN_OOPS_SAFE_MB
+    return heap
 
 
 def _detect_inventory_workers() -> int:

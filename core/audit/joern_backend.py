@@ -11,9 +11,10 @@ import json
 import logging
 import threading
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ _JOERN_EXTENSIONS = frozenset({
 })
 
 
-def target_has_c_sources(target_path: Optional[Path]) -> bool:
+def target_has_c_sources(target_path: Path | None) -> bool:
     """Check if target directory contains C/C++ source files."""
     if not target_path or not target_path.is_dir():
         return False
@@ -36,7 +37,7 @@ def target_has_c_sources(target_path: Optional[Path]) -> bool:
     return False
 
 
-def target_has_joern_sources(target_path: Optional[Path]) -> bool:
+def target_has_joern_sources(target_path: Path | None) -> bool:
     """Check if target has non-C sources that Joern can parse."""
     if not target_path or not target_path.is_dir():
         return False
@@ -46,7 +47,7 @@ def target_has_joern_sources(target_path: Optional[Path]) -> bool:
     return False
 
 
-def joern_available(overrides: Optional[Dict[str, Any]] = None) -> bool:
+def joern_available(overrides: dict[str, Any] | None = None) -> bool:
     """Check if Joern is installed, importable, and enabled in tuning."""
     if overrides and overrides.get("enabled") is False:
         return False
@@ -55,7 +56,7 @@ def joern_available(overrides: Optional[Dict[str, Any]] = None) -> bool:
         if not get_tuning().joern_enabled:
             return False
     except Exception:
-        pass
+        logger.debug("joern tuning probe failed", exc_info=True)
     try:
         from packages.joern.prereqs import is_available
         return is_available()
@@ -63,12 +64,13 @@ def joern_available(overrides: Optional[Dict[str, Any]] = None) -> bool:
         return False
 
 
-def joern_tunables(overrides: Optional[Dict[str, Any]] = None):
+def joern_tunables(overrides: dict[str, Any] | None = None):
     """Load JoernTunables from the central tuning config."""
     try:
         from packages.joern.tunables import JoernTunables
         return JoernTunables.from_tuning(overrides=overrides)
     except Exception:
+        logger.debug("joern tunables from_tuning failed", exc_info=True)
         try:
             from packages.joern.tunables import JoernTunables
             return JoernTunables()
@@ -117,7 +119,7 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None):
         try:
             srv.stop()
         except Exception:
-            pass
+            logger.debug("joern server stop failed", exc_info=True)
         return None
     return srv
 
@@ -173,19 +175,19 @@ def stop_joern_server(server) -> None:
 def joern_live_query(
     server,
     function_name: str,
-    sinks: List[str],
+    sinks: list[str],
     timeout: int = 30,
     *,
-    label: Optional[str] = None,
-    max_call_depth: Optional[int] = None,
-) -> List[Any]:
+    label: str | None = None,
+    max_call_depth: int | None = None,
+) -> list[Any]:
     """Fire a targeted taint query via the live Joern server."""
     from packages.joern.runner import _validate_substitution_value
 
     if not _validate_substitution_value(function_name):
         return []
 
-    depth_kwargs: Dict[str, int] = {}
+    depth_kwargs: dict[str, int] = {}
     if max_call_depth is not None:
         depth_kwargs["max_call_depth"] = max_call_depth
 
@@ -214,10 +216,10 @@ def joern_live_query(
 
 
 def enrich_joern_evidence(
-    evidence_index: Optional[Dict[str, Any]],
+    evidence_index: dict[str, Any] | None,
     key: str,
     function_name: str,
-    sinks: List[str],
+    sinks: list[str],
     joern_server,
 ) -> None:
     """Add unguarded-sink details and tainted arg indices to evidence."""
@@ -259,9 +261,9 @@ def enrich_joern_evidence(
 
 def build_joern_evidence(
     target_path, out_dir, joern_overrides=None,
-    on_progress: Optional[Callable] = None,
+    on_progress: Callable | None = None,
     joern_server=None,
-) -> Optional[Dict[str, list]]:
+) -> dict[str, list] | None:
     """Run Joern pre-sweep (standard_sinks.sc) if available."""
     try:
         from .sweep import run_joern_pre_sweep
@@ -286,16 +288,19 @@ def build_joern_evidence(
 
 def enrich_summaries_from_joern(
     joern_server,
-    joern_flows: Dict[str, list],
-    taint_summary_results: Dict[str, Any],
+    joern_flows: dict[str, list],
+    taint_summary_results: dict[str, Any],
 ) -> None:
     """Run Joern summary batch for flow-involved methods and merge results."""
     try:
-        from packages.joern.models import TaintFlow
         from core.analysis.summaries import (
-            FunctionSummary, TaintRule, Precondition, ReturnCondition,
             EvidenceTier,
+            FunctionSummary,
+            Precondition,
+            ReturnCondition,
+            TaintRule,
         )
+        from packages.joern.models import TaintFlow
     except ImportError:
         return
 
@@ -306,6 +311,7 @@ def enrich_summaries_from_joern(
             try:
                 flow = TaintFlow.from_dict(flow_dict) if isinstance(flow_dict, dict) else flow_dict
             except Exception:
+                logger.debug("unparseable joern flow skipped", exc_info=True)
                 continue
             if flow.source_method:
                 methods.add(flow.source_method)
@@ -377,7 +383,7 @@ def enrich_summaries_from_joern(
 
 def resolve_joern_evidence(
     target_path, joern_overrides=None,
-    on_joern_progress: Optional[Callable[[str], None]] = None,
+    on_joern_progress: Callable[[str], None] | None = None,
     joern_server=None,
     out_dir=None,
 ) -> tuple:
@@ -393,9 +399,15 @@ def resolve_joern_evidence(
         return (None, None)
 
     def _progress(msg: str) -> None:
-        logger.info(msg)
+        # ONE channel per message: the progress callback renders on
+        # the operator console (stdout); emitting the same text
+        # through the logger too printed every Joern progress line
+        # twice (stderr + stdout). The logger is the fallback when no
+        # callback exists.
         if on_joern_progress:
             on_joern_progress(msg)
+        else:
+            logger.info(msg)
 
     if joern_server is not None and joern_server.is_alive():
         _progress("Joern pre-sweep (server mode, background)...")
@@ -410,11 +422,11 @@ def resolve_joern_evidence(
 
 
 def merge_joern_flows(
-    joern_flows: Dict[str, list],
-    evidence_index: Dict[str, Any],
-    checklist: Dict[str, Any],
+    joern_flows: dict[str, list],
+    evidence_index: dict[str, Any],
+    checklist: dict[str, Any],
     sarif_cache,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Merge Joern taint flows into the evidence index."""
     from core.evidence import build_evidence_index
     merged = build_evidence_index(
@@ -444,10 +456,10 @@ def merge_joern_flows(
 
 def drain_joern_future(
     future: Future,
-    evidence_index: Dict[str, Any],
-    checklist: Dict[str, Any],
+    evidence_index: dict[str, Any],
+    checklist: dict[str, Any],
     sarif_cache,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Drain a completed Joern future and merge flows into evidence_index."""
     try:
         joern_flows = future.result(timeout=0)
@@ -461,7 +473,7 @@ def drain_joern_future(
     return merge_joern_flows(joern_flows, evidence_index, checklist, sarif_cache)
 
 
-def resolve_cpg_cache_dir(out_dir) -> Optional[Path]:
+def resolve_cpg_cache_dir(out_dir) -> Path | None:
     """Resolve the CPG cache directory for project-level reuse."""
     if not out_dir:
         return None
@@ -471,15 +483,43 @@ def resolve_cpg_cache_dir(out_dir) -> Optional[Path]:
     return None
 
 
+def _current_content_hash(out_dir, target_path) -> str | None:
+    """The current run's target content hash, or None when unavailable.
+
+    Prefers the current run's own .raptor-run.json manifest; falls back
+    to deriving it from the target tree the same way the CPG cache does.
+    """
+    manifest_path = Path(out_dir) / ".raptor-run.json"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                own = json.load(f)
+            own_hash = own.get("content_hash", "")
+            if own_hash:
+                return own_hash
+        except (json.JSONDecodeError, OSError):
+            pass
+    if target_path is None or not Path(target_path).is_dir():
+        return None
+    try:
+        from packages.joern.runner import _target_content_hash
+        return _target_content_hash(Path(target_path))
+    except Exception:
+        logger.debug("content hash derivation failed", exc_info=True)
+        return None
+
+
 def import_sibling_joern_flows(
     out_dir,
     target_path=None,
-) -> Optional[Dict[str, list]]:
+) -> dict[str, list] | None:
     """Step 0i: import Joern taint flows from sibling project runs."""
     siblings = sibling_run_dirs(out_dir, target_path=target_path)
     if not siblings:
         return None
-    imported: Dict[str, list] = {}
+    imported: dict[str, list] = {}
+    current_hash: str | None = None
+    current_hash_resolved = False
     for sibling_dir in siblings:
         flows_path = sibling_dir / "joern-flows.json"
         if not flows_path.exists():
@@ -491,7 +531,24 @@ def import_sibling_joern_flows(
                     manifest = json.load(f)
                 sibling_hash = manifest.get("content_hash", "")
                 if sibling_hash:
-                    pass
+                    # Staleness gate: a sibling run at a different
+                    # commit carries taint flows for code that no
+                    # longer exists. Only enforced when both hashes
+                    # are known — legacy siblings without hashes
+                    # import as before.
+                    if not current_hash_resolved:
+                        current_hash = _current_content_hash(
+                            out_dir, target_path,
+                        )
+                        current_hash_resolved = True
+                    if current_hash and sibling_hash != current_hash:
+                        logger.info(
+                            "sibling %s joern-flows stale "
+                            "(hash %s → %s) — skipped",
+                            sibling_dir.name,
+                            sibling_hash[:8], current_hash[:8],
+                        )
+                        continue
             except (json.JSONDecodeError, OSError):
                 pass
         try:
@@ -508,7 +565,7 @@ def sibling_run_dirs(
     out_dir,
     *,
     target_path=None,
-) -> List[Path]:
+) -> list[Path]:
     """List sibling run directories under the same project."""
     out_dir = Path(out_dir)
     project_dir = out_dir.parent
@@ -536,9 +593,9 @@ def sibling_run_dirs(
 
 
 def adaptive_max_depth(
-    inventory: Optional[Dict[str, Any]],
+    inventory: dict[str, Any] | None,
     entry_points: set,
-    operator_override: Optional[int] = None,
+    operator_override: int | None = None,
 ) -> int:
     """Compute propagation depth from call graph density."""
     from .propagation import DEFAULT_MAX_DEPTH
@@ -560,11 +617,11 @@ def adaptive_max_depth(
 
 
 def _sample_entry_point_depths(
-    inventory: Dict[str, Any],
+    inventory: dict[str, Any],
     entry_points: set,
-) -> List[int]:
+) -> list[int]:
     """BFS from each entry point, recording reachable function depths."""
-    edges: Dict[str, List[str]] = {}
+    edges: dict[str, list[str]] = {}
     for edge in inventory.get("call_edges", inventory.get("edges", [])):
         caller = edge.get("caller", "")
         callee = edge.get("callee", "")
@@ -574,7 +631,7 @@ def _sample_entry_point_depths(
     if not edges:
         return []
 
-    depths: List[int] = []
+    depths: list[int] = []
     for ep in list(entry_points)[:50]:
         name = ep.split(":")[-1] if ":" in ep else ep
         visited: set = set()

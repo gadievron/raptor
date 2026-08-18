@@ -51,6 +51,7 @@ _PURL_TYPE = "oci"
 
 _FLOATING_TAGS = frozenset({
     "latest", "stable", "edge", "nightly", "dev",
+    "beta", "alpha", "rc", "canary",
     "main", "master",
 })
 

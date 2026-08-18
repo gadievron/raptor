@@ -15,7 +15,6 @@ from packages.autonomous.poc_source_scan import (
     scan,
 )
 
-
 # ---------------------------------------------------------------------------
 # Allow: directives a real PoC legitimately uses
 # ---------------------------------------------------------------------------
@@ -239,6 +238,85 @@ def test_has_include_with_whitespace_blocked():
 
 
 # ---------------------------------------------------------------------------
+# Pre-normalisation: legal spellings the raw regexes would miss
+# ---------------------------------------------------------------------------
+
+def test_block_comment_between_keyword_and_path_blocked():
+    """``#include/*x*/"path"`` — comments become a space in translation
+    phase 3, so this is a legal spelling of the directive."""
+    src = '#include/*x*/"/etc/passwd"\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].directive == "#include"
+    assert v[0].path == "/etc/passwd"
+    assert v[0].reason == "absolute path"
+
+
+def test_block_comment_between_hash_and_keyword_blocked():
+    src = '#/*x*/include "/etc/passwd"\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+def test_backslash_newline_splice_blocked():
+    """``#include \\`` + newline + ``"path"`` — phase 2 splices the
+    continuation before the directive is parsed."""
+    src = '#include \\\n"/etc/passwd"\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].directive == "#include"
+    assert v[0].path == "/etc/passwd"
+
+
+def test_backslash_crlf_splice_blocked():
+    src = '#include \\\r\n"/etc/passwd"\r\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+def test_splice_inside_keyword_blocked():
+    src = '#inc\\\nlude "/etc/passwd"\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+def test_plain_spelling_still_blocked_after_normalisation():
+    src = '#include "/etc/passwd"\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+    assert v[0].line_no == 1
+
+
+def test_directive_inside_block_comment_not_flagged():
+    """A directive fully inside a block comment never reaches the
+    compiler, so it isn't a violation either."""
+    src = '/*\n#include "/etc/passwd"\n*/\nint main(){}'
+    assert scan(src) == []
+
+
+def test_comment_marker_inside_string_does_not_hide_directive():
+    """``/*`` inside a string literal must not open a comment for the
+    normaliser — the compiler would still process the directive that
+    follows, so the scan must too."""
+    src = 'const char *s = "/*";\n#include "/etc/passwd"\nconst char *t = "*/";\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+    assert v[0].line_no == 2
+
+
+def test_comment_open_in_line_comment_does_not_hide_directive():
+    src = '// /*\n#include "/etc/passwd"\n// */\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+# ---------------------------------------------------------------------------
 # Integration with ExploitValidator
 # ---------------------------------------------------------------------------
 
@@ -384,8 +462,8 @@ def test_e2e_no_gcc_invocation_when_source_scan_rejects(monkeypatch, tmp_path):
     """Strongest signal: confirm the sandbox/gcc subprocess is NEVER
     reached when the source-scan rejects. Substitutes ``sandbox.run``
     for a probe that would fail loudly if it were called."""
-    from packages.autonomous.exploit_validator import ExploitValidator
     import core.sandbox
+    from packages.autonomous.exploit_validator import ExploitValidator
 
     sandbox_called = {"hit": False}
 

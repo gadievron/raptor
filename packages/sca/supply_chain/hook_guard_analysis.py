@@ -25,32 +25,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any
+
+from .sink_vocab import HOOK_PAYLOAD_EXTRA_SINKS, SHARED_SUPPLY_CHAIN_SINKS
 
 logger = logging.getLogger(__name__)
 
-_HOOK_SINKS: FrozenSet[str] = frozenset({
-    # Shell execution
-    "os.system", "os.popen", "subprocess.call", "subprocess.run",
-    "subprocess.Popen", "subprocess.check_output", "subprocess.check_call",
-    "system", "popen", "exec", "eval",
-    # Code execution / deserialization
-    "pickle.loads", "pickle.load", "marshal.loads",
-    "yaml.load", "compile", "__import__",
-    # Network exfiltration
-    "requests.get", "requests.post", "urllib.request.urlopen",
-    "http.client.HTTPSConnection", "socket.connect",
-    "fetch", "XMLHttpRequest",
-    # File system manipulation
-    "os.remove", "os.unlink", "shutil.rmtree",
-    # Rust-specific
-    "Command::new", "std::process::Command",
-    # Node-specific
-    "child_process.exec", "child_process.spawn",
-    "child_process.execSync", "child_process.execFile",
-    # Credential reads
-    "fs.readFileSync", "open",
-})
+# Composed from the shared supply-chain authority plus the
+# hook-payload-specific extras (see sink_vocab.py for the rationale).
+_HOOK_SINKS: frozenset[str] = (
+    SHARED_SUPPLY_CHAIN_SINKS | HOOK_PAYLOAD_EXTRA_SINKS
+)
 
 
 @dataclass
@@ -61,7 +46,7 @@ class HookSinkInfo:
     line: int
     unconditional: bool
     guard_count: int
-    guard_categories: List[str] = field(default_factory=list)
+    guard_categories: list[str] = field(default_factory=list)
     adequacy_verdict: str = "unknown"
 
 
@@ -74,7 +59,7 @@ class HookGuardAnalysis:
     total_sinks: int
     unconditional_sinks: int
     guarded_sinks: int
-    sinks: List[HookSinkInfo] = field(default_factory=list)
+    sinks: list[HookSinkInfo] = field(default_factory=list)
 
     @property
     def has_unconditional_dangerous_call(self) -> bool:
@@ -84,7 +69,7 @@ class HookGuardAnalysis:
     def all_sinks_guarded(self) -> bool:
         return self.total_sinks > 0 and self.unconditional_sinks == 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "file_path": self.file_path,
             "language": self.language,
@@ -112,8 +97,8 @@ def analyze_hook_payload(
     source: str,
     filepath: str,
     *,
-    sink_names: Optional[FrozenSet[str]] = None,
-) -> Optional[HookGuardAnalysis]:
+    sink_names: frozenset[str] | None = None,
+) -> HookGuardAnalysis | None:
     """Analyze a hook payload script for dangerous sinks and guards.
 
     Args:
@@ -126,11 +111,11 @@ def analyze_hook_payload(
         supported or condition extraction is unavailable.
     """
     try:
+        from core.audit.condition_adequacy import assess_guard_adequacy
         from core.audit.condition_extraction import (
             extract_sink_guards,
             language_for_file,
         )
-        from core.audit.condition_adequacy import assess_guard_adequacy
     except ImportError:
         logger.debug(
             "hook_guard_analysis: condition stack not importable"
@@ -153,7 +138,7 @@ def analyze_hook_payload(
             guarded_sinks=0,
         )
 
-    sink_infos: List[HookSinkInfo] = []
+    sink_infos: list[HookSinkInfo] = []
     for sg in guards:
         adequacy = assess_guard_adequacy(sg.sink_api, sg.guards)
         categories = sorted({g.category for g in sg.guards})
@@ -181,7 +166,7 @@ def analyze_hook_payload(
 def analyze_intree_targets(
     intree_targets: list,
     project_root: Path,
-) -> List[HookGuardAnalysis]:
+) -> list[HookGuardAnalysis]:
     """Analyze in-tree files referenced by an install hook.
 
     Args:
@@ -191,7 +176,7 @@ def analyze_intree_targets(
     Returns:
         List of HookGuardAnalysis, one per parseable in-tree target.
     """
-    results: List[HookGuardAnalysis] = []
+    results: list[HookGuardAnalysis] = []
     for t in intree_targets:
         target_path = project_root / t.path
         try:

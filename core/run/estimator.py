@@ -10,10 +10,13 @@ requested model (< 5 calls). No estimate is better than a wrong one.
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,8 +41,8 @@ def estimate_from_scorecard(
     n_findings: int,
     *,
     max_parallel: int = 3,
-    scorecard_path: Optional[Path] = None,
-) -> Optional[RunEstimate]:
+    scorecard_path: Path | None = None,
+) -> RunEstimate | None:
     """Derive a cost + time estimate from the model's scorecard history.
 
     Aggregates ``calls``, ``cost_usd``, and ``latency_ms_sum`` across
@@ -55,10 +58,23 @@ def estimate_from_scorecard(
         from core.llm.scorecard.scorecard import ModelScorecard
     except ImportError:
         return None
+    if scorecard_path is None:
+        # Same sidecar the rest of RAPTOR reads/writes: anchor on
+        # RAPTOR_DIR so a run started from any cwd finds the shared
+        # scorecard, not a stray ./out/llm_scorecard.json.
+        raptor_dir = os.environ.get("RAPTOR_DIR")
+        scorecard_path = (
+            Path(raptor_dir) / "out" / "llm_scorecard.json"
+            if raptor_dir else Path("out/llm_scorecard.json")
+        )
     try:
-        sc = ModelScorecard(path=scorecard_path) if scorecard_path else ModelScorecard()
+        sc = ModelScorecard(scorecard_path)
         stats = sc.get_stats()
-    except Exception:  # noqa: BLE001
+    except Exception:
+        logger.debug(
+            "scorecard estimate unavailable (%s)", scorecard_path,
+            exc_info=True,
+        )
         return None
 
     total_calls = 0
@@ -98,7 +114,7 @@ def estimate_from_scorecard(
     )
 
 
-def format_estimate(est: Optional[RunEstimate]) -> str:
+def format_estimate(est: RunEstimate | None) -> str:
     """Operator-facing one-liner. Empty string when ``est`` is
     None — caller can unconditionally append to output, no None
     check needed at the print site.

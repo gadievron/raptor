@@ -92,6 +92,17 @@ def test_format_report_renders_lift_and_fp_lines():
     assert "patched" in report and "false-pos" in report
 
 
+def test_format_report_renders_per_sample_lines():
+    """The aggregate hides which sample produced (or destroyed) the
+    lift — each sample gets a detail line under its variant."""
+    results = run_efficacy_eval(
+        [_sample("vulnerable"), _sample("patched")], _lens_helps, runs=2,
+    )
+    report = format_report(results)
+    assert "ld_vulnerable  ctrl 0/2  treat 2/2" in report
+    assert "ld_patched  ctrl 0/2  treat 2/2" in report
+
+
 # --- corpus loading --------------------------------------------------------
 
 

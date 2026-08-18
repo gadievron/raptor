@@ -54,6 +54,8 @@ def test_sole_source_clean_coverage_preserved(tmp_path):
     assert c.duplicate is False and c.lossy is False
     # Coverage snapshotted -> f1/f2 are now examined-clean in the store.
     assert s.function_verdict("a.c", 0, 20) == "clean"
+    # The magnitude of what's unique is part of the operator warning.
+    assert "unique coverage (1 examined file(s))" in format_consequence(c)
     assert "preserved into the store" in format_consequence(c)
 
 

@@ -105,7 +105,9 @@ def _relax_bottlenecks(
     the rest proceed without waiting and get repassed later.
 
     *max_repass* caps the total number of relaxed edges.  When 0
-    (the default), the cap is ``total_tasks // 20`` (5%).
+    (the default), no cap is applied; the production caller passes
+    ``max(total_tasks // 20, max_workers)`` to keep relaxation at
+    roughly 5%.
     """
     callee_to_callers: dict[str, set[str]] = {}
     for caller, callees in caller_to_callees.items():
@@ -171,18 +173,56 @@ class GraphStats:
 
 @dataclass
 class TaskGraph:
-    """DAG of review tasks with ready-set tracking."""
+    """DAG of review tasks with ready-set tracking.
+
+    Ready-set ordering (``schedule``):
+
+    * ``"priority"`` (default) — highest effective priority first
+      (base score + unblocking bonus). Optimises time-to-first-finding
+      and is the only sensible order for a serial run.
+    * ``"cost"`` — longest-predicted-duration first within the ready
+      set (LPT packing), effective priority as the tie-break. With
+      multiple workers, dispatching the expensive reviews early
+      shrinks the makespan: a 300s review started last idles three
+      workers at the tail. Duration predictions come from
+      ``duration_hints`` (the orchestrator derives them from triage
+      token budgets + SLOC); tasks without a hint sort last.
+      Chain-injected tasks (``inject_task``) stay urgent — a
+      confirmed finding's neighbours are the most valuable next
+      reviews under either objective.
+    """
 
     _tasks: dict[str, ReviewTask] = field(default_factory=dict)
     _remaining_deps: dict[str, set[str]] = field(default_factory=dict)
     _dependents: dict[str, list[str]] = field(default_factory=dict)
-    _ready: list[tuple[float, str]] = field(default_factory=list)
+    _ready: list[tuple[float, float, str]] = field(default_factory=list)
     _completed: set[str] = field(default_factory=set)
     _repass_keys: frozenset[str] = field(default_factory=frozenset)
     _effective_priority: dict[str, float] = field(default_factory=dict)
     _requeued: set[str] = field(default_factory=set)
+    _duration_hints: dict[str, float] = field(default_factory=dict)
+    _schedule: str = "priority"
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     stats: GraphStats = field(default_factory=GraphStats)
+
+    def _push_ready(
+        self, key: str, priority_value: float, *, urgent: bool = False,
+    ) -> None:
+        """Push *key* onto the ready heap under the active schedule.
+
+        Heap entries are ``(-primary, -secondary, key)``. In priority
+        mode ``primary`` is a constant 0 so ordering degenerates to
+        the classic priority ordering; in cost mode ``primary`` is
+        the duration hint (urgent pushes jump the queue entirely).
+        """
+        if self._schedule == "cost":
+            primary = (
+                float("inf") if urgent
+                else self._duration_hints.get(key, 0.0)
+            )
+        else:
+            primary = 0.0
+        heapq.heappush(self._ready, (-primary, -priority_value, key))
 
     @classmethod
     def from_workqueue(
@@ -192,8 +232,16 @@ class TaskGraph:
         *,
         priority_scores: dict[str, float] | None = None,
         max_workers: int = 1,
+        duration_hints: dict[str, float] | None = None,
+        schedule: str = "priority",
     ) -> TaskGraph:
         scores = priority_scores or {}
+        if schedule not in ("priority", "cost"):
+            logger.warning(
+                "task graph: unknown schedule %r — using 'priority'",
+                schedule,
+            )
+            schedule = "priority"
 
         wq_keys: set[str] = set()
         gaps_by_key: dict[str, dict[str, Any]] = {}
@@ -244,6 +292,8 @@ class TaskGraph:
                         s.discard(callee)
 
         graph = cls()
+        graph._schedule = schedule
+        graph._duration_hints = dict(duration_hints or {})
 
         for key, gap in gaps_by_key.items():
             deps = frozenset(caller_to_callees.get(key, set()))
@@ -269,8 +319,7 @@ class TaskGraph:
 
         for key, remaining in graph._remaining_deps.items():
             if not remaining:
-                ep = graph._effective_priority[key]
-                heapq.heappush(graph._ready, (-ep, key))
+                graph._push_ready(key, graph._effective_priority[key])
 
         graph._repass_keys = frozenset(
             k for k in repass_callers if k in graph._tasks
@@ -291,11 +340,11 @@ class TaskGraph:
         return graph
 
     def pop_ready(self, n: int = 1) -> list[ReviewTask]:
-        """Pop up to *n* highest-priority ready tasks."""
+        """Pop up to *n* ready tasks in schedule order."""
         with self._lock:
             result: list[ReviewTask] = []
             while self._ready and len(result) < n:
-                _, key = heapq.heappop(self._ready)
+                *_, key = heapq.heappop(self._ready)
                 if key in self._completed:
                     continue
                 result.append(self._tasks[key])
@@ -314,7 +363,7 @@ class TaskGraph:
                         ep = self._effective_priority.get(
                             dep_key, self._tasks[dep_key].priority,
                         )
-                        heapq.heappush(self._ready, (-ep, dep_key))
+                        self._push_ready(dep_key, ep)
                         newly_ready.append(dep_key)
             return newly_ready
 
@@ -322,9 +371,9 @@ class TaskGraph:
     def pending(self) -> int:
         return len(self._tasks) - len(self._completed)
 
-    @property
-    def completed_count(self) -> int:
-        return len(self._completed)
+    def has_dependents(self, key: str) -> bool:
+        """True when other tasks depend on *key*'s taint summary."""
+        return bool(self._dependents.get(key))
 
     def repass_tasks(self) -> list[ReviewTask]:
         """Callers whose dependency edges were relaxed (cycle-breaking or
@@ -377,7 +426,7 @@ class TaskGraph:
                 priority=priority,
             )
             self._effective_priority[key] = priority
-            heapq.heappush(self._ready, (-priority, key))
+            self._push_ready(key, priority, urgent=True)
             logger.debug(
                 "inject_task: requeued %s at priority %.1f",
                 key.rsplit(":", 1)[0], priority,
@@ -390,7 +439,7 @@ class TaskGraph:
             old_ep = self._effective_priority.get(key, 0.0)
             if priority > old_ep:
                 self._effective_priority[key] = priority
-                heapq.heappush(self._ready, (-priority, key))
+                self._push_ready(key, priority, urgent=True)
                 logger.debug(
                     "inject_task: reprioritised %s (%.1f -> %.1f)",
                     key.rsplit(":", 1)[0], old_ep, priority,
@@ -402,7 +451,7 @@ class TaskGraph:
         self._tasks[key] = task
         self._remaining_deps[key] = set()
         self._effective_priority[key] = priority
-        heapq.heappush(self._ready, (-priority, key))
+        self._push_ready(key, priority, urgent=True)
         logger.debug(
             "inject_task: added %s at priority %.1f",
             key.rsplit(":", 1)[0], priority,

@@ -27,13 +27,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import shutil
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from core.atomic_fs import write_text_atomically
+from core.atomic_fs import write_bytes_atomically, write_text_atomically
 
 from .cwe_families import cwe_siblings
 from .models import CheckerSynthesisResult, Match, MatchTriage
@@ -61,11 +60,11 @@ class TargetRecord:
     ts: str
     matches: int
     variants: int
-    tp_rate: Optional[float]
+    tp_rate: float | None
     target_profile: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "target_hash": self.target_hash,
             "ts": self.ts,
             "matches": self.matches,
@@ -77,7 +76,7 @@ class TargetRecord:
         return d
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "TargetRecord":
+    def from_dict(cls, d: dict[str, Any]) -> TargetRecord:
         return cls(
             target_hash=d["target_hash"],
             ts=d.get("ts", ""),
@@ -104,12 +103,17 @@ class LibraryEntry:
     fp_rate: float
     total_variants: int
     total_matches: int = 0
-    targets: List[TargetRecord] = field(default_factory=list)
+    targets: list[TargetRecord] = field(default_factory=list)
     archived: bool = False
     source: str = ""
+    # Mechanical-control tier at persist time: "library" only when
+    # every control passed (positive + dual + fix-mutant / verified
+    # ground-truth negative). Legacy manifests without the field
+    # deserialise as "sweep_once" — fail-closed for graduation.
+    rule_tier: str = "sweep_once"
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "rule_id": self.rule_id,
             "engine": self.engine,
             "cwe": self.cwe,
@@ -126,13 +130,14 @@ class LibraryEntry:
             "total_matches": self.total_matches,
             "targets": [t.to_dict() for t in self.targets],
             "archived": self.archived,
+            "rule_tier": self.rule_tier,
         }
         if self.source:
             d["source"] = self.source
         return d
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "LibraryEntry":
+    def from_dict(cls, d: dict[str, Any]) -> LibraryEntry:
         return cls(
             rule_id=d["rule_id"],
             engine=d["engine"],
@@ -147,16 +152,26 @@ class LibraryEntry:
             tp_rate=d.get("tp_rate", 0.0),
             fp_rate=d.get("fp_rate", 0.0),
             total_variants=d.get("total_variants", 0),
-            total_matches=d.get("total_matches") or d.get("total_variants", 0),
+            total_matches=d.get("total_matches", d.get("total_variants", 0)),
             targets=[TargetRecord.from_dict(t) for t in d.get("targets", [])],
             archived=d.get("archived", False),
             source=d.get("source", ""),
+            # Legacy manifests predate the field. dual_control=True
+            # could only be stamped by promote(), whose gate already
+            # required rule_tier="library" at persist time; add_rule
+            # always stamped dual_control=False. So the flag is a
+            # sound tier witness for old rows; everything else stays
+            # sweep_once (fail-closed).
+            rule_tier=d.get(
+                "rule_tier",
+                "library" if d.get("dual_control") else "sweep_once",
+            ),
         )
 
 
 def _compute_rates(
-    triage: List[MatchTriage],
-) -> Tuple[float, float, int]:
+    triage: list[MatchTriage],
+) -> tuple[float, float, int]:
     classified = [t for t in triage if t.status in ("variant", "false_positive")]
     if not classified:
         return 0.0, 0.0, 0
@@ -169,10 +184,10 @@ def _compute_rates(
 class RuleLibrary:
     """Persistent rule library backed by a manifest.json file."""
 
-    def __init__(self, library_dir: Optional[Path] = None) -> None:
+    def __init__(self, library_dir: Path | None = None) -> None:
         self._dir = Path(library_dir) if library_dir else _DEFAULT_LIBRARY_DIR
         self._manifest_path = self._dir / "manifest.json"
-        self._entries: Optional[List[LibraryEntry]] = None
+        self._entries: list[LibraryEntry] | None = None
         self._lock = threading.Lock()
 
     @property
@@ -183,7 +198,7 @@ class RuleLibrary:
         (self._dir / "semgrep").mkdir(parents=True, exist_ok=True)
         (self._dir / "coccinelle").mkdir(parents=True, exist_ok=True)
 
-    def _load(self) -> List[LibraryEntry]:
+    def _load(self) -> list[LibraryEntry]:
         if self._entries is not None:
             return self._entries
         if not self._manifest_path.exists():
@@ -207,7 +222,7 @@ class RuleLibrary:
             tmp_prefix=".manifest-",
         )
 
-    def find(self, cwe: str, engine: str) -> List[LibraryEntry]:
+    def find(self, cwe: str, engine: str) -> list[LibraryEntry]:
         """Find active library rules matching a CWE and engine.
 
         Uses the CWE family mapper so a rule promoted for CWE-564
@@ -219,7 +234,7 @@ class RuleLibrary:
             if e.cwe in family and e.engine == engine and not e.archived
         ]
 
-    def find_replayable(self, cwe: str, engine: str) -> List[LibraryEntry]:
+    def find_replayable(self, cwe: str, engine: str) -> list[LibraryEntry]:
         """Find rules suitable for replay (high TP, enough targets).
 
         Sorted by TP rate descending, then by number of targets tested
@@ -234,7 +249,7 @@ class RuleLibrary:
         candidates.sort(key=lambda e: (e.tp_rate, len(e.targets)), reverse=True)
         return candidates
 
-    def get_by_body_hash(self, body_hash: str) -> Optional[LibraryEntry]:
+    def get_by_body_hash(self, body_hash: str) -> LibraryEntry | None:
         """Look up by rule body hash (dedup key)."""
         for e in self._load():
             if e.body_hash == body_hash:
@@ -248,20 +263,90 @@ class RuleLibrary:
         target_hash: str = "",
         timestamp: str = "",
         source: str = "",
-    ) -> Optional[LibraryEntry]:
+    ) -> LibraryEntry | None:
         """Promote a synthesis result into the library.
 
         Returns the new/updated LibraryEntry, or None if the result
         doesn't meet promotion criteria (no rule, dual control failed,
-        no triage).
+        rule_tier below "library" — e.g. missing fixtures or a failed
+        fix-mutant control — or no triage).
         """
         if result.rule is None or result.rule_path is None:
             return None
         if not result.dual_control:
             return None
+        # Fail-closed library gate: synthesise_and_run only stamps
+        # rule_tier="library" when every mechanical control passed
+        # (positive + dual + fix-mutant).  getattr keeps foreign /
+        # legacy result objects without the field excluded too.
+        if getattr(result, "rule_tier", "sweep_once") != "library":
+            logger.info(
+                "promote refused for %s: rule_tier=%r (library "
+                "requires all mechanical controls to pass)",
+                result.rule.rule_id,
+                getattr(result, "rule_tier", "sweep_once"),
+            )
+            return None
         if not result.triage:
             return None
 
+        with self._lock:
+            entry = self._promote_locked(result, target_hash=target_hash,
+                                         timestamp=timestamp, source=source)
+        if entry is not None:
+            self._store_metadata_in_sage(entry, result)
+        return entry
+
+    def _store_metadata_in_sage(
+        self,
+        entry: LibraryEntry,
+        result: CheckerSynthesisResult,
+    ) -> None:
+        """Index the graduated rule in SAGE (best-effort, never raises).
+
+        The library manifest stays the local source of truth; SAGE
+        holds an index row so future runs can replay proven rules via
+        ``core.audit.checker_synthesis._sage_replay_rule``. That recall
+        side only trusts HMAC-verified rows, so the store hook stamps
+        the decision fields (engine/cwe/rule_id/body-hash/counts) at
+        write time.
+        """
+        try:
+            from core.sage.hooks import store_proven_rule_metadata
+        except ImportError:
+            return
+        try:
+            classified = [
+                t for t in result.triage
+                if t.status in ("variant", "false_positive")
+            ]
+            tp_count = sum(1 for t in classified if t.status == "variant")
+            fp_count = sum(
+                1 for t in classified if t.status == "false_positive"
+            )
+            store_proven_rule_metadata(
+                engine=entry.engine,
+                cwe=entry.cwe,
+                rule_id=entry.rule_id,
+                rule_body_hash=entry.body_hash,
+                rule_path=str(self.rule_path(entry)),
+                tp_count=tp_count,
+                fp_count=fp_count,
+                total_matches=len(result.matches),
+                dual_control_passed=entry.dual_control,
+                targets_tested=max(len(entry.targets), 1),
+            )
+        except Exception:
+            logger.debug("SAGE proven-rule store failed", exc_info=True)
+
+    def _promote_locked(
+        self,
+        result: CheckerSynthesisResult,
+        *,
+        target_hash: str = "",
+        timestamp: str = "",
+        source: str = "",
+    ) -> LibraryEntry | None:
         self._ensure_dirs()
         rule = result.rule
         bh = _body_hash(rule.body)
@@ -277,13 +362,18 @@ class RuleLibrary:
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         if result.rule_path and Path(result.rule_path).exists():
-            shutil.copy2(str(result.rule_path), str(dest))
+            # Tempfile + rename so concurrent runs never see a
+            # partially-copied rule file (module contract: manifest
+            # AND rule files are written atomically).
+            write_bytes_atomically(
+                dest, Path(result.rule_path).read_bytes(), tmp_prefix=".rule-",
+            )
         else:
             write_text_atomically(dest, rule.body, tmp_prefix=".rule-")
 
         tp_rate, fp_rate, variant_count = _compute_rates(result.triage)
 
-        targets: List[TargetRecord] = []
+        targets: list[TargetRecord] = []
         if target_hash:
             targets.append(TargetRecord(
                 target_hash=target_hash,
@@ -307,8 +397,10 @@ class RuleLibrary:
             tp_rate=tp_rate,
             fp_rate=fp_rate,
             total_variants=variant_count,
+            total_matches=len(result.matches),
             targets=targets,
             source=source,
+            rule_tier="library",
         )
 
         self._load().append(entry)
@@ -326,7 +418,7 @@ class RuleLibrary:
         target_hash: str,
         timestamp: str,
     ) -> None:
-        tp_rate, fp_rate, variant_count = _compute_rates(result.triage)
+        tp_rate, _fp_rate, variant_count = _compute_rates(result.triage)
         if target_hash:
             already = {t.target_hash for t in entry.targets}
             if target_hash not in already:
@@ -338,23 +430,29 @@ class RuleLibrary:
                     tp_rate=tp_rate if result.triage else None,
                 ))
         entry.total_variants += variant_count
+        entry.total_matches += len(result.matches)
+        # Only called from the promote() path, whose gate already
+        # required every mechanical control — an existing add_rule
+        # (sweep_once) copy of the same body is upgraded in place.
+        entry.dual_control = True
+        entry.rule_tier = "library"
         self._recompute_aggregate(entry)
 
     def update(
         self,
         rule_id: str,
         target_hash: str,
-        matches: List[Match],
-        triage: List[MatchTriage],
+        matches: list[Match],
+        triage: list[MatchTriage],
         timestamp: str = "",
-    ) -> Optional[LibraryEntry]:
+    ) -> LibraryEntry | None:
         """Update effectiveness after replaying a library rule."""
         entries = self._load()
         entry = next((e for e in entries if e.rule_id == rule_id), None)
         if entry is None:
             return None
 
-        tp_rate, fp_rate, variant_count = _compute_rates(triage)
+        tp_rate, _fp_rate, variant_count = _compute_rates(triage)
         already = {t.target_hash for t in entry.targets}
         if target_hash and target_hash not in already:
             entry.targets.append(TargetRecord(
@@ -365,6 +463,7 @@ class RuleLibrary:
                 tp_rate=tp_rate if triage else None,
             ))
         entry.total_variants += variant_count
+        entry.total_matches += len(matches)
         self._recompute_aggregate(entry)
         self._auto_archive(entry)
         self._save()
@@ -394,11 +493,11 @@ class RuleLibrary:
         """Absolute path to the rule file on disk."""
         return self._dir / entry.rule_path
 
-    def all_entries(self) -> List[LibraryEntry]:
+    def all_entries(self) -> list[LibraryEntry]:
         """All entries including archived."""
         return list(self._load())
 
-    def active_entries(self) -> List[LibraryEntry]:
+    def active_entries(self) -> list[LibraryEntry]:
         """Non-archived entries only."""
         return [e for e in self._load() if not e.archived]
 
@@ -414,6 +513,8 @@ class RuleLibrary:
         seed_function: str = "",
         source: str = "",
         timestamp: str = "",
+        dual_control: bool = False,
+        rule_tier: str = "sweep_once",
     ) -> LibraryEntry:
         """Add a rule directly (no CheckerSynthesisResult needed).
 
@@ -421,7 +522,24 @@ class RuleLibrary:
         and doesn't always have a full CheckerSynthesisResult.  Deduplicates
         by body hash — returns the existing entry if the rule body already
         exists.
+
+        Tier gate (same policy as :meth:`promote`): callers thread the
+        synthesis result's ``dual_control`` / ``rule_tier`` through, and
+        ``rule_tier="library"`` is only accepted alongside
+        ``dual_control=True`` — otherwise it is downgraded to
+        ``sweep_once`` with a warning. Defaults keep legacy callers
+        fail-closed: an add_rule entry without control evidence can
+        never graduate to the engine rules dir.
         """
+        if rule_tier == "library" and not dual_control:
+            logger.warning(
+                "add_rule %s: rule_tier='library' requires "
+                "dual_control=True — downgrading to sweep_once",
+                rule_id,
+            )
+            rule_tier = "sweep_once"
+        if rule_tier not in ("library", "sweep_once"):
+            rule_tier = "sweep_once"
         with self._lock:
             self._ensure_dirs()
             bh = _body_hash(body)
@@ -445,12 +563,13 @@ class RuleLibrary:
                 rationale=rationale,
                 seed_file=seed_file,
                 seed_function=seed_function,
-                dual_control=False,
+                dual_control=dual_control,
                 promoted_at=timestamp,
                 tp_rate=0.0,
                 fp_rate=0.0,
                 total_variants=0,
                 source=source,
+                rule_tier=rule_tier,
             )
             self._load().append(entry)
             self._save()
@@ -475,13 +594,13 @@ class RuleLibrary:
 
     def retire_low_precision(
         self, *, threshold: float = 0.3, min_evidence: int = 5,
-    ) -> List[str]:
+    ) -> list[str]:
         """Archive rules below the precision threshold.
 
         Only considers rules with enough evidence (total matches across
         targets). Returns list of archived rule_ids.
         """
-        retired: List[str] = []
+        retired: list[str] = []
         for entry in self._load():
             if entry.archived:
                 continue
@@ -499,18 +618,24 @@ class RuleLibrary:
             self._save()
         return retired
 
-    def graduate(self, engine_rules_dir: Path) -> List[str]:
+    def graduate(self, engine_rules_dir: Path) -> list[str]:
         """Promote high-confidence rules to the engine rules directory.
 
         Graduated rules run as first-class scanner rules in /scan and
-        /agentic. Requires: >=2 true positives, >=3 total matches,
-        precision >=80%.
+        /agentic. Requires the mechanical-control tier (dual_control
+        AND rule_tier="library" — precision statistics alone cannot
+        substitute for the controls, since record_match feedback can
+        inflate tp_rate on a rule that never proved it distinguishes
+        fixed from unfixed code) plus the precision thresholds:
+        >=2 true positives, >=3 total matches, precision >=80%.
 
         Returns list of graduated rule_ids.
         """
-        graduated: List[str] = []
+        graduated: list[str] = []
         for entry in self._load():
             if entry.archived:
+                continue
+            if not entry.dual_control or entry.rule_tier != "library":
                 continue
             total_matches = sum(t.matches for t in entry.targets)
             if entry.total_variants < 2 or total_matches < 3:
@@ -534,7 +659,12 @@ class RuleLibrary:
 
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(src), str(dest))
+                # Same atomicity contract as promote: /scan and
+                # /agentic may load engine rules while a graduate
+                # runs — they must never read a partial rule file.
+                write_bytes_atomically(
+                    dest, src.read_bytes(), tmp_prefix=".rule-",
+                )
                 graduated.append(entry.rule_id)
                 logger.info(
                     "graduated rule %s → %s (tp=%.0f%%, %d variants)",
@@ -561,7 +691,7 @@ class RuleLibrary:
             f"avg precision {avg:.0%}"
         )
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Summary statistics for /sage status or reports."""
         entries = self._load()
         active = [e for e in entries if not e.archived]

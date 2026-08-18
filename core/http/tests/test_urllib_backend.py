@@ -5,7 +5,6 @@ from __future__ import annotations
 import gzip
 import sys
 from pathlib import Path
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,7 +20,8 @@ from core.http import (
     default_client,
 )
 from core.http.urllib_backend import (
-    UrllibClient, _HostCircuitBreaker,
+    UrllibClient,
+    _HostCircuitBreaker,
     reset_default_circuit_breaker,
 )
 
@@ -40,7 +40,7 @@ def _reset_default_breaker():
 def _stub_response(body: bytes, *, status: int = 200,
                    content_encoding: str = "",
                    reason: str = "OK",
-                   extra_headers: Optional[dict] = None,
+                   extra_headers: dict | None = None,
                    final_url: str = "") -> MagicMock:
     """Build a stub urllib3 HTTPResponse: stream() yields body in one chunk."""
     resp = MagicMock()
@@ -98,7 +98,7 @@ class TestSuccess:
         assert call.kwargs["headers"]["Content-Type"] == "application/json"
 
     def test_get_bytes(self):
-        client, pool = _client_with_mock_pool(_stub_response(b"\x01\x02\xff"))
+        client, _pool = _client_with_mock_pool(_stub_response(b"\x01\x02\xff"))
         out = client.get_bytes("https://example.com/binary")
         assert out == b"\x01\x02\xff"
 
@@ -141,7 +141,7 @@ class TestConnectionPooling:
         """The default pool manager is constructed with maxsize > 1
         so concurrent calls to the same host don't serialise on a
         single connection."""
-        from core.http.urllib_backend import _new_pool_manager, _DEFAULT_POOL_MAXSIZE
+        from core.http.urllib_backend import _DEFAULT_POOL_MAXSIZE, _new_pool_manager
         pool = _new_pool_manager()
         # urllib3 stores maxsize on connection_pool_kw.
         assert pool.connection_pool_kw.get("maxsize") == _DEFAULT_POOL_MAXSIZE
@@ -239,7 +239,7 @@ class TestTotalTimeout:
         # the second iteration.
         ticks = iter([0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000])
         mock_monotonic.side_effect = lambda: next(ticks)
-        client, pool = _client_with_mock_pool([
+        client, _pool = _client_with_mock_pool([
             _stub_response(b"", status=503),
             _stub_response(b"", status=503),
         ])
@@ -410,6 +410,95 @@ class TestStreamBytes:
             client.stream_bytes("https://example.com/x", retries=-1)
         # And no HTTP call should have been issued.
         assert client._http.request.call_count == 0
+
+
+class TestStreamPostRedirectRevalidation:
+    """stream_bytes revalidates the post-redirect final URL before
+    yielding any body byte — same gate as the buffered path."""
+
+    def test_https_to_http_downgrade_redirect_refused(self):
+        """A followed https -> http redirect on a streamed download must
+        raise HttpError before any body byte is yielded — the TLS
+        downgrade gate `_fetch_once` already had."""
+        resp = _stub_response(b"x" * 100,
+                              final_url="http://attacker.example/payload")
+
+        class HttpsOnly(UrllibClient):
+            _ALLOWED_SCHEMES = ("https",)
+
+        pool = MagicMock()
+        pool.request.return_value = resp
+        client = HttpsOnly(_http=pool)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError, match="refused redirect"):
+            next(it)
+        resp.release_conn.assert_called_once()
+
+    def test_redirect_to_disallowed_scheme_refused_for_default_client(self):
+        """Even the default (http+https) client refuses a redirect whose
+        final URL fails _validate_url — e.g. embedded credentials."""
+        resp = _stub_response(b"x",
+                              final_url="https://user:pw@example.com/blob")
+        client, _pool = _client_with_mock_pool(resp)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError, match="refused redirect"):
+            next(it)
+
+    def test_same_scheme_redirect_streams_normally(self):
+        """A validated https -> https redirect still streams the body."""
+        resp = _stub_response(b"abc",
+                              final_url="https://cdn.example.com/blob")
+        client, _pool = _client_with_mock_pool(resp)
+        chunks = list(client.stream_bytes("https://example.com/blob"))
+        assert b"".join(chunks) == b"abc"
+
+    def test_relative_geturl_resolved_not_refused(self):
+        """urllib3 geturl() can return a relative path on a 200 response
+        (Location header without redirect) — resolve, don't refuse."""
+        resp = _stub_response(b"data", final_url="/v1/blob")
+        client, _pool = _client_with_mock_pool(resp)
+        chunks = list(client.stream_bytes("https://example.com/v1/blob"))
+        assert b"".join(chunks) == b"data"
+
+    def test_falsy_geturl_falls_back_to_request_url(self):
+        """geturl() returning '' (no URL recorded) must not trigger
+        revalidation or refusal."""
+        resp = _stub_response(b"ok", final_url="")
+        client, _pool = _client_with_mock_pool(resp)
+        chunks = list(client.stream_bytes("https://example.com/blob"))
+        assert b"".join(chunks) == b"ok"
+
+
+class TestStreamErrorSnippetRedaction:
+    """The 4xx body snippet embedded in a streaming-path HttpError is
+    redacted and decoded tolerantly — parity with the buffered path."""
+
+    def test_4xx_body_secret_redacted_in_stream_error(self):
+        """A token echoed in a 4xx body must not appear verbatim in the
+        HttpError raised by the streaming path (parity with
+        `_fetch_once`'s redaction)."""
+        token = "ghp_" + "a" * 36
+        resp = _stub_response(
+            f"invalid token {token}".encode(),
+            status=403, reason="Forbidden", final_url="",
+        )
+        client, _pool = _client_with_mock_pool(resp)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError) as excinfo:
+            next(it)
+        assert token not in str(excinfo.value)
+        assert excinfo.value.status == 403
+
+    def test_4xx_non_utf8_body_does_not_crash(self):
+        """Non-UTF-8 error bodies decode with errors='replace' instead
+        of raising UnicodeDecodeError from the error path itself."""
+        resp = _stub_response(b"\xff\xfe bad", status=404,
+                              reason="Not Found", final_url="")
+        client, _pool = _client_with_mock_pool(resp)
+        it = client.stream_bytes("https://example.com/blob")
+        with pytest.raises(HttpError) as excinfo:
+            next(it)
+        assert excinfo.value.status == 404
 
 
 # ---------------------------------------------------------------------------
@@ -1209,3 +1298,146 @@ def test_circuit_break_attribute_on_mid_retry_abort(_mock_sleep):
             total_timeout=60, retries=2,
         )
     assert exc_info.value.circuit_break is True
+
+
+class TestOperatorProxyEnv:
+    """UrllibClient must honour the operator's proxy env when no pool
+    manager is injected — mandatory-egress-proxy hosts have no direct
+    route. Injected pools (EgressClient's chokepoint) disable the
+    snapshot so no_proxy can never bypass the chokepoint."""
+
+    def test_no_proxy_env_uses_direct_pool(self, monkeypatch):
+        from core.http.urllib_backend import UrllibClient
+        for var in ("http_proxy", "https_proxy", "all_proxy",
+                    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+        client = UrllibClient()
+        assert client._proxy_pools == {}
+        assert client._pool_for("https://api.osv.dev/v1") is client._http
+
+    def test_proxy_env_routes_via_proxy_manager(self, monkeypatch):
+        import urllib3 as _u3
+
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.setenv("http_proxy", "http://proxy.corp:3128")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        client = UrllibClient()
+        pool = client._pool_for("https://api.osv.dev/v1")
+        assert isinstance(pool, _u3.ProxyManager)
+        assert pool.proxy.host == "proxy.corp"
+        assert pool.proxy.port == 3128
+        # http and https share one manager when the URL is identical
+        assert client._pool_for("http://example.com/") is pool
+
+    def test_no_proxy_entries_bypass_proxy(self, monkeypatch):
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.setenv("no_proxy", "169.254.169.254,internal.corp")
+        client = UrllibClient()
+        assert client._pool_for("https://internal.corp/x") is client._http
+        assert client._pool_for("https://sub.internal.corp/x") is client._http
+        assert client._pool_for("https://api.osv.dev/v1") is not client._http
+
+    def test_all_proxy_fallback(self, monkeypatch):
+        import urllib3 as _u3
+
+        from core.http.urllib_backend import UrllibClient
+        for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("all_proxy", "http://proxy.corp:3128")
+        client = UrllibClient()
+        assert isinstance(
+            client._pool_for("https://api.osv.dev/v1"), _u3.ProxyManager,
+        )
+
+    def test_injected_pool_disables_env_snapshot(self, monkeypatch):
+        """EgressClient regression guard: an injected pool is used
+        exclusively — env proxy vars must not reroute it and no_proxy
+        must not bypass it."""
+        from unittest.mock import MagicMock
+
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.setenv("no_proxy", "*")
+        injected = MagicMock()
+        client = UrllibClient(_http=injected)
+        assert client._pool_for("https://api.osv.dev/v1") is injected
+
+    def test_malformed_proxy_env_does_not_break_construction(
+        self, monkeypatch,
+    ):
+        """A schemeless or socks proxy value must not raise from
+        UrllibClient() — loopback/no_proxy-only uses never touch the
+        proxy and must keep working (regression: eager ProxyManager
+        construction raised ProxySchemeUnknown from every client)."""
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "proxy.corp:3128")  # schemeless
+        monkeypatch.setenv("http_proxy", "socks5://proxy.corp:1080")
+        monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+        client = UrllibClient()  # must not raise
+        # no_proxy'd hosts route direct, untouched by the bad value.
+        assert client._pool_for("http://127.0.0.1:8080/x") is client._http
+        assert client._pool_for("https://localhost/x") is client._http
+
+    def test_malformed_proxy_env_fails_proxied_request_clearly(
+        self, monkeypatch,
+    ):
+        from core.http import HttpError
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "socks5://proxy.corp:1080")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        client = UrllibClient()
+        with pytest.raises(HttpError, match="invalid proxy configuration"):
+            client._pool_for("https://api.osv.dev/v1")
+        # Cached: the second attempt fails identically, not from a
+        # fresh construction path.
+        with pytest.raises(HttpError, match="invalid proxy configuration"):
+            client._pool_for("https://api.osv.dev/v1")
+
+    def test_proxy_error_message_redacts_credentials(self, monkeypatch):
+        from core.http import HttpError
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv(
+            "https_proxy", "socks5://user:hunter2secret@proxy.corp:1080")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        client = UrllibClient()
+        with pytest.raises(HttpError) as exc_info:
+            client._pool_for("https://api.osv.dev/v1")
+        assert "hunter2secret" not in str(exc_info.value)
+
+    def test_proxy_manager_construction_is_lazy(self, monkeypatch):
+        """No ProxyManager exists until a proxied request needs one."""
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        client = UrllibClient()
+        assert client._proxy_pools == {}
+        client._pool_for("https://api.osv.dev/v1")
+        assert "https" in client._proxy_pools
+
+    def test_proxy_url_basic_auth_extracted(self, monkeypatch):
+        from core.http.urllib_backend import _new_proxy_manager
+        pm = _new_proxy_manager("http://user:secret@proxy.corp:3128")
+        assert pm.proxy.host == "proxy.corp"
+        assert pm.proxy.port == 3128
+        assert pm.proxy_headers.get("proxy-authorization", "").startswith(
+            "Basic ",
+        )
+
+
+class TestHostInNoProxy:
+    def test_matching(self):
+        from core.http.urllib_backend import _host_in_no_proxy
+        assert _host_in_no_proxy("anything.example", ("*",))
+        assert _host_in_no_proxy("example.com", ("example.com",))
+        assert _host_in_no_proxy("a.example.com", ("example.com",))
+        assert _host_in_no_proxy("a.example.com", (".example.com",))
+        assert _host_in_no_proxy("example.com", ("example.com:443",))
+        assert not _host_in_no_proxy("notexample.com", ("example.com",))
+        assert not _host_in_no_proxy("example.com", ())
+        assert _host_in_no_proxy("169.254.169.254", ("169.254.169.254",))

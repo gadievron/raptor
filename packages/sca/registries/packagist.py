@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+import urllib.parse
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "packagist-versions"
 _DEFAULT_TTL = 24 * 3600
+
+
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — Composer names legitimately contain ``/``, and a raw
+    name with ``..`` segments could otherwise alias another package's
+    cache file after JsonCache path sanitisation. Old raw-name entries
+    re-fetch once."""
+    return urllib.parse.quote(value, safe="")
 
 # Composer pre-release tags (hyphen-prefixed or dev- prefix forms).
 _PRERELEASE_RE = re.compile(
@@ -42,7 +51,7 @@ class PackagistClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -52,13 +61,13 @@ class PackagistClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         if "/" not in name:
             logger.debug("sca.registries.packagist: name %r missing vendor/",
                           name)
             return []
 
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -75,7 +84,7 @@ class PackagistClient:
             self._cache.put(cache_key, versions, ttl_seconds=self._ttl)
         return versions
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         """Return the raw /p2 packagist response for a package.
 
         Used by the transitive-drop detector to inspect per-version
@@ -84,7 +93,7 @@ class PackagistClient:
         needing the dep blocks don't double-fetch."""
         if "/" not in name:
             return None
-        cache_key = f"packagist-meta:{name}"
+        cache_key = f"packagist-meta:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -105,7 +114,7 @@ class PackagistClient:
         return data
 
 
-def _extract_versions(data: dict, name: str) -> List[str]:
+def _extract_versions(data: dict, name: str) -> list[str]:
     """Pull versions from the Packagist p2 response.
 
     Shape (abridged):
@@ -128,7 +137,7 @@ def _extract_versions(data: dict, name: str) -> List[str]:
     if not isinstance(raw, list):
         return []
     seen: set = set()
-    out: List[str] = []
+    out: list[str] = []
     for entry in raw:
         if not isinstance(entry, dict):
             continue

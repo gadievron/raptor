@@ -322,3 +322,72 @@ class TestGraphProtocol:
         # A node not in the graph: no successors, no crash.
         ghost = PyCallGraphNode(name="ghost", lineno=999)
         assert list(cg.successors(ghost)) == []
+
+
+class TestConditionalRedefinition:
+    """``if X: def f() / else: def f()`` produces two distinct nodes;
+    the name-keyed maps used to collapse last-writer-wins, dropping
+    the earlier body from the graph (taint through it was invisible)
+    and mis-attributing its outgoing calls to the later variant."""
+
+    SRC = (
+        "import os\n"
+        "\n"
+        "if os.environ.get('X'):\n"
+        "    def f(a):\n"
+        "        early_helper(a)\n"
+        "        return a\n"
+        "else:\n"
+        "    def f(a):\n"
+        "        late_helper(a)\n"
+        "        return a\n"
+        "\n"
+        "def early_helper(a):\n"
+        "    return a\n"
+        "\n"
+        "def late_helper(a):\n"
+        "    return a\n"
+        "\n"
+        "def caller(x):\n"
+        "    return f(x)\n"
+    )
+
+    def _graph(self):
+        from core.analysis.python_module_callgraph import (
+            build_python_module_callgraph,
+        )
+        return build_python_module_callgraph(self.SRC)
+
+    def test_both_variants_are_nodes(self):
+        cg = self._graph()
+        variants = cg.find_all("f")
+        assert len(variants) == 2
+        assert variants[0].lineno < variants[1].lineno
+        assert {v.lineno for v in variants} <= {n.lineno for n in cg.nodes()}
+
+    def test_find_returns_last_variant_and_asts_returns_both(self):
+        cg = self._graph()
+        assert cg.find("f") is cg.find_all("f")[-1]
+        assert len(cg.function_asts("f")) == 2
+
+    def test_call_to_redefined_name_fans_out(self):
+        cg = self._graph()
+        caller = cg.find("caller")
+        succ = set(cg.successors(caller))
+        assert set(cg.find_all("f")) <= succ
+
+    def test_each_variant_body_attributes_to_its_own_node(self):
+        cg = self._graph()
+        early, late = cg.find_all("f")
+        early_succ = {n.name for n in cg.successors(early)}
+        late_succ = {n.name for n in cg.successors(late)}
+        assert "early_helper" in early_succ
+        assert "early_helper" not in late_succ
+        assert "late_helper" in late_succ
+
+    def test_taint_summary_goes_conservative_on_variants(self):
+        from core.analysis.taint_summaries import _compute_one_summary
+        cg = self._graph()
+        s = _compute_one_summary(cg, "f", {})
+        assert s.summary_unknown
+        assert "variant" in (s.summary_unknown_reason or "")

@@ -89,9 +89,13 @@ class SourceIntelAdapter(ToolAdapter):
 
     Args:
         cache: Shared :class:`~packages.source_intel.SourceIntelCache`.
-            When supplied, spatch runs once per (target, rules_hash)
-            and every adapter call reads from cache. When ``None``,
-            every call re-runs spatch (do not do this for production).
+            When supplied, spatch runs once per target and every
+            subsequent adapter call reads from cache. The adapter
+            always analyses with the shipped default rules
+            (``rules_dir=None`` → the cache's ``default-rules``
+            sentinel in the rules slot), so keying is effectively
+            per-target. When ``None``, every call re-runs spatch (do
+            not do this for production).
         sandbox: Whether the underlying spatch invocation runs in a
             network-blocked sandbox. Default ``True``. Passed through
             via :func:`packages.source_intel.analyze.analyze` — that
@@ -128,6 +132,8 @@ class SourceIntelAdapter(ToolAdapter):
                 "double-free observations for memory-corruption findings",
                 "Privilege gradient: capability_check, LSM hooks, "
                 "credential manipulation, setuid/setgid call sites",
+                "Variant signals: checked-alloc patterns and structural "
+                "fingerprints for locating siblings of a known bug shape",
                 "Build-flag context: FORTIFY_SOURCE level, "
                 "-fstack-protector, -fdelete-null-pointer-checks, "
                 "active sanitizers",
@@ -257,7 +263,7 @@ class SourceIntelAdapter(ToolAdapter):
                 f"{n} match{'es' if n != 1 else ''} "
                 f"for {function_name} "
                 f"across {len(axes_req)} "
-                f"axis{'es' if len(axes_req) != 1 else ''} "
+                f"{'axes' if len(axes_req) != 1 else 'axis'} "
                 f"in {len(files)} "
                 f"file{'s' if len(files) != 1 else ''}"
                 if n

@@ -23,10 +23,9 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ _PURL_TYPE = "composer"
 
 
 @register(filenames=["composer.json"])
-def parse_manifest(path: Path) -> List[Dependency]:
+def parse_manifest(path: Path) -> list[Dependency]:
     """Parse a ``composer.json`` and emit one Dependency per declared dep."""
     try:
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
@@ -46,7 +45,7 @@ def parse_manifest(path: Path) -> List[Dependency]:
 
     if not isinstance(data, dict):
         return []
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_keys: set = set()
     # ``replace``: this package CLAIMS to provide the listed
     # packages — consumers seeing ``foo/replacement`` with
@@ -96,7 +95,7 @@ def parse_manifest(path: Path) -> List[Dependency]:
 
 
 @register(filenames=["composer.lock"])
-def parse_lockfile(path: Path) -> List[Dependency]:
+def parse_lockfile(path: Path) -> list[Dependency]:
     """Parse a ``composer.lock`` and emit one Dependency per resolved entry.
 
     Format (abridged):
@@ -111,13 +110,20 @@ def parse_lockfile(path: Path) -> List[Dependency]:
     Direct vs transitive: Composer's lockfile lists every resolved dep
     flat; the join layer flips ``direct`` based on the manifest.
     """
+    # Bounded read — same posture as sibling parsers: a hostile
+    # oversized (or symlinked) composer.lock is treated as
+    # unparseable rather than fed to the JSON parser.
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
+        return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError) as e:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
         logger.warning("sca.parsers.composer: %s: %s", path, e)
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_keys: set = set()
     for json_key, scope in (("packages", "main"), ("packages-dev", "dev")):
         block = data.get(json_key) or []
@@ -170,12 +176,10 @@ def _is_platform_req(name: str) -> bool:
     """``php``, ``ext-*``, ``lib-*``, ``hhvm`` — environment requirements."""
     if name == "php" or name == "hhvm":
         return True
-    if name.startswith(("ext-", "lib-")):
-        return True
-    return False
+    return name.startswith(("ext-", "lib-"))
 
 
-def _classify_version_spec(spec: str) -> Tuple[PinStyle, Optional[str]]:
+def _classify_version_spec(spec: str) -> tuple[PinStyle, str | None]:
     s = spec.strip()
     if not s or s == "*":
         return PinStyle.WILDCARD, None
@@ -200,7 +204,18 @@ def _classify_version_spec(spec: str) -> Tuple[PinStyle, Optional[str]]:
     return PinStyle.UNKNOWN, None
 
 
-_RELEASE_TAG_RE = re.compile(r"^v?\d+(\.\d+)*[\w.\-+]*$")
+# Unambiguous grammar: the pre-release/build tail must START with
+# ``-`` or ``+`` so it cannot re-consume dot-digit runs already
+# matched by ``(\.\d+)*``. The previous ``[\w.\-+]*`` tail overlapped
+# with the dotted-segment group, giving O(K^2) backtracking on
+# ``1`` + ``.1``*K + ``!`` — quadratic work on attacker-supplied
+# lockfile version strings.
+_RELEASE_TAG_RE = re.compile(r"^v?\d+(\.\d+)*(?:[-+][\w.\-+]*)?$")
+
+# Length bound applied before the regex runs. Real Composer versions
+# are tens of characters; anything longer is hostile or garbage and
+# is classified as "not a release tag" without touching the regex.
+_MAX_VERSION_LEN = 128
 
 
 def _looks_like_release_tag(version: str) -> bool:
@@ -210,16 +225,18 @@ def _looks_like_release_tag(version: str) -> bool:
     ``1.2.x-dev``) which satisfy the release regex but represent
     moving branch pins, not immutable tags.
     """
+    if len(version) > _MAX_VERSION_LEN:
+        return False
     if version.endswith("-dev") or ".x-dev" in version:
         return False
     return bool(_RELEASE_TAG_RE.match(version))
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:{_PURL_TYPE}/{name}"
     if version:
         return f"{base}@{version}"
     return base
 
 
-__all__ = ["parse_manifest", "parse_lockfile"]
+__all__ = ["parse_lockfile", "parse_manifest"]

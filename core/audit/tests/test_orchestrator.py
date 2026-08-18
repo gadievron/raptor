@@ -7,16 +7,19 @@ from pathlib import Path
 
 import pytest
 
+from core.audit.hypothesis_mapping import (
+    hypothesis_to_semgrep_rule as _hypothesis_to_semgrep_rule,
+)
 from core.audit.orchestrator import (
     OrchestratorConfig,
     OrchestratorResult,
     ReviewOutcome,
-    _ContentFilterError,
     _check_finding_gates,
+    _ContentFilterError,
+    _hypothesis_to_tool_chain,
+    _is_verification_evidence_for_gate,
     _joern_live_query,
     _multi_pass_review,
-    _hypothesis_to_semgrep_rule,
-    _hypothesis_to_tool_chain,
     _promote_hypothesis_inconsistent,
     _resolve_gate_demoted,
     _run_tool_chain,
@@ -304,6 +307,14 @@ class TestRunOrchestrator:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
+            # hermetic: with Joern installed, the post-resolution channel
+            # settles the unverifiable suspicious verdict as "dark" and
+            # spends a live LLM call doing so (see TestSuspiciousPromotion).
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             max_refinements=0,
@@ -1028,6 +1039,10 @@ class TestSweepValidation:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
         )
@@ -1048,6 +1063,10 @@ class TestSweepValidation:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False, batch_sloc_threshold=0,
             prefilter=False, max_refinements=0,
@@ -1427,9 +1446,23 @@ class TestGateEnforcement:
         assert result.findings == 0
         assert result.suspicious == 0
 
-    def test_finding_with_llm_evidence_demoted_by_gate(self, tmp_path: Path):
-        """G2: finding with evidence_tool='llm' gets demoted to suspicious."""
+    def test_finding_with_llm_evidence_demoted_by_gate(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """G2: finding with evidence_tool='llm' gets demoted to
+        suspicious, then mechanically resolved (clean/dark) by
+        _resolve_gate_demoted."""
         target, out = _setup_target(tmp_path)
+
+        # Hermetic: on hosts with a live LLM transport, the dark-verify
+        # pass builds its own LLMClient, synthesizes a witness for the
+        # gate-demoted outcome, and can re-promote it to finding —
+        # making the assertions depend on a real model's verdict (and
+        # billing real money per test run).
+        import core.audit.orchestrator as _orch
+        monkeypatch.setattr(
+            _orch, "_run_dark_verification", lambda *a, **kw: None,
+        )
 
         def review_fn(ctx, config):
             return ReviewOutcome(
@@ -1445,6 +1478,9 @@ class TestGateEnforcement:
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
+            # Hermetic: see TestSuspiciousPromotion — the Joern-gated
+            # suspicious demotion must not decide this test's outcome.
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.findings == 0
@@ -1474,6 +1510,10 @@ class TestGateEnforcement:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             max_refinements=0,
@@ -1498,9 +1538,17 @@ class TestGateEnforcement:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
+            # Hermetic: with a live Joern server the suspicious-demotion
+            # gate rewrites the G1-demoted verdict to clean, and the
+            # log loses both markers this test asserts on.
+            joern_overrides={"enabled": False},
         )
         run_orchestrator(config, review_fn)
 
@@ -1549,8 +1597,17 @@ class TestSuspiciousPromotion:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
+            # Hermetic: with Joern installed, the suspicious-demotion
+            # gate (suspicious + no verification evidence -> clean)
+            # would flip the stubbed verdict before the sweep promotes
+            # it, making the assertions host-dependent.
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.sweep_promoted >= 1
@@ -1575,6 +1632,14 @@ class TestSuspiciousPromotion:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
+            # Hermetic: with Joern installed, the post-resolution
+            # channel settles the unverifiable suspicious verdicts as
+            # "dark" (no tool could confirm or refute) — and spends
+            # live LLM calls getting there when the host has a
+            # configured provider. The assertions below are about
+            # sweep promotion, not host tooling. Same pin as
+            # test_suspicious_with_prefilter_hit_promoted.
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.sweep_promoted == 0
@@ -1690,7 +1755,12 @@ class TestSuspiciousPromotion:
             "should not promote when LLM has a specific counter-hypothesis"
         )
         assert result.findings == 0
-        assert result.suspicious >= 1
+        # The item must never become a finding.  Its resting status is
+        # environment-dependent: bare hosts keep it suspicious, while
+        # tool-equipped hosts may triage-skip it or apply the
+        # Joern-conditional suspicious-demotion gate (both → clean).
+        assert result.suspicious + result.clean == 1
+        assert all(o.status != "finding" for o in result.outcomes)
 
 
 class TestResolveGateDemoted:
@@ -1814,9 +1884,451 @@ class TestResolveGateDemoted:
         _resolve_gate_demoted(result, config, sarif_cache=None, checklist={})
         assert result.outcomes[0].status == "finding"
 
+    def test_semantic_confidence_high_rescues_from_clean(self, tmp_path: Path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "auth.c").write_text(
+            "int check_uid(int uid) {\n"
+            "    if (uid = 0)\n"
+            "        return 1;\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "auth.c",
+                "items": [{"name": "check_uid", "line_start": 1, "line_end": 5}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="auth.c", function="check_uid", status="suspicious",
+            body="[gate violation: G2: finding emitted without tool-grounded evidence]",
+            hypothesis="line 2 uses `=` instead of `==` in a conditional",
+            line=1,
+        )
+        outcome.semantic_confidence = "high"
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"prefilter": True},
+        )
+        assert result.outcomes[0].status == "suspicious"
+        assert result.suspicious == 1
+
+    def test_semantic_confidence_low_still_resolved_to_clean(self, tmp_path: Path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "a.c",
+                "items": [{"name": "f", "line_start": 1, "line_end": 1}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="[gate violation: G2: finding emitted without tool-grounded evidence]",
+            hypothesis="integer overflow in addition",
+            line=1,
+        )
+        # SMT actually RAN for this function and stayed silent —
+        # covered==ran semantics require the dispatch record.
+        outcome.tools_dispatched = {"smt"}
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"prefilter": True, "smt": True},
+        )
+        assert result.outcomes[0].status == "clean"
+
+    def test_covered_class_without_dispatch_record_resolves_dark(self, tmp_path: Path):
+        """Installed-but-never-ran is NOT coverage: the same outcome
+        with no dispatch record routes to dark, not clean."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "a.c",
+                "items": [{"name": "f", "line_start": 1, "line_end": 1}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="[gate violation: G2: finding emitted without tool-grounded evidence]",
+            hypothesis="integer overflow in addition",
+            line=1,
+        )
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"prefilter": True, "smt": True},
+        )
+        assert result.outcomes[0].status == "dark"
+
+    def test_errored_channel_routes_to_dark_not_clean(self, tmp_path: Path):
+        """A dispatched channel that errored/timed out did not run —
+        it must not convert the outcome into a clean verdict."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "a.c",
+                "items": [{"name": "f", "line_start": 1, "line_end": 1}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="[gate violation: G2: finding emitted without tool-grounded evidence]",
+            hypothesis="integer overflow in addition",
+            line=1,
+        )
+        outcome.tools_dispatched = {"smt"}
+        outcome.tools_errored = {"smt"}
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"prefilter": True, "smt": True},
+        )
+        assert result.outcomes[0].status == "dark"
+
+    def test_plain_suspicious_resolved_when_joern_up(self, tmp_path: Path):
+        """Replacement for the in-loop Joern-up demotion: evidence-free
+        plain suspicious outcomes resolve here (class/error-aware)."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "a.c",
+                "items": [{"name": "f", "line_start": 1, "line_end": 1}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        # Tool-blind hypothesis, nothing ran → dark (old gate: clean).
+        outcome = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="looks like an auth bypass",
+            hypothesis="authorization bypass in role check",
+            line=1,
+        )
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"joern": True},
+        )
+        assert result.outcomes[0].status == "dark"
+        assert result.outcomes[0].body.startswith("[suspicious-resolution:")
+
+    def test_plain_suspicious_with_silent_covering_channel_resolves_clean(
+        self, tmp_path: Path,
+    ):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "a.c",
+                "items": [{"name": "f", "line_start": 1, "line_end": 1}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="possible overflow",
+            hypothesis="integer overflow in addition",
+            line=1,
+        )
+        outcome.tools_dispatched = {"smt"}
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"joern": True, "smt": True},
+        )
+        assert result.outcomes[0].status == "clean"
+
+    def test_plain_suspicious_with_verification_evidence_untouched(
+        self, tmp_path: Path,
+    ):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="tool-backed", hypothesis="integer overflow",
+            evidence_tool="semgrep:rule-1",
+            line=1,
+        )
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist={},
+            available_tools={"joern": True},
+        )
+        assert result.outcomes[0].status == "suspicious"
+
+
+    def test_provenance_all_trusted_overrides_corroboration(self, tmp_path: Path):
+        """When all inputs are trusted, detection-only corroboration is overridden."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "safe.c").write_text(
+            "void process(char *input) {\n"
+            "  char buf[64];\n"
+            "  strcpy(buf, input);\n"
+            "}\n"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "safe.c",
+                "items": [{"name": "process", "line_start": 1, "line_end": 4}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="safe.c", function="process", status="suspicious",
+            body="[gate violation: G2: finding emitted without tool-grounded evidence]",
+            hypothesis="buffer overflow in strcpy",
+            line=1,
+        )
+        outcome.provenance_all_trusted = True
+        outcome.evidence_tool = "joern"
+        # A covering channel (codeql for CWE-120) ran and stayed silent.
+        outcome.tools_dispatched = {"codeql"}
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+            available_tools={"prefilter": True, "codeql": True},
+        )
+        # Prefilter would normally corroborate (strcpy), but provenance
+        # override lets it fall through to covered-and-ran → clean.
+        assert result.outcomes[0].status == "clean"
+
+    def test_provenance_smt_evidence_not_overridden(self, tmp_path: Path):
+        """SMT evidence is never overridden by provenance."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "risky.c").write_text(
+            "void process(char *input) {\n"
+            "  char buf[64];\n"
+            "  strcpy(buf, input);\n"
+            "}\n"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        checklist = {
+            "files": [{
+                "path": "risky.c",
+                "items": [{"name": "process", "line_start": 1, "line_end": 4}],
+            }],
+        }
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        outcome = ReviewOutcome(
+            file="risky.c", function="process", status="suspicious",
+            body="[gate violation: G2: finding emitted without tool-grounded evidence]",
+            hypothesis="buffer overflow in strcpy",
+            line=1,
+        )
+        outcome.provenance_all_trusted = True
+        outcome.evidence_tool = "smt"
+        result = self._make_result(outcome)
+        _resolve_gate_demoted(
+            result, config, sarif_cache=None, checklist=checklist,
+        )
+        # SMT evidence is immune to provenance override — stays suspicious
+        assert result.outcomes[0].status == "suspicious"
+
+
+def _gate_outcome(evidence_tool: str = "", review: dict | None = None) -> ReviewOutcome:
+    return ReviewOutcome(
+        file="src/a.c",
+        function="f",
+        status="suspicious",
+        body="",
+        evidence_tool=evidence_tool,
+        review_result=review,
+    )
+
+
+class TestReviewFallbackSanitised:
+    """LLM evidence_tool sentinels must not defeat the suspicious→clean gate.
+
+    _is_verification_evidence_for_gate falls back to the RAW LLM
+    review["evidence_tool"] when the outcome carries no genuine stamp.
+    That fallback must go through _sanitize_llm_et — otherwise an
+    LLM-emitted sentinel like "none" (which is not a _NON_MECHANICAL
+    prefix) passes pipeline._is_verification_evidence and silently blocks
+    the Joern-era demotion gate."""
+
+    @pytest.mark.parametrize("sentinel", [
+        "none", "n/a", "manual", "None", "N/A", "Manual",
+        "manual code review", "manual review", "code review",
+        "llm", "llm review", "  none  ",
+    ])
+    def test_llm_sentinel_is_not_verification_evidence(self, sentinel):
+        outcome = _gate_outcome(review={"evidence_tool": sentinel})
+        assert _is_verification_evidence_for_gate(outcome) is False
+
+    def test_llm_freeform_tool_claim_is_not_verification_evidence(self):
+        # A hallucinated tool name must land under llm-claimed:, which
+        # pipeline._is_verification_evidence rejects as non-mechanical.
+        outcome = _gate_outcome(review={"evidence_tool": "semgrep"})
+        assert _is_verification_evidence_for_gate(outcome) is False
+
+    @pytest.mark.parametrize("joined", [
+        "none+manual",
+        "manual+none",
+        "semgrep+manual",
+        "none+n/a+manual",
+    ])
+    def test_plus_joined_llm_values_sanitised_per_part(self, joined):
+        # Sanitizing the joined string whole would prefix only the first
+        # part — every part must be sanitised before the "+" split.
+        outcome = _gate_outcome(review={"evidence_tool": joined})
+        assert _is_verification_evidence_for_gate(outcome) is False
+
+    def test_empty_review_fallback_is_not_verification_evidence(self):
+        assert _is_verification_evidence_for_gate(_gate_outcome(review={})) is False
+        assert _is_verification_evidence_for_gate(_gate_outcome(review=None)) is False
+
+
+class TestGenuineOutcomeStampUnchanged:
+    def test_genuine_outcome_stamp_still_counts(self):
+        # outcome.evidence_tool is pipeline-controlled — genuine stamps
+        # keep their gate protection (sanitizing them was a regression).
+        outcome = _gate_outcome(evidence_tool="joern:flow")
+        assert _is_verification_evidence_for_gate(outcome) is True
+
+    def test_genuine_stamp_wins_over_review_sentinel(self):
+        outcome = _gate_outcome(
+            evidence_tool="joern:flow",
+            review={"evidence_tool": "none"},
+        )
+        assert _is_verification_evidence_for_gate(outcome) is True
+
+    def test_prefilter_stamp_is_not_verification(self):
+        outcome = _gate_outcome(evidence_tool="prefilter:some-rule")
+        assert _is_verification_evidence_for_gate(outcome) is False
+
+
+class TestRejournalFinalStatuses:
+    """Journal entries are committed mid-loop, pre-resolution — the
+    end-of-run pass appends corrective entries so the journal (and
+    everything reading it) reflects final statuses, dark included."""
+
+    def _setup(self, tmp_path: Path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        return OrchestratorConfig(target_path=target, out_dir=out)
+
+    def _journal_initial(self, config, status="suspicious"):
+        from core.audit.collector import append_journal_for_outcome
+        initial = ReviewOutcome(
+            file="a.c", function="f", status=status,
+            body="initial", hypothesis="auth bypass", line=1,
+        )
+        append_journal_for_outcome(
+            out_dir=config.out_dir,
+            target_path=config.target_path,
+            run_id="run-1",
+            outcome=initial,
+            gap={"line_start": 1},
+        )
+
+    def test_drifted_status_rejournaled(self, tmp_path: Path):
+        from core.audit.journal import latest_entries, make_function_key
+        from core.audit.orchestrator import _rejournal_final_statuses
+
+        config = self._setup(tmp_path)
+        self._journal_initial(config, status="suspicious")
+
+        final = ReviewOutcome(
+            file="a.c", function="f", status="dark",
+            body="resolved dark", hypothesis="auth bypass", line=1,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        updated = _rejournal_final_statuses(result, config)
+        assert updated == 1
+        entries = latest_entries(config.out_dir)
+        key = make_function_key("a.c", "f")
+        assert entries[key].verdict == "dark"
+
+    def test_unchanged_status_not_rejournaled(self, tmp_path: Path):
+        from core.audit.orchestrator import _rejournal_final_statuses
+
+        config = self._setup(tmp_path)
+        self._journal_initial(config, status="suspicious")
+
+        final = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="still suspicious", hypothesis="auth bypass", line=1,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        assert _rejournal_final_statuses(result, config) == 0
+
+    def test_never_journaled_outcome_skipped(self, tmp_path: Path):
+        from core.audit.orchestrator import _rejournal_final_statuses
+
+        config = self._setup(tmp_path)
+        final = ReviewOutcome(
+            file="a.c", function="f", status="dark",
+            body="resolved dark", hypothesis="auth bypass", line=1,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        assert _rejournal_final_statuses(result, config) == 0
+
 
 class TestRefutationGateWirePoint:
     """Refutation gates demote findings/suspicious via the orchestrator wire point."""
+
+    @pytest.fixture(autouse=True)
+    def _hermetic_tool_layer(self, monkeypatch):
+        """These tests pin gate WIRING, not sweep behaviour.
+
+        Left unstubbed, the outcome depends on which external tools
+        are installed: a locally-installed semgrep re-confirming the
+        planted hypothesis masked a gate regression that only CI
+        (where the sweep found nothing) caught, and Joern server
+        startup adds minutes per test.  "No tool confirmation" is the
+        deterministic baseline the gate assertions are written
+        against.
+        """
+        import core.audit.orchestrator as _orch
+
+        monkeypatch.setattr(_orch, "_run_tool_chain", lambda *a, **k: [])
+        monkeypatch.setattr(
+            _orch, "_start_joern_server_raw", lambda *a, **k: None,
+        )
 
     def test_race_in_single_threaded_demoted_to_clean(self, tmp_path: Path):
         """Architecture gate demotes a race-condition finding to clean."""
@@ -1920,6 +2432,10 @@ class TestRefutationGateWirePoint:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -2090,6 +2606,21 @@ class TestHasRefutingCounter:
             )
 
 
+def _unlink_chain_rules(chain):
+    """Remove the on-disk audit_sweep_ rule files a chain carries.
+
+    Production unlinks them in _run_tool_chain's finally; tests that
+    only build the chain must clean up themselves or every run strands
+    rule files in the system temp dir.
+    """
+    import os
+    for entry in chain:
+        rule = entry.get("config", {}).get("rule") or ""
+        if isinstance(rule, str) and \
+                os.path.basename(rule).startswith("audit_sweep_"):
+            Path(rule).unlink(missing_ok=True)
+
+
 class TestToolChain:
     """Test _hypothesis_to_tool_chain and _run_tool_chain."""
 
@@ -2099,15 +2630,25 @@ class TestToolChain:
             "sem.c",
         )
         types = [e["type"] for e in chain]
+        _unlink_chain_rules(chain)
         assert "smt" in types
         assert "coccinelle" in types
 
     def test_chain_empty_for_unmatched(self):
         chain = _hypothesis_to_tool_chain(
-            "the function trusts its calling context",
+            "the function has unusual formatting and long lines",
             "shm.c",
         )
         assert chain == []
+
+    def test_caller_context_hypotheses_dispatch_boundary_channel(self):
+        # Caller-contract shapes are no longer chain-less: the
+        # api-boundary channel adjudicates them at the call sites.
+        chain = _hypothesis_to_tool_chain(
+            "the function trusts its calling context",
+            "shm.c",
+        )
+        assert [e["type"] for e in chain] == ["api_boundary"]
 
     def test_chain_single_tool(self):
         chain = _hypothesis_to_tool_chain(
@@ -2115,6 +2656,7 @@ class TestToolChain:
             "shm.c",
         )
         types = [e["type"] for e in chain]
+        _unlink_chain_rules(chain)
         assert "coccinelle" in types
 
     def test_chain_preserves_order(self):
@@ -2123,6 +2665,7 @@ class TestToolChain:
             "msg.c",
         )
         types = [e["type"] for e in chain]
+        _unlink_chain_rules(chain)
         assert types.index("semgrep") < types.index("smt")
 
     def test_run_chain_fallback_on_error(self, tmp_path: Path, monkeypatch):
@@ -2280,6 +2823,7 @@ class TestJoernLiveQuery:
 
     def test_live_query_returns_flows(self):
         from unittest.mock import MagicMock
+
         from packages.joern.models import TaintFlow
 
         server = MagicMock()
@@ -2298,6 +2842,7 @@ class TestJoernLiveQuery:
 
     def test_live_query_short_circuits_on_first_hit(self):
         from unittest.mock import MagicMock
+
         from packages.joern.models import TaintFlow
 
         server = MagicMock()
@@ -2351,6 +2896,7 @@ class TestJoernLiveQuery:
     def test_tool_chain_joern_live_fallback(self, tmp_path: Path):
         """When pre-sweep has no hit and server is available, fires live query."""
         from unittest.mock import MagicMock
+
         from packages.joern.models import TaintFlow
 
         server = MagicMock()
@@ -2373,6 +2919,7 @@ class TestJoernLiveQuery:
     def test_tool_chain_joern_presweep_hit_skips_live(self, tmp_path: Path):
         """When pre-sweep index has a hit, live query is not fired."""
         from unittest.mock import MagicMock
+
         from core.evidence import EvidenceRecord
 
         server = MagicMock()
@@ -2511,6 +3058,10 @@ class TestIterativeReReview:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False, batch_sloc_threshold=0,
             propagate_constraints=True,
@@ -2606,6 +3157,10 @@ class TestIterativeReReview:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
             propagate_constraints=True,
@@ -2810,11 +3365,20 @@ class TestDeepenSuspicious:
             )
 
         config = OrchestratorConfig(
+            # hermetic: findings survive to post-loop — without the pin,
+            # config.validate (default True) dispatches the real validation
+            # pipeline on hosts with a Claude CLI (live spend, minutes).
+            validate=False,
             target_path=target, out_dir=out,
             budget=10, batch_sloc_threshold=0,
             deepen_suspicious=True,
             max_refinements=0,
             sweep_validate_findings=False,
+            # Hermetic: the suspicious-demotion gate only runs with a
+            # live Joern server and would demote the evidence-less
+            # stub verdict to clean, making the assertions
+            # host-dependent (deepen dispatch / suspicious tally).
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
 
@@ -2863,6 +3427,11 @@ class TestDeepenSuspicious:
             deepen_suspicious=True,
             max_refinements=0,
             sweep_validate_findings=False,
+            # Hermetic: the suspicious-demotion gate only runs with a
+            # live Joern server and would demote the evidence-less
+            # stub verdict to clean, making the assertions
+            # host-dependent (deepen dispatch / suspicious tally).
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
 
@@ -2907,6 +3476,8 @@ class TestDeepenSuspicious:
             budget=10, batch_sloc_threshold=0,
             deepen_suspicious=False,
             max_refinements=0,
+            # Hermetic: see test_suspicious_gets_deepened.
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
 
@@ -2915,6 +3486,56 @@ class TestDeepenSuspicious:
 
 
 class TestMultiPassReview:
+
+    def test_single_model_passes_use_substrate_majority_vote(
+            self, tmp_path: Path):
+        # The former inline best-of-N loop kept a lone "finding" out of
+        # 3 samples as the primary (severity-max). The substrate's
+        # majority-vote merge downgrades a 1-of-3 lone dissent to
+        # "suspicious" — asserting that proves single-model
+        # review_passes now go through multi_review.run_self_consistency
+        # rather than a third inline self-consistency implementation.
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        call_count = [0]
+
+        def review_fn(ctx, cfg):
+            call_count[0] += 1
+            status = "finding" if call_count[0] == 1 else "clean"
+            return ReviewOutcome(
+                file="a.c", function="f", status=status,
+                body=f"pass {call_count[0]}", cost_usd=0.01,
+            )
+
+        outcome = _multi_pass_review(
+            review_fn, {"file": "a.c", "function": "f"}, config, passes=3,
+        )
+        assert call_count[0] == 3
+        assert outcome.status == "suspicious"
+
+    def test_substrate_failure_falls_back_to_single_pass(
+            self, tmp_path: Path, monkeypatch):
+        import core.audit.multi_review as mr
+
+        def boom(**kwargs):
+            raise RuntimeError("substrate down")
+        monkeypatch.setattr(mr, "run_self_consistency", boom)
+
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        calls = [0]
+
+        def review_fn(ctx, cfg):
+            calls[0] += 1
+            return ReviewOutcome(
+                file="a.c", function="f", status="clean", body="ok",
+            )
+
+        outcome = _multi_pass_review(
+            review_fn, {"file": "a.c", "function": "f"}, config, passes=2,
+        )
+        assert outcome.status == "clean"
+        assert calls[0] == 1  # one plain pass, not an inline N-loop
 
     def test_merges_hypotheses_across_passes(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
@@ -2950,7 +3571,9 @@ class TestMultiPassReview:
         assert call_count[0] == 2
         assert outcome.status == "finding"
         assert outcome.cost_usd == 0.03
-        assert outcome.duration_s == 3.0
+        # Samples run in parallel through the multi_review substrate:
+        # duration is the max across passes (wall-clock), not the sum.
+        assert outcome.duration_s == 2.0
         assert outcome.hypotheses is not None
         mechanisms = {h["mechanism"] for h in outcome.hypotheses}
         assert "page-cache aliasing" in mechanisms
@@ -3039,7 +3662,7 @@ class TestRunCleanCheckSweep:
         result = _run_clean_check_sweep(outcome, None, None)
         assert result is None
 
-    def test_returns_flows_from_evidence_index(self):
+    def test_returns_flows_from_evidence_index(self, tmp_path):
         from core.audit.orchestrator import _run_clean_check_sweep
         from core.evidence import EvidenceRecord
         outcome = ReviewOutcome(
@@ -3055,14 +3678,14 @@ class TestRunCleanCheckSweep:
         index = {"a.c:f": rec}
 
         config = OrchestratorConfig(
-            target_path=Path("/tmp"), out_dir=Path("/tmp"),
+            target_path=tmp_path, out_dir=tmp_path,
         )
         result = _run_clean_check_sweep(outcome, config, index)
         assert result is not None
         assert "buf" in result
         assert "memcpy" in result
 
-    def test_returns_none_for_empty_evidence(self):
+    def test_returns_none_for_empty_evidence(self, tmp_path):
         from core.audit.orchestrator import _run_clean_check_sweep
         from core.evidence import EvidenceRecord
         outcome = ReviewOutcome(
@@ -3072,7 +3695,7 @@ class TestRunCleanCheckSweep:
         index = {"a.c:f": rec}
 
         config = OrchestratorConfig(
-            target_path=Path("/tmp"), out_dir=Path("/tmp"),
+            target_path=tmp_path, out_dir=tmp_path,
         )
         result = _run_clean_check_sweep(outcome, config, index)
         assert result is None
@@ -3120,8 +3743,8 @@ class TestEnrichSummariesFromJoern:
         assert len(fs.returns) == 1
 
     def test_does_not_overwrite_existing_cpg_summary(self):
+        from core.analysis.summaries import EvidenceTier, FunctionSummary
         from core.audit.orchestrator import _enrich_summaries_from_joern
-        from core.analysis.summaries import FunctionSummary, EvidenceTier
         from packages.joern.models import JoernMethodSummary
 
         class FakeServer:
@@ -3190,8 +3813,8 @@ class TestCommitOutcomeJournal:
     """
 
     def test_commit_outcome_writes_journal_entry(self, tmp_path: Path):
-        from core.audit.orchestrator import _commit_outcome
         from core.audit.journal import latest_entries
+        from core.audit.orchestrator import _commit_outcome
 
         target, out = _setup_target(tmp_path)
         config = OrchestratorConfig(
@@ -3611,9 +4234,13 @@ class TestSageCombinedPathway:
             batch_sloc_threshold=0,
         )
 
-        with _patch("core.sage.hooks.store_audit_hypothesis_verdict", side_effect=capture_hyp):
-            with _patch("core.sage.hooks.store_audit_observation", side_effect=capture_obs):
-                run_orchestrator(config, review_fn)
+        with (
+            _patch("core.sage.hooks.store_audit_hypothesis_verdict",
+                   side_effect=capture_hyp),
+            _patch("core.sage.hooks.store_audit_observation",
+                   side_effect=capture_obs),
+        ):
+            run_orchestrator(config, review_fn)
 
         assert len(hypothesis_calls) >= 1
         # Gate enforcement may demote to suspicious, but hypothesis
@@ -3735,17 +4362,17 @@ class TestPromoteHypothesisInconsistent:
         _promote_hypothesis_inconsistent(r)
         assert r.outcomes[0].status == "suspicious"
 
-    def test_skips_medium_confidence_hypothesis(self):
-        """Medium-confidence hypotheses don't override clean verdict."""
+    def test_promotes_medium_confidence_hypothesis(self):
+        """Medium-confidence hypotheses also trigger promotion."""
         o = self._outcome(
             hypotheses=[{"mechanism": "oob", "confidence": "medium"}],
         )
         r = self._result([o])
         _promote_hypothesis_inconsistent(r)
-        assert r.outcomes[0].status == "clean"
+        assert r.outcomes[0].status == "suspicious"
 
-    def test_skips_high_confidence_with_counter(self):
-        """High-confidence but countered hypotheses don't promote."""
+    def test_promotes_high_confidence_with_counter(self):
+        """Counter text does not suppress promotion."""
         o = self._outcome(
             hypotheses=[{
                 "mechanism": "oob",
@@ -3755,7 +4382,7 @@ class TestPromoteHypothesisInconsistent:
         )
         r = self._result([o])
         _promote_hypothesis_inconsistent(r)
-        assert r.outcomes[0].status == "clean"
+        assert r.outcomes[0].status == "suspicious"
 
     def test_skips_gate_demoted_outcome(self):
         o = self._outcome(
@@ -3783,3 +4410,561 @@ class TestPromoteHypothesisInconsistent:
         _promote_hypothesis_inconsistent(r)
         assert r.outcomes[0].status == "clean"
 
+
+
+class TestGapIndex:
+    """_gap_index must round-trip the real checklist shape, whose file
+    records carry "path" (inventory builder) — not "file"."""
+
+    def test_indexes_real_checklist_shape(self):
+        from core.audit.orchestrator import _gap_index
+
+        checklist = {
+            "files": [
+                {
+                    "path": "src/auth.c",
+                    "language": "c",
+                    "items": [
+                        {
+                            "name": "check_pw",
+                            "line_start": 10,
+                            "line_end": 42,
+                            "source": "int check_pw(...) {}",
+                        },
+                    ],
+                },
+            ],
+        }
+        index = _gap_index(checklist)
+        assert "src/auth.c:check_pw" in index
+        gap = index["src/auth.c:check_pw"]
+        assert gap["file"] == "src/auth.c"
+        assert gap["name"] == "check_pw"
+        assert gap["line_start"] == 10
+        assert gap["line_end"] == 42
+
+    def test_legacy_functions_key(self):
+        from core.audit.orchestrator import _gap_index
+
+        checklist = {
+            "files": [
+                {"path": "a.py", "functions": [{"name": "f"}]},
+            ],
+        }
+        assert "a.py:f" in _gap_index(checklist)
+
+
+class TestTaintApproxHasFlow:
+    """_taint_approx_has_flow must handle both TaintApprox objects and
+    the plain dicts the taint-approx cache round-trips through JSON on
+    resumed runs (previously dicts always read as no-flow, dropping the
+    taint-path priority signal on every resumed run)."""
+
+    def test_cached_dict_with_dangerous_flows(self):
+        from core.audit.orchestrator import _taint_approx_has_flow
+
+        assert _taint_approx_has_flow(
+            {"dangerous_flows": {"0": [["memcpy", 1]]}, "direct_flows": {}},
+        )
+
+    def test_cached_dict_with_direct_flows_only(self):
+        from core.audit.orchestrator import _taint_approx_has_flow
+
+        assert _taint_approx_has_flow(
+            {"dangerous_flows": {}, "direct_flows": {"1": [["helper", 0]]}},
+        )
+
+    def test_cached_dict_without_flows(self):
+        from core.audit.orchestrator import _taint_approx_has_flow
+
+        assert not _taint_approx_has_flow(
+            {"dangerous_flows": {}, "direct_flows": {}},
+        )
+
+    def test_object_shapes(self):
+        from core.audit.orchestrator import _taint_approx_has_flow
+
+        class FakeApprox:
+            def __init__(self, dangerous, direct):
+                self._dangerous = dangerous
+                self.direct_flows = direct
+
+            def has_any_dangerous_flow(self):
+                return self._dangerous
+
+        assert _taint_approx_has_flow(FakeApprox(True, {}))
+        assert _taint_approx_has_flow(FakeApprox(False, {0: [("f", 1)]}))
+        assert not _taint_approx_has_flow(FakeApprox(False, {}))
+
+    def test_none(self):
+        from core.audit.orchestrator import _taint_approx_has_flow
+
+        assert not _taint_approx_has_flow(None)
+
+
+class TestHeuristicBypassFindings:
+    """Post-loop stored-taint / config-provenance bypass detection.
+
+    The runner is None whenever IRIS refinement did not build a
+    compositional analyzer — previously the name was not even bound in
+    that (common) case and the pass died with a NameError swallowed by
+    a broad except."""
+
+    def test_none_runner_returns_empty(self):
+        from core.audit.orchestrator import _heuristic_bypass_findings
+
+        assert _heuristic_bypass_findings([{"file": "a.c"}], None) == []
+
+    def test_runner_findings_are_collected(self, monkeypatch):
+        from core.audit.orchestrator import _heuristic_bypass_findings
+
+        class FakeAssumption:
+            enforced_by = ("check_auth",)
+            bug_class = "stored_taint"
+            target = "db_write"
+
+        class FakeBypass:
+            assumption = FakeAssumption()
+            caller_file = "web.c"
+            caller_function = "handler"
+            missing_enforcer = "check_auth"
+
+        import core.iris.synthesise as synth_mod
+        monkeypatch.setattr(
+            synth_mod, "stored_taint_assumptions",
+            lambda gaps: [FakeAssumption()],
+        )
+        monkeypatch.setattr(
+            synth_mod, "config_provenance_assumptions", lambda gaps: [],
+        )
+
+        findings = _heuristic_bypass_findings(
+            [{"file": "web.c"}], lambda assumptions: [FakeBypass()],
+        )
+        assert len(findings) == 1
+        assert findings[0]["check"] == "iris_stored_taint"
+        assert findings[0]["file"] == "web.c"
+        assert findings[0]["function"] == "handler"
+
+    def test_runner_error_is_contained(self, monkeypatch):
+        from core.audit.orchestrator import _heuristic_bypass_findings
+
+        class FakeAssumption:
+            enforced_by = ("check_auth",)
+
+        import core.iris.synthesise as synth_mod
+        monkeypatch.setattr(
+            synth_mod, "stored_taint_assumptions",
+            lambda gaps: [FakeAssumption()],
+        )
+        monkeypatch.setattr(
+            synth_mod, "config_provenance_assumptions", lambda gaps: [],
+        )
+
+        def broken_runner(assumptions):
+            raise RuntimeError("analyzer crashed")
+
+        assert _heuristic_bypass_findings([], broken_runner) == []
+
+
+class TestDiffNewConcepts:
+    """Study-consumer concept diffing: new concepts must be computed
+    BEFORE the current model's names are folded into seen_concepts
+    (previously the fold ran first, so the diff was always empty and
+    the ConceptIndex-scoped broader re-review never triggered)."""
+
+    @staticmethod
+    def _dm(*names):
+        return {"concepts": [{"name": n} for n in names]}
+
+    def test_study_added_concept_is_new(self):
+        from core.audit.orchestrator import _diff_new_concepts
+
+        seen: set = set()
+        new = _diff_new_concepts(seen, self._dm("Alloc"), self._dm("Alloc", "Free"))
+        assert new == {"free"}
+        assert seen == {"alloc", "free"}
+
+    def test_previously_seen_not_returned_again(self):
+        from core.audit.orchestrator import _diff_new_concepts
+
+        seen: set = set()
+        _diff_new_concepts(seen, self._dm("A"), self._dm("A", "B"))
+        new = _diff_new_concepts(seen, self._dm("A", "B"), self._dm("A", "B", "C"))
+        assert new == {"c"}
+
+    def test_no_growth_still_updates_seen(self):
+        from core.audit.orchestrator import _diff_new_concepts
+
+        seen: set = set()
+        new = _diff_new_concepts(seen, self._dm("A"), None)
+        assert new == set()
+        assert seen == {"a"}
+
+
+class TestG3ReRecordGate:
+    """G3 must match journal entries by their lined key form
+    ("file:function:line", the shape _commit_outcome writes)."""
+
+    def _outcome(self, evidence_tool=""):
+        return ReviewOutcome(
+            file="a.c", function="f",
+            status="finding", body="bad",
+            hypothesis="overflow",
+            evidence_tool=evidence_tool,
+        )
+
+    def test_lined_prior_record_triggers_g3(self):
+        audit_log = [
+            {
+                "action": "orchestrator_review",
+                "key": "a.c:f:42",
+                "status": "finding",
+            },
+        ]
+        v = _check_finding_gates(
+            self._outcome(evidence_tool=""), audit_log=audit_log,
+        )
+        assert any("G3" in x for x in v)
+
+    def test_bare_prior_record_still_triggers_g3(self):
+        audit_log = [
+            {"action": "record", "key": "a.c:f", "status": "finding"},
+        ]
+        v = _check_finding_gates(
+            self._outcome(evidence_tool=""), audit_log=audit_log,
+        )
+        assert any("G3" in x for x in v)
+
+    def test_new_tool_evidence_passes_g3(self):
+        audit_log = [
+            {
+                "action": "orchestrator_review",
+                "key": "a.c:f:42",
+                "status": "finding",
+            },
+        ]
+        v = _check_finding_gates(
+            self._outcome(evidence_tool="semgrep:overflow"),
+            audit_log=audit_log,
+        )
+        assert not any("G3" in x for x in v)
+
+    def test_other_function_does_not_trigger_g3(self):
+        audit_log = [
+            {
+                "action": "orchestrator_review",
+                "key": "a.c:other:42",
+                "status": "finding",
+            },
+        ]
+        v = _check_finding_gates(
+            self._outcome(evidence_tool=""), audit_log=audit_log,
+        )
+        assert not any("G3" in x for x in v)
+
+
+class TestUpdateRunProgress:
+    def test_checkpoint_reports_reviewed_count(self, tmp_path):
+        from core.audit.orchestrator import _update_run_progress
+
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(json.dumps({"status": "running"}))
+
+        result = OrchestratorResult(reviewed=7)
+        _update_run_progress(tmp_path, result)
+
+        meta = json.loads(meta_path.read_text())
+        assert meta["extra"]["progress"]["completed"] == 7
+
+    def test_checkpoint_write_is_atomic_and_clean(self, tmp_path):
+        """Written via the shared atomic primitive: other fields
+        survive, and no tempfile debris is left behind (only the
+        flock sidecar every metadata writer shares)."""
+        from core.audit.orchestrator import _update_run_progress
+
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(json.dumps({
+            "status": "running",
+            "command": "audit",
+            "extra": {"note": "keep-me"},
+        }))
+        _update_run_progress(tmp_path, OrchestratorResult(reviewed=3))
+
+        meta = json.loads(meta_path.read_text())
+        assert meta["status"] == "running"
+        assert meta["extra"]["note"] == "keep-me"
+        assert meta["extra"]["progress"]["completed"] == 3
+        leftovers = [
+            q.name for q in tmp_path.iterdir()
+            if q.name not in (".raptor-run.json", ".raptor-run.json.lock")
+        ]
+        assert leftovers == []
+
+    def test_missing_metadata_is_noop(self, tmp_path):
+        from core.audit.orchestrator import _update_run_progress
+
+        _update_run_progress(tmp_path, OrchestratorResult(reviewed=1))
+        assert not (tmp_path / ".raptor-run.json").exists()
+
+    def test_corrupt_metadata_does_not_raise(self, tmp_path):
+        from core.audit.orchestrator import _update_run_progress
+
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text("{torn write")
+        _update_run_progress(tmp_path, OrchestratorResult(reviewed=1))
+        # Untouched: a corrupt file is not silently replaced here
+        # (recovery belongs to the lifecycle layer).
+        assert meta_path.read_text() == "{torn write"
+
+
+class TestRunCritiqueConcurrency:
+    """_run_critique runs from concurrent review workers: promotions
+    must be applied under the result lock and skipped when another
+    worker already replaced the outcome."""
+
+    @staticmethod
+    def _suspicious(fn="f"):
+        return ReviewOutcome(
+            file="a.c", function=fn, status="suspicious",
+            body="maybe", hypothesis="unbounded memcpy overflow",
+        )
+
+    def _patch_chain(self, monkeypatch, run_tool_chain):
+        import core.audit.orchestrator as orch_mod
+
+        monkeypatch.setattr(
+            orch_mod, "_hypothesis_to_tool_chain",
+            lambda hyp, f, cwe="": ["fake-rule"],
+        )
+        monkeypatch.setattr(
+            orch_mod, "_read_raw_source", lambda *a, **kw: "src",
+        )
+        monkeypatch.setattr(orch_mod, "_run_tool_chain", run_tool_chain)
+        monkeypatch.setattr(orch_mod, "_is_detection_only", lambda t: False)
+        monkeypatch.setattr(
+            orch_mod, "_check_sink_guarded_cached", lambda *a, **kw: None,
+        )
+
+    def test_promotes_confirmed_suspicious(self, monkeypatch, tmp_path):
+        from core.audit.orchestrator import _run_critique
+
+        result = OrchestratorResult(suspicious=1)
+        result.outcomes = [self._suspicious()]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        self._patch_chain(
+            monkeypatch, lambda *a, **kw: ["semgrep:unbounded-memcpy"],
+        )
+        _run_critique(result, config)
+
+        assert result.outcomes[0].status == "finding"
+        assert result.findings == 1
+        assert result.suspicious == 0
+        assert result.sweep_promoted == 1
+
+    def test_skips_outcome_replaced_during_tool_run(
+        self, monkeypatch, tmp_path,
+    ):
+        """Simulates a concurrent worker replacing the outcome while
+        the tool chain runs: no ValueError, no double-count."""
+        from core.audit.orchestrator import _run_critique
+
+        suspicious = self._suspicious()
+        result = OrchestratorResult(suspicious=1)
+        result.outcomes = [suspicious]
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        replacement = ReviewOutcome(
+            file="a.c", function="f", status="finding",
+            body="[sweep promoted via critique:other]\n\nmaybe",
+            evidence_tool="critique:other",
+        )
+
+        def racing_tool_chain(*a, **kw):
+            # another worker promotes/replaces the same outcome first
+            result.outcomes[0] = replacement
+            return ["semgrep:unbounded-memcpy"]
+
+        self._patch_chain(monkeypatch, racing_tool_chain)
+        _run_critique(result, config)  # must not raise
+
+        assert result.outcomes[0] is replacement
+        assert result.findings == 0  # no double promotion tally
+        assert result.suspicious == 1
+        assert result.sweep_promoted == 0
+
+
+class TestRecordExecutorStop:
+    """A shutdown-stopped run must not report terminated_by='complete'
+    (the old guard compared 'not terminated_by' against the truthy
+    default, so it never fired)."""
+
+    def test_shutdown_stop_named(self):
+        from core.audit.executor import ExecutorStats
+        from core.audit.orchestrator import _record_executor_stop
+
+        result = OrchestratorResult()
+        _record_executor_stop(result, ExecutorStats(budget_stopped=True))
+        assert result.terminated_by == "shutdown"
+
+    def test_budget_reason_preserved(self):
+        from core.audit.executor import ExecutorStats
+        from core.audit.orchestrator import _record_executor_stop
+
+        result = OrchestratorResult(terminated_by="llm_budget_exceeded")
+        _record_executor_stop(result, ExecutorStats(budget_stopped=True))
+        assert result.terminated_by == "llm_budget_exceeded"
+
+    def test_normal_completion_untouched(self):
+        from core.audit.executor import ExecutorStats
+        from core.audit.orchestrator import _record_executor_stop
+
+        result = OrchestratorResult()
+        _record_executor_stop(result, ExecutorStats(budget_stopped=False))
+        assert result.terminated_by == "complete"
+
+
+class TestChecklistLineEndCache:
+    """The line_end cache must not leak values across targets that
+    share a relative path + function name (corpus runner executes
+    multiple targets in one process)."""
+
+    @staticmethod
+    def _config(target, line_end):
+        return OrchestratorConfig(
+            target_path=target,
+            out_dir=target,
+            inventory={
+                "files": [
+                    {
+                        "path": "src/util.c",
+                        "items": [
+                            {"name": "init", "line_end": line_end},
+                        ],
+                    },
+                ],
+            },
+        )
+
+    def test_no_cross_target_leak(self, tmp_path):
+        from core.audit.orchestrator import _checklist_line_end
+
+        target_a = tmp_path / "a"
+        target_b = tmp_path / "b"
+
+        assert _checklist_line_end(
+            self._config(target_a, 42), "src/util.c", "init",
+        ) == 42
+        assert _checklist_line_end(
+            self._config(target_b, 99), "src/util.c", "init",
+        ) == 99
+
+
+class TestMultiPassConsensusFailureVisibility:
+    """A runtime failure in cross-model consensus must be visible at
+    WARNING (the operator asked for --model A --model B and silently
+    got single-model results), while a missing module stays at DEBUG."""
+
+    def test_consensus_runtime_failure_warns(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        import logging
+
+        import core.audit.multi_review as mr_mod
+
+        def broken_multi_review(*a, **kw):
+            raise RuntimeError("provider exploded")
+
+        monkeypatch.setattr(
+            mr_mod, "run_audit_multi_review", broken_multi_review,
+        )
+
+        config = OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path,
+            models=["model-a", "model-b"], multi_model=True,
+        )
+
+        def review_fn(ctx, cfg):
+            return ReviewOutcome(
+                file="a.c", function="f", status="clean", body="ok",
+            )
+
+        ctx = {"file": "a.c", "function": "f", "line_start": 1}
+        with caplog.at_level(logging.DEBUG, logger="core.audit.orchestrator"):
+            outcome = _multi_pass_review(review_fn, ctx, config, passes=2)
+
+        assert outcome.status == "clean"  # inline fallback still ran
+        warning_msgs = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "multi-model consensus failed" in r.message
+        ]
+        assert warning_msgs, "consensus failure must be logged at WARNING"
+
+
+class TestJoernReReviewDuplicateGaps:
+    """Two gaps resolving to the same prior clean outcome (duplicate
+    function keys in gaps_before_joern) must not crash the post-loop
+    phase with ValueError on the second replace."""
+
+    def test_duplicate_gaps_processed_once(self, tmp_path, monkeypatch):
+        import time as _time
+        from unittest.mock import MagicMock
+
+        import core.audit.orchestrator as orch_mod
+        from core.audit.orchestrator import _re_review_joern_enriched
+
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+                "line_start": gap.get("line_start", 1),
+            },
+        )
+        monkeypatch.setattr(orch_mod, "_commit_outcome", lambda *a, **kw: None)
+
+        prior = ReviewOutcome(
+            file="a.c", function="f", status="clean", body="ok",
+        )
+        result = OrchestratorResult(clean=1)
+        result.outcomes = [prior]
+
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+
+        rec = MagicMock()
+        rec.all_joern_flows.return_value = ["flow"]
+        evidence_index = {"a.c:f": rec}
+
+        review_calls = [0]
+
+        def review_fn(ctx, cfg):
+            review_calls[0] += 1
+            return ReviewOutcome(
+                file="a.c", function="f", status="suspicious",
+                body="joern flow reaches sink", hypothesis="taint",
+            )
+
+        gaps = [
+            {"file": "a.c", "name": "f", "line_start": 1},
+            {"file": "a.c", "name": "f", "line_start": 40},  # duplicate
+        ]
+
+        _re_review_joern_enriched(
+            result, config, review_fn,
+            checklist={"files": []},
+            context_map=None,
+            fuzz_coverage=None,
+            evidence_index=evidence_index,
+            sarif_cache=None,
+            entry_points=set(),
+            gaps_before_joern=gaps,
+            start_time=_time.monotonic(),
+            on_progress=None,
+        )
+
+        assert review_calls[0] == 1  # deduped, one re-review
+        assert len(result.outcomes) == 1
+        assert result.outcomes[0].status == "suspicious"
+        assert result.suspicious == 1
+        assert result.clean == 0

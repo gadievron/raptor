@@ -36,12 +36,23 @@ The three-tier search in find_understand_output() covers:
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
+from core.artifacts.provenance import (
+    provenance_of,
+    sanitise_free_text,
+    stamp_provenance,
+)
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
+
+# Provenance generator id stamped on artifacts (re)written by this
+# bridge. Content originates from LLM-authored /understand output, so
+# everything the bridge writes is stamped untrusted per docs/security.md
+# I2-(b).
+_BRIDGE_GENERATOR = "understand-bridge"
 
 # Label used in attack-paths to mark entries imported from /understand traces.
 # Stage B uses this to distinguish its own paths from pre-loaded ones.
@@ -63,8 +74,8 @@ _VALID_PROFILE_NAMES = frozenset({
 
 def find_understand_output(
     validate_dir: Path,
-    target_path: str = None,
-) -> Tuple[Optional[Path], Set[str]]:
+    target_path: str | None = None,
+) -> tuple[Path | None, set[str]]:
     """Find the best /understand output for a validate run.
 
     Three-tier search eliminates the need for --out alignment:
@@ -95,7 +106,7 @@ def find_understand_output(
         co-located data is assumed fresh.
     """
     validate_dir = Path(validate_dir)
-    empty: Set[str] = set()
+    empty: set[str] = set()
 
     # Tier 1: context-map.json (or binary-context-map.json) co-located.
     # Staleness can't be checked here — the validate rebuild overwrites
@@ -124,11 +135,11 @@ def find_understand_output(
 
 
 def _collect_candidates(
-    validate_dir: Path, target_path: str = None,
-) -> List[Path]:
+    validate_dir: Path, target_path: str | None = None,
+) -> list[Path]:
     """Gather understand run directories from tiers 2 and 3."""
     seen: set = set()
-    results: List[Path] = []
+    results: list[Path] = []
 
     # Tier 2: project sibling directories
     parent = validate_dir.parent  # e.g. out/projects/myapp/
@@ -154,9 +165,9 @@ def _collect_candidates(
 
 
 def _rank_candidates(
-    candidates: List[Path],
-    target_path: str = None,
-) -> Optional[Tuple[Path, Set[str]]]:
+    candidates: list[Path],
+    target_path: str | None = None,
+) -> tuple[Path, set[str]] | None:
     """Pick the best candidate: fresh hashes > stale, then newest first.
 
     Freshness is checked by hashing the current files on disk under
@@ -198,7 +209,7 @@ def _rank_candidates(
     # candidate runs. The disk doesn't change between candidates in
     # a single ranking call, so re-hashing the same content M times
     # was pure waste. See `_find_stale_files` docstring.
-    disk_hash_cache: Dict[str, Optional[str]] = {}
+    disk_hash_cache: dict[str, str | None] = {}
     scored = []
     for d in candidates:
         u_checklist = load_json(d / "checklist.json")
@@ -227,7 +238,7 @@ def _rank_candidates(
     return best_dir, best_stale_files
 
 
-def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
+def _extract_hashes(checklist: dict[str, Any]) -> dict[str, str]:
     """Build {relative_path: sha256} from a checklist.
 
     Pre-fix the comprehension subscripted ``f["path"]`` directly,
@@ -240,7 +251,7 @@ def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
     non-dict entry (corrupt list element) doesn't AttributeError on
     `.get`.
     """
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for f in checklist.get("files", []):
         if not isinstance(f, dict):
             continue
@@ -252,10 +263,10 @@ def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _find_stale_files(
-    understand_hashes: Dict[str, str],
+    understand_hashes: dict[str, str],
     target_path: str,
-    disk_hash_cache: Optional[Dict[str, Optional[str]]] = None,
-) -> Set[str]:
+    disk_hash_cache: dict[str, str | None] | None = None,
+) -> set[str]:
     """Return relative paths whose on-disk SHA-256 differs from the understand checklist.
 
     Hashes the actual files under target_path rather than comparing against
@@ -276,9 +287,21 @@ def _find_stale_files(
     from core.hash import sha256_file
 
     target = Path(target_path)
-    stale: Set[str] = set()
+    target_resolved = target.resolve()
+    stale: set[str] = set()
     for rel_path, u_hash in understand_hashes.items():
+        # Checklist entry paths are external input — require the
+        # joined path to stay inside the target before hashing (same
+        # containment rule as ``core.staleness.check_batch(root=...)``).
+        # An escaping path (absolute, ``..``, or a symlink pointing
+        # out) is treated as stale so its data gets excluded rather
+        # than hashing arbitrary files.
         full_path = target / rel_path
+        try:
+            full_path.resolve().relative_to(target_resolved)
+        except (ValueError, OSError):
+            stale.add(rel_path)
+            continue
         if disk_hash_cache is not None and rel_path in disk_hash_cache:
             disk_hash = disk_hash_cache[rel_path]
         else:
@@ -298,9 +321,9 @@ def _find_stale_files(
 
 def _search_understand_dirs(
     parent_dir: Path,
-    exclude: Path = None,
-    require_target: str = None,
-) -> List[Path]:
+    exclude: Path | None = None,
+    require_target: str | None = None,
+) -> list[Path]:
     """Find understand run directories under parent_dir.
 
     Args:
@@ -388,8 +411,8 @@ def _search_understand_dirs(
 def load_understand_context(
     understand_dir: Path,
     validate_dir: Path,
-    stale_files: Optional[Set[str]] = None,
-) -> Dict[str, Any]:
+    stale_files: set[str] | None = None,
+) -> dict[str, Any]:
     #Import /understand outputs as /validate starting state.
     understand_dir = Path(understand_dir)
     validate_dir = Path(validate_dir)
@@ -397,7 +420,7 @@ def load_understand_context(
     if stale_files is None:
         stale_files = set()
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "understand_dir": str(understand_dir),
         "context_map_loaded": False,
         "stale_files_excluded": sorted(stale_files),
@@ -439,6 +462,14 @@ def load_understand_context(
 
     summary["context_map_loaded"] = True
     summary["context_map"] = context_map
+    # Surface the writer-side provenance stamp (a missing stamp reads
+    # as untrusted + legacy) so downstream stages see the trust bit
+    # without re-deriving it.
+    summary["context_map_provenance"] = provenance_of(context_map)
+    if summary["context_map_provenance"]["legacy"]:
+        logger.info(
+            "understand_bridge: context-map has no provenance stamp "
+            "(legacy artifact) — treating content as untrusted")
 
     # --- Populate attack-surface.json ---
     surface_stats = _merge_attack_surface(context_map, validate_dir, understand_dir)
@@ -477,8 +508,8 @@ def load_understand_context(
     return summary
 
 
-def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any],
-                          target_path: Optional[str] = None) -> Dict[str, Any]:
+def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any],
+                          target_path: str | None = None) -> dict[str, Any]:
     """Mechanically fix up an LLM-produced context-map using the checklist
     as ground truth.
 
@@ -539,8 +570,8 @@ def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any]
     return context_map
 
 
-def _augment_library_surface(context_map: Dict[str, Any],
-                             checklist: Dict[str, Any]) -> None:
+def _augment_library_surface(context_map: dict[str, Any],
+                             checklist: dict[str, Any]) -> None:
     """6th normalise pass — the first consumer of ``checklist['target_kind']``.
 
     For a ``library``/``hybrid`` target the public/exported API *is* the attack
@@ -602,7 +633,7 @@ def _augment_library_surface(context_map: Dict[str, Any],
         return
     # Dedup against entries the LLM already found (names are backfilled by the
     # prior pass) and against ones we add.
-    seen: Set[Tuple[str, str]] = set()
+    seen: set[tuple[str, str]] = set()
     for ep in eps:
         if isinstance(ep, dict):
             f, n = ep.get("file"), ep.get("name")
@@ -656,7 +687,7 @@ def _augment_library_surface(context_map: Dict[str, Any],
 _LOCATION_BEARING_SECTIONS = ("entry_points", "sink_details", "boundary_details")
 
 
-def _list_at(d: Any, key: str) -> List[Any]:
+def _list_at(d: Any, key: str) -> list[Any]:
     """Return d[key] if it's a list, else an empty list.
 
     Defensive guard for the many `for x in context_map.get(field) or []`
@@ -670,7 +701,7 @@ def _list_at(d: Any, key: str) -> List[Any]:
     return v if isinstance(v, list) else []
 
 
-def _normalize_path(path: str, target_path: Optional[str]) -> str:
+def _normalize_path(path: str, target_path: str | None) -> str:
     """Return the path normalised relative to target_path when possible.
 
     - Strips a leading ``./`` (claude often emits these).
@@ -680,8 +711,7 @@ def _normalize_path(path: str, target_path: Optional[str]) -> str:
     if not path:
         return path
     p = path.strip()
-    if p.startswith("./"):
-        p = p[2:]
+    p = p.removeprefix("./")
     if target_path and p.startswith("/"):
         try:
             rel = Path(p).resolve().relative_to(Path(target_path).resolve())
@@ -691,8 +721,8 @@ def _normalize_path(path: str, target_path: Optional[str]) -> str:
     return p
 
 
-def _normalize_paths(context_map: Dict[str, Any],
-                     target_path: Optional[str]) -> None:
+def _normalize_paths(context_map: dict[str, Any],
+                     target_path: str | None) -> None:
     for section in _LOCATION_BEARING_SECTIONS:
         for entry in _list_at(context_map, section):
             if not isinstance(entry, dict):
@@ -705,8 +735,8 @@ def _normalize_paths(context_map: Dict[str, Any],
                 entry["file"] = _normalize_path(file, target_path)
 
 
-def _find_containing_function(file_info: Dict[str, Any],
-                               line: int) -> Optional[Dict[str, Any]]:
+def _find_containing_function(file_info: dict[str, Any],
+                               line: int) -> dict[str, Any] | None:
     """Return the function in file_info whose line range contains ``line``.
 
     Strict pass: collect every function with both ``line_start`` and
@@ -765,8 +795,8 @@ def _find_containing_function(file_info: Dict[str, Any],
     return candidates[0][1]
 
 
-def _backfill_and_validate_locations(context_map: Dict[str, Any],
-                                      files_by_path: Dict[str, Dict[str, Any]]
+def _backfill_and_validate_locations(context_map: dict[str, Any],
+                                      files_by_path: dict[str, dict[str, Any]]
                                       ) -> None:
     for section in _LOCATION_BEARING_SECTIONS:
         for entry in _list_at(context_map, section):
@@ -812,7 +842,7 @@ def _backfill_and_validate_locations(context_map: Dict[str, Any],
                         entry["name"] = func_name
 
 
-def _validate_cross_refs(context_map: Dict[str, Any]) -> None:
+def _validate_cross_refs(context_map: dict[str, Any]) -> None:
     # Set construction requires hashable values — if claude emits an id as
     # a list / dict, the comprehension would raise. Constrain to strings.
     ep_ids = {
@@ -846,7 +876,7 @@ def _validate_cross_refs(context_map: Dict[str, Any]) -> None:
                 )
 
 
-def _as_id_list(value: Any) -> List[str]:
+def _as_id_list(value: Any) -> list[str]:
     """Coerce a context-map ID reference into a list of string IDs.
 
     Accepts a single string, a list of strings (or mixed), or any other
@@ -862,8 +892,8 @@ def _as_id_list(value: Any) -> List[str]:
     return []
 
 
-def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
-                     output_dir: str = None) -> Dict[str, Any]:
+def enrich_checklist(checklist: dict[str, Any], context_map: dict[str, Any],
+                     output_dir: str | None = None) -> dict[str, Any]:
     """Mark entry points and sinks as high-priority in a checklist.
 
     Mutates checklist in place. Returns the checklist for chaining.
@@ -929,7 +959,7 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
     # in the file). Reasons accumulate so a function that is both an entry
     # point and a sink gets both labels rather than only the one written
     # last.
-    priority_functions: Dict[tuple, set] = {}
+    priority_functions: dict[tuple, set] = {}
 
     def _record(entry: Any, reason: str) -> None:
         """Record a priority reason against the (file, name) key.
@@ -1016,27 +1046,32 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
 
     if output_dir:
         from core.inventory import save_checklist
+        # The enriched checklist mixes mechanical inventory with
+        # LLM-derived priority markers from the context-map — stamp it
+        # untrusted before the mechanical writer default applies.
+        stamp_provenance(checklist, _BRIDGE_GENERATOR, untrusted=True,
+                         overwrite_generator=False)
         save_checklist(output_dir, checklist)
 
     return checklist
 
 
-def _index_entries_by_id(context_map: Dict[str, Any]
-                          ) -> Tuple[Dict[str, Dict[str, Any]],
-                                     Dict[str, Dict[str, Any]]]:
+def _index_entries_by_id(context_map: dict[str, Any]
+                          ) -> tuple[dict[str, dict[str, Any]],
+                                     dict[str, dict[str, Any]]]:
     """Build {id → entry} lookups for entry_points and sink_details.
 
     Skips entries with missing or non-string IDs (matching the defensive
     posture of _validate_cross_refs). Returns a pair (ep_by_id, sink_by_id).
     """
-    ep_by_id: Dict[str, Dict[str, Any]] = {}
+    ep_by_id: dict[str, dict[str, Any]] = {}
     for ep in _list_at(context_map, "entry_points"):
         if not isinstance(ep, dict):
             continue
         ep_id = ep.get("id")
         if isinstance(ep_id, str) and ep_id:
             ep_by_id[ep_id] = ep
-    sink_by_id: Dict[str, Dict[str, Any]] = {}
+    sink_by_id: dict[str, dict[str, Any]] = {}
     for sd in _list_at(context_map, "sink_details"):
         if not isinstance(sd, dict):
             continue
@@ -1046,8 +1081,8 @@ def _index_entries_by_id(context_map: Dict[str, Any]
     return ep_by_id, sink_by_id
 
 
-def _resolve_id_to_details(value: Any, by_id: Dict[str, Dict[str, Any]]
-                            ) -> List[Dict[str, Any]]:
+def _resolve_id_to_details(value: Any, by_id: dict[str, dict[str, Any]]
+                            ) -> list[dict[str, Any]]:
     """Resolve a single ID or list of IDs into a list of detail dicts.
 
     Each detail keeps only the fields a downstream consumer actually
@@ -1059,12 +1094,12 @@ def _resolve_id_to_details(value: Any, by_id: Dict[str, Dict[str, Any]]
     file, string-typed line, etc.) rather than propagating the type bug
     to downstream consumers.
     """
-    resolved: List[Dict[str, Any]] = []
+    resolved: list[dict[str, Any]] = []
     for ref in _as_id_list(value):
         entry = by_id.get(ref)
         if not entry:
             continue
-        out: Dict[str, Any] = {"id": ref}
+        out: dict[str, Any] = {"id": ref}
         # file / name must be non-empty strings; line must be int (and
         # not bool, which is an int subclass in Python).
         file_v = entry.get("file")
@@ -1080,10 +1115,10 @@ def _resolve_id_to_details(value: Any, by_id: Dict[str, Dict[str, Any]]
     return resolved
 
 
-def _build_priority_target(flow: Dict[str, Any],
-                            ep_by_id: Dict[str, Dict[str, Any]],
-                            sink_by_id: Dict[str, Dict[str, Any]]
-                            ) -> Dict[str, Any]:
+def _build_priority_target(flow: dict[str, Any],
+                            ep_by_id: dict[str, dict[str, Any]],
+                            sink_by_id: dict[str, dict[str, Any]]
+                            ) -> dict[str, Any]:
     """Build a priority_targets entry from one unchecked_flow.
 
     Preserves the original raw ID fields for backward compatibility and
@@ -1102,7 +1137,7 @@ def _build_priority_target(flow: Dict[str, Any],
     }
 
 
-def _clear_prior_priority_markers(checklist: Dict[str, Any]) -> None:
+def _clear_prior_priority_markers(checklist: dict[str, Any]) -> None:
     """Remove bridge-written priority data so re-enrichment starts clean.
 
     Targets:
@@ -1134,7 +1169,7 @@ def _clear_prior_priority_markers(checklist: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _references_file(entry: Dict[str, Any], stale_files: Set[str]) -> bool:
+def _references_file(entry: dict[str, Any], stale_files: set[str]) -> bool:
     """Check if a context-map entry references any stale file.
 
     Entries use different formats:
@@ -1191,7 +1226,7 @@ def _references_file(entry: Dict[str, Any], stale_files: Set[str]) -> bool:
     return False
 
 
-def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> int:
+def _filter_context_map(context_map: dict[str, Any], stale_files: set[str]) -> int:
     """Remove entries referencing stale files from the context map. Mutates in place.
 
     Returns the number of entries removed.
@@ -1281,7 +1316,7 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
     return removed
 
 
-def _load_context_map(understand_dir: Path) -> Optional[Dict[str, Any]]:
+def _load_context_map(understand_dir: Path) -> dict[str, Any] | None:
     #Load context-map.json (or binary-context-map.json) from an understand output directory.
     context_map_path = understand_dir / "context-map.json"
     if not context_map_path.exists():
@@ -1305,10 +1340,10 @@ def _load_context_map(understand_dir: Path) -> Optional[Dict[str, Any]]:
 
 
 def _merge_attack_surface(
-    context_map: Dict[str, Any],
+    context_map: dict[str, Any],
     validate_dir: Path,
     understand_dir: Path,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     # Populate or merge attack-surface.json from context-map data.
     surface_path = validate_dir / "attack-surface.json"
 
@@ -1322,6 +1357,8 @@ def _merge_attack_surface(
     all_boundary_details = context_map.get("boundary_details", [])
     for boundary in new_boundaries:
         for bd in all_boundary_details:
+            if not isinstance(bd, dict):
+                continue
             if bd.get("gaps") and _boundary_matches(boundary, bd):
                 boundary["gaps"] = bd["gaps"]
                 boundary["gaps_source"] = "understand:map"
@@ -1367,6 +1404,15 @@ def _merge_attack_surface(
         taint_summary = context_map.get("taint_summary")
         if taint_summary:
             attack_surface["taint_summary"] = taint_summary
+        # Provenance chokepoint: the surface is a selective copy of the
+        # LLM-authored context-map (merged with whatever Stage B wrote),
+        # so it is stamped untrusted; marked free-text fields are
+        # defanged before persisting.
+        from packages.exploitability_validation.schemas import (
+            ATTACK_SURFACE_SCHEMA,
+        )
+        sanitise_free_text(attack_surface, ATTACK_SURFACE_SCHEMA)
+        stamp_provenance(attack_surface, _BRIDGE_GENERATOR, untrusted=True)
         # mode=0o600 — attack-surface JSON lists entry points, trust
         # boundaries, and sinks. Default umask makes this readable to
         # other local users; on multi-tenant hosts the file is a soft-
@@ -1384,7 +1430,7 @@ def _merge_attack_surface(
     }
 
 
-def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> bool:
+def _trace_references_stale(trace: dict[str, Any], stale_files: set[str]) -> bool:
     """Check if a flow trace references any stale file via its steps."""
     import re
 
@@ -1422,8 +1468,8 @@ def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> boo
 def _import_flow_traces(
     understand_dir: Path,
     validate_dir: Path,
-    stale_files: Optional[Set[str]] = None,
-) -> Dict[str, Any]:
+    stale_files: set[str] | None = None,
+) -> dict[str, Any]:
     # Import flow-trace-*.json files as initial entries in attack-paths.json.
     trace_files = sorted(understand_dir.glob("flow-trace-*.json"))
     if not trace_files:
@@ -1433,7 +1479,7 @@ def _import_flow_traces(
         stale_files = set()
 
     paths_path = validate_dir / "attack-paths.json"
-    existing_paths: List[Dict[str, Any]] = []
+    existing_paths: list[dict[str, Any]] = []
     if paths_path.exists():
         loaded = load_json(paths_path)
         if isinstance(loaded, list):
@@ -1505,6 +1551,10 @@ def _import_flow_traces(
         imported += 1
 
     if imported > 0:
+        # Provenance chokepoint: per-element stamp (top-level array),
+        # untrusted — content comes from LLM-authored flow traces.
+        # Existing generator ids on already-stamped elements survive.
+        _sanitise_and_stamp_paths(existing_paths)
         # mode=0o600 — attack-paths.json persists exploitation chains
         # (steps, blockers, proximity scores) imported from /understand
         # --trace. Same threat profile as attack-surface.json above.
@@ -1514,9 +1564,9 @@ def _import_flow_traces(
 
 
 def _import_unchecked_flow_conditions(
-    context_map: Dict[str, Any],
+    context_map: dict[str, Any],
     validate_dir: Path,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Import path_conditions from sink_details into attack-paths.json.
 
     Walks `unchecked_flows`; for each flow whose referenced sink_detail
@@ -1538,7 +1588,7 @@ def _import_unchecked_flow_conditions(
     _, sink_by_id = _index_entries_by_id(context_map)
 
     paths_path = validate_dir / "attack-paths.json"
-    existing_paths: List[Dict[str, Any]] = []
+    existing_paths: list[dict[str, Any]] = []
     if paths_path.exists():
         loaded = load_json(paths_path)
         if isinstance(loaded, list):
@@ -1564,7 +1614,7 @@ def _import_unchecked_flow_conditions(
         path_id = f"map-flow-{i:03d}"
         if path_id in existing_ids:
             continue
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "id": path_id,
             "name": f"Imported from /understand --map: {flow.get('entry_point')} → {sink_id}",
             "finding": "",
@@ -1586,6 +1636,9 @@ def _import_unchecked_flow_conditions(
         imported += 1
 
     if imported > 0:
+        # Provenance chokepoint — see comment on the earlier
+        # paths_path write.
+        _sanitise_and_stamp_paths(existing_paths)
         # mode=0o600 — see comment on the earlier paths_path write.
         save_json(paths_path, existing_paths, mode=0o600)
 
@@ -1596,7 +1649,16 @@ def _import_unchecked_flow_conditions(
     }
 
 
-def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, Any]:
+def _sanitise_and_stamp_paths(paths: list) -> None:
+    """Defang free-text fields and stamp every attack-path element."""
+    from packages.exploitability_validation.schemas import ATTACK_PATH_SCHEMA
+
+    sanitise_free_text(paths, {"items": ATTACK_PATH_SCHEMA})
+    stamp_provenance(paths, _BRIDGE_GENERATOR, untrusted=True,
+                     overwrite_generator=False)
+
+
+def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, Any]:
     #Convert a flow-trace dict into an attack-paths entry.
 
     path = {
@@ -1642,7 +1704,7 @@ def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, 
 
 def _validate_path_conditions(
     conditions: Any, source: str,
-) -> Optional[List[Any]]:
+) -> list[Any] | None:
     """Validate the optional ``path_conditions`` field on a flow trace.
 
     Returns the conditions list if every element is a string or a
@@ -1680,7 +1742,7 @@ def _validate_path_conditions(
     return conditions
 
 
-def _validate_path_profile(profile: Any, source: str) -> Optional[str]:
+def _validate_path_profile(profile: Any, source: str) -> str | None:
     """Validate the optional ``path_profile`` field on a flow trace.
 
     Must be one of the stdint-style names accepted by
@@ -1699,18 +1761,20 @@ def _validate_path_profile(profile: Any, source: str) -> Optional[str]:
 
 
 def _merge_list_by_key(
-    existing: List[Dict], incoming: List[Dict], key: str
-) -> List[Dict]:
+    existing: list[dict], incoming: list[dict], key: str
+) -> list[dict]:
     #Merge two lists of dicts, de-duplicating on a string key field.
 
     existing_keys = {
         item.get(key, "")
         for item in existing
-        if item.get(key)
+        if isinstance(item, dict) and item.get(key)
     }
 
     result = list(existing)
     for item in incoming:
+        if not isinstance(item, dict):
+            continue
         item_key = item.get(key, "")
         if item_key and item_key in existing_keys:
             continue
@@ -1721,7 +1785,7 @@ def _merge_list_by_key(
     return result
 
 
-def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
+def _boundary_matches(boundary: dict[str, Any], detail: dict[str, Any]) -> bool:
     """Check whether a trust_boundaries entry corresponds to a boundary_details entry.
 
     Pre-fix used a bare substring containment check
@@ -1768,56 +1832,3 @@ def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     # as a contiguous slice of long.
     n = len(short)
     return any(long_[i:i + n] == short for i in range(len(long_) - n + 1))
-
-
-def enrich_context_map_with_summaries(
-    context_map: Dict[str, Any],
-    summaries: Dict[str, Any],
-) -> int:
-    """Augment context-map entries with audit-derived function summaries.
-
-    For each entry point and sink in the context map, if a corresponding
-    summary exists, annotates it with taint rules, preconditions, and
-    postconditions. This gives /understand --map richer per-function
-    annotations without re-running /audit.
-
-    summaries: dict mapping "file:function" -> summary dict (from core.audit.audit_bridge.load_summaries)
-    Returns number of entries enriched.
-    """
-    if not summaries or not context_map:
-        return 0
-
-    enriched = 0
-
-    for section_key in ("entry_points", "sinks", "sources"):
-        for entry in context_map.get(section_key, []):
-            if not isinstance(entry, dict):
-                continue
-            func = entry.get("function", entry.get("name", ""))
-            file_path = entry.get("file", "")
-            if not func:
-                continue
-
-            key = f"{file_path}:{func}"
-            summary = summaries.get(key)
-            if not summary:
-                continue
-
-            entry["audit_summary"] = {
-                "taint_rules": summary.get("taint_rules", []),
-                "preconditions": summary.get("preconditions", []),
-                "postconditions": summary.get("returns", []),
-                "confidence": summary.get("confidence", ""),
-                "source": summary.get("source", ""),
-            }
-            enriched += 1
-
-    if enriched:
-        logger.info(
-            "understand_bridge: enriched %d context-map entries with audit summaries",
-            enriched,
-        )
-
-    return enriched
-
-

@@ -11,17 +11,22 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
-from .context import _format_glance_prompt
-from .orchestrator import ReviewOutcome, OrchestratorConfig
+from core.security.prompt_framing import with_audit_framing
+
+from .orchestrator import OrchestratorConfig, ReviewOutcome
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 10
 
-_BATCH_SYSTEM_PROMPT = (
+# Audit-purpose framing: same gap class as the refused summary /
+# spec_inference prompts (bare code + one-line security question);
+# unexercised in the final audit run (0 glances) but the shape is
+# identical. See core.security.prompt_framing.
+_BATCH_SYSTEM_PROMPT = with_audit_framing(
     "You are a security auditor doing a quick triage pass over multiple "
     "functions. For each function, determine whether it is security-relevant "
     "and could contain a vulnerability.\n\n"
@@ -30,21 +35,86 @@ _BATCH_SYSTEM_PROMPT = (
     '  {"file": "<file>", "function": "<name>", "status": "clean"|"suspicious", '
     '"body": "<one sentence>"}\n\n'
     'Use "suspicious" only when there is a concrete reason (e.g. unchecked '
-    "input, missing bounds check, unsafe pattern). Default to \"clean\"."
+    "input, missing bounds check, unsafe pattern). Default to \"clean\".",
+)
+
+# Per-function triage question, keyed by review mode. Lives in the
+# trusted system text — the per-function data arrives as envelope
+# blocks whose origin attribute carries file:function:lines.
+_GLANCE_QUESTION_QUALITY = (
+    "For each function: does it contain a potential defect — logic "
+    "error, resource leak, error handling gap, or incorrect "
+    "assumption? Answer in one sentence per function."
+)
+_GLANCE_QUESTION_SECURITY = (
+    "For each function: is it security-relevant? Could it contain a "
+    "vulnerability (memory safety, injection, auth bypass, "
+    "information disclosure, logic flaw)? Answer in one sentence per "
+    "function."
 )
 
 
-def format_batch_prompt(contexts: list[dict[str, Any]]) -> str:
-    """Build a single prompt containing N GLANCE reviews."""
-    parts = [f"Review {len(contexts)} functions:\n"]
-    for i, ctx in enumerate(contexts, 1):
-        parts.append(f"### Function {i}")
-        parts.append(_format_glance_prompt(ctx))
-        parts.append("")
-    parts.append(
+def format_batch_prompt(
+    contexts: list[dict[str, Any]],
+    *,
+    model_id: str = "",
+) -> tuple[str, str]:
+    """Build a single enveloped prompt containing N GLANCE reviews.
+
+    Each function's source travels in its own ``UntrustedBlock`` whose
+    origin attribute carries ``file:function:lines``; the function
+    index list rides in a slot; instructions stay in the system text.
+    Returns ``(user, system)``.
+    """
+    from core.security.prompt_envelope import TaintedString, UntrustedBlock
+
+    from ._util import envelope_prompt
+
+    mode = contexts[0].get("review_mode", "security") if contexts else "security"
+    question = (
+        _GLANCE_QUESTION_QUALITY
+        if mode in ("bug_first", "quality")
+        else _GLANCE_QUESTION_SECURITY
+    )
+    system = (
+        f"{_BATCH_SYSTEM_PROMPT}\n\n"
+        f"Review {len(contexts)} functions: each arrives in its own "
+        "untrusted source-code block whose origin attribute is "
+        "file:function:line-range, in the order listed in the "
+        "function_list slot.\n\n"
+        f"{question}\n\n"
         f"Respond with a JSON array of exactly {len(contexts)} objects."
     )
-    return "\n".join(parts)
+
+    blocks = []
+    listing = []
+    for i, ctx in enumerate(contexts, 1):
+        origin = (
+            f"{ctx['file']}:{ctx['function']}"
+            f":{ctx.get('line_start', '?')}-{ctx.get('line_end', '?')}"
+        )
+        blocks.append(UntrustedBlock(
+            content=ctx.get("source", "(not available)"),
+            kind="source-code",
+            origin=origin,
+        ))
+        listing.append(f"{i}. {ctx['file']}:{ctx['function']}")
+
+    slots = {
+        "function_list": TaintedString(
+            value="; ".join(listing), trust="untrusted",
+        ),
+    }
+    return envelope_prompt(system, blocks, slots, model_id=model_id)
+
+
+# Strict element schema for the batch response (mirrors
+# _BATCH_SYSTEM_PROMPT's contract). Unknown fields are REJECTED — the
+# element is dropped and the affected function falls back to individual
+# review, exactly like any other malformed element. Same floor policy
+# as core.llm.response_validation.unknown_response_fields.
+_BATCH_ELEMENT_KEYS = frozenset({"file", "function", "status", "body"})
+_BATCH_STATUSES = frozenset({"clean", "suspicious"})
 
 
 def parse_batch_response(
@@ -54,7 +124,11 @@ def parse_batch_response(
     """Parse the LLM batch response into per-function result dicts.
 
     Falls back to empty results if the response is malformed —
-    those functions will be individually re-reviewed.
+    those functions will be individually re-reviewed. Elements that
+    are not dicts, carry fields outside :data:`_BATCH_ELEMENT_KEYS`,
+    or report a status outside :data:`_BATCH_STATUSES` are dropped
+    individually (schema-invalid == malformed; the keyed lookup in
+    ``batch_review_fn`` then error-routes the affected functions).
     """
     text = raw.strip()
     if text.startswith("```"):
@@ -76,7 +150,42 @@ def parse_batch_response(
 
     if not isinstance(results, list):
         return []
-    return results
+
+    accepted: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            logger.debug("batch glance: dropping non-object element")
+            continue
+        unknown = sorted(k for k in item if k not in _BATCH_ELEMENT_KEYS)
+        if unknown:
+            logger.debug(
+                "batch glance: dropping element with unknown fields %s",
+                unknown,
+            )
+            continue
+        if item.get("status") not in _BATCH_STATUSES:
+            logger.debug(
+                "batch glance: dropping element with invalid status %r",
+                item.get("status"),
+            )
+            continue
+        accepted.append(item)
+    return accepted
+
+
+def _response_text(response: Any) -> str:
+    """Extract the model output text from a generate() response.
+
+    ``LLMResponse`` carries it in ``content``; duck-typed responses
+    may use ``text``. Non-string attributes are skipped so mocks or
+    exotic response objects degrade to ``str(response)`` instead of
+    propagating non-text into the parser.
+    """
+    for attr in ("content", "text"):
+        value = getattr(response, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return str(response)
 
 
 def _classify_batch_error(exc: Exception) -> str:
@@ -119,7 +228,10 @@ def make_batch_review_fn(
         if not contexts:
             return []
 
-        prompt = format_batch_prompt(contexts)
+        prompt, system_prompt = format_batch_prompt(
+            contexts,
+            model_id=model_name or getattr(llm_client, "model_name", "") or "",
+        )
         t0 = time.monotonic()
 
         kwargs: dict[str, Any] = {}
@@ -128,13 +240,24 @@ def make_batch_review_fn(
         else:
             kwargs["task_type"] = task_type
 
+        # Short call class: N minimal glance prompts in one call.
+        # Per-call ceiling honoured by the claudecode transport (SDK
+        # providers ignore it); timeout retries keep the client
+        # default of one identical retry — cheap for this class, and
+        # the per-item fallback to individual review covers repeated
+        # failure.
+        from .llm_review import SHORT_CALL_TIMEOUT_S
+        kwargs["timeout_s"] = SHORT_CALL_TIMEOUT_S
+        # Telemetry label: distinguish batched glances from full reviews.
+        kwargs["call_class"] = "glance_batch"
+
         try:
             response = llm_client.generate(
                 prompt,
-                system_prompt=_BATCH_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 **kwargs,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any dispatch failure error-routes the whole batch
             logger.warning("batch glance review failed: %s", exc)
             ec = _classify_batch_error(exc)
             return [
@@ -148,7 +271,13 @@ def make_batch_review_fn(
                 for ctx in contexts
             ]
 
-        raw_text = response.text if hasattr(response, "text") else str(response)
+        # LLMResponse carries the model output in ``content`` (there
+        # is no ``text`` attribute) — falling through to
+        # ``str(response)`` produced the dataclass repr, which the
+        # JSON-array parse rejected and every batch silently fell
+        # back to individual reviews. ``text`` is kept as a fallback
+        # for duck-typed responses.
+        raw_text = _response_text(response)
         duration = time.monotonic() - t0
         model = getattr(response, "model", "")
         cost = getattr(response, "cost", 0.0)

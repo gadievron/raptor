@@ -14,7 +14,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-
 from core.dataflow.finding import Finding, Step
 from packages.source_intel.adapter import (
     _PRIV_BACK_WALK_DEFAULT_DEPTH,
@@ -23,11 +22,10 @@ from packages.source_intel.adapter import (
     _privilege_back_walk_suppresses,
 )
 from packages.source_intel.analyze import (
-    CapabilityEvidence,
     GRADE_SAME_FUNCTION,
+    CapabilityEvidence,
     SourceIntelResult,
 )
-
 
 # ---- fixtures ---------------------------------------------------------
 
@@ -84,24 +82,6 @@ def _cap_for(fn_name: str, *, cap_function: str = "capable",
 
 def _result_with_caps(*caps):
     return SourceIntelResult(target="/repo", capabilities=tuple(caps))
-
-
-def _patch_walk(facts, *, line_cap_check=True):
-    """Patch helpers the walk depends on. line_cap_check controls
-    whether _line_uses_privileged_cap returns True for any line."""
-    from unittest.mock import patch as _patch
-    return [
-        _patch("packages.coccinelle.prereqs.gather_prereqs",
-               return_value=facts),
-        _patch("packages.source_intel.adapter.gather_prereqs",
-               return_value=facts, create=True),
-        _patch("packages.source_intel.analyze._enclosing_function",
-               side_effect=lambda f, line: facts.enclosing(f, line)
-               if hasattr(facts, "enclosing")
-               else None),
-        _patch("packages.source_intel.adapter._line_uses_privileged_cap",
-               return_value=line_cap_check),
-    ]
 
 
 # ---- _path_is_gated direct tests --------------------------------------
@@ -228,13 +208,13 @@ class TestPrivilegeBackWalkSuppresses:
         ):
             # Patch the import inside the function as well.
             import packages.coccinelle.prereqs as p
-            with patch.object(p, "gather_prereqs", return_value=facts):
-                with patch.object(Path, "is_dir", return_value=True):
-                    assert _privilege_back_walk_suppresses(
-                        _finding(),
-                        _result_with_caps(),
-                        Path("/repo"),
-                    ) is False
+            with patch.object(p, "gather_prereqs", return_value=facts), \
+                    patch.object(Path, "is_dir", return_value=True):
+                assert _privilege_back_walk_suppresses(
+                    _finding(),
+                    _result_with_caps(),
+                    Path("/repo"),
+                ) is False
 
     def test_max_depth_clamped_to_ceiling(self):
         """User-supplied max_depth above _MAX is clamped."""

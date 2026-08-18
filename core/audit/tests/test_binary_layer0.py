@@ -103,26 +103,57 @@ class TestLockImbalance:
 
 
 class TestMissingClear:
+    """A plain memset() is elidable by the compiler, so it no longer
+    suppresses the missing-secure-clear finding — it only lowers the
+    finding's confidence. Only explicit_bzero/memset_s-class calls clear."""
+
     def test_sensitive_without_clear(self):
         calls = [{"callee": "strcmp"}]
         findings = check_missing_clear("verify_password", calls)
         assert len(findings) == 1
         assert findings[0].evidence_tier == EvidenceTier.HEURISTIC
 
+    def test_sensitive_without_any_clear_keeps_medium_confidence(self):
+        calls = [{"callee": "strcmp"}]
+        findings = check_missing_clear("verify_password", calls)
+        assert len(findings) == 1
+        assert findings[0].confidence == "medium"
+
     def test_sensitive_with_explicit_bzero(self):
         calls = [{"callee": "explicit_bzero"}]
         findings = check_missing_clear("encrypt_key", calls)
         assert len(findings) == 0
 
-    def test_sensitive_with_memset(self):
+    def test_sensitive_with_memset_s_still_clean(self):
+        calls = [{"callee": "memset_s"}]
+        findings = check_missing_clear("hmac_secret", calls)
+        assert findings == []
+
+    def test_sensitive_with_plain_memset_emits_finding(self):
         calls = [{"callee": "memset"}]
         findings = check_missing_clear("decrypt_token", calls)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.pattern_id == PatternID.MISSING_CLEAR
+        assert f.evidence_tier == EvidenceTier.HEURISTIC
+        assert f.confidence == "low"
+        assert "memset" in f.description
+        assert "elide" in f.description
+
+    def test_secure_clear_beats_memset_presence(self):
+        calls = [{"callee": "memset"}, {"callee": "OPENSSL_cleanse"}]
+        findings = check_missing_clear("cipher_setup", calls)
+        assert findings == []
 
     def test_non_sensitive(self):
         calls = [{"callee": "printf"}]
         findings = check_missing_clear("process_data", calls)
         assert len(findings) == 0
+
+    def test_non_sensitive_with_memset_still_clean(self):
+        calls = [{"callee": "memset"}]
+        findings = check_missing_clear("process_data", calls)
+        assert findings == []
 
 
 class TestSignConfusion:
@@ -282,3 +313,52 @@ class TestFormatSummary:
         ])
         s = format_layer0_summary(result)
         assert "1 findings" in s
+
+
+class TestCalleesFromSource:
+    """Source-derived callee lists feed the calls-based checks on the
+    source-only scan path (which used to pass calls=[] and silently
+    disable all six of them)."""
+
+    def test_extracts_calls_and_skips_keywords(self):
+        from core.audit.binary_layer0 import callees_from_source
+        src = (
+            "int f(char *p) {\n"
+            "    if (pthread_mutex_lock(&m) != 0) return -1;\n"
+            "    for (int i = 0; i < n; i++) helper(p, i);\n"
+            "    return sizeof(int);\n"
+            "}\n"
+        )
+        names = {c["callee"] for c in callees_from_source(src)}
+        assert "pthread_mutex_lock" in names
+        assert "helper" in names
+        assert names.isdisjoint({"if", "for", "return", "sizeof", "int"})
+
+    def test_dedupes(self):
+        from core.audit.binary_layer0 import callees_from_source
+        src = "g(); g(); g();"
+        assert len(callees_from_source(src)) == 1
+
+    def test_activates_lock_imbalance_end_to_end(self):
+        from core.audit.binary_layer0 import (
+            PatternID,
+            callees_from_source,
+            scan_function,
+        )
+        src = (
+            "void locker(void) {\n"
+            "    pthread_mutex_lock(&m);\n"
+            "    do_work();\n"
+            "}\n"
+        )
+        findings = scan_function("locker", callees_from_source(src),
+                                 source=src, file="x.c")
+        assert any(f.pattern_id == PatternID.LOCK_IMBALANCE
+                   for f in findings)
+        # Balanced variant stays quiet.
+        balanced = src.replace("do_work();",
+                               "do_work();\n    pthread_mutex_unlock(&m);")
+        findings2 = scan_function("locker", callees_from_source(balanced),
+                                  source=balanced, file="x.c")
+        assert not any(f.pattern_id == PatternID.LOCK_IMBALANCE
+                       for f in findings2)

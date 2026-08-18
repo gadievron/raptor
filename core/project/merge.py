@@ -9,13 +9,15 @@ import hashlib as _hashlib
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from core.json import save_json
 from core.logging import get_logger
 from core.project.findings_utils import count_vulns as _count_vulns
 from core.project.findings_utils import dedup_key as _dedup_key
-from core.project.findings_utils import load_findings_from_dir as _load_findings_from_dir
+from core.project.findings_utils import (
+    load_findings_from_dir as _load_findings_from_dir,
+)
 from core.sarif.parser import merge_sarif
 
 logger = get_logger()
@@ -123,7 +125,23 @@ def _uniquify(parent: Path, stem: str, date_tag: str, suffix: str) -> Path:
             )
 
 
-def _finding_key(finding: Dict[str, Any]) -> tuple:
+def _resolves_inside(item: Path, run_root: Path) -> bool:
+    """Check that ``item`` resolves to a path inside ``run_root``.
+
+    Direct symlink children are already skipped by the caller; this
+    guards the remaining case where a link in an intermediate path
+    component makes a plain-looking entry resolve outside the run
+    directory being merged. Unresolvable entries (dangling target,
+    permission error mid-path) are treated as outside.
+    """
+    try:
+        resolved = item.resolve(strict=True)
+    except OSError:
+        return False
+    return resolved.is_relative_to(run_root)
+
+
+def _finding_key(finding: dict[str, Any]) -> tuple:
     """Dedup key for a finding: (file, function, line, vuln_type).
 
     Aligns with `count_vulns` (which groups by `(file, function, vuln_type)`)
@@ -175,13 +193,13 @@ _STATUS_RANK = {
 }
 
 
-def _status_rank(finding: Dict[str, Any]) -> int:
+def _status_rank(finding: dict[str, Any]) -> int:
     """Return a rank for how far a finding has progressed through validation."""
     status = finding.get("final_status") or finding.get("status") or ""
     return _STATUS_RANK.get(status, 0)
 
 
-def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
+def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
     """Merge findings from multiple runs. Deduplicate by (file, function, line).
 
     When the same finding appears in multiple runs, prefer the version with the
@@ -202,12 +220,12 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     Returns:
         Deduplicated list of findings.
     """
-    merged: Dict[tuple, Dict[str, Any]] = {}
+    merged: dict[tuple, dict[str, Any]] = {}
     # Parallel structure tracking the provenance union per key. Kept in
     # insertion order via a dict-of-dicts indexed by run_id so re-additions
     # of the same run (e.g. a /project clean + rerun on the same dir) don't
     # multiply the refs.
-    refs_by_key: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+    refs_by_key: dict[tuple, dict[str, dict[str, Any]]] = {}
 
     for run_dir in run_dirs:
         findings = _load_findings_from_dir(Path(run_dir))
@@ -229,7 +247,7 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     # no refs at all (all sources were pre-stamping), leave the field absent
     # rather than synthesising an empty list — preserves the "no provenance
     # available" signal.
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for key, winner in merged.items():
         union = list(refs_by_key.get(key, {}).values())
         if union:
@@ -240,9 +258,15 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     return out
 
 
-def verify_merge(merged_findings: List, source_findings_count: int,
+def verify_merge(merged_findings: list, source_findings_count: int,
                  unique_count: int) -> bool:
-    """Verify merged count >= expected deduplicated count.
+    """Sanity-check the merged findings count from both directions.
+
+    Every unique key must survive the merge (``>= unique_count``) and
+    dedup can only ever reduce, never invent, findings
+    (``<= source_findings_count``). Pre-fix the source count was an
+    unused parameter, so the docstring's promise to verify against the
+    total across all source runs was never exercised.
 
     Args:
         merged_findings: The merged findings list.
@@ -252,10 +276,10 @@ def verify_merge(merged_findings: List, source_findings_count: int,
     Returns:
         True if the merge looks valid.
     """
-    return len(merged_findings) >= unique_count
+    return unique_count <= len(merged_findings) <= source_findings_count
 
 
-def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
+def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     """Merge findings and artefacts from multiple run directories.
 
     Args:
@@ -302,7 +326,7 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
     # Top-level *.sarif are the code-scan outputs; SCA writes its SARIF
     # to the sca/ subdir (<run>/sca/findings.sarif), so include that too
     # or merged.sarif would silently omit dependency findings.
-    sarif_paths: List[str] = []
+    sarif_paths: list[str] = []
     for run_dir in run_dirs:
         for sarif_file in run_dir.glob("*.sarif"):
             sarif_paths.append(str(sarif_file))
@@ -315,14 +339,27 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
         save_json(output_dir / "merged.sarif", merged_sarif)
 
     # --- Copy unknown artefacts ---
+    # Run directories are agent-writable, so symlinks are skipped
+    # rather than dereferenced — matching the export policy
+    # (core/project/export.py) so merge cannot pull content from
+    # outside the run directory into the merged output.
     artefacts_preserved = 0
     for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue
+        run_root = run_dir.resolve()
         for item in run_dir.iterdir():
+            if item.is_symlink():
+                logger.debug("Skipping symlink in merge: %s", item)
+                continue
             if item.is_dir():
                 continue
             if _is_known_file(item.name):
+                continue
+            if not _resolves_inside(item, run_root):
+                logger.debug(
+                    "Skipping artefact resolving outside run dir: %s", item
+                )
                 continue
 
             dest = output_dir / item.name
@@ -348,10 +385,19 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
     for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue
+        run_root = run_dir.resolve()
         for item in run_dir.iterdir():
+            if item.is_symlink():
+                logger.debug("Skipping symlink in merge: %s", item)
+                continue
             if not item.is_dir():
                 continue
             if item.name.startswith("."):
+                continue
+            if not _resolves_inside(item, run_root):
+                logger.debug(
+                    "Skipping artefact resolving outside run dir: %s", item
+                )
                 continue
             dest = output_dir / item.name
             if dest.exists():
@@ -364,7 +410,14 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
                 # entirely.
                 date_tag = _extract_date_from_dir(run_dir)
                 dest = _uniquify(output_dir, item.name, date_tag, "")
-            shutil.copytree(str(item), str(dest))
+            # symlinks=True preserves symlinks inside the tree as
+            # symlinks instead of dereferencing them into regular-file
+            # copies of out-of-run content; ignore_dangling_symlinks
+            # keeps a broken link from aborting the whole merge.
+            shutil.copytree(
+                str(item), str(dest),
+                symlinks=True, ignore_dangling_symlinks=True,
+            )
             artefacts_preserved += 1
 
     vuln_count = _count_vulns(merged)
@@ -378,9 +431,12 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
         "artefacts_preserved": artefacts_preserved,
     }
 
+    # Documented convention (_finding_key docstring): "N findings (M
+    # vulns)". Pre-fix the override relabelled the LOGICAL-vuln count
+    # as "findings", contradicting the actual merged count.
     findings_label = f"{len(merged)} findings"
     if vuln_count != len(merged):
-        findings_label = f"{vuln_count} findings"
+        findings_label = f"{len(merged)} findings ({vuln_count} vulns)"
 
     logger.info(
         f"Merged {len(run_dirs)} runs: {findings_label}, "

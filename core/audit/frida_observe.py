@@ -19,7 +19,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,9 @@ class FridaObservation:
 
     function: str
     file: str
-    args: List[str] = field(default_factory=list)
-    retval: Optional[str] = None
-    callees: List[str] = field(default_factory=list)
-    timestamp_ms: float = 0.0
+    args: list[str] = field(default_factory=list)
+    retval: str | None = None
+    callees: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -46,11 +45,11 @@ class FridaObserveResult:
     """Result of a Frida observation session."""
 
     attached: bool
-    observations: List[FridaObservation] = field(default_factory=list)
-    observed_functions: FrozenSet[str] = field(default_factory=frozenset)
+    observations: list[FridaObservation] = field(default_factory=list)
+    observed_functions: frozenset[str] = field(default_factory=frozenset)
     evidence_strength: str = "inconclusive"
     duration_s: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def should_run_frida(
@@ -73,17 +72,14 @@ def should_run_frida(
         return False
 
     target_pid = _resolve_target_pid(config)
-    if target_pid is None:
-        return False
-
-    return True
+    return target_pid is not None
 
 
 def run_frida_observation(
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
-) -> Optional[FridaObserveResult]:
+) -> FridaObserveResult | None:
     """Observe a function via Frida instrumentation.
 
     Attaches to the target process, hooks the function under review
@@ -116,7 +112,7 @@ def run_frida_observation(
         )
 
         observations = _parse_observations(log_file) if success else []
-        observed_set: Set[str] = set()
+        observed_set: set[str] = set()
         target_observed = False
 
         for obs in observations:
@@ -155,14 +151,16 @@ def run_frida_observation(
 
 def collect_observed_functions(
     config: Any,
-    functions: List[Dict[str, Any]],
-) -> FrozenSet[str]:
+    functions: list[dict[str, Any]],
+) -> frozenset[str]:
     """Run a broad Frida session to observe which functions are hit.
 
-    Used pre-loop to populate the observation set for
-    ``assign_observation_status``.  Hooks up to ``_MAX_HOOKS``
-    functions and collects which ones fire during a test/exercise
-    window.
+    Intended pre-loop populator for the observation set consumed by
+    ``layer_resolution.assign_observation_status`` — NOT currently
+    invoked by the orchestrator (the only production frida entry
+    points are should_run_frida/run_frida_observation). Hooks up to
+    ``_MAX_HOOKS`` functions and collects which ones fire during a
+    test/exercise window.
     """
     if not _frida_available():
         return frozenset()
@@ -220,13 +218,15 @@ def _frida_available() -> bool:
         return False
 
 
-def _resolve_target_pid(config: Any) -> Optional[int]:
+def _resolve_target_pid(config: Any) -> int | None:
     """Resolve the target process PID for Frida attachment.
 
     Checks (in order):
     1. Explicit ``config.frida_pid``
     2. ``config.frida_process_name`` — find by name
-    3. ``config.target_container`` — find main process in container
+
+    (Container-based resolution is not implemented — setting a
+    ``target_container`` on the config has no effect here.)
     """
     pid = getattr(config, "frida_pid", None)
     if pid is not None:
@@ -243,12 +243,12 @@ def _resolve_target_pid(config: Any) -> Optional[int]:
     return None
 
 
-def _find_pid_by_name(name: str) -> Optional[int]:
+def _find_pid_by_name(name: str) -> int | None:
     """Find a process PID by name via /proc."""
     try:
         result = subprocess.run(
             ["pgrep", "-x", name],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
             first_line = result.stdout.strip().splitlines()[0]
@@ -261,8 +261,8 @@ def _find_pid_by_name(name: str) -> Optional[int]:
 def _build_hook_targets(
     function_name: str,
     file_path: str,
-    ctx: Dict[str, Any],
-) -> List[str]:
+    ctx: dict[str, Any],
+) -> list[str]:
     """Build the list of function names to hook.
 
     Includes the target function plus its immediate callees
@@ -282,7 +282,7 @@ def _build_hook_targets(
     return targets[:_MAX_HOOKS]
 
 
-def _generate_frida_script(hook_targets: List[str]) -> str:
+def _generate_frida_script(hook_targets: list[str]) -> str:
     """Generate a Frida instrumentation script.
 
     Hooks each target function's export, logging arguments on
@@ -297,7 +297,6 @@ var targets = {targets_json};
 var hooked = 0;
 
 targets.forEach(function(name) {{
-    var syms = Module.enumerateExports ? undefined : [];
     try {{
         var addrs = Module.findExportByName(null, name);
         if (!addrs) {{
@@ -317,7 +316,9 @@ targets.forEach(function(name) {{
         Interceptor.attach(addrs, {{
             onEnter: function(args) {{
                 var argv = [];
-                for (var i = 0; i < Math.min(6, 6); i++) {{
+                // Log a fixed 6 arg slots; args[i] beyond the real
+                // arity throws and is caught per-slot, padding with '?'.
+                for (var i = 0; i < 6; i++) {{
                     try {{
                         argv.push(args[i].toString());
                     }} catch(e) {{
@@ -389,61 +390,7 @@ def _run_frida_session(
             text=True,
             timeout=timeout,
             env=env,
-        )
-
-        return result.returncode == 0 or log_file.stat().st_size > 0
-
-    except subprocess.TimeoutExpired:
-        logger.debug("Frida session timed out after %ds", _OBSERVE_TIMEOUT_S)
-        return log_file.exists() and log_file.stat().st_size > 0
-    except FileNotFoundError:
-        logger.debug("frida CLI not found")
-        return False
-    except Exception as exc:
-        logger.debug("Frida session error: %s", exc)
-        return False
-    finally:
-        if script_file and script_file.exists():
-            try:
-                script_file.unlink()
-            except OSError:
-                pass
-
-
-def _run_frida_session_pid(
-    pid: int,
-    script_source: str,
-    log_file: Path,
-    timeout: int = _OBSERVE_TIMEOUT_S,
-) -> bool:
-    """Run a Frida session by PID without requiring a config object.
-
-    Thin wrapper around the CLI invocation for use by auto-launch
-    callers that manage their own process lifecycle.
-    """
-    script_file = None
-    try:
-        fd, script_path = tempfile.mkstemp(suffix=".js", prefix="raptor_frida_")
-        os.close(fd)
-        script_file = Path(script_path)
-        script_file.write_text(script_source)
-
-        cmd = [
-            "frida",
-            "-p", str(pid),
-            "-l", str(script_file),
-            "--no-pause",
-            "-o", str(log_file),
-        ]
-
-        env = _safe_env()
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
+            check=False,
         )
 
         return result.returncode == 0 or log_file.stat().st_size > 0
@@ -454,7 +401,7 @@ def _run_frida_session_pid(
     except FileNotFoundError:
         logger.debug("frida CLI not found")
         return False
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — dynamic observation is best-effort: report unobserved
         logger.debug("Frida session error: %s", exc)
         return False
     finally:
@@ -465,9 +412,9 @@ def _run_frida_session_pid(
                 pass
 
 
-def _parse_observations(log_file: Path) -> List[FridaObservation]:
+def _parse_observations(log_file: Path) -> list[FridaObservation]:
     """Parse JSONL observations from a Frida session log."""
-    observations: List[FridaObservation] = []
+    observations: list[FridaObservation] = []
 
     if not log_file.exists():
         return observations
@@ -477,7 +424,7 @@ def _parse_observations(log_file: Path) -> List[FridaObservation]:
     except OSError:
         return observations
 
-    call_stack: Dict[str, FridaObservation] = {}
+    call_stack: dict[str, FridaObservation] = {}
 
     for line in content.splitlines():
         line = line.strip()
@@ -508,7 +455,6 @@ def _parse_observations(log_file: Path) -> List[FridaObservation]:
                 function=func_name,
                 file="",
                 args=data.get("args", []),
-                timestamp_ms=data.get("ts", 0.0),
             )
             call_stack[func_name] = obs
             observations.append(obs)
@@ -522,12 +468,12 @@ def _parse_observations(log_file: Path) -> List[FridaObservation]:
     return observations
 
 
-def _safe_env() -> Dict[str, str]:
+def _safe_env() -> dict[str, str]:
     """Build a sanitised environment for the Frida subprocess."""
     try:
         from core.config import RaptorConfig
         return RaptorConfig.get_safe_env()
-    except Exception:
+    except Exception:  # noqa: BLE001 — config unavailable: fall back to manual scrub
         env = dict(os.environ)
         for key in ("TERMINAL", "EDITOR", "VISUAL", "BROWSER", "PAGER"):
             env.pop(key, None)

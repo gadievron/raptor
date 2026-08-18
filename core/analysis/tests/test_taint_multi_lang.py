@@ -1,12 +1,17 @@
 """Tests for core.analysis.taint_multi_lang — multi-language taint extraction."""
 
+import time
+
 from core.analysis.taint_multi_lang import (
     extract_java_summaries,
     extract_js_summaries,
     extract_go_summaries,
     extract_rust_summaries,
     extract_summaries_for_file,
+    _extract_callees_java,
     _find_brace_end,
+    _JAVA_FUNC,
+    _MAX_CALLEES,
     _parse_java_params,
     _parse_go_params,
     _parse_rust_params,
@@ -56,6 +61,50 @@ public class Foo {
         assert _parse_java_params("String name, int age") == ["name", "age"]
         assert _parse_java_params("final List<String> items") == ["items"]
         assert _parse_java_params("") == []
+
+
+class TestJavaFuncRegex:
+    def test_matches_modifier_functions(self):
+        m = _JAVA_FUNC.search("public static void main(String[] args) {")
+        assert m and m.group(1) == "main"
+        m = _JAVA_FUNC.search("  private int foo(int a) throws IOException {")
+        assert m and m.group(1) == "foo"
+
+    def test_matches_bare_and_generic_return(self):
+        m = _JAVA_FUNC.search("int bare(int x) {")
+        assert m and m.group(1) == "bare"
+        m = _JAVA_FUNC.search("public List<String> get(String k) {")
+        assert m and m.group(1) == "get"
+
+    def test_no_midword_match(self):
+        assert _JAVA_FUNC.search("myint foo(") is None
+
+    def test_whitespace_heavy_file_completes_quickly(self):
+        # ~500KB of whitespace must not stall through quadratic
+        # backtracking. Generous budget keeps the assertion hermetic
+        # on slow machines.
+        content = (" " * 200 + "\n") * 2500
+        start = time.monotonic()
+        assert list(_JAVA_FUNC.finditer(content)) == []
+        assert time.monotonic() - start < 5.0
+
+
+class TestCalleeCap:
+    """Extractors and their consumer share one callee cap."""
+
+    def _body_with_calls(self, n: int) -> str:
+        return "\n".join(f"call_{i}(x);" for i in range(n))
+
+    def test_extractor_caps_at_max_callees(self):
+        callees = _extract_callees_java(self._body_with_calls(40))
+        assert len(callees) == _MAX_CALLEES
+
+    def test_summary_callees_match_extractor_cap(self):
+        body = self._body_with_calls(40)
+        content = f"public void worker(String input) {{\n{body}\n}}\n"
+        summaries = extract_java_summaries(content, "Worker.java")
+        assert "worker" in summaries
+        assert len(summaries["worker"].callees) == _MAX_CALLEES
 
 
 class TestJavaScriptExtraction:
@@ -215,3 +264,17 @@ class TestBraceMatching:
     def test_string_braces_ignored(self):
         s = '{ x = "}" }'
         assert _find_brace_end(s, 0) == len(s)
+
+    def test_unterminated_line_comment_scans_to_eof(self):
+        content = "{ x(); // no trailing newline"
+        # The str.find -1 sentinel must not leak out; like the
+        # unterminated-block-comment branch, this returns len(content).
+        assert _find_brace_end(content, 0) == len(content)
+
+    def test_matched_braces_unchanged(self):
+        content = "{ if (a) { b(); } }"
+        assert _find_brace_end(content, 0) == len(content)
+
+    def test_line_comment_with_newline_unchanged(self):
+        content = "{ x(); // brace in comment }\n}"
+        assert _find_brace_end(content, 0) == len(content)

@@ -397,8 +397,16 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Cache Python bytecode
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
@@ -524,8 +532,16 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Run SCA tests (group ${{ matrix.group }} of 4)
         env:
@@ -615,8 +631,16 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Run sandbox tests
         run: |
@@ -763,8 +787,16 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Run exploit_feasibility integration tests
         env:
@@ -859,7 +891,11 @@ jobs:
         run: pip install pytest==9.0.3
 
       - name: Run CI filter-coverage tests
-        run: pytest .github/tests
+        # Both dirs: filter-coverage tests AND the checker-script
+        # detector tests (check_vocab_lists, check_env_docs,
+        # check_miswiring_detector, check_optional_dep_imports) —
+        # stdlib+pytest only, ~20s.
+        run: pytest .github/tests .github/scripts/tests
 
   # Heavy-subdir Python tiers — each gated on its own filter so a PR
   # touching only one package skips the others. Filters live in

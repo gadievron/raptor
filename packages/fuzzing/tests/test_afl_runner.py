@@ -116,5 +116,81 @@ class TestCreateDefaultCorpus:
         assert b"STACK:" in (corpus / "seed-0014-command-prefixes").read_bytes()
         assert (corpus / "manifest.json").is_file()
 
+
+# ---------------------------------------------------------------------------
+# _merge_crash_files()
+# ---------------------------------------------------------------------------
+
+class TestMergeCrashFiles:
+    """Crashes found by secondary instances must reach the returned
+    crashes dir.
+
+    Regression: run_fuzzing counted crashes across all parallel
+    instances but returned only ``main/crashes``, so secondary-instance
+    crashes were reported in the total yet never analysed.
+    """
+
+    def _make_runner(self, output_dir: Path) -> AFLRunner:
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.output_dir = output_dir
+        return runner
+
+    def _plant_crash(self, output_dir: Path, instance: str, name: str,
+                     payload: bytes) -> Path:
+        crashes = output_dir / instance / "crashes"
+        crashes.mkdir(parents=True, exist_ok=True)
+        f = crashes / name
+        f.write_bytes(payload)
+        return f
+
+    def test_main_only_crashes_keep_main_dir(self, tmp_path):
+        runner = self._make_runner(tmp_path)
+        self._plant_crash(tmp_path, "main",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"a")
+
+        crash_files = runner._collect_all_crash_files()
+        result = runner._merge_crash_files(crash_files)
+
+        assert result == tmp_path / "main" / "crashes"
+        assert not (tmp_path / "merged_crashes").exists()
+
+    def test_secondary_crashes_are_merged(self, tmp_path):
+        runner = self._make_runner(tmp_path)
+        self._plant_crash(tmp_path, "main",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"a")
+        # Same AFL id in a secondary — must not collide away.
+        self._plant_crash(tmp_path, "secondary1",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"b")
+        self._plant_crash(tmp_path, "secondary1",
+                          "id:000001,sig:06,src:000002,op:havoc,rep:2", b"c")
+
+        crash_files = runner._collect_all_crash_files()
+        assert len(crash_files) == 3
+
+        result = runner._merge_crash_files(crash_files)
+        assert result == tmp_path / "merged_crashes"
+
+        merged = sorted(result.iterdir())
+        assert len(merged) == 3
+        # CrashCollector filters on the id: prefix — every merged file
+        # must keep it.
+        assert all(f.name.startswith("id:") for f in merged)
+        assert sorted(f.read_bytes() for f in merged) == [b"a", b"b", b"c"]
+
+    def test_merge_is_idempotent(self, tmp_path):
+        runner = self._make_runner(tmp_path)
+        self._plant_crash(tmp_path, "main",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"a")
+        self._plant_crash(tmp_path, "secondary1",
+                          "id:000001,sig:06,src:000002,op:havoc,rep:2", b"b")
+
+        crash_files = runner._collect_all_crash_files()
+        first = runner._merge_crash_files(crash_files)
+        second = runner._merge_crash_files(crash_files)
+
+        assert first == second
+        assert len(list(second.iterdir())) == 2
+
+
 if __name__ == "__main__":
     unittest.main()

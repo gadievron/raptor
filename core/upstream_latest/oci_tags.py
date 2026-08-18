@@ -32,7 +32,6 @@ Out-of-scope shapes silently filter out (filter lives in
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
 
 from core.http import HttpClient, HttpError
 from core.json import JsonCache
@@ -54,9 +53,9 @@ def latest_tag(
     image_ref: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache] = None,
+    cache: JsonCache | None = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    client: Optional[OciRegistryClient] = None,
+    client: OciRegistryClient | None = None,
     per_page: int = 100,
     variant: str = "",
 ) -> str:
@@ -107,11 +106,11 @@ def list_all_tags(
     image_ref: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache] = None,
+    cache: JsonCache | None = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    client: Optional[OciRegistryClient] = None,
+    client: OciRegistryClient | None = None,
     per_page: int = 100,
-) -> List[str]:
+) -> list[str]:
     """Return the full tag list, unfiltered.
 
     Useful for diagnostic / future-detector use cases (e.g. "list
@@ -133,11 +132,11 @@ def _list_tags_cached(
     image_ref: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache],
+    cache: JsonCache | None,
     ttl_seconds: int,
-    client: Optional[OciRegistryClient],
+    client: OciRegistryClient | None,
     per_page: int,
-) -> List[str]:
+) -> list[str]:
     """Cached wrapper around ``OciRegistryClient.list_tags``.
 
     Cache key includes the parsed registry + repository (not the
@@ -145,8 +144,13 @@ def _list_tags_cached(
     regardless of what tag the caller asked about).
     """
     ref = parse_image_ref(image_ref)
+    from urllib.parse import quote as _quote
+    # Registry and repository each percent-encoded into one segment —
+    # the repository component is target-derived, and the cache layer
+    # requires keys that cannot alias each other.
     cache_key = (
-        f"upstream_latest:oci:{ref.registry}/{ref.repository}"
+        f"upstream_latest:oci:{_quote(ref.registry, safe='')}/"
+        f"{_quote(ref.repository, safe='')}"
         f":n={per_page}"
     )
     if cache is not None and ttl_seconds > 0:

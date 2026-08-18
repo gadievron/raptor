@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Show or update RAPTOR resource tuning.
 
 Usage:
@@ -7,17 +9,12 @@ Usage:
   raptor-tune balanced       Rewrite tuning.json with conservative values
   raptor-tune default        Rewrite tuning.json to shipped defaults
 """
-import faulthandler
 import json
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -27,13 +24,14 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
-from core.json import load_json_with_comments
-from core.tuning import load_tuning, _DEFAULTS, _KEY_COMMENTS, _detect_available_cpus
+from core.json import load_json_with_comments  # noqa: E402
+from core.tuning import load_tuning, _DEFAULTS, _KEY_COMMENTS, _detect_available_cpus  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TUNING_PATH = _REPO_ROOT / "tuning.json"
@@ -60,6 +58,7 @@ def _max_values() -> dict:
     return {
         "codeql_ram_mb": codeql_ram_mb,
         "codeql_threads": cpus,
+        "joern_heap_mb": max(1024, ram // 2) if ram else 8192,
         "max_semgrep_workers": max(2, cpus),
         "max_codeql_workers": max(1, min(cpus // 2, 8, codeql_worker_ram_cap)),
         "max_fuzz_parallel": max(1, cpus // 2),
@@ -74,6 +73,7 @@ def _balanced_values() -> dict:
     return {
         "codeql_ram_mb": max(2048, min(ram // 8, 8192)) if ram else 4096,
         "codeql_threads": max(1, cpus // 2),
+        "joern_heap_mb": max(1024, min(ram // 8, 8192)) if ram else 2048,
         "max_semgrep_workers": max(1, cpus // 4),
         "max_codeql_workers": 1,
         "max_fuzz_parallel": 1,
@@ -121,6 +121,10 @@ _KEY_ORDER = [
     "codeql_ram_mb",
     "codeql_threads",
     "codeql_max_disk_cache_mb",
+    "joern_enabled",
+    "joern_heap_mb",
+    "joern_cpg_timeout_s",
+    "joern_query_timeout_s",
     "max_semgrep_workers",
     "max_codeql_workers",
     "max_fuzz_parallel",
@@ -160,6 +164,10 @@ def _show() -> None:
         ("codeql_ram_mb", t.codeql_ram_mb, "MB"),
         ("codeql_threads", t.codeql_threads, "CPUs"),
         ("codeql_max_disk_cache_mb", t.codeql_max_disk_cache_mb, "MB"),
+        ("joern_enabled", t.joern_enabled, ""),
+        ("joern_heap_mb", t.joern_heap_mb, "MB"),
+        ("joern_cpg_timeout_s", t.joern_cpg_timeout_s, "s"),
+        ("joern_query_timeout_s", t.joern_query_timeout_s, "s"),
         ("max_semgrep_workers", t.max_semgrep_workers, ""),
         ("max_codeql_workers", t.max_codeql_workers, ""),
         ("max_fuzz_parallel", t.max_fuzz_parallel, ""),

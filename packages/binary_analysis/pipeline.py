@@ -14,20 +14,35 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from core.json import load_json, save_json
+from core.artifacts.provenance import (
+    CONTEXT_MAP_TEXT_SCHEMA,
+    sanitise_free_text,
+    stamp_provenance,
+)
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from core.hash import sha256_file
+from core.json import load_json, save_json
 
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
 from .diff import diff_manifests
-from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from .fuzz_evidence import CrashEvidence, FuzzEvidenceBundle, load_fuzz_evidence
 from .fuzz_suitability import assess_fuzz_suitability
-from .graph_store import BinaryGraphStore, graph_path_for_run, graph_summary, stable_node_id
+from .graph_store import (
+    BinaryGraphStore,
+    graph_path_for_run,
+    graph_summary,
+    stable_node_id,
+)
 from .ingress import recover_external_ingress
-from .input_channels import InputChannel, event_channel_kind, merge_observed_channels, recover_static_channels
+from .input_channels import (
+    InputChannel,
+    event_channel_kind,
+    merge_observed_channels,
+    recover_static_channels,
+)
 from .manifest import BinaryManifest, build_manifest
 from .parser_boundary import extract_parser_boundaries
 from .radare2_understand import BinaryContextMap, FunctionInfo, analyse_binary_context
@@ -37,6 +52,18 @@ from .topology import build_component_topology
 from .validation_handoff import build_validation_handoff
 
 logger = logging.getLogger(__name__)
+
+
+def _stamp_context_map(context_map: dict) -> None:
+    """Provenance chokepoint for the binary pipeline's context maps.
+
+    The map mixes mechanical r2 extraction with LLM investigation
+    content, so it is stamped untrusted per docs/security.md I2-(b);
+    marked free-text fields are defanged before persisting.
+    """
+    sanitise_free_text(context_map, CONTEXT_MAP_TEXT_SCHEMA)
+    stamp_provenance(context_map, "binary-analysis", untrusted=True,
+                     overwrite_generator=False)
 
 _RUNTIME_SUPPORT_PREFIXES = (
     "sym.___afl_",
@@ -79,8 +106,8 @@ class BinaryAnalysisResult:
     input_channels: list[InputChannel]
     graph_path: Path
     fuzz: FuzzEvidenceBundle = field(default_factory=FuzzEvidenceBundle)
-    constraints: Optional[dict[str, Any]] = None
-    diff: Optional[dict[str, Any]] = None
+    constraints: dict[str, Any] | None = None
+    diff: dict[str, Any] | None = None
     decompilations: dict[str, Any] = field(default_factory=dict)
     validation_handoff: dict[str, Any] = field(default_factory=dict)
 
@@ -157,9 +184,10 @@ def _is_graph_worthy_method(name: str) -> bool:
     normalised = str(name or "")
     if not normalised or normalised.isdigit():
         return False
-    if normalised.startswith("func.") and normalised[5:].replace("_", "").isalnum():
-        return False
-    return True
+    return not (
+        normalised.startswith("func.")
+        and normalised[5:].replace("_", "").isalnum()
+    )
 
 
 def _static_evidence(manifest: BinaryManifest, context: BinaryContextMap) -> list[BinaryEvidenceRecord]:
@@ -537,7 +565,7 @@ def _call_graph_edges(
         for fn in functions_by_name.values()
     }
 
-    def resolve_ingress_function(ingress: dict[str, Any]) -> Optional[FunctionInfo]:
+    def resolve_ingress_function(ingress: dict[str, Any]) -> FunctionInfo | None:
         bound_id = str(ingress.get("bound_function_id") or "")
         if bound_id in functions_by_id:
             return functions_by_id[bound_id]
@@ -823,7 +851,7 @@ def _context_map(
     runtime_events: list[dict[str, Any]],
     runtime_records: list[BinaryEvidenceRecord],
     fuzz: FuzzEvidenceBundle,
-    constraints: Optional[dict[str, Any]],
+    constraints: dict[str, Any] | None,
     graph_path: Path,
     static_records: list[BinaryEvidenceRecord],
     decompilations: dict[str, Any],
@@ -1593,7 +1621,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         )
         ingress_node = ingress_nodes.get(boundary.get("ingress_id") or "")
         function_node = function_nodes.get(boundary.get("boundary_function_id") or "")
-        surface_node = surface_nodes.get(boundary.get("parser_surface_id") or "")
+        surface_node = all_surface_nodes.get(boundary.get("parser_surface_id") or "")
         store.add_edge(
             snapshot_id,
             manifest.binary_sha256,
@@ -1736,11 +1764,11 @@ def analyse_blackbox_binary(
     llm: Any = None,
     quick: bool = False,
     max_decompile: int = 20,
-    slice_arch: Optional[str] = None,
-    runtime_dir: Optional[Path] = None,
-    fuzz_dir: Optional[Path] = None,
-    constraint_file: Optional[Path] = None,
-    compare_binary: Optional[Path] = None,
+    slice_arch: str | None = None,
+    runtime_dir: Path | None = None,
+    fuzz_dir: Path | None = None,
+    constraint_file: Path | None = None,
+    compare_binary: Path | None = None,
 ) -> BinaryAnalysisResult:
     binary = Path(binary_path).resolve()
     out_dir = Path(out_dir).resolve()
@@ -1920,6 +1948,7 @@ def analyse_blackbox_binary(
 
     save_json(out_dir / "binary-manifest.json", manifest.to_dict())
     save_json(out_dir / "binary-evidence.json", {"evidence": [record.to_dict() for record in evidence]})
+    _stamp_context_map(context_map)
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-decompilations.json", decompilations)
@@ -1982,8 +2011,8 @@ def append_fuzz_evidence_to_run(
     binary_path: Path,
     *,
     out_dir: Path,
-    fuzz_dir: Optional[Path] = None,
-) -> Optional[FuzzEvidenceBundle]:
+    fuzz_dir: Path | None = None,
+) -> FuzzEvidenceBundle | None:
     """Append completed fuzz evidence to an existing binary run.
 
     The fuzz orchestrator uses this after the campaign finishes so the pre-fuzz
@@ -2027,6 +2056,7 @@ def append_fuzz_evidence_to_run(
             existing.append(record.to_dict())
             seen.add(record.id)
     context_map["evidence"] = existing
+    _stamp_context_map(context_map)
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})
@@ -2216,7 +2246,7 @@ def append_runtime_evidence_to_run(
     *,
     out_dir: Path,
     runtime_dir: Path,
-) -> Optional[BinaryAnalysisResult]:
+) -> BinaryAnalysisResult | None:
     """Append parser/input runtime evidence to an existing binary run.
 
     This is used by `/binary trace-parser`: it preserves the original static
@@ -2322,6 +2352,7 @@ def append_runtime_evidence_to_run(
         decompilations=decompilations,
     )
     context_map["evidence"] = existing
+    _stamp_context_map(context_map)
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})

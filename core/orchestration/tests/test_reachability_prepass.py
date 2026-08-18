@@ -157,3 +157,137 @@ def test_duration_recorded(tmp_path):
     })
     result = run_reachability_prepass(target, out_dir)
     assert result.duration_s >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Checklist writes go through the accessor (symlink-resolving, flocked)
+# ---------------------------------------------------------------------------
+
+
+def test_mark_unreachable_concurrent_writer_markers_survive(
+    tmp_path, monkeypatch,
+):
+    """Two writers through the accessor: the priority marker written
+    inside ``_mark_unreachable_low_priority``'s transform AND a
+    competing ``update_checklist`` write must both survive.
+
+    Pre-fix the function did a plain load+save; a write landing
+    between its read and its write was silently clobbered.
+    """
+    import threading
+    import time
+
+    import core.orchestration.reachability_enrichment as re_mod
+    from core.inventory import update_checklist
+    from core.orchestration.agentic_passes import (
+        _mark_unreachable_low_priority,
+    )
+
+    out_dir = tmp_path / "agentic-out"
+    _write_checklist(out_dir, {
+        "src/a.py": [{"name": "dead", "kind": "function"}],
+    })
+
+    inside_transform = threading.Event()
+
+    def fake_mark(checklist, target, *, inventory=None,
+                  allow_unreachable=False):
+        checklist["files"][0]["items"][0]["priority"] = "low"
+        inside_transform.set()
+        # Give the competing writer a window while the flock is held.
+        time.sleep(0.3)
+        return 1
+
+    monkeypatch.setattr(
+        re_mod, "mark_unreachable_low_priority", fake_mark,
+    )
+
+    results = {}
+
+    def run_mark():
+        results["marked"] = _mark_unreachable_low_priority(
+            out_dir, tmp_path,
+        )
+
+    t = threading.Thread(target=run_mark)
+    t.start()
+    assert inside_transform.wait(timeout=10)
+
+    # Competing writer — blocks on the flock until the transform's
+    # write completes, then sees the marker and adds its own.
+    def add_marker(current):
+        current["competing_marker"] = True
+        return current
+
+    update_checklist(out_dir, add_marker)
+    t.join(timeout=30)
+
+    data = json.loads((out_dir / "checklist.json").read_text())
+    assert results["marked"] == 1
+    assert data["competing_marker"] is True
+    assert data["files"][0]["items"][0]["priority"] == "low"
+
+
+def test_mark_unreachable_preserves_project_symlink(tmp_path, monkeypatch):
+    """Project mode: checklist.json in the run dir is a symlink to the
+    project-level checklist. The write must go through the symlink,
+    not replace it with a regular file."""
+    import core.orchestration.reachability_enrichment as re_mod
+    from core.orchestration.agentic_passes import (
+        _mark_unreachable_low_priority,
+    )
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_checklist = project_dir / "checklist.json"
+    project_checklist.write_text(json.dumps({
+        "files": [{"path": "src/a.py",
+                   "items": [{"name": "dead", "kind": "function"}]}],
+    }))
+
+    out_dir = tmp_path / "agentic-out"
+    out_dir.mkdir()
+    link = out_dir / "checklist.json"
+    link.symlink_to(project_checklist)
+
+    def fake_mark(checklist, target, *, inventory=None,
+                  allow_unreachable=False):
+        checklist["files"][0]["items"][0]["priority"] = "low"
+        return 1
+
+    monkeypatch.setattr(
+        re_mod, "mark_unreachable_low_priority", fake_mark,
+    )
+
+    marked = _mark_unreachable_low_priority(out_dir, tmp_path)
+    assert marked == 1
+    assert link.is_symlink()
+    data = json.loads(project_checklist.read_text())
+    assert data["files"][0]["items"][0]["priority"] == "low"
+
+
+def test_mark_unreachable_no_write_when_nothing_marked(
+    tmp_path, monkeypatch,
+):
+    """A no-op transform must not rewrite the checklist."""
+    import core.orchestration.reachability_enrichment as re_mod
+    from core.orchestration.agentic_passes import (
+        _mark_unreachable_low_priority,
+    )
+
+    out_dir = tmp_path / "agentic-out"
+    path = _write_checklist(out_dir, {
+        "src/a.py": [{"name": "alive", "kind": "function"}],
+    })
+    before = path.read_text()
+    mtime_before = path.stat().st_mtime_ns
+
+    monkeypatch.setattr(
+        re_mod, "mark_unreachable_low_priority",
+        lambda checklist, target, *, inventory=None,
+        allow_unreachable=False: 0,
+    )
+
+    assert _mark_unreachable_low_priority(out_dir, tmp_path) == 0
+    assert path.read_text() == before
+    assert path.stat().st_mtime_ns == mtime_before

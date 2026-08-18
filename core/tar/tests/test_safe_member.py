@@ -115,6 +115,61 @@ def test_absolute_path_rejected():
         == UnsafeMemberReason.ABSOLUTE_PATH
 
 
+def test_backslash_traversal_rejected():
+    """``..\\..\\etc\\passwd`` — Windows-shaped traversal. POSIX
+    resolution sees one odd-named segment, but a resolver that
+    treats ``\\`` as a separator escapes dest. Same predicate as
+    the zip guard."""
+    assert safe_member_reason(_file_member("..\\..\\etc\\passwd")) \
+        == UnsafeMemberReason.BACKSLASH_PATH
+
+
+def test_any_backslash_in_name_rejected():
+    """Any backslash is rejected, not just leading ``..\\`` — tar
+    names use forward slash; a backslash is a malformed producer
+    or an attack (``safe\\..\\..\\etc``)."""
+    assert not is_safe_member(_file_member("safe\\..\\..\\etc"))
+    assert safe_member_reason(_file_member("foo\\bar.txt")) \
+        == UnsafeMemberReason.BACKSLASH_PATH
+
+
+def test_nfkc_normalised_traversal_rejected():
+    """``safe/．．/x`` (FULLWIDTH FULL STOP U+FF0E) — the raw name
+    has no ``..`` segment, but HFS+ and friends NFKC-normalise on
+    write, extracting as ``safe/../x``. Must reject."""
+    assert safe_member_reason(_file_member("safe/．．/x")) \
+        == UnsafeMemberReason.PATH_TRAVERSAL
+
+
+def test_nfkc_normalised_absolute_path_rejected():
+    """A leading FULLWIDTH SOLIDUS (U+FF0F) NFKC-normalises to
+    ``/...`` — the raw absolute-path check passes, the normalised
+    form must not."""
+    assert safe_member_reason(_file_member("／etc／passwd")) \
+        == UnsafeMemberReason.ABSOLUTE_PATH
+
+
+def test_benign_unicode_name_still_safe():
+    """Unicode in names is fine when it doesn't normalise into a
+    separator or dot-dot — the NFKC check must not over-reject."""
+    assert is_safe_member(_file_member("docs/naïve résumé.txt"))
+
+
+def test_empty_name_rejected():
+    """A member with no name has nowhere legitimate to extract to;
+    the split-based checks treat it as vacuously safe, so it must
+    be rejected explicitly."""
+    assert safe_member_reason(_file_member("")) \
+        == UnsafeMemberReason.UNRECOGNISED_TYPE
+
+
+def test_whitespace_only_name_rejected():
+    """Whitespace-only names are the same degenerate class as
+    empty — nothing legitimate produces them."""
+    assert safe_member_reason(_file_member("   ")) \
+        == UnsafeMemberReason.UNRECOGNISED_TYPE
+
+
 # ---------------------------------------------------------------------------
 # Symlinks (the post-extract escape vector)
 # ---------------------------------------------------------------------------
@@ -138,6 +193,22 @@ def test_internal_symlink_safe():
     This is a legitimate use of symlinks in tar (some Python wheels
     use it); shouldn't be rejected."""
     assert is_safe_member(_symlink("alias", "actual/file"))
+
+
+def test_symlink_backslash_target_rejected():
+    """``..\\..\\etc\\shadow`` as the link TARGET — same
+    backslash-separator concern as member names, surfaced under
+    the existing symlink reason."""
+    assert safe_member_reason(_symlink("lnk", "..\\..\\etc\\shadow")) \
+        == UnsafeMemberReason.SYMLINK_UNSAFE
+
+
+def test_symlink_nfkc_traversal_target_rejected():
+    """``．．/etc/shadow`` as the link TARGET — no raw ``..``
+    segment, but NFKC-folding filesystems turn it into a
+    dest-escaping ``../etc/shadow``."""
+    assert safe_member_reason(_symlink("lnk", "．．/etc/shadow")) \
+        == UnsafeMemberReason.SYMLINK_UNSAFE
 
 
 # ---------------------------------------------------------------------------

@@ -24,10 +24,15 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
+from ._util import (
+    SAFE_COCCI_RULE_RE,
+    find_function_line,
+    find_function_lines,
+    safe_join,
+)
 from .constraints import Constraint
-from ._util import find_function_line, find_function_lines, safe_join, SAFE_COCCI_RULE_RE
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +65,7 @@ class CallerCandidate:
     function: str
     line: int
     score: float = 0.0
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
     is_entry_point: bool = False
     is_passthrough: bool = False
 
@@ -73,18 +78,17 @@ class PropagationResult:
     resolved: bool = False
     resolution: str = ""          # "confirmed" | "refuted" | "depth_limited"
     resolver_used: str = ""       # "codeql" | "coccinelle" | "semgrep" | "heuristic" | "llm"
-    callers_scheduled: List[CallerCandidate] = field(default_factory=list)
-    callers_filtered: int = 0
-    finding: Optional[Dict[str, Any]] = None
-    depth_probe: Optional[DepthProbe] = None
+    callers_scheduled: list[CallerCandidate] = field(default_factory=list)
+    finding: dict[str, Any] | None = None
+    depth_probe: DepthProbe | None = None
 
 
 @dataclass
 class DepthProbe:
     """One-hop probe beyond the depth ceiling."""
 
-    callers_at_ceiling: List[str]
-    entry_points_within_one_hop: List[str]
+    callers_at_ceiling: list[str]
+    entry_points_within_one_hop: list[str]
     estimated_remaining: str       # "1-2" | "3+" | "unknown"
     codeql_recommended: bool = False
     codeql_setup_hint: str = ""
@@ -96,13 +100,17 @@ class PropagationConfig:
 
     max_depth: int = DEFAULT_MAX_DEPTH
     max_callers_per_hop: int = DEFAULT_MAX_CALLERS_PER_HOP
-    codeql_db_path: Optional[str] = None
-    codeql_bin: Optional[str] = None
+    codeql_db_path: str | None = None
+    codeql_bin: str | None = None
     coccinelle_available: bool = False
-    target_path: Optional[Path] = None
-    binary_verdicts: Optional[Dict[str, str]] = None
-    inventory: Optional[Dict[str, Any]] = None
-    evidence_index: Optional[Dict[str, Any]] = None
+    target_path: Path | None = None
+    binary_verdicts: dict[str, str] | None = None
+    inventory: dict[str, Any] | None = None
+    evidence_index: dict[str, Any] | None = None
+    # Live Joern server (warm CPG) for the dominance resolver tier
+    # (P23). None = tier disabled; the orchestrator threads its
+    # already-running server in, this module never starts one.
+    joern_server: Any | None = None
 
 
 def score_caller(
@@ -111,10 +119,10 @@ def score_caller(
     caller_line: int,
     constraint: Constraint,
     *,
-    entry_points: Set[str],
-    checklist: Optional[Dict[str, Any]] = None,
-    target_path: Optional[Path] = None,
-    inventory: Optional[Dict[str, Any]] = None,
+    entry_points: set[str],
+    checklist: dict[str, Any] | None = None,
+    target_path: Path | None = None,
+    inventory: dict[str, Any] | None = None,
 ) -> CallerCandidate:
     """Score a caller by likelihood of violating a constraint.
 
@@ -176,7 +184,7 @@ def _scope_to_function(
     source: str,
     function_name: str,
     caller_line: int,
-    checklist: Optional[Dict[str, Any]],
+    checklist: dict[str, Any] | None,
     caller_file: str,
 ) -> str:
     """Extract the source text for a single function body.
@@ -242,7 +250,7 @@ def _score_passthrough(
     constraint: Constraint,
     caller_file: str,
     caller_function: str,
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
 ) -> None:
     """Detect parameter passthrough (caller forwards its own param)."""
     if constraint.kind != "parameter":
@@ -269,10 +277,10 @@ def _score_passthrough(
 
 
 def rank_callers(
-    candidates: List[CallerCandidate],
+    candidates: list[CallerCandidate],
     *,
     max_callers: int = DEFAULT_MAX_CALLERS_PER_HOP,
-) -> List[CallerCandidate]:
+) -> list[CallerCandidate]:
     """Rank and filter caller candidates by score.
 
     Returns top-N candidates with score > 0.
@@ -286,8 +294,8 @@ def get_callers(
     file_path: str,
     function_name: str,
     line: int,
-    inventory: Optional[Dict[str, Any]],
-) -> Optional[List[Tuple[str, str, int]]]:
+    inventory: dict[str, Any] | None,
+) -> list[tuple[str, str, int]] | None:
     """Get direct callers of a function via the reachability API.
 
     Returns:
@@ -301,7 +309,7 @@ def get_callers(
         return None
 
     try:
-        from core.analysis.reachability import callers_of, InternalFunction
+        from core.analysis.reachability import InternalFunction, callers_of
     except ImportError:
         logger.debug("reachability module not available")
         return None
@@ -326,7 +334,7 @@ def get_callers(
 def try_codeql_resolve(
     constraint: Constraint,
     config: PropagationConfig,
-) -> Optional[PropagationResult]:
+) -> PropagationResult | None:
     """Attempt to resolve a parameter constraint via CodeQL taint query.
 
     Returns None if CodeQL is unavailable or the constraint isn't
@@ -385,7 +393,7 @@ def try_codeql_resolve(
     return None
 
 
-_COCCI_DEFAULT_RULES: Dict[str, List[str]] = {
+_COCCI_DEFAULT_RULES: dict[str, list[str]] = {
     "postcondition": ["unchecked_return.cocci"],
     "precondition": [
         "missing_null_check.cocci",
@@ -410,7 +418,7 @@ _COCCI_RULES_DIR = Path(__file__).resolve().parents[2] / "engine" / "coccinelle"
 def try_coccinelle_resolve(
     constraint: Constraint,
     config: PropagationConfig,
-) -> Optional[PropagationResult]:
+) -> PropagationResult | None:
     """Attempt to resolve a constraint via Coccinelle consistency checks.
 
     Handles postcondition, precondition, and state constraints using
@@ -430,9 +438,9 @@ def try_coccinelle_resolve(
 
     try:
         from packages.coccinelle.runner import (
+            is_available,
             run_rule,
             run_rules_batched,
-            is_available,
         )
     except ImportError:
         return None
@@ -445,7 +453,7 @@ def try_coccinelle_resolve(
     else:
         raw_rules = _COCCI_DEFAULT_RULES.get(constraint.kind, [])
 
-    rule_paths: List[Path] = []
+    rule_paths: list[Path] = []
     for rule_name in raw_rules:
         if not SAFE_COCCI_RULE_RE.match(rule_name):
             logger.warning(
@@ -463,8 +471,8 @@ def try_coccinelle_resolve(
 
     _PARAMETRIC_RE = re.compile(r"identifier\s+virtual\.", re.MULTILINE)
 
-    parametric: List[Path] = []
-    batchable: List[Path] = []
+    parametric: list[Path] = []
+    batchable: list[Path] = []
     for rp in rule_paths:
         try:
             head = rp.read_text()[:4096]
@@ -475,12 +483,15 @@ def try_coccinelle_resolve(
         else:
             batchable.append(rp)
 
-    all_results: Dict[str, Any] = {}
+    all_results: dict[str, Any] = {}
     if batchable:
         all_results.update(run_rules_batched(
             config.target_path,
             batchable,
             timeout=300,
+            # In-repo engine/coccinelle rules (code trust) — their
+            # @script:python reporting blocks are trusted.
+            allow_scripting=True,
         ))
 
     for rp in parametric:
@@ -490,10 +501,12 @@ def try_coccinelle_resolve(
             str(rp),
             defines=defines,
             timeout=300,
+            # In-repo engine/coccinelle rules (code trust).
+            allow_scripting=True,
         )
         all_results[rp.stem] = sr
 
-    all_callers: List[CallerCandidate] = []
+    all_callers: list[CallerCandidate] = []
     for rule_stem, result in all_results.items():
         if not result.ok and not result.matches:
             continue
@@ -520,9 +533,9 @@ def try_coccinelle_resolve(
 
 def probe_beyond_ceiling(
     constraint: Constraint,
-    ceiling_callers: List[Tuple[str, str, int]],
-    inventory: Optional[Dict[str, Any]],
-    entry_points: Set[str],
+    ceiling_callers: list[tuple[str, str, int]],
+    inventory: dict[str, Any] | None,
+    entry_points: set[str],
 ) -> DepthProbe:
     """One-hop probe beyond the depth ceiling to estimate remaining depth.
 
@@ -574,7 +587,7 @@ def probe_beyond_ceiling(
 def _try_taint_approx_resolve(
     constraint: Constraint,
     config: PropagationConfig,
-) -> Optional[PropagationResult]:
+) -> PropagationResult | None:
     """Tier 1: resolve constraint via tree-sitter taint approximation."""
     if not config.evidence_index:
         return None
@@ -593,7 +606,8 @@ def _try_taint_approx_resolve(
         return None
 
     param_idx = None
-    for i, p in enumerate(approx.params):
+    params = approx.get("params", []) if isinstance(approx, dict) else getattr(approx, "params", [])
+    for i, p in enumerate(params):
         if p == param_name:
             param_idx = i
             break
@@ -602,7 +616,7 @@ def _try_taint_approx_resolve(
         return None
 
     df = approx.get("dangerous_flows", {}) if isinstance(approx, dict) else getattr(approx, "dangerous_flows", {})
-    if param_idx in df and df[param_idx]:
+    if df.get(param_idx):
         return PropagationResult(
             constraint=constraint,
             resolved=True,
@@ -620,7 +634,7 @@ def _try_taint_approx_resolve(
 def _try_taint_summary_resolve(
     constraint: Constraint,
     config: PropagationConfig,
-) -> Optional[PropagationResult]:
+) -> PropagationResult | None:
     """Tier 1: resolve constraint via Python CFG-based taint summary."""
     if not config.evidence_index:
         return None
@@ -661,6 +675,7 @@ def _try_taint_summary_resolve(
         sanitizers = ts.return_sanitizers_for_param(param_idx)
         if sanitizers and constraint.cwe:
             from core.dataflow.sanitizer_catalog import sanitizer_callables_for_cwe
+
             from .prefilter import detect_language
             lang = detect_language(constraint.file)
             if lang:
@@ -685,7 +700,7 @@ def _try_taint_summary_resolve(
 def _try_joern_resolve(
     constraint: Constraint,
     config: PropagationConfig,
-) -> Optional[PropagationResult]:
+) -> PropagationResult | None:
     """Tier 3: resolve constraint via Joern CPG taint flows."""
     if not config.evidence_index:
         return None
@@ -720,17 +735,109 @@ def _try_joern_resolve(
     return None
 
 
+# Callers probed per dominance check: each is one Joern round-trip.
+_DOMINANCE_MAX_CALLERS = 3
+
+
+def _try_joern_dominance_resolve(
+    constraint: Constraint,
+    config: PropagationConfig,
+    checklist: dict[str, Any],
+) -> PropagationResult | None:
+    """Tier 3b (P23): verify a caller-contract constraint via CFG
+    dominance when the CPG is warm.
+
+    The flow tier (:func:`_try_joern_resolve`) confirms via flow
+    *existence* — a parameter that flows in from a caller. This tier
+    checks the claimed caller-side GUARD instead: in each caller, does
+    a condition on ``constraint.target`` dominate the call to
+    ``constraint.function``?
+
+    * every probed caller guards the call → ``refuted`` (contract
+      satisfied — same resolution the sanitizer branch of the taint
+      tier uses);
+    * any probed caller has an unguarded call site mentioning the
+      identifier → ``confirmed`` (violation);
+    * anything else (cold server, no callers, unbindable identifiers,
+      inconclusive queries) → ``None``, falling through to the next
+      resolver.
+    """
+    server = getattr(config, "joern_server", None)
+    if server is None or config.target_path is None:
+        return None
+    if constraint.kind not in ("parameter", "precondition"):
+        return None
+    if constraint.direction not in ("callers", "both"):
+        return None
+
+    from ._util import is_valid_identifier
+    ident = constraint.target or ""
+    sink = constraint.function or ""
+    if not is_valid_identifier(ident) or not is_valid_identifier(sink):
+        return None
+
+    line = find_function_line(checklist, constraint.file, constraint.function)
+    callers = get_callers(
+        constraint.file, constraint.function, line, config.inventory,
+    ) or []
+    if not callers:
+        return None
+
+    from .joern_verify import run_guard_dominance_check
+
+    outcomes: list[str] = []
+    for caller_file, caller_fn, _ln in callers[:_DOMINANCE_MAX_CALLERS]:
+        try:
+            res = run_guard_dominance_check(
+                target_path=Path(config.target_path),
+                file_path=caller_file,
+                function_name=caller_fn,
+                identifier=ident,
+                sink_call=sink,
+                server=server,
+            )
+        except Exception:
+            logger.debug(
+                "dominance resolve failed for %s in %s:%s",
+                constraint.identity, caller_file, caller_fn,
+                exc_info=True,
+            )
+            return None
+        outcomes.append(res.outcome)
+
+    if "confirmed" in outcomes:
+        return PropagationResult(
+            constraint=constraint,
+            resolved=True,
+            resolution="confirmed",
+            resolver_used="joern_dominance",
+        )
+    if outcomes and all(o == "refuted" for o in outcomes):
+        # A dominating check on the constrained identifier exists in
+        # EVERY probed caller — the caller contract is mechanically
+        # satisfied.
+        return PropagationResult(
+            constraint=constraint,
+            resolved=True,
+            resolution="refuted",
+            resolver_used="joern_dominance",
+        )
+    return None
+
+
 def _tick_tier(
-    tier_counters: Optional[Dict[str, Any]],
+    tier_counters: dict[str, Any] | None,
     tier: str,
-    result: "PropagationResult",
+    result: PropagationResult,
 ) -> None:
     """Increment a tier counter based on propagation result."""
     if tier_counters is None or tier not in tier_counters:
         return
     tc = tier_counters[tier]
-    if result.resolved:
+    if result.resolved and result.resolution == "confirmed":
         tc.confirmed += 1
+    elif result.resolved:
+        tc.refuted += 1
     else:
         tc.inconclusive += 1
 
@@ -738,11 +845,11 @@ def _tick_tier(
 def propagate_one_hop(
     constraint: Constraint,
     *,
-    checklist: Dict[str, Any],
-    entry_points: Set[str],
+    checklist: dict[str, Any],
+    entry_points: set[str],
     config: PropagationConfig,
     current_depth: int = 0,
-    tier_counters: Optional[Dict[str, Any]] = None,
+    tier_counters: dict[str, Any] | None = None,
 ) -> PropagationResult:
     """Propagate a constraint one hop through the resolver chain.
 
@@ -792,6 +899,13 @@ def propagate_one_hop(
     if joern_result:
         _tick_tier(tier_counters, "joern", joern_result)
         return joern_result
+
+    dominance_result = _try_joern_dominance_resolve(
+        constraint, config, checklist,
+    )
+    if dominance_result:
+        _tick_tier(tier_counters, "joern_dominance", dominance_result)
+        return dominance_result
 
     codeql_result = try_codeql_resolve(constraint, config)
     if codeql_result:
@@ -849,7 +963,6 @@ def propagate_one_hop(
         resolved=False,
         resolver_used="heuristic",
         callers_scheduled=ranked,
-        callers_filtered=len(candidates) - len(ranked),
     )
 
 
@@ -908,7 +1021,7 @@ def format_depth_limit_report(
 
 
 def _entry_reachability_verdict(
-    inventory: Dict[str, Any],
+    inventory: dict[str, Any],
     file_path: str,
     function_name: str,
     line: int,
@@ -916,13 +1029,14 @@ def _entry_reachability_verdict(
     """Query entry_reachability, returning the verdict or "uncertain"."""
     try:
         from core.analysis.reachability import (
-            entry_reachability, InternalFunction,
+            InternalFunction,
+            entry_reachability,
         )
         target = InternalFunction(
             file_path=file_path, name=function_name, line=line,
         )
         return entry_reachability(inventory, target)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return "uncertain"
 
 
@@ -954,17 +1068,17 @@ class ConfidenceDemotion:
     file: str
     function: str
     reason: str
-    source_functions: List[str]
+    source_functions: list[str]
 
 
 def propagate_confidence(
-    outcomes: List[Any],
-    call_edge_index: Dict[str, Any],
-    checklist_index: Optional[Dict[Tuple[str, str], Any]] = None,
+    outcomes: list[Any],
+    call_edge_index: dict[str, Any],
+    checklist_index: dict[tuple[str, str], Any] | None = None,
     *,
     max_iterations: int = 5,
     min_callers: int = 2,
-) -> List[ConfidenceDemotion]:
+) -> list[ConfidenceDemotion]:
     """Propagate clean verdicts through the call graph to refute contract-violation hypotheses.
 
     Only propagates from outcomes with tool-backed or confirmed
@@ -978,17 +1092,17 @@ def propagate_confidence(
     Returns a list of demotions to apply. Runs to fixpoint or
     max_iterations, whichever comes first.
     """
-    trusted_clean: Set[Tuple[str, str]] = set()
+    trusted_clean: set[tuple[str, str]] = set()
     for o in outcomes:
         if o.status == "clean" and getattr(o, "verification_tier", "") in (
             "confirmed", "tool_backed",
         ):
             trusted_clean.add((o.file, o.function))
 
-    all_demotions: List[ConfidenceDemotion] = []
+    all_demotions: list[ConfidenceDemotion] = []
 
     for iteration in range(max_iterations):
-        round_demotions: List[ConfidenceDemotion] = []
+        round_demotions: list[ConfidenceDemotion] = []
 
         suspicious = [
             o for o in outcomes
@@ -1087,8 +1201,8 @@ def propagate_confidence(
 
 def _get_callers_from_index(
     key: str,
-    call_edge_index: Dict[str, Any],
-) -> List[Tuple[str, str]]:
+    call_edge_index: dict[str, Any],
+) -> list[tuple[str, str]]:
     """Get caller (file, function) pairs from the call-edge index.
 
     Production edges have keys caller_file, caller, callee_file, callee.
@@ -1097,9 +1211,9 @@ def _get_callers_from_index(
     Returns deduplicated callers — edges are indexed under both caller
     and callee keys so the same edge appears twice in a full scan.
     """
-    seen: Set[Tuple[str, str]] = set()
-    callers: List[Tuple[str, str]] = []
-    key_file, _, key_func = key.rpartition(":")
+    seen: set[tuple[str, str]] = set()
+    callers: list[tuple[str, str]] = []
+    _key_file, _, key_func = key.rpartition(":")
     for edge_key, edges in call_edge_index.items():
         if not isinstance(edges, list):
             continue
@@ -1132,8 +1246,8 @@ def _get_callers_from_index(
 
 def _get_callees_from_index(
     key: str,
-    call_edge_index: Dict[str, Any],
-) -> List[Tuple[str, str]]:
+    call_edge_index: dict[str, Any],
+) -> list[tuple[str, str]]:
     """Get callee (file, function) pairs from the call-edge index."""
     callees = []
     edges = call_edge_index.get(key) or []
@@ -1156,9 +1270,9 @@ def _get_callees_from_index(
     return callees
 
 
-def _extract_callee_names(hypotheses: List[Dict[str, Any]]) -> Set[str]:
+def _extract_callee_names(hypotheses: list[dict[str, Any]]) -> set[str]:
     """Extract callee function names from hypothesis text."""
-    names: Set[str] = set()
+    names: set[str] = set()
     for h in hypotheses:
         if not isinstance(h, dict):
             continue

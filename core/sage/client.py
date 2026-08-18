@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.logging import get_logger
 
-from .config import SageConfig
+from .config import SageConfig, ensure_loopback_no_proxy
 
 logger = get_logger()
 
@@ -122,6 +122,7 @@ class SageClient:
     """
 
     def __init__(self, config: Optional[SageConfig] = None):
+        ensure_loopback_no_proxy()
         self._config = config or SageConfig.from_env()
         self._client = None
         self._query_cache: Dict[Tuple[str, str, int, Optional[float]], Tuple[Tuple[str, float, str], ...]] = {}

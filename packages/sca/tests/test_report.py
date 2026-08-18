@@ -7,10 +7,10 @@ from pathlib import Path
 
 from packages.sca.findings import build_vuln_findings
 from packages.sca.models import (
-    AffectedRange,
     Advisory,
-    CVSSScore,
+    AffectedRange,
     Confidence,
+    CVSSScore,
     Dependency,
     HygieneFinding,
     PinStyle,
@@ -82,6 +82,42 @@ def test_empty_report_states_no_findings(tmp_path: Path) -> None:
     )
     assert "No vulnerabilities" in md
     assert "Dependencies analysed: **42**" in md
+
+
+def test_project_license_rendered_in_header(tmp_path: Path) -> None:
+    """The project's own manifest-declared license is a project-level
+    fact — it shows in the header, not on any per-dep row."""
+    md = render_markdown_report(
+        target=tmp_path,
+        deps_analysed=1,
+        vuln_findings=[],
+        hygiene_findings=[],
+        project_license="MIT",
+    )
+    assert "_Project license: `MIT`_" in md
+
+
+def test_project_license_line_omitted_when_unknown(tmp_path: Path) -> None:
+    md = render_markdown_report(
+        target=tmp_path,
+        deps_analysed=1,
+        vuln_findings=[],
+        hygiene_findings=[],
+    )
+    assert "Project license" not in md
+
+
+def test_project_license_defanged_in_header(tmp_path: Path) -> None:
+    """The license string comes from the scanned tree — hostile bytes
+    must not survive into the rendered report."""
+    md = render_markdown_report(
+        target=tmp_path,
+        deps_analysed=1,
+        vuln_findings=[],
+        hygiene_findings=[],
+        project_license="MIT\x1b[31mDANGER\x1b[0m",
+    )
+    assert "\x1b[" not in md
 
 
 def test_report_surfaces_parser_failures(tmp_path: Path) -> None:
@@ -239,7 +275,7 @@ def test_hygiene_detail_escapes_terminal_injection() -> None:
     hostile = _hygiene()
     object.__setattr__(
         hostile, "detail",
-        "harmless\x1b[31mDANGER\x1b[0m ‮text",
+        "harmless\x1b[31mDANGER\x1b[0m \u202etext",
     )
     md = render_markdown_report(
         target=Path("/x"),
@@ -248,7 +284,7 @@ def test_hygiene_detail_escapes_terminal_injection() -> None:
         hygiene_findings=[hostile],
     )
     assert "\x1b[" not in md
-    assert "‮" not in md
+    assert "\u202e" not in md
 
 
 def test_cache_stats_when_provided() -> None:
@@ -501,13 +537,13 @@ def test_supply_chain_distinct_kinds_keep_separate_sections() -> None:
 def test_hygiene_dedup_uses_same_grouping():
     """Hygiene findings collapse on (kind, ecosystem, name, version),
     same as supply-chain. Verifies the shared helper covers both."""
-    common = dict(
-        ecosystem="npm", name="lodash", version="4.17.20",
-        scope="main", is_lockfile=False,
-        pin_style=PinStyle.RANGE, direct=True,
-        purl="pkg:npm/[email protected]",
-        parser_confidence=Confidence("high", reason="t"),
-    )
+    common = {
+        "ecosystem": "npm", "name": "lodash", "version": "4.17.20",
+        "scope": "main", "is_lockfile": False,
+        "pin_style": PinStyle.RANGE, "direct": True,
+        "purl": "pkg:npm/[email protected]",
+        "parser_confidence": Confidence("high", reason="t"),
+    }
     h_a = HygieneFinding(
         finding_id="sca:hygiene:loose_pin:npm:lodash:/repo/a.json",
         kind="loose_pin",                                  # type: ignore[arg-type]
@@ -763,8 +799,8 @@ def test_supply_chain_escalation_reasons_rendered() -> None:
     surface that so the bumped severity isn't mysterious."""
     sc = _supply_chain(kind="slopsquat_suspect", severity="critical",
                        evidence={"escalation_reasons": [
-                           "co-occurs with recent_publish + low_bus_factor "
-                           "(LLM-hallucination-bait archetype)"
+                           ("co-occurs with recent_publish + low_bus_factor "
+                            "(LLM-hallucination-bait archetype)"),
                        ]})
     md = render_markdown_report(
         target=Path("/x"),
@@ -826,3 +862,76 @@ class TestAdvisoryDetailSanitization:
         assert "_strip_autofetch_markup" in content, (
             "report.py must call _strip_autofetch_markup on advisory detail"
         )
+
+
+# ---------------------------------------------------------------------------
+# Exploit-evidence rendering — untrusted URLs / module names
+# ---------------------------------------------------------------------------
+
+def _vuln_with_evidence(ev) -> object:
+    from packages.sca.models import Reachability, VulnFinding
+    return VulnFinding(
+        finding_id="sca:vuln:npm:lodash@4.17.20:GHSA-x",
+        dependency=_dep(),
+        advisories=[_adv()],
+        in_kev=False,
+        epss=None,
+        fixed_version="5.0.0",
+        reachability=Reachability(
+            verdict="not_evaluated",
+            confidence=Confidence("low", reason="t"),
+        ),
+        version_match_confidence=Confidence("high", reason="t"),
+        cvss_score=9.8,
+        cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        severity="critical",
+        exposure_factor=0.0,
+        transitive_depth=0,
+        exploit_evidence=ev,
+    )
+
+
+def test_poc_href_scheme_allowlist() -> None:
+    """Non-http(s) PoC URLs must render as inert text, never as a
+    markdown autolink — corpus URLs are untrusted content."""
+    from packages.sca.models import ExploitEvidence
+    ev = ExploitEvidence(
+        github_poc_urls=["javascript:alert(1)",
+                         "https://github.com/x/poc"],
+    )
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[_vuln_with_evidence(ev)], hygiene_findings=[],
+    )
+    assert "<javascript:alert(1)>" not in md
+    assert "`javascript:alert(1)`" in md
+    assert "<https://github.com/x/poc>" in md
+
+
+def test_msf_module_names_escape_nonprintables() -> None:
+    from packages.sca.models import ExploitEvidence
+    ev = ExploitEvidence(
+        msf_modules=["exploit/multi/http/\x1b[2Jwiped"],
+    )
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[_vuln_with_evidence(ev)], hygiene_findings=[],
+    )
+    assert "\x1b" not in md
+    assert "\\x1b" in md
+
+
+def test_reference_urls_scheme_allowlist() -> None:
+    """Advisory reference URLs get the same allowlist treatment as
+    PoC hrefs — an OSV record can carry any URL."""
+    adv = _adv()
+    adv.references = ["data:text/html,<script>1</script>",
+                      "https://nvd.nist.gov/vuln/detail/CVE-2099-9999"]
+    f = _vuln_with_evidence(None)
+    f.advisories = [adv]
+    md = render_markdown_report(
+        target=Path("/repo"), deps_analysed=1,
+        vuln_findings=[f], hygiene_findings=[],
+    )
+    assert "<data:text/html" not in md
+    assert "<https://nvd.nist.gov/vuln/detail/CVE-2099-9999>" in md

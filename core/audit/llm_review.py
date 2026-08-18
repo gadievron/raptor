@@ -11,16 +11,83 @@ produces a ``review_fn`` callable that:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
-from .context import format_context_for_prompt
+from .context import format_context_for_prompt, render_pattern_library
 from .orchestrator import OrchestratorConfig, ReviewOutcome, _ContentFilterError
 from .pipeline import ReviewMode
 
 logger = logging.getLogger(__name__)
+
+
+# Per-call-class timeout ceilings (seconds), plumbed to providers that
+# honour a per-call ``timeout_s`` (the claudecode transport; SDK
+# providers build their request kwargs explicitly and ignore it).
+#
+# Derivation: pooled successful review calls on the claudecode
+# transport measure min 62s / median 96s / p95 234s / max 317s. The
+# transport's own default is 600s — nearly 2x the observed maximum —
+# so a review still running at that point has effectively already
+# failed. REVIEW_TIMEOUT_S ≈ 2x p95 keeps genuine heavy calls alive
+# while cutting the doomed-call wait by 2 minutes; the reduced-context
+# retry (300s cap) is the designed recovery beyond it. Glance batches
+# and taint-summary calls are short, minimal-prompt classes (simple
+# turns measure 5-15s): 120s is generous for a healthy call and stops
+# a wedged one from holding a worker slot for 10 minutes.
+REVIEW_TIMEOUT_S = 480
+SHORT_CALL_TIMEOUT_S = 120
+
+
+_CLEAN_PHRASES = (
+    "no vulnerability", "no security issue", "correctly bounded",
+    "properly validated", "safely handled", "no exploitable",
+    "function is safe", "function is clean", "no bug",
+    "all checks are present", "all paths are guarded",
+)
+
+_QUALIFIER_PHRASES = (
+    "except", "but", "however", "unless",
+    "with the exception", "apart from",
+    "other than", "excluding",
+)
+
+
+def _rationale_consistency_should_demote(
+    status: str,
+    body: str,
+    hypothesis: str,
+    evidence_tool: str,
+) -> bool:
+    """Return True if the rationale-consistency gate should demote to clean."""
+    if status not in ("suspicious", "finding"):
+        return False
+    # Only REAL tool evidence blocks the demotion. The raw value here
+    # can be the LLM's own claim ("llm-claimed:semgrep" after
+    # sanitization, or an unsanitized tool name) — an LLM that names a
+    # tool must not exempt itself from its own consistency gate.
+    from core.audit.evidence_grade import is_tool_evidence
+    if is_tool_evidence(evidence_tool.strip()):
+        return False
+
+    rationale = body.lower()
+    for p in _CLEAN_PHRASES:
+        idx = rationale.find(p)
+        if idx < 0:
+            continue
+        after = rationale[idx + len(p):idx + len(p) + 60]
+        if not any(q in after for q in _QUALIFIER_PHRASES):
+            hyp_text = hypothesis.lower()
+            if not any(
+                w in hyp_text
+                for w in ("however", "but", "despite", "although", "yet")
+            ):
+                return True
+    return False
 
 _STATUS_FULL = {
     "type": "string",
@@ -79,6 +146,20 @@ _BUG_CLASS_FIELD = {
     ],
     "description": "Category of the defect found.",
 }
+
+# Languages the study loop can resolve reading_list assumptions in.
+# C/C++ resolve via the study-prep corpus; the others via
+# core.concepts.lang_resolve (per-language identifier/concept
+# resolution).  Extend BOTH this tuple and the resolution layer when
+# lifting the gate for another language.
+STUDY_SUPPORTED_LANGUAGES = (
+    "C", "C++", "Python", "Go", "Java", "JavaScript", "TypeScript",
+    "Rust",
+)
+
+_STUDY_LANGS_TEXT = (
+    "C/C++, Python, Go, Java, JavaScript/TypeScript, and Rust"
+)
 
 REVIEW_SCHEMA = {
     "type": "object",
@@ -155,9 +236,15 @@ REVIEW_SCHEMA = {
             "description": (
                 "CWE identifier for the vulnerability class, e.g. "
                 "'CWE-362' for race conditions, 'CWE-190' for integer "
-                "overflow, 'CWE-120' for buffer overflow. Use the most "
-                "specific CWE that applies. Empty string if status is "
-                "clean."
+                "overflow, 'CWE-120' for buffer overflow. You MUST "
+                "fill this with the most specific CWE that applies "
+                "whenever status is NOT clean, OR whenever your "
+                "hypotheses array is non-empty (refuted hypotheses "
+                "included — tag the class of your primary hypothesis). "
+                "Mechanical tool dispatch is seeded from this field: "
+                "an empty value disables CWE-directed verification of "
+                "your claim. Empty string ONLY for a clean verdict "
+                "with no hypotheses."
             ),
         },
         "counter_hypothesis": {
@@ -405,17 +492,19 @@ REVIEW_SCHEMA = {
         "reading_list": {
             "type": "array",
             "description": (
-                "C/C++ targets only — omit for all other languages. "
-                "Domain knowledge you relied on for your verdict that "
-                "was NOT defined in the provided source context. List "
-                "every type, macro, API contract, or invariant whose "
-                "semantics you assumed from training knowledge rather "
-                "than reading in the provided code. The study loop "
-                "will verify these assumptions against the actual "
-                "source. Most non-trivial C functions reference at "
-                "least one external contract — an empty list means "
-                "you made zero assumptions beyond what was shown, "
-                "which is rare."
+                f"{_STUDY_LANGS_TEXT} targets only — omit for other "
+                "languages; the study loop cannot resolve assumptions "
+                "there. Domain knowledge you relied on for your "
+                "verdict that was NOT defined in the provided source "
+                "context. List every type, macro, API contract, "
+                "library call, or invariant whose semantics you "
+                "assumed from training knowledge rather than reading "
+                "in the provided code. The study loop will verify "
+                "these assumptions against the actual source. Most "
+                "non-trivial functions reference at least one "
+                "external contract — an empty list means you made "
+                "zero assumptions beyond what was shown, which is "
+                "rare."
             ),
             "items": {
                 "type": "object",
@@ -426,9 +515,10 @@ REVIEW_SCHEMA = {
                             "The assumption phrased as a verifiable "
                             "question. Be precise: name the type, macro, "
                             "function, or contract. E.g. 'Does rcu_read_lock "
-                            "prevent the task_struct from being freed?' or "
+                            "prevent the task_struct from being freed?', "
                             "'Does skb_cow_data handle shared frags by "
-                            "copying them?'"
+                            "copying them?', or 'Does parse_config validate "
+                            "the schema before returning?'"
                         ),
                     },
                     "priority": {
@@ -709,20 +799,22 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "your final status value. The status must follow from the "
     "reasoning, never the reverse. Do not generate empty arrays or "
     "objects as placeholder values — omit optional fields entirely "
-    "when they do not apply (exception: reading_list for C/C++ "
-    "targets — see ASSUMED KNOWLEDGE).\n\n"
-    "ASSUMED KNOWLEDGE (C/C++ only): When reviewing C or C++ code, "
-    "state in reading_list every domain fact you relied on that was "
-    "NOT defined in the provided source context — type semantics, "
-    "API contracts, macro expansions, locking invariants, allocator "
-    "contracts, error-handling conventions. Phrase each as a "
+    "when they do not apply (exception: reading_list for "
+    "study-supported languages — see ASSUMED KNOWLEDGE).\n\n"
+    "ASSUMED KNOWLEDGE (" + _STUDY_LANGS_TEXT + "): When reviewing "
+    "code in these languages, state in reading_list every domain "
+    "fact you relied on that was NOT defined in the provided source "
+    "context — type semantics, API contracts, macro expansions, "
+    "locking invariants, allocator contracts, error-handling "
+    "conventions, framework and library behaviour. Phrase each as a "
     "verifiable question: 'Does rcu_read_lock prevent the "
-    "task_struct from being freed here?' or 'Does EVP_CIPHER_CTX_new "
-    "return NULL on allocation failure?'. Most non-trivial C "
-    "functions reference at least one external contract. If your "
-    "verdict would change if any assumption is wrong, mark it "
-    "critical. For non-C/C++ targets, omit reading_list entirely — "
-    "the study loop cannot resolve assumptions in other languages.\n\n"
+    "task_struct from being freed here?', 'Does EVP_CIPHER_CTX_new "
+    "return NULL on allocation failure?', or 'Does json.loads accept "
+    "duplicate keys without error?'. Most non-trivial functions "
+    "reference at least one external contract. If your verdict would "
+    "change if any assumption is wrong, mark it critical. For other "
+    "languages, omit reading_list entirely — the study loop cannot "
+    "resolve assumptions there.\n\n"
     "OPERATOR NOTES: The operator may attach advisory notes in "
     "``<operator_note>`` blocks (visible in your context under "
     "'Previous annotation'). Read these for context — the operator's "
@@ -757,16 +849,16 @@ _QUALITY_SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.format(**_QUALITY_SLOTS)
 
 def _system_prompt_for_mode(
     mode: ReviewMode,
-    out_dir: Optional[Path] = None,
+    out_dir: Path | None = None,
 ) -> str:
     base = _QUALITY_SYSTEM_PROMPT if mode.is_defect_oriented else _DEFAULT_SYSTEM_PROMPT
-    try:
-        from .learning import load_corrections, format_corrections_for_prompt
+    # load_corrections self-handles malformed JSON; file reads racing a
+    # corpus-dir cleanup can still raise OSError.
+    with contextlib.suppress(OSError):
+        from .learning import format_corrections_for_prompt, load_corrections
         corrections = load_corrections(out_dir)
         if corrections:
             return base + format_corrections_for_prompt(corrections)
-    except Exception:
-        pass
     return base
 
 
@@ -795,18 +887,14 @@ def _schema_for_mode(mode: ReviewMode) -> dict:
     return base
 
 
-_CONTENT_FILTER_MARKERS = (
-    "content filter",
-    "content_filter",
-    "model refused",
-    "safety filter",
-    "blocked by",
-)
-
-
 def _is_content_filter_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(m in msg for m in _CONTENT_FILTER_MARKERS)
+    """Delegates to the shared word-boundary classifier
+    (core.llm.structured_call) — the substring-marker list this module
+    carried false-positived on phrases like "thread-safety violation";
+    the shared vocabulary is the union of both pipelines' markers.
+    """
+    from core.llm.structured_call import is_content_filter_text
+    return is_content_filter_text(str(exc))
 
 
 _LLM_ONLY_EVIDENCE = frozenset({
@@ -869,7 +957,7 @@ def _is_contract_delegation(lower: str) -> bool:
     """
     if any(d in lower for d in _CONTRACT_DELEGATION_CALLER):
         return True
-    if any(d in lower for d in _CONTRACT_DELEGATION_SUBJECT_AGNOSTIC):
+    if any(d in lower for d in _CONTRACT_DELEGATION_SUBJECT_AGNOSTIC):  # noqa: SIM102
         if any(w in lower for w in _CALLER_REFERENCE_WORDS):
             return True
     return False
@@ -891,6 +979,16 @@ def _counter_hypothesis_is_compelling(counter: str) -> bool:
     lower = counter.lower().strip()
     if any(d in lower for d in _DISMISSIVE_COUNTER):
         return False
+    # Direction check: a counter that REFUTES the vulnerability is an
+    # argument FOR the clean verdict, not against it. It is full of
+    # specificity markers (it names every mechanism it defeats), so
+    # without this check a review that refuted its own escalation was
+    # re-escalated to suspicious off its own refutation — permanently,
+    # once per pass (live corpus case: refuted SMT check-early-release
+    # signal, verdict stuck at suspicious).
+    from .pipeline import counter_refutes_vulnerability
+    if counter_refutes_vulnerability(lower):
+        return False
     if _is_contract_delegation(lower):
         return False
     specificity_markers = (
@@ -900,11 +998,9 @@ def _counter_hypothesis_is_compelling(counter: str) -> bool:
         "buffer", "stack", "heap", "oob", "out-of-bound",
         "attacker", "controlled", "tainted",
     )
-    if not any(m in lower for m in specificity_markers):
-        return False
-    if _is_contract_delegation(lower):
-        return False
-    return True
+    # Contract delegation was already ruled out above; a counter that
+    # names a specific mechanism survives every filter.
+    return any(m in lower for m in specificity_markers)
 
 
 def _lang_correction(filename: str) -> float:
@@ -925,7 +1021,7 @@ def _lang_correction(filename: str) -> float:
     return 1.0
 
 
-def _prompt_budget(ctx: Dict[str, Any], system_prompt: str) -> int:
+def _prompt_budget(ctx: dict[str, Any], system_prompt: str) -> int:
     """Compute the user-message token budget for this review call.
 
     When the triage classifier has set a token budget on the context,
@@ -938,7 +1034,7 @@ def _prompt_budget(ctx: Dict[str, Any], system_prompt: str) -> int:
     sys_tokens = estimate_tokens(system_prompt) if system_prompt else 0
     try:
         model_budget = context_budget_for_model(model, system_prompt_tokens=sys_tokens)
-    except Exception:
+    except Exception:  # noqa: BLE001
         model_budget = 0
     if triage_budget > 0 and model_budget > 0:
         budget = min(triage_budget, model_budget)
@@ -953,15 +1049,15 @@ def _prompt_budget(ctx: Dict[str, Any], system_prompt: str) -> int:
 def make_review_fn(
     llm_client: Any,
     *,
-    system_prompt: Optional[str] = None,
+    system_prompt: str | None = None,
     task_type: str = "audit",
-    schema: Optional[Dict[str, Any]] = None,
-    blind_schema: Optional[Dict[str, Any]] = None,
-    model_name: Optional[str] = None,
+    schema: dict[str, Any] | None = None,
+    blind_schema: dict[str, Any] | None = None,
+    model_name: str | None = None,
     escalate_clean: bool = True,
     mode: ReviewMode = ReviewMode.SECURITY,
-    out_dir: Optional[Path] = None,
-) -> Callable[[Dict[str, Any], OrchestratorConfig], ReviewOutcome]:
+    out_dir: Path | None = None,
+) -> Callable[[dict[str, Any], OrchestratorConfig], ReviewOutcome]:
     """Build a review_fn for run_orchestrator.
 
     Args:
@@ -985,6 +1081,25 @@ def make_review_fn(
         system_prompt if system_prompt is not None
         else _system_prompt_for_mode(mode, out_dir=out_dir)
     )
+
+    # Cache-aligned composition: when the provider supports prompt
+    # caching, the run-stable pattern library (static primers,
+    # exemplars, fixed language pattern blocks) moves out of every
+    # per-function user prompt and into the system prompt, which the
+    # provider marks cache_control=ephemeral — after the first call
+    # it bills at the cached-input rate instead of full price per
+    # function. Providers without caching (e.g. the claude CLI
+    # transport) keep the old per-prompt placement: for them a bigger
+    # system prompt is pure extra cost.
+    patterns_in_system = False
+    try:
+        patterns_in_system = llm_client.supports_prompt_caching_for()
+    except AttributeError:
+        pass  # older client without the helper
+    if patterns_in_system:
+        effective_system_prompt = (
+            effective_system_prompt + render_pattern_library()
+        )
     deepen_schema = schema or _schema_for_mode(mode)
     first_pass_schema = blind_schema or deepen_schema
 
@@ -997,44 +1112,71 @@ def make_review_fn(
 
     def _single_pass(
         prompt: str,
-        active_schema: Dict[str, Any],
-        kwargs: Dict[str, Any],
+        active_schema: dict[str, Any],
+        kwargs: dict[str, Any],
     ):
         """Standard single-call structured generation."""
+        from core.llm.structured_call import unwrap_structured_response
         response = llm_client.generate_structured(
             prompt,
             active_schema,
             system_prompt=effective_system_prompt,
             **kwargs,
         )
-        if hasattr(response, "result"):
-            result = response.result
-        elif response:
-            result = response[0]
-        else:
-            result = {"status": "error", "body": "empty LLM response"}
-        cost = response.cost if hasattr(response, "cost") else 0.0
-        model = response.model if hasattr(response, "model") else ""
-        return result, cost, model
+        call = unwrap_structured_response(
+            response,
+            empty_result={"status": "error", "body": "empty LLM response"},
+        )
+        return call.result, call.cost, call.model, call.usage
 
     def review_fn(
-        ctx: Dict[str, Any],
+        ctx: dict[str, Any],
         config: OrchestratorConfig,
     ) -> ReviewOutcome:
         budget = _prompt_budget(ctx, effective_system_prompt)
-        prompt = format_context_for_prompt(ctx, budget_limit=budget)
+        prompt = format_context_for_prompt(
+            ctx, budget_limit=budget,
+            patterns_in_system=patterns_in_system,
+        )
         t0 = time.monotonic()
 
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         if model_config_override is not None:
             kwargs["model_config"] = model_config_override
         else:
             kwargs["task_type"] = task_type
 
+        # Review calls are the long-tail call class: a review that hits
+        # the transport timeout almost always has an oversized prompt,
+        # and its designed recovery is the orchestrator's reduced-
+        # context retry. An identical client-level retry in between
+        # would re-buy the same timeout at full wall-clock and token
+        # cost first — so the review path opts out of it entirely
+        # (timeout_retry_cap=0) and fails straight through to the
+        # orchestrator's recovery.
+        kwargs["timeout_retry_cap"] = 0
+        # Telemetry label: which call class spent the time/money.
+        kwargs["call_class"] = "review"
+
+        # Per-call timeout cap (timeout-recovery retries set this on
+        # the context). Providers that support per-call timeouts (the
+        # claudecode transport) honour ``timeout_s``; others build
+        # their request kwargs explicitly and ignore it. When the
+        # context carries no explicit cap, apply the review-class
+        # default: ~2x the p95 of successful review calls observed on
+        # the claudecode transport — a call still streaming past that
+        # is far more likely doomed than about to finish, and the
+        # reduced-context retry is the cheaper way to find out.
+        _timeout_cap = ctx.get("timeout_s") or REVIEW_TIMEOUT_S
+        try:
+            kwargs["timeout_s"] = int(_timeout_cap)
+        except (TypeError, ValueError):
+            pass
+
         active_schema = deepen_schema if ctx.get("deepen") else first_pass_schema
 
         try:
-            result, cost, resolved_model = _single_pass(
+            result, cost, resolved_model, usage = _single_pass(
                 prompt, active_schema, kwargs,
             )
         except Exception as exc:
@@ -1063,6 +1205,17 @@ def make_review_fn(
                 snippet = counter[:120]
                 if len(counter) > 120:
                     snippet += "…"
+                # Annotate the body: the prose below argues clean, but
+                # the stored verdict is suspicious — without this
+                # marker an operator reading the journal sees
+                # "Verdict: clean" text under a suspicious record and
+                # cannot tell which one to trust.
+                result["body"] = (
+                    "[counter-hypothesis escalation: the review "
+                    "rationale below concludes clean, but a compelling "
+                    "counter-hypothesis kept this verdict suspicious "
+                    f"— {snippet}]\n\n" + (result.get("body") or "")
+                )
                 logger.debug(
                     "counter-hypothesis escalation %s:%s: %s",
                     ctx["file"], ctx["function"], snippet,
@@ -1083,35 +1236,40 @@ def make_review_fn(
                 status = "clean"
                 result["status"] = status
                 result["all_refuted_demotion"] = True
+                # Keep the journal body consistent with the stored
+                # verdict (the prose may still argue suspicion).
+                result["body"] = (
+                    "[all-refuted demotion: every hypothesis below was "
+                    "refuted by the review itself — verdict recorded "
+                    "as clean]\n\n" + (result.get("body") or "")
+                )
                 logger.info(
                     "all-refuted demotion %s:%s: %d hypotheses refuted%s",
                     ctx["file"], ctx["function"], len(hypotheses),
                     " (overrode counter-escalation)" if counter_escalated else "",
                 )
 
-        if status in ("suspicious", "finding"):
-            rationale = (result.get("body") or "").lower()
-            _clean_phrases = (
-                "no vulnerability", "no security issue", "correctly bounded",
-                "properly validated", "safely handled", "no exploitable",
-                "function is safe", "function is clean", "no bug",
-                "all checks are present", "all paths are guarded",
+        if _rationale_consistency_should_demote(
+            status,
+            result.get("body") or "",
+            result.get("hypothesis") or "",
+            result.get("evidence_tool") or "",
+        ):
+            prior = status
+            status = "clean"
+            result["status"] = status
+            result["rationale_consistency_demotion"] = True
+            result["body"] = (
+                f"[rationale-consistency demotion: the rationale below "
+                f"concludes clean while the emitted status was {prior} "
+                f"— verdict recorded as clean]\n\n"
+                + (result.get("body") or "")
             )
-            if any(p in rationale for p in _clean_phrases):
-                hyp_text = (result.get("hypothesis") or "").lower()
-                if not any(
-                    w in hyp_text
-                    for w in ("however", "but", "despite", "although", "yet")
-                ):
-                    prior = status
-                    status = "clean"
-                    result["status"] = status
-                    result["rationale_consistency_demotion"] = True
-                    logger.info(
-                        "rationale-consistency demotion %s:%s: "
-                        "rationale says clean but status was %s",
-                        ctx["file"], ctx["function"], prior,
-                    )
+            logger.info(
+                "rationale-consistency demotion %s:%s: "
+                "rationale says clean but status was %s",
+                ctx["file"], ctx["function"], prior,
+            )
 
         raw_ev = result.get("evidence_tool") or ""
         evidence_tool = _normalize_evidence_tool(raw_ev)
@@ -1127,6 +1285,10 @@ def make_review_fn(
             cost_usd=cost,
             model=resolved_model,
             duration_s=duration,
+            tokens_in=usage["tokens_in"],
+            tokens_out=usage["tokens_out"],
+            cache_read_tokens=usage["cache_read_tokens"],
+            cache_write_tokens=usage["cache_write_tokens"],
             review_result=result,
         )
 
@@ -1137,8 +1299,8 @@ def call_llm_for_rule_refinement(
     prompt: str,
     config: OrchestratorConfig,
     *,
-    client: Optional[Any] = None,
-) -> Optional[str]:
+    client: Any | None = None,
+) -> str | None:
     """Single-shot free-form LLM call for Semgrep rule refinement.
 
     Returns the raw text response, or None on failure.
@@ -1146,12 +1308,24 @@ def call_llm_for_rule_refinement(
     """
     try:
         if client is None:
+            # Prefer the run's budget-governed client so refinement
+            # spend enters the run ledger and the reservation gate.
+            client = getattr(config, "llm_budget_client", None)
+        if client is None:
             from core.llm.client import LLMClient
             client = LLMClient()
+        from core.security.prompt_framing import with_audit_framing
         response = client.generate(
             prompt,
-            system_prompt="You are a Semgrep rule author. Return only YAML.",
+            # Framed like every auxiliary audit class — the bare
+            # rule-author ask ships hypothesis + target code with no
+            # stated purpose (the refused-class shape, see
+            # core.security.prompt_framing).
+            system_prompt=with_audit_framing(
+                "You are a Semgrep rule author. Return only YAML.",
+            ),
             task_type="audit",
+            call_class="rule_refinement",
         )
         if hasattr(response, "text"):
             return response.text

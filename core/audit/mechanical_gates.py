@@ -745,8 +745,9 @@ def _extract_rust_types(source: str, function_name: str) -> list[dict[str, str]]
                 continue
             pname, ptype = param.split(":", 1)
             pname = pname.strip()
+            ptype = ptype.strip()
             is_ref = ptype.startswith("&")
-            ptype = ptype.strip().removeprefix("&").removeprefix("mut ").strip()
+            ptype = ptype.removeprefix("&").removeprefix("mut ").strip()
             if is_ref and ptype in ("str", "[u8]"):
                 continue
             note = _constraint_note_for_type(ptype)

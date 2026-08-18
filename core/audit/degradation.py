@@ -17,16 +17,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-
-class ToolTier(str, Enum):
-    PRIMARY = "primary"
-    FALLBACK = "fallback"
-    UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -38,7 +31,7 @@ class Fallback:
     impact: str
     fallback_description: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "tool": self.tool,
             "fallback_tool": self.fallback_tool,
@@ -47,12 +40,14 @@ class Fallback:
         }
 
 
-_DEGRADATION_MATRIX: List[Fallback] = [
+_DEGRADATION_MATRIX: list[Fallback] = [
     Fallback(
         tool="joern",
         fallback_tool="tree-sitter + LLM",
         impact="Higher LLM cost (~70% vs ~20-30% of functions need LLM summaries), "
-               "lower summary precision. Cross-file resolution falls back to import-based resolver.",
+               "lower summary precision. Cross-file resolution falls back to import-based resolver. "
+               "release_order channel: the guard-dominance cross-check leg is skipped — "
+               "verdicts carry single-engine (engine=\"cfg\") receipts.",
         fallback_description="tree-sitter for AST extraction, LLM for summaries",
     ),
     Fallback(
@@ -72,9 +67,11 @@ _DEGRADATION_MATRIX: List[Fallback] = [
     Fallback(
         tool="binary",
         fallback_tool="source-only",
-        impact="Lose all binary mechanical intelligence. Source-only audit, "
-               "no Layer 0, no binary oracle.",
-        fallback_description="Layers 1-2-3 only (Joern + LLM, no Layer 0)",
+        impact="Lose binary-derived mechanical intelligence and the "
+               "binary oracle. The Layer 0 source-pattern pre-sweep "
+               "still runs (it reads source, not binaries).",
+        fallback_description="Layers 1-2-3 plus source-pattern Layer 0 "
+                             "(no binary-backed evidence)",
     ),
     Fallback(
         tool="semgrep",
@@ -125,12 +122,59 @@ _DEGRADATION_MATRIX: List[Fallback] = [
                "generation. Joern/CodeQL may miss includes and macros.",
         fallback_description="Scan for Makefile/CMakeLists/meson.build and infer flags",
     ),
+    Fallback(
+        tool="tree-sitter",
+        fallback_tool="ast + line-regex heuristics",
+        impact="fail_open channel: Python handler classification is "
+               "unaffected (stdlib ast); the C ignored-return and "
+               "tri-state legs degrade to line-regex shape matching "
+               "with parser=\"regex\" recorded on every receipt — "
+               "comparison shapes the regex cannot classify gate to "
+               "inconclusive('handler-undecided') rather than guessing; "
+               "the Java catch-clause and Go discard/recover legs have "
+               "no honest line-shape fallback and report "
+               "inconclusive('language-unsupported'). "
+               "consistency channel: the return census keeps its coarse "
+               "regex classes (no read-scan, no acknowledged/tested "
+               "split beyond line shapes); the flag/mode and cleanup "
+               "comparators need trees and report "
+               "inconclusive('extractor-unavailable') / detect nothing. "
+               "field census: regex-tier records only — verdicts that "
+               "need rhs provenance gate to "
+               "inconclusive('census-incomplete') (ptr_lifecycle "
+               "refuses to guess alias edges; the field-parity leg "
+               "detects nothing). "
+               "resource_bounds channel: the bound-witness comparator "
+               "needs the CFG/dominator walk and reports "
+               "inconclusive('census-degraded') rather than confirming "
+               "a no-bound claim without the guard walk. release_order "
+               "channel: dominance needs the CFG and reports "
+               "inconclusive('cfg-unavailable'). protocol_state "
+               "channel: a violable site without the CFG guard leg "
+               "reports inconclusive('census-degraded') — never a "
+               "confirmation on a partial census.",
+        fallback_description="ast for Python handlers, line-regex for "
+                             "C call-site shapes and the coarse census",
+    ),
+    Fallback(
+        tool="z3",
+        fallback_tool="none (verdict-honest degradation)",
+        impact="smt_invariant channel: invariant preservation reports "
+               "inconclusive('z3 unavailable'). protocol_state "
+               "channel: leg 3 (census-driven multi-site invariant "
+               "harness) reports inconclusive('z3-unavailable'); the "
+               "legs-1+2 lead receipts (dead-state, unvalidated "
+               "peer-write) still emit — they are census facts, not "
+               "SMT verdicts.",
+        fallback_description="pip install z3-solver restores the "
+                             "invariant channels",
+    ),
 ]
 
 _FALLBACK_BY_TOOL = {f.tool: f for f in _DEGRADATION_MATRIX}
 
 
-def get_fallback(tool: str) -> Optional[Fallback]:
+def get_fallback(tool: str) -> Fallback | None:
     return _FALLBACK_BY_TOOL.get(tool.lower())
 
 
@@ -138,11 +182,11 @@ def get_fallback(tool: str) -> Optional[Fallback]:
 class DegradationReport:
     """Tracks which tools are available and which degraded."""
 
-    available: List[str] = field(default_factory=list)
-    degraded: List[Fallback] = field(default_factory=list)
-    unavailable_no_fallback: List[str] = field(default_factory=list)
+    available: list[str] = field(default_factory=list)
+    degraded: list[Fallback] = field(default_factory=list)
+    unavailable_no_fallback: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "available": self.available,
             "degraded": [f.to_dict() for f in self.degraded],
@@ -151,7 +195,7 @@ class DegradationReport:
 
 
 def assess_degradation(
-    capabilities: Dict[str, bool],
+    capabilities: dict[str, bool],
 ) -> DegradationReport:
     """Assess which tools are available and which need fallbacks.
 
@@ -199,7 +243,7 @@ def format_degradation_report(report: DegradationReport) -> str:
 
 
 def format_capabilities_table(
-    capabilities: Dict[str, bool],
+    capabilities: dict[str, bool],
 ) -> str:
     """Format capabilities as a markdown table for the audit report."""
     lines = [
@@ -230,7 +274,7 @@ class TriageSignalAvailability:
     layer0_findings: bool = False
     complexity_metrics: bool = True
 
-    def conservative_defaults(self) -> Dict[str, bool]:
+    def conservative_defaults(self) -> dict[str, bool]:
         """When a signal is unavailable, return the conservative default.
 
         Conservative = assume reachable/present (review more, not less).

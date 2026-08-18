@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -242,6 +244,63 @@ def _spatch_matches_to_variants(
 
 
 # ---------------------------------------------------------------------
+# Sandbox runner
+# ---------------------------------------------------------------------
+
+
+def _make_locked_sandbox_runner(
+    target: Path,
+    scratch_output: Path,
+    *,
+    caller_label: str = "understand-hunt-cocci",
+) -> Callable:
+    """Build a subprocess.run-shaped callable around ``core.sandbox.run``
+    with reads locked down and a fake $HOME.
+
+    ``restrict_reads=True`` limits reads to the system dirs, ``target``,
+    ``scratch_output``, and /tmp (where the rule file and spatch's
+    TMPDIR scratch live) — the real $HOME is unreadable. ``fake_home=True``
+    points HOME/XDG_*_HOME at an empty directory under ``scratch_output``
+    so a hostile rule finds no dotfiles to read even by path guess. A
+    spatch installed outside the system dirs (e.g. via opam under $HOME)
+    stays loadable through ``tool_paths``.
+
+    Fail-closed when ``core.sandbox`` is unimportable: raises
+    ``SandboxUnavailableError`` unless the operator explicitly opted
+    into ``RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1`` (loud warning + security
+    event), in which case plain ``subprocess.run`` is returned.
+    """
+    try:
+        # Bind the module, not the function: the import failure is
+        # detected here (fail-closed BEFORE any tempfiles exist), while
+        # ``run`` itself is resolved per call so test seams can patch
+        # ``core.sandbox.run``.
+        from core import sandbox as core_sandbox  # type: ignore
+    except Exception as exc:  # noqa: BLE001 — any import failure means no isolation
+        from core.run.sandbox_policy import require_sandbox_or_optout
+        require_sandbox_or_optout(f"{caller_label} (locked sandbox runner)", exc)
+        return subprocess.run
+
+    def _runner(cmd, **kwargs):
+        sandbox_kwargs: Dict[str, Any] = {
+            "block_network": True,
+            "target": str(target),
+            "output": str(scratch_output),
+            "restrict_reads": True,
+            "fake_home": True,
+            "caller_label": caller_label,
+            "env_caller_filtered": True,
+        }
+        exe = cmd[0] if cmd else ""
+        if exe and Path(exe).is_absolute():
+            sandbox_kwargs["tool_paths"] = [str(Path(exe).parent)]
+        sandbox_kwargs.update({k: v for k, v in kwargs.items() if k != "shell"})
+        return core_sandbox.run(cmd, **sandbox_kwargs)
+
+    return _runner
+
+
+# ---------------------------------------------------------------------
 # Dispatch entry point
 # ---------------------------------------------------------------------
 
@@ -264,18 +323,22 @@ def cocci_hunt_dispatch(
     key — substrate convention for ``failed_models`` capture.
 
     ``sandbox`` (default True) runs spatch through ``core.sandbox.run``
-    via ``make_sandbox_runner``. Critical: cocci rules CAN embed
-    ``script:python`` blocks that execute as part of the spatch
+    via ``_make_locked_sandbox_runner``. Critical: cocci rules CAN
+    embed ``script:python`` blocks that execute as part of the spatch
     process. The dispatch's rule text is LLM-emitted, and the LLM's
     pattern input is operator-influenced — combined, that's
-    arbitrary-code-exec inside the process invoking spatch. The
-    sandbox locks reads to ``target``, blocks network, and uses a
-    fake $HOME so even a compromised rule can't exfiltrate. Tests
-    pass ``sandbox=False`` for speed; production callers should
-    take the default. Falls back to plain ``subprocess.run`` on
-    hosts where the sandbox isn't available (non-Linux/macOS,
-    minimal containers) — degrade-not-fail. ``spatch_runner``
-    overrides everything (lets tests inject a fully-stubbed runner).
+    arbitrary-code-exec inside the process invoking spatch (the
+    coccinelle runner refuses script blocks by default; the sandbox is
+    the second layer). The sandbox locks reads to ``target`` (plus
+    system dirs and /tmp, where the rule file lives), blocks network,
+    and uses a fake $HOME so even a compromised rule can't exfiltrate.
+    Fail-closed: when ``core.sandbox`` is unavailable the dispatch
+    returns an error variant instead of degrading to an unlocked run —
+    hosts that accept unisolated execution opt in explicitly via
+    ``RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1``. Tests pass ``sandbox=False``
+    for speed; production callers should take the default.
+    ``spatch_runner`` overrides everything (lets tests inject a
+    fully-stubbed runner).
     """
     if not isinstance(pattern, str) or not pattern.strip():
         return [{"error": "pattern must be a non-empty string"}]
@@ -320,38 +383,38 @@ def cocci_hunt_dispatch(
             "tool (CodeQL / IRIS) for taint-shaped patterns"
         )}]
 
+    # Sandbox spatch by default — see docstring. Caller's explicit
+    # ``spatch_runner=`` wins (used by tests to inject mocks). Built
+    # before the rule tempfile so failure here has nothing to clean up.
+    effective_runner = spatch_runner
+    scratch_output: Optional[Path] = None
+    if effective_runner is None and sandbox:
+        try:
+            # Writable scratch for the sandbox: hosts the fake $HOME
+            # (fake_home requires an output dir) and bounds Landlock's
+            # writable scope. Removed in the finally below.
+            scratch_output = Path(tempfile.mkdtemp(prefix="raptor-cocci-hunt-"))
+            effective_runner = _make_locked_sandbox_runner(
+                Path(repo_path), scratch_output,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed, surface as error variant
+            if scratch_output is not None:
+                shutil.rmtree(scratch_output, ignore_errors=True)
+            return [{"error": (
+                f"sandbox unavailable for spatch — refusing to run the "
+                f"LLM-emitted rule unisolated: {type(exc).__name__}: {exc}"
+            )}]
+
     # Step 2: write the rule to a temp file and hand it to spatch.
     # The runner's harness auto-injection writes the harnessed
     # text to its own tempfile when needed (fixed by the
     # runner-fix PR).
 
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".cocci", delete=False,
+        mode="w", encoding="utf-8", suffix=".cocci", delete=False,
     ) as fh:
         fh.write(rule_text)
         rule_path = Path(fh.name)
-
-    # Sandbox spatch by default — see docstring. Caller's explicit
-    # ``spatch_runner=`` wins (used by tests to inject mocks).
-    effective_runner = spatch_runner
-    if effective_runner is None and sandbox:
-        try:
-            from packages.hypothesis_validation.adapters.base import (
-                make_sandbox_runner,
-            )
-            effective_runner = make_sandbox_runner(
-                target=Path(repo_path),
-                caller_label="understand-hunt-cocci",
-            )
-        except ImportError:
-            # hypothesis_validation isn't a hard dependency of
-            # /understand. If it's missing, fall back to unsandboxed
-            # plain subprocess.run via the runner's default. Log so
-            # operators can audit.
-            logger.warning(
-                "cocci_hunt: make_sandbox_runner unavailable; "
-                "spatch will run unsandboxed",
-            )
 
     try:
         result: SpatchResult = spatch_run_rule(
@@ -370,6 +433,8 @@ def cocci_hunt_dispatch(
             rule_path.unlink()
         except OSError:
             pass
+        if scratch_output is not None:
+            shutil.rmtree(scratch_output, ignore_errors=True)
 
     if not result.ok and not result.matches:
         # Nothing matched AND spatch reported errors — surface the

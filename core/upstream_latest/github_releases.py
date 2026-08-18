@@ -28,12 +28,35 @@ cve-diff upstream resolver) share one implementation.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import re
+from typing import Any
+from urllib.parse import quote
 
 from core.http import HttpClient, HttpError
 from core.json import JsonCache
 
 from ._version_filter import highest_stable
+
+# ``owner/name`` — exactly one slash, both components restricted to
+# GitHub's own username/repo character set. Slugs are read out of the
+# target's manifests, so they must not be able to reshape the API URL
+# below (extra path segments, ``..``, query strings).
+_REPO_SLUG_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def _validated_slug(repo: str) -> str:
+    if not _REPO_SLUG_RE.fullmatch(repo or ""):
+        raise UpstreamLookupError(
+            f"GitHub repo slug refused: {repo!r} is not owner/name"
+        )
+    # The character class admits dots, so all-dot components ("." /
+    # "..") would pass the shape check while still traversing the URL
+    # path — refuse them explicitly.
+    if any(set(part) == {"."} for part in repo.split("/")):
+        raise UpstreamLookupError(
+            f"GitHub repo slug refused: {repo!r} is not owner/name"
+        )
+    return repo
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +85,9 @@ def latest_release(
     repo: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache] = None,
+    cache: JsonCache | None = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    github_token: Optional[str] = None,
+    github_token: str | None = None,
 ) -> str:
     """Return the ``tag_name`` of the latest stable GitHub release.
 
@@ -76,7 +99,7 @@ def latest_release(
     If the project doesn't cut proper releases, this returns
     HTTP 404 — caller should fall back to ``latest_tag``.
     """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/releases/latest"
+    url = f"{GITHUB_API_BASE}/repos/{_validated_slug(repo)}/releases/latest"
     data = _fetch_cached_json(
         url, http=http, cache=cache, ttl_seconds=ttl_seconds,
         github_token=github_token,
@@ -98,9 +121,9 @@ def resolve_tag_to_sha(
     tag: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache] = None,
+    cache: JsonCache | None = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    github_token: Optional[str] = None,
+    github_token: str | None = None,
 ) -> str:
     """Resolve a tag to its 40-char commit SHA.
 
@@ -119,7 +142,8 @@ def resolve_tag_to_sha(
     to construct the target SHA when proposing a bump from
     ``<sha-A>  # was v6`` to ``<sha-B>  # was v7``.
     """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/git/refs/tags/{tag}"
+    url = (f"{GITHUB_API_BASE}/repos/{_validated_slug(repo)}"
+           f"/git/refs/tags/{quote(tag, safe='')}")
     data = _fetch_cached_json(
         url, http=http, cache=cache, ttl_seconds=ttl_seconds,
         github_token=github_token,
@@ -138,7 +162,8 @@ def resolve_tag_to_sha(
     if obj_type == "tag":
         # Annotated tag — chase the tag object to get the
         # underlying commit SHA.
-        tag_url = f"{GITHUB_API_BASE}/repos/{repo}/git/tags/{sha}"
+        tag_url = (f"{GITHUB_API_BASE}/repos/{_validated_slug(repo)}"
+                   f"/git/tags/{sha}")
         tag_data = _fetch_cached_json(
             tag_url, http=http, cache=cache, ttl_seconds=ttl_seconds,
             github_token=github_token,
@@ -161,9 +186,9 @@ def latest_tag(
     repo: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache] = None,
+    cache: JsonCache | None = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    github_token: Optional[str] = None,
+    github_token: str | None = None,
     per_page: int = 100,
 ) -> str:
     """Return the highest stable-semver tag in the repo.
@@ -177,7 +202,8 @@ def latest_tag(
     GitHub Releases, only tags).
     """
     url = (
-        f"{GITHUB_API_BASE}/repos/{repo}/tags?per_page={per_page}"
+        f"{GITHUB_API_BASE}/repos/{_validated_slug(repo)}"
+        f"/tags?per_page={per_page}"
     )
     data = _fetch_cached_json(
         url, http=http, cache=cache, ttl_seconds=ttl_seconds,
@@ -207,9 +233,9 @@ def _fetch_cached_json(
     url: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache],
+    cache: JsonCache | None,
     ttl_seconds: int,
-    github_token: Optional[str],
+    github_token: str | None,
 ) -> Any:
     """Cached GET-JSON wrapper.
 
@@ -230,7 +256,10 @@ def _fetch_cached_json(
         token_fp = sha256_string(github_token)[:12]
     else:
         token_fp = "anon"
-    cache_key = f"upstream_latest:gh:{token_fp}:{url}"
+    from urllib.parse import quote as _quote
+    # Percent-encode the URL into one key segment (raw URLs carry "//",
+    # an empty segment the cache layer refuses) so keys stay injective.
+    cache_key = f"upstream_latest:gh:{token_fp}:{_quote(url, safe='')}"
     if cache is not None and ttl_seconds > 0:
         cached = cache.get(cache_key, ttl_seconds=ttl_seconds)
         if cached is not None:

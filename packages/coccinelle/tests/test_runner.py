@@ -5,29 +5,31 @@ import os
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from packages.coccinelle import runner as runner_mod
+from packages.coccinelle.models import SpatchMatch
 from packages.coccinelle.runner import (
+    MIN_SPATCH_VERSION,
+    RESULT_PREFIX,
+    _collect_files_examined,
+    _dedup_matches,
+    _inject_harness,
+    _parse_errors,
+    _parse_results,
+    contains_script_block,
+    is_available,
+    meets_min_version,
     run_rule,
     run_rules,
     run_rules_batched,
-    is_available,
     version,
     version_tuple,
-    meets_min_version,
-    MIN_SPATCH_VERSION,
-    _parse_results,
-    _parse_errors,
-    _inject_harness,
-    _collect_files_examined,
-    _dedup_matches,
-    RESULT_PREFIX,
 )
-from packages.coccinelle.models import SpatchMatch
 
 
 class TestAvailability:
@@ -334,8 +336,10 @@ class TestRunRule:
         mock_proc.returncode = 0
 
         with patch("packages.coccinelle.runner.is_available", return_value=True), \
-             patch("subprocess.run", return_value=mock_proc):
-            result = run_rule(target, rule, env=dict(os.environ))
+             patch("packages.coccinelle.runner._sandboxed_run", return_value=mock_proc):
+            # Rule carries its own @script:python — trusted-caller flag.
+            result = run_rule(target, rule, env=dict(os.environ),
+                              allow_scripting=True)
 
         assert result.rule == "test"
         assert result.match_count == 1
@@ -349,7 +353,8 @@ class TestRunRule:
         target.write_text("void f() {}\n")
 
         with patch("packages.coccinelle.runner.is_available", return_value=True), \
-             patch("subprocess.run", side_effect=sp.TimeoutExpired("spatch", 5)):
+             patch("packages.coccinelle.runner._sandboxed_run",
+                   side_effect=sp.TimeoutExpired("spatch", 5)):
             result = run_rule(target, rule, timeout=5, env=dict(os.environ))
 
         assert not result.ok
@@ -391,7 +396,8 @@ class TestHarnessTempfilePath:
 
         with patch(
             "packages.coccinelle.runner.is_available", return_value=True,
-        ), patch("subprocess.run", side_effect=_capture):
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 side_effect=_capture):
             run_rule(target, rule, env=dict(os.environ))
 
         cmd = captured["cmd"]
@@ -408,7 +414,7 @@ class TestHarnessTempfilePath:
             "tempfile should be cleaned up by the time subprocess.run "
             "returns to the caller (we're inside the patched runner, "
             "which captured the path; runner's finally cleans up)"
-        ) or True  # noqa
+        )
         # Fed via input= would be a regression — passing a path to
         # an existing file means input= must NOT be set.
         assert captured["input"] is None, (
@@ -447,8 +453,11 @@ class TestHarnessTempfilePath:
 
         with patch(
             "packages.coccinelle.runner.is_available", return_value=True,
-        ), patch("subprocess.run", side_effect=_capture):
-            run_rule(target, rule, env=dict(os.environ))
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 side_effect=_capture):
+            # Rule carries its own @script:python — trusted-caller flag.
+            run_rule(target, rule, env=dict(os.environ),
+                     allow_scripting=True)
 
         cmd = captured["cmd"]
         sp_idx = cmd.index("--sp-file")
@@ -479,7 +488,8 @@ class TestHarnessTempfilePath:
 
         with patch(
             "packages.coccinelle.runner.is_available", return_value=True,
-        ), patch("subprocess.run", side_effect=_capture):
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 side_effect=_capture):
             run_rule(target, rule, env=dict(os.environ))
 
         # Post-call: tempfile gone.
@@ -513,7 +523,8 @@ class TestHarnessTempfilePath:
 
         with patch(
             "packages.coccinelle.runner.is_available", return_value=True,
-        ), patch("subprocess.run", side_effect=_capture_then_timeout):
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 side_effect=_capture_then_timeout):
             result = run_rule(target, rule, timeout=5,
                               env=dict(os.environ))
 
@@ -544,7 +555,8 @@ class TestHarnessTempfilePath:
 
         with patch(
             "packages.coccinelle.runner.is_available", return_value=True,
-        ), patch("subprocess.run", side_effect=_capture_then_oserror):
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 side_effect=_capture_then_oserror):
             result = run_rule(target, rule, env=dict(os.environ))
 
         assert not result.ok
@@ -583,7 +595,8 @@ class TestRunRules:
         mock_proc.returncode = 0
 
         with patch("packages.coccinelle.runner.is_available", return_value=True), \
-             patch("subprocess.run", return_value=mock_proc):
+             patch("packages.coccinelle.runner._sandboxed_run",
+                   return_value=mock_proc):
             results = run_rules(target, rules_dir, env=dict(os.environ))
 
         assert len(results) == 2
@@ -607,7 +620,8 @@ class TestRunRulesBatched:
         with patch(
             "packages.coccinelle.runner.is_available",
             return_value=True,
-        ), patch("subprocess.run", return_value=mock_proc):
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 return_value=mock_proc):
             results = run_rules_batched(
                 target, [rule], env=dict(os.environ),
             )
@@ -640,7 +654,8 @@ class TestRunRulesBatched:
         with patch(
             "packages.coccinelle.runner.is_available",
             return_value=True,
-        ), patch("subprocess.run", return_value=mock_proc):
+        ), patch("packages.coccinelle.runner._sandboxed_run",
+                 return_value=mock_proc):
             results = run_rules_batched(
                 target, [r1, r2], env=dict(os.environ),
             )
@@ -708,7 +723,8 @@ class TestRunRuleIntegration:
                 sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\\n")
         """))
 
-        result = run_rule(target, rule)
+        # Rule carries its own @script:python — trusted-caller flag.
+        result = run_rule(target, rule, allow_scripting=True)
         assert result.ok or result.returncode == 0
         assert result.match_count == 2
 
@@ -733,7 +749,7 @@ class TestRunRuleIntegration:
                 sys.stderr.write("COCCIRESULT:" + json.dumps({"file": _p.file, "line": int(_p.line)}) + "\\n")
         """))
 
-        result = run_rule(target, rule)
+        result = run_rule(target, rule, allow_scripting=True)
         assert result.match_count == 0
 
     def test_files_examined_includes_clean_file(self, tmp_path):
@@ -757,7 +773,7 @@ class TestRunRuleIntegration:
                 sys.stderr.write("COCCIRESULT:" + json.dumps({"file": _p.file, "line": int(_p.line)}) + "\\n")
         """))
 
-        result = run_rule(target, rule)
+        result = run_rule(target, rule, allow_scripting=True)
         assert result.match_count == 0
         assert str(target) in result.files_examined
 
@@ -781,7 +797,8 @@ class TestShippedRulesIntegration:
                 *p = 42;
             }
         """))
-        result = run_rule(target, self.RULES_DIR / "missing_null_check.cocci")
+        result = run_rule(target, self.RULES_DIR / "missing_null_check.cocci",
+                          allow_scripting=True)
         assert result.returncode == 0
         assert result.match_count >= 1
 
@@ -795,7 +812,8 @@ class TestShippedRulesIntegration:
                 *p = 42;
             }
         """))
-        result = run_rule(target, self.RULES_DIR / "missing_null_check.cocci")
+        result = run_rule(target, self.RULES_DIR / "missing_null_check.cocci",
+                          allow_scripting=True)
         assert result.returncode == 0
         assert result.match_count == 0
 
@@ -815,7 +833,8 @@ class TestShippedRulesIntegration:
                 return 0;
             }
         """))
-        result = run_rule(target, self.RULES_DIR / "lock_imbalance.cocci")
+        result = run_rule(target, self.RULES_DIR / "lock_imbalance.cocci",
+                          allow_scripting=True)
         assert result.returncode == 0
         assert result.match_count >= 1
 
@@ -837,7 +856,8 @@ class TestShippedRulesIntegration:
                 return 0;
             }
         """))
-        result = run_rule(target, self.RULES_DIR / "lock_imbalance.cocci")
+        result = run_rule(target, self.RULES_DIR / "lock_imbalance.cocci",
+                          allow_scripting=True)
         assert result.returncode == 0
         assert result.match_count == 0
 
@@ -858,7 +878,8 @@ class TestShippedRulesIntegration:
                 return 0;
             }
         """))
-        result = run_rule(target, self.RULES_DIR / "lock_imbalance.cocci")
+        result = run_rule(target, self.RULES_DIR / "lock_imbalance.cocci",
+                          allow_scripting=True)
         assert result.returncode == 0
         assert result.match_count >= 1
 
@@ -881,6 +902,7 @@ class TestShippedRulesIntegration:
             target,
             self.RULES_DIR / "unchecked_return.cocci",
             defines={"func": "do_io"},
+            allow_scripting=True,
         )
         assert result.returncode == 0
         assert result.match_count >= 1
@@ -901,6 +923,455 @@ class TestShippedRulesIntegration:
             target,
             self.RULES_DIR / "unchecked_return.cocci",
             defines={"func": "do_io"},
+            allow_scripting=True,
         )
         assert result.returncode == 0
         assert result.match_count == 0
+
+
+class TestSpatchScratchTmpdir:
+    """spatch materialises per-file working copies (cocci-output-*,
+    cocci_small_output-*) in TMPDIR and only removes them on clean
+    exit — a timeout kill stranded ~200 of them per interrupted sweep.
+    The runner gives every invocation a private scratch TMPDIR and
+    removes it unconditionally."""
+
+    def _run_and_capture_env(self, tmp_path, *, boom=False):
+        import subprocess as _sp
+        rule = tmp_path / "r.cocci"
+        rule.write_text(
+            "@r@\nexpression e1, e2;\nposition p;\n@@\nstrcpy@p(e1, e2)\n"
+        )
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+        captured = {}
+
+        def _fake(cmd, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+            # Simulate spatch stranding a working copy in TMPDIR.
+            scratch = captured["env"].get("TMPDIR")
+            if scratch:
+                (Path(scratch) / "cocci-output-1-abc-x.c").write_text("x")
+            if boom:
+                raise _sp.TimeoutExpired(cmd, 1)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("subprocess.run", side_effect=_fake):
+            run_rule(target, rule, env=dict(os.environ))
+        return captured
+
+    def test_private_tmpdir_passed_and_removed(self, tmp_path):
+        captured = self._run_and_capture_env(tmp_path)
+        scratch = captured["env"].get("TMPDIR", "")
+        assert "raptor-cocci-tmp-" in scratch, (
+            "spatch not given a private scratch TMPDIR"
+        )
+        assert not Path(scratch).exists(), (
+            "scratch dir (with spatch's stranded working copy) survived"
+        )
+
+    def test_scratch_removed_even_on_timeout(self, tmp_path):
+        captured = self._run_and_capture_env(tmp_path, boom=True)
+        scratch = captured["env"].get("TMPDIR", "")
+        assert scratch and not Path(scratch).exists(), (
+            "timeout path leaked the scratch dir"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scripting gate — allow_scripting=False (default) refuses rules that
+# declare SmPL scripting blocks BEFORE any spatch invocation.
+# ---------------------------------------------------------------------------
+
+
+HOSTILE_SCRIPTED_RULE = textwrap.dedent("""\
+    @r@
+    position p;
+    @@
+    malloc@p(...)
+
+    @script:python@
+    p << r.p;
+    @@
+    import os
+    os.system("touch /tmp/pwned")
+""")
+
+PLAIN_RULE = "@r@\nposition p;\n@@\nmalloc@p(...)\n"
+
+
+def _mock_proc():
+    return MagicMock(stdout="", stderr="", returncode=0)
+
+
+class TestScriptingGate:
+    """LLM-synthesised (untrusted) rules must never smuggle a
+    @script:/@initialize:/@finalize: block into spatch. The refusal is
+    a structured error result, not an exception, and it fires before
+    tempfile write / runner invocation. RAPTOR's own injected harness
+    is added after the gate and is exempt by construction."""
+
+    def test_default_refuses_scripted_rule_runner_not_invoked(
+        self, tmp_path,
+    ):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(HOSTILE_SCRIPTED_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock()
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(target, rule, subprocess_runner=spy)
+
+        assert not result.ok
+        assert result.returncode == -1
+        assert "scripting block" in result.errors[0]
+        spy.assert_not_called()
+
+    @pytest.mark.parametrize("header", [
+        "@script:python@",
+        "@script:ocaml@",
+        "@initialize:python@",
+        "@finalize:python@",
+        "@ script:python @",  # header whitespace tolerated by spatch
+    ])
+    def test_all_scripting_headers_refused(self, tmp_path, header):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(f"{PLAIN_RULE}\n{header}\n@@\nprint(1)\n")
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock()
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(target, rule, subprocess_runner=spy)
+
+        assert not result.ok
+        assert "scripting block" in result.errors[0]
+        spy.assert_not_called()
+
+    def test_comment_mentioning_script_does_not_trip_gate(self, tmp_path):
+        """The matcher anchors on rule-header syntax; a comment that
+        merely mentions "@script:" must not refuse the rule."""
+        rule = tmp_path / "commented.cocci"
+        rule.write_text(
+            "// do NOT add @script: blocks here — see runner docs\n"
+            + PLAIN_RULE
+        )
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock(return_value=_mock_proc())
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(target, rule, subprocess_runner=spy)
+
+        assert spy.called
+        assert result.returncode == 0
+
+    def test_allow_scripting_true_passes_rule_through_unmodified(
+        self, tmp_path,
+    ):
+        """Shipped-rule path: with allow_scripting=True the scripted
+        rule still executes, and the text handed to spatch is the
+        original rule file, byte-for-byte."""
+        rule = tmp_path / "shipped.cocci"
+        rule.write_text(HOSTILE_SCRIPTED_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured["path"] = Path(cmd[sp_idx + 1])
+            captured["text"] = captured["path"].read_text(encoding="utf-8")
+            return _mock_proc()
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(
+                target, rule,
+                subprocess_runner=_capture,
+                allow_scripting=True,
+            )
+
+        assert result.returncode == 0
+        assert captured["path"] == rule
+        assert captured["text"] == HOSTILE_SCRIPTED_RULE
+
+    def test_plain_rule_still_gets_harness_and_runs(self, tmp_path):
+        """The gate must not break RAPTOR's own harness injection:
+        a plain SmPL rule is wrapped with the @script:python
+        COCCIRESULT harness and executed."""
+        rule = tmp_path / "plain.cocci"
+        rule.write_text(PLAIN_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured["text"] = Path(cmd[sp_idx + 1]).read_text(
+                encoding="utf-8",
+            )
+            return _mock_proc()
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(target, rule, subprocess_runner=_capture)
+
+        assert result.returncode == 0
+        assert "@script:python@" in captured["text"]
+        assert RESULT_PREFIX in captured["text"]
+
+    def test_contains_script_block_predicate(self):
+        assert contains_script_block(HOSTILE_SCRIPTED_RULE)
+        assert contains_script_block("@initialize:python@\n@@\nx=1\n")
+        assert contains_script_block("@finalize:ocaml@\n@@\n")
+        assert not contains_script_block(PLAIN_RULE)
+        assert not contains_script_block(
+            "// commented @script:python mention\n" + PLAIN_RULE
+        )
+
+
+class TestScriptingGateBatched:
+    def test_scripted_rule_refused_plain_rule_still_batched(
+        self, tmp_path,
+    ):
+        hostile = tmp_path / "hostile.cocci"
+        hostile.write_text(HOSTILE_SCRIPTED_RULE)
+        plain = tmp_path / "plain.cocci"
+        plain.write_text(PLAIN_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured["text"] = Path(cmd[sp_idx + 1]).read_text(
+                encoding="utf-8",
+            )
+            captured["calls"] = captured.get("calls", 0) + 1
+            return _mock_proc()
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            results = run_rules_batched(
+                target, [hostile, plain, tmp_path / "plain2.cocci"],
+                subprocess_runner=_capture,
+            )
+
+        # plain2 doesn't exist → dropped by the existence filter;
+        # hostile refused; plain batched alone... but a 2-element
+        # surviving list still takes the batch path only when >1 rule
+        # remains AFTER the existence filter. Here [hostile, plain]
+        # survive, so the batch path runs with hostile refused.
+        assert "hostile" in results
+        assert not results["hostile"].ok
+        assert "scripting block" in results["hostile"].errors[0]
+        # The hostile payload never reached the batch file.
+        assert "os.system" not in captured["text"]
+        assert "malloc@p" in captured["text"]
+        assert captured["calls"] == 1
+        assert results["plain"].returncode == 0
+
+    def test_all_scripted_rules_refused_runner_not_invoked(self, tmp_path):
+        r1 = tmp_path / "h1.cocci"
+        r1.write_text(HOSTILE_SCRIPTED_RULE)
+        r2 = tmp_path / "h2.cocci"
+        r2.write_text(PLAIN_RULE + "\n@initialize:python@\n@@\nx=1\n")
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock()
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            results = run_rules_batched(
+                target, [r1, r2], subprocess_runner=spy,
+            )
+
+        assert set(results) == {"h1", "h2"}
+        for r in results.values():
+            assert not r.ok
+            assert "scripting block" in r.errors[0]
+        spy.assert_not_called()
+
+    def test_single_rule_delegation_forwards_gate(self, tmp_path):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(HOSTILE_SCRIPTED_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock()
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            results = run_rules_batched(
+                target, [rule], subprocess_runner=spy,
+            )
+
+        assert not results["hostile"].ok
+        assert "scripting block" in results["hostile"].errors[0]
+        spy.assert_not_called()
+
+    def test_allow_scripting_true_keeps_scripted_rule_in_batch(
+        self, tmp_path,
+    ):
+        r1 = tmp_path / "shipped.cocci"
+        r1.write_text(HOSTILE_SCRIPTED_RULE)
+        r2 = tmp_path / "plain.cocci"
+        r2.write_text(PLAIN_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured["text"] = Path(cmd[sp_idx + 1]).read_text(
+                encoding="utf-8",
+            )
+            return _mock_proc()
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            results = run_rules_batched(
+                target, [r1, r2],
+                subprocess_runner=_capture,
+                allow_scripting=True,
+            )
+
+        assert "@script:python@" in captured["text"]
+        assert results["shipped"].returncode == 0
+        assert results["plain"].returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Default runner — sandboxed, network blocked.
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRunnerSandboxed:
+    """When no subprocess_runner is passed, the runner routes spatch
+    through core.sandbox (network blocked) rather than bare
+    subprocess.run. Explicit subprocess_runner always wins."""
+
+    def test_run_rule_default_routes_through_sandboxed_run(
+        self, tmp_path, monkeypatch,
+    ):
+        rule = tmp_path / "plain.cocci"
+        rule.write_text(PLAIN_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock(return_value=_mock_proc())
+        monkeypatch.setattr(runner_mod, "_sandboxed_run", spy)
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(target, rule, env=dict(os.environ))
+
+        assert spy.called
+        assert result.returncode == 0
+
+    def test_run_rules_batched_default_routes_through_sandboxed_run(
+        self, tmp_path, monkeypatch,
+    ):
+        r1 = tmp_path / "a.cocci"
+        r1.write_text(PLAIN_RULE)
+        r2 = tmp_path / "b.cocci"
+        r2.write_text("@s@\nposition p;\n@@\nfree@p(...)\n")
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        spy = MagicMock(return_value=_mock_proc())
+        monkeypatch.setattr(runner_mod, "_sandboxed_run", spy)
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            run_rules_batched(target, [r1, r2], env=dict(os.environ))
+
+        assert spy.called
+
+    def test_sandboxed_run_blocks_network(self, monkeypatch):
+        """_sandboxed_run wires core.sandbox.run with
+        block_network=True; subprocess-style kwargs pass through."""
+        import core.sandbox as sandbox_pkg
+
+        captured = {}
+
+        def fake_sandbox_run(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return _mock_proc()
+
+        monkeypatch.setattr(sandbox_pkg, "run", fake_sandbox_run)
+        proc = runner_mod._sandboxed_run(
+            ["spatch", "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+
+        assert proc.returncode == 0
+        assert captured["cmd"] == ["spatch", "--version"]
+        assert captured["kwargs"]["block_network"] is True
+        assert captured["kwargs"]["caller_label"] == "coccinelle-runner"
+        assert captured["kwargs"]["capture_output"] is True
+        assert captured["kwargs"]["timeout"] == 5
+
+    def test_explicit_subprocess_runner_wins(self, tmp_path, monkeypatch):
+        rule = tmp_path / "plain.cocci"
+        rule.write_text(PLAIN_RULE)
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        def _boom(cmd, **kwargs):
+            raise AssertionError(
+                "default sandbox runner used despite explicit "
+                "subprocess_runner"
+            )
+
+        monkeypatch.setattr(runner_mod, "_sandboxed_run", _boom)
+        stub = MagicMock(return_value=_mock_proc())
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ):
+            result = run_rule(target, rule, subprocess_runner=stub)
+
+        assert stub.called
+        assert result.returncode == 0
+
+class TestSpatchPathRealpath:
+    """_spatch_path caches the REAL path: a symlink shim on PATH
+    otherwise fails the sandbox's mount-ns visibility check and
+    silently downgrades rule runs to Landlock-only."""
+
+    def test_resolves_symlink(self, tmp_path, monkeypatch):
+        from packages.coccinelle import runner as runner_mod
+        real = tmp_path / "coccinelle" / "bin" / "spatch"
+        real.parent.mkdir(parents=True)
+        real.write_text("#!/bin/sh\n")
+        link = tmp_path / "shim" / "spatch"
+        link.parent.mkdir()
+        link.symlink_to(real)
+        monkeypatch.setattr(runner_mod.shutil, "which",
+                            lambda _name: str(link))
+        monkeypatch.setattr(runner_mod, "_spatch_resolved", False)
+        monkeypatch.setattr(runner_mod, "_resolved_spatch", None)
+        assert runner_mod._spatch_path() == str(real.resolve())
+        # Cache invalidation hygiene for later tests.
+        monkeypatch.setattr(runner_mod, "_spatch_resolved", False)
+        monkeypatch.setattr(runner_mod, "_resolved_spatch", None)

@@ -5,10 +5,21 @@ tiny-but-real modules (e.g. a Go API with 2 ``.go`` files + ``go.mod``).
 The fix: a matching build manifest counts as evidence on its own,
 provided per-language confidence still passes — ``min_confidence``
 continues to protect against stray manifests alone.
+
+Also covers the structural-indicator mechanics: pruned ignore-dirs
+(``node_modules/``, ``dist/``, ``bin/``, ``obj/``) still count as
+structural evidence even though their contents never enter the walk,
+indicator matching is anchored on path-segment boundaries so lookalike
+names (``redist/``, ``sbin/``, ``domain.go``) don't match, every
+language pattern declares ``build_file_suffixes``, and declared build
+files ending in ``.lock`` (``poetry.lock``, ``yarn.lock``,
+``Gemfile.lock``) are not swallowed by IGNORE_SUFFIXES.
 """
 
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from packages.codeql import language_detector as ld_mod
 from packages.codeql.language_detector import LanguageDetector
@@ -256,3 +267,240 @@ class TestFloorFallback:
         assert any(
             "Floor-tier include python" in w for w in warns
         ), f"expected loud floor-include WARN for python; got: {warns}"
+
+
+class TestPrunedDirIndicators:
+    """Ignored dirs still count as structural evidence.
+
+    Indicators naming IGNORE_DIRS members were dead for their intended
+    case — the walk pruned those dirs before any file under them could
+    be yielded. Pruned-dir presence now registers the indicator while
+    the contents stay unscanned.
+    """
+
+    def test_node_modules_presence_matches_indicator(self, tmp_path: Path):
+        _write(tmp_path, "index.js", "// js\n")
+        _write(tmp_path, "app.js", "// js\n")
+        _write(tmp_path, "node_modules/lodash/lodash.js", "// vendored\n")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "node_modules/" in stats["indicators"], (
+            "a real node_modules/ dir must register the indicator "
+            "even though its contents are pruned from the walk"
+        )
+        # Pruned contents must still NOT be scanned.
+        assert stats["scanned_files"] == 2
+
+    def test_dist_bin_obj_presence_matches_indicators(self, tmp_path: Path):
+        _write(tmp_path, "Program.cs", "class P {}\n")
+        _write(tmp_path, "bin/Debug/app.dll", "")
+        _write(tmp_path, "obj/project.assets.json", "{}")
+        _write(tmp_path, "dist/bundle.out", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert {"bin/", "obj/", "dist/"} <= stats["indicators"]
+
+    def test_nested_pruned_dir_matches(self, tmp_path: Path):
+        _write(tmp_path, "web/index.js", "// js\n")
+        _write(tmp_path, "web/node_modules/pkg/a.js", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "node_modules/" in stats["indicators"]
+
+    def test_indicator_boost_reaches_confidence(self, tmp_path: Path):
+        # JS repo whose only structural evidence besides sources is
+        # node_modules/ + dist/ — with dead indicators this shape
+        # scored 0.3 base + 0.3 ratio-cap = 0.6; the boost itself is
+        # the regression target: indicators_found must carry the
+        # pruned dirs.
+        _write(tmp_path, "a.js", "")
+        _write(tmp_path, "b.js", "")
+        _write(tmp_path, "c.js", "")
+        _write(tmp_path, "node_modules/x/y.js", "")
+        _write(tmp_path, "dist/a.out.js", "")
+
+        detected = LanguageDetector(tmp_path).detect_languages()
+
+        assert "javascript" in detected
+        assert {"node_modules/", "dist/"} <= set(detected["javascript"].indicators_found)
+
+
+class TestSegmentBoundaryMatching:
+    """Indicator matching is anchored on path-segment boundaries;
+    plain substring lookalikes no longer match."""
+
+    def test_redist_does_not_match_dist(self, tmp_path: Path):
+        _write(tmp_path, "redist/readme.txt", "")
+        _write(tmp_path, "a.py", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "dist/" not in stats["indicators"]
+
+    def test_sbin_does_not_match_bin(self, tmp_path: Path):
+        _write(tmp_path, "sbin/tool.sh", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "bin/" not in stats["indicators"]
+
+    def test_domain_go_does_not_match_main_go(self, tmp_path: Path):
+        _write(tmp_path, "pkg2/domain.go", "package pkg2\n")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "main.go" not in stats["indicators"]
+
+    def test_mysrc_does_not_match_src(self, tmp_path: Path):
+        _write(tmp_path, "mysrc/a.c", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "src/" not in stats["indicators"]
+
+    def test_real_segments_still_match(self, tmp_path: Path):
+        _write(tmp_path, "app/src/main/java/Main.java", "class Main {}\n")
+        _write(tmp_path, "cmd/main.go", "package main\n")
+        _write(tmp_path, "pkg/__init__.py", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert {"src/main/java/", "src/", "main.go", "cmd/", "__init__.py"} <= stats["indicators"]
+
+    def test_root_level_file_indicator_matches(self, tmp_path: Path):
+        _write(tmp_path, "main.go", "package main\n")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "main.go" in stats["indicators"]
+
+
+class TestBuildFileSuffixSchemaUniformity:
+    """Every language pattern declares build_file_suffixes."""
+
+    def test_all_languages_declare_build_file_suffixes(self):
+        missing = [
+            lang for lang, patterns in LanguageDetector.LANGUAGE_PATTERNS.items()
+            if "build_file_suffixes" not in patterns
+        ]
+        assert missing == [], f"patterns missing build_file_suffixes: {missing}"
+
+    def test_suffix_values_are_tuples(self):
+        # endswith() requires str or tuple; a stray list would raise at
+        # scan time, so pin the type here.
+        for lang, patterns in LanguageDetector.LANGUAGE_PATTERNS.items():
+            assert isinstance(patterns["build_file_suffixes"], tuple), lang
+
+    def test_csproj_suffix_still_detected(self, tmp_path: Path):
+        _write(tmp_path, "App.csproj", "<Project/>")
+        _write(tmp_path, "Program.cs", "class P {}\n")
+
+        detected = LanguageDetector(tmp_path).detect_languages()
+
+        assert "csharp" in detected
+        assert "App.csproj" in detected["csharp"].build_files_found
+
+
+class TestLockBuildFilesNotSwallowed:
+    """Declared *.lock build manifests survive the IGNORE_SUFFIXES
+    filter; undeclared lock files stay ignored."""
+
+    def test_poetry_lock_counts_as_build_evidence(self, tmp_path: Path):
+        _write(tmp_path, "poetry.lock", "[[package]]\n")
+        _write(tmp_path, "app.py", "")
+
+        detected = LanguageDetector(tmp_path).detect_languages()
+
+        assert "python" in detected
+        assert "poetry.lock" in detected["python"].build_files_found
+
+    def test_yarn_lock_counts_as_build_evidence(self, tmp_path: Path):
+        _write(tmp_path, "yarn.lock", "")
+        _write(tmp_path, "index.js", "")
+
+        detected = LanguageDetector(tmp_path).detect_languages()
+
+        assert "javascript" in detected
+        assert "yarn.lock" in detected["javascript"].build_files_found
+
+    def test_gemfile_lock_counts_as_build_evidence(self, tmp_path: Path):
+        _write(tmp_path, "Gemfile.lock", "")
+        _write(tmp_path, "app.rb", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "Gemfile.lock" in stats["build_files"]
+
+    def test_undeclared_lock_files_still_ignored(self, tmp_path: Path):
+        _write(tmp_path, "flake.lock", "{}")
+        _write(tmp_path, "a.py", "")
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "flake.lock" not in stats["build_files"]
+        assert stats["scanned_files"] == 1
+
+
+class TestManifestOnlyCeiling:
+    """With ZERO source files, confidence is capped at ~0.2 (build-file
+    boost only — no base, no indicator boost, no ratio). A crafted
+    manifests-plus-indicators repo must stay below every language's
+    ``min_confidence`` so hostile zero-source repos cannot force a
+    detection."""
+
+    def test_manifests_plus_indicators_zero_source_stay_capped(self, tmp_path: Path):
+        # Two Java build files (+0.4 if ungated) + both structural
+        # indicators (+0.3 if ungated) but zero .java sources —
+        # ungated boosts scored ~0.7 and cleared min_confidence 0.5.
+        _write(tmp_path, "pom.xml", "<project/>")
+        _write(tmp_path, "build.gradle", "")
+        _write(tmp_path, "src/main/java/keep.txt", "")
+        _write(tmp_path, "src/test/java/keep.txt", "")
+
+        detector = LanguageDetector(tmp_path)
+        stats = detector._scan_repository()
+        info = detector._analyze_language(
+            "java", LanguageDetector.LANGUAGE_PATTERNS["java"], stats,
+        )
+
+        assert info.file_count == 0
+        assert info.confidence <= 0.2
+        assert "java" not in detector.detect_languages()
+
+    def test_single_manifest_zero_source_scores_point_two(self, tmp_path: Path):
+        _write(tmp_path, "go.mod", "module x\n")
+        _write(tmp_path, "README.md", "")
+
+        detector = LanguageDetector(tmp_path)
+        stats = detector._scan_repository()
+        info = detector._analyze_language(
+            "go", LanguageDetector.LANGUAGE_PATTERNS["go"], stats,
+        )
+
+        assert info.file_count == 0
+        assert info.confidence == pytest.approx(0.2)
+        assert "go" not in detector.detect_languages()
+
+    def test_ceiling_stays_below_every_min_confidence(self):
+        # The manifest-only ceiling (0.2) must sit below the smallest
+        # per-language threshold, otherwise the gate is decorative.
+        smallest = min(
+            p["min_confidence"]
+            for p in LanguageDetector.LANGUAGE_PATTERNS.values()
+        )
+        assert 0.2 < smallest
+
+    def test_source_present_keeps_indicator_and_build_boosts(self, tmp_path: Path):
+        # Regression guard: the ceiling only applies at file_count==0;
+        # a real repo keeps base + build + indicator + ratio boosts.
+        _write(tmp_path, "go.mod", "module x\n")
+        _write(tmp_path, "main.go", "package main\n")
+        _write(tmp_path, "cmd/run.go", "package main\n")
+
+        detected = LanguageDetector(tmp_path).detect_languages()
+
+        assert "go" in detected
+        assert detected["go"].confidence >= 0.6

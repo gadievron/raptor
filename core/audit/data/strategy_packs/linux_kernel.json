@@ -1,0 +1,30 @@
+{
+  "name": "linux_kernel",
+  "description": "Linux-kernel token supplements for /audit's per-function strategy inference (core/audit/strategy.py). Loaded ONLY when the target looks like a kernel tree / module (core/audit/vocab_packs.py gating) and merged additively with the universal signal maps. These tokens used to be hardcoded in the generic maps for every target; project-specific vocabulary should come from the study loop's domain model (infer_strategies consumes DomainVocabulary), not from growing this file.",
+  "path_signals": {
+    "concurrency": ["rcu"],
+    "memory": ["slab", "kref"],
+    "aliasing": [
+      "sk_buff", "skb", "page_cache", "pagecache", "scatterlist",
+      "sg_", "page_pool", "pipe_buf", "vmsplice", "copy_page", "kmap"
+    ]
+  },
+  "source_signals": {
+    "concurrency": [
+      "rcu_read_lock", "rcu_read_unlock", "rcu_dereference",
+      "spin_lock", "spin_unlock",
+      "task_lock", "task_unlock", "lock_sock", "release_sock",
+      "down_read", "up_read", "down_write", "up_write",
+      "READ_ONCE", "WRITE_ONCE", "smp_rmb", "smp_wmb"
+    ],
+    "memory": [
+      "kfree", "kmalloc", "kzalloc", "vmalloc", "vfree",
+      "refcount_inc", "refcount_dec", "kref_put", "kref_get"
+    ],
+    "aliasing": [
+      "sg_chain", "sg_init_table", "scatterlist",
+      "memcpy_sglist", "skb_cow_data"
+    ],
+    "integer": ["check_mul_overflow"]
+  }
+}

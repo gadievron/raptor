@@ -24,10 +24,12 @@ _FUNC_FROM_DEF_RE = re.compile(
 
 
 def _function_name_from_step(step: dict[str, Any]) -> str | None:
-    """Extract function name from a trace step's definition field.
+    """Extract the function name a trace step carries directly, from
+    its ``function`` or ``callee`` key.
 
-    The definition field is "file:line" but doesn't carry the function
-    name directly.  Falls back to parsing it from the description.
+    Steps that name neither return ``None``; callers then fall back to
+    :func:`_resolve_function_from_checklist`, which maps the step's
+    "file:line" ``definition`` to a function via the checklist.
     """
     return step.get("function") or step.get("callee") or None
 
@@ -50,7 +52,7 @@ def _resolve_function_from_checklist(
         best_name = None
         best_dist = float("inf")
         for func in fi.get("items") or fi.get("functions") or []:
-            func_line = func.get("line", 0)
+            func_line = func.get("line_start", 0) or func.get("line", 0)
             if func_line and abs(func_line - line) < best_dist:
                 best_dist = abs(func_line - line)
                 best_name = func.get("name")
@@ -100,7 +102,8 @@ def enrich_trace_with_siblings(
 ) -> dict[str, Any]:
     """Add ``siblings`` field to each intermediate step in a flow trace.
 
-    For each step that isn't the entry or the final sink, resolves
+    For each step that isn't the entry (the final sink step is
+    processed too, and may receive advisory ``siblings``), resolves
     the function name and looks up other callers in the call graph.
     The caller that's already ON the trace is excluded.
 

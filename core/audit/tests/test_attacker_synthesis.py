@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from core.audit.attacker_synthesis import (
+    _COMPOSABLE_PAIRS,
+    _STEP_OUTPUT_INPUT,
     AttackChain,
     AttackPrimitive,
+    _check_chain_constraints,
     classify_primitive,
     format_chains_summary,
     group_by_reachability,
@@ -253,6 +256,171 @@ class TestSynthesizeChains:
         ]
         chains = synthesize_chains(outcomes)
         assert chains == []
+
+
+class TestSecondPrimitiveConstraints:
+    """Access constraints on the SECOND primitive also block a chain."""
+
+    def test_blocking_constraint_on_second_primitive_fails_chain(self):
+        outcomes = [
+            FakeOutcome(
+                file="a.c", function="leak",
+                review_result={"cwe_class": "CWE-200"},
+            ),
+            FakeOutcome(
+                file="a.c", function="overflow",
+                review_result={
+                    "cwe_class": "CWE-120",
+                    "preconditions": [
+                        {"assumption": "requires local access only"},
+                    ],
+                },
+            ),
+        ]
+        chains = synthesize_chains(outcomes)
+        assert len(chains) >= 1
+        assert all(c.chain_status == "hypothetical" for c in chains)
+        failures = [f for c in chains for f in c.constraint_failures]
+        assert any("local access" in f for f in failures)
+        assert any("Finding B" in f for f in failures)
+
+    def test_auth_constraint_on_second_primitive_fails_chain(self):
+        prim_a = AttackPrimitive(kind="info_leak", description="leak")
+        prim_b = AttackPrimitive(
+            kind="write", description="write",
+            constraints=["authentication required for this endpoint"],
+        )
+        failures = _check_chain_constraints(
+            FakeOutcome(), FakeOutcome(), prim_a, prim_b,
+        )
+        assert any("Finding B requires authentication" in f for f in failures)
+
+    def test_auth_constraint_waived_by_auth_bypass_partner(self):
+        prim_a = AttackPrimitive(kind="auth_bypass", description="bypass")
+        prim_b = AttackPrimitive(
+            kind="execute", description="exec",
+            constraints=["authentication required"],
+        )
+        failures = _check_chain_constraints(
+            FakeOutcome(), FakeOutcome(), prim_a, prim_b,
+        )
+        assert failures == []
+
+    def test_first_primitive_constraints_still_checked(self):
+        prim_a = AttackPrimitive(
+            kind="info_leak", description="leak",
+            constraints=["local access only"],
+        )
+        prim_b = AttackPrimitive(kind="write", description="write")
+        failures = _check_chain_constraints(
+            FakeOutcome(), FakeOutcome(), prim_a, prim_b,
+        )
+        assert any("Finding A" in f and "local access" in f for f in failures)
+
+
+class TestDirectionNormalisation:
+    """Reverse-ordered composable pairs are normalised to the forward
+    direction — no contradictory verdicts, truthful narrative order."""
+
+    def test_reverse_ordered_pair_normalised_to_forward(self):
+        # write appears before info_leak; only (info_leak, write) is a
+        # forward transition, so the chain must be reordered.
+        outcomes = [
+            FakeOutcome(
+                file="a.c", function="overflow",
+                review_result={"cwe_class": "CWE-120"},
+            ),
+            FakeOutcome(
+                file="a.c", function="leak",
+                review_result={"cwe_class": "CWE-200"},
+            ),
+        ]
+        chains = synthesize_chains(outcomes)
+        assert len(chains) == 1
+        chain = chains[0]
+        assert chain.chain_status == "confirmed"
+        assert chain.constraint_failures == []
+        assert chain.finding_keys == ["a.c:leak", "a.c:overflow"]
+        assert chain.primitives[0].kind == "info_leak"
+        assert chain.primitives[1].kind == "write"
+        assert "Step 1: info_leak" in chain.narrative
+        assert "Step 2: write" in chain.narrative
+
+    def test_forward_ordered_pair_unchanged(self):
+        outcomes = [
+            FakeOutcome(
+                file="a.c", function="leak",
+                review_result={"cwe_class": "CWE-200"},
+            ),
+            FakeOutcome(
+                file="a.c", function="overflow",
+                review_result={"cwe_class": "CWE-120"},
+            ),
+        ]
+        chains = synthesize_chains(outcomes)
+        assert len(chains) == 1
+        assert chains[0].finding_keys == ["a.c:leak", "a.c:overflow"]
+        assert chains[0].chain_status == "confirmed"
+
+    def test_multi_step_no_spurious_type_mismatch_from_reverse_seed(self):
+        # write listed before info_leak: the pairwise seed used to be
+        # built as write -> info_leak, so the multi-step extension
+        # write -> info_leak -> execute reported a spurious type
+        # mismatch while the symmetric pairwise check cleared it.
+        outcomes = [
+            FakeOutcome(
+                file="a.c", function="overflow",
+                review_result={"cwe_class": "CWE-120"},
+            ),
+            FakeOutcome(
+                file="a.c", function="leak",
+                review_result={"cwe_class": "CWE-200"},
+            ),
+            FakeOutcome(
+                file="a.c", function="runner",
+                review_result={"cwe_class": "CWE-78"},
+            ),
+        ]
+        chains = synthesize_chains(outcomes)
+        multi = [c for c in chains if len(c.finding_keys) > 2]
+        assert multi, "expected at least one multi-step chain"
+        for c in chains:
+            assert not any(
+                "type mismatch" in f for f in c.constraint_failures
+            ), f"{c.chain_id} carries a spurious type mismatch"
+        assert all(c.chain_status == "confirmed" for c in chains)
+        # The normalised 3-step chain follows the forward direction.
+        three_step = [c for c in multi if len(c.finding_keys) == 3]
+        assert any(
+            [p.kind for p in c.primitives] == ["info_leak", "write", "execute"]
+            for c in three_step
+        )
+
+    def test_pairwise_and_multistep_verdicts_agree(self):
+        outcomes = [
+            FakeOutcome(
+                file="a.c", function="overflow",
+                review_result={"cwe_class": "CWE-120"},
+            ),
+            FakeOutcome(
+                file="a.c", function="leak",
+                review_result={"cwe_class": "CWE-200"},
+            ),
+        ]
+        chains = synthesize_chains(outcomes)
+        statuses = {c.chain_status for c in chains}
+        assert statuses == {"confirmed"}
+
+
+class TestDeadDosEntryRemoved:
+    def test_dos_race_entry_gone(self):
+        assert ("dos", "race") not in _STEP_OUTPUT_INPUT
+
+    def test_no_dos_output_kind_remains(self):
+        # dos is never produced as a chain step output: pairs come from
+        # _COMPOSABLE_PAIRS and extension appends in_kind primitives.
+        assert not any(out == "dos" for out, _ in _STEP_OUTPUT_INPUT)
+        assert not any("dos" in pair for pair in _COMPOSABLE_PAIRS)
 
 
 class TestAttackChainToDict:

@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class CheckResult:
 class PreconditionVerdict:
     """Aggregate result of checking all preconditions for a finding."""
 
-    checks: List[CheckResult] = field(default_factory=list)
+    checks: list[CheckResult] = field(default_factory=list)
 
     @property
     def any_contradicted(self) -> bool:
@@ -48,11 +48,29 @@ class PreconditionVerdict:
                 parts.append(f"{c.check_type}: {c.evidence}")
         return "; ".join(parts)
 
+    @property
+    def all_supported(self) -> bool:
+        """True when every check verified in the vulnerability-supporting direction.
+
+        Empty check lists are NOT "all supported" — an absent verdict is
+        not a positive one.
+        """
+        return bool(self.checks) and all(
+            c.verdict == "supported" for c in self.checks
+        )
+
+    @property
+    def supported_types(self) -> frozenset:
+        """check_type values whose verdict came back supported."""
+        return frozenset(
+            c.check_type for c in self.checks if c.verdict == "supported"
+        )
+
 
 def verify_preconditions(
-    preconditions: List[Dict[str, Any]],
+    preconditions: list[dict[str, Any]],
     target_path: Path,
-    context_map: Optional[Dict[str, Any]] = None,
+    context_map: dict[str, Any] | None = None,
 ) -> PreconditionVerdict:
     """Run mechanical checks on LLM-stated preconditions.
 
@@ -126,7 +144,7 @@ def verify_preconditions(
 
 def _read_function_source(
     target_path: Path, file_path: str, function_name: str,
-) -> Optional[str]:
+) -> str | None:
     """Read a function's source from the target directory."""
     full = (target_path / file_path).resolve()
     if not full.is_relative_to(target_path.resolve()):
@@ -147,7 +165,7 @@ def _read_function_source(
     return text
 
 
-def _extract_c_function(source: str, name: str) -> Optional[str]:
+def _extract_c_function(source: str, name: str) -> str | None:
     """Extract a C function body (heuristic brace-matching)."""
     # Find the function definition: type name(...)  {
     pattern = re.compile(
@@ -160,18 +178,41 @@ def _extract_c_function(source: str, name: str) -> Optional[str]:
 
     start = m.start()
     depth = 0
-    i = m.end() - 1  # at the opening brace
-    for i in range(m.end() - 1, len(source)):
-        if source[i] == '{':
+    length = len(source)
+    i = m.end() - 1
+    in_string = False
+    string_char = ""
+    while i < length:
+        ch = source[i]
+        if in_string:
+            if ch == string_char:
+                bs = 0
+                while i - 1 - bs >= 0 and source[i - 1 - bs] == "\\":
+                    bs += 1
+                if bs % 2 == 0:
+                    in_string = False
+        elif ch in ('"', "'"):
+            in_string = True
+            string_char = ch
+        elif ch == "/" and i + 1 < length:
+            nxt = source[i + 1]
+            if nxt == "/":
+                nl = source.find("\n", i + 2)
+                i = nl if nl >= 0 else length
+            elif nxt == "*":
+                end = source.find("*/", i + 2)
+                i = end + 1 if end >= 0 else length
+        elif ch == "{":
             depth += 1
-        elif source[i] == '}':
+        elif ch == "}":
             depth -= 1
             if depth == 0:
                 return source[start:i + 1]
+        i += 1
     return source[start:]
 
 
-def _extract_python_function(source: str, name: str) -> Optional[str]:
+def _extract_python_function(source: str, name: str) -> str | None:
     """Extract a Python function body (indent-based)."""
     pattern = re.compile(rf'^([ \t]*)def\s+{re.escape(name)}\s*\(', re.MULTILINE)
     m = pattern.search(source)
@@ -194,11 +235,15 @@ def _extract_python_function(source: str, name: str) -> Optional[str]:
 
 # ── Check implementations ──────────────────────────────────────────
 
-_NULL_TERM_PATTERNS = [
-    # Direct null-termination: buf[len] = '\0'; buf[n] = 0;
+# Explicit terminator stores: buf[len] = '\0'; buf[n] = 0;
+_NULL_TERM_STORE_PATTERNS = [
     re.compile(r"\[\s*\w+\s*\]\s*=\s*['\"]?\\0['\"]?\s*;"),
     re.compile(r"\[\s*\w+\s*\]\s*=\s*0\s*;"),
-    # strncpy + explicit null term
+]
+
+# Bare call tokens: too weak to bind to a specific buffer (and
+# strncpy does not even guarantee termination).
+_NULL_TERM_TOKEN_PATTERNS = [
     re.compile(r"\bstrncpy\b"),
     re.compile(r"\bstrlcpy\b"),
     re.compile(r"\bsnprintf\b"),
@@ -206,6 +251,8 @@ _NULL_TERM_PATTERNS = [
     re.compile(r"\bstrdup\b"),
     re.compile(r"\bstrndup\b"),
 ]
+
+_NULL_TERM_PATTERNS = _NULL_TERM_STORE_PATTERNS + _NULL_TERM_TOKEN_PATTERNS
 
 
 def _check_null_termination(
@@ -215,14 +262,25 @@ def _check_null_termination(
     """Check if a function null-terminates a buffer.
 
     For caller_null_terminates, expect_absent=True means the LLM claims
-    the caller does NOT null-terminate. If we find null-termination,
-    the claim is contradicted.
+    the caller does NOT null-terminate. Bare call tokens (a strncpy or
+    strdup anywhere in the function) are weak evidence — they don't
+    prove the specific buffer is terminated — so they cap at
+    'inconclusive', matching _check_bounds/_check_sanitization. Only
+    an explicit terminator store contradicts: bound to the named
+    parameter when one is given, or any store when the claim names no
+    buffer to bind.
     """
     found_patterns = []
+    strong_patterns = []
 
-    for pat in _NULL_TERM_PATTERNS:
-        matches = pat.findall(source)
-        if matches:
+    for pat in _NULL_TERM_STORE_PATTERNS:
+        if pat.search(source):
+            found_patterns.append(pat.pattern[:40])
+            if not parameter:
+                strong_patterns.append(pat.pattern[:40])
+
+    for pat in _NULL_TERM_TOKEN_PATTERNS:
+        if pat.search(source):
             found_patterns.append(pat.pattern[:40])
 
     # Also look for the specific parameter if given
@@ -236,19 +294,31 @@ def _check_null_termination(
         )
         if param_null.search(source):
             found_patterns.append(f"explicit \\0 on '{parameter}'")
+            strong_patterns.append(f"explicit \\0 on '{parameter}'")
 
     has_null_term = bool(found_patterns)
 
     if expect_absent:
         # LLM claims null-termination is ABSENT
-        if has_null_term:
+        if strong_patterns:
             return CheckResult(
                 check_type="caller_null_terminates",
                 assumption="",
                 verdict="contradicted",
                 evidence=(
                     f"{file}:{func} DOES null-terminate: "
-                    f"{', '.join(found_patterns[:3])}"
+                    f"{', '.join(strong_patterns[:3])}"
+                ),
+            )
+        if has_null_term:
+            return CheckResult(
+                check_type="caller_null_terminates",
+                assumption="",
+                verdict="inconclusive",
+                evidence=(
+                    f"{file}:{func} has null-termination-related patterns "
+                    f"({', '.join(found_patterns[:3])}) but cannot confirm "
+                    "they terminate this specific buffer"
                 ),
             )
         return CheckResult(
@@ -297,9 +367,12 @@ def _check_bounds(
     """Check if a function performs bounds checking.
 
     Regex matching is weak evidence — a sizeof or MAX_ in a function
-    doesn't prove it protects the specific argument.  So we only
-    return 'supported' (not 'contradicted') when patterns are found
-    and expect_absent is True.
+    doesn't prove it protects the specific argument.  So this never
+    returns 'contradicted': under expect_absent, found patterns yield
+    'inconclusive' (we decline to affirm on weak evidence) and
+    'supported' is returned only when no patterns are found; without
+    expect_absent, found patterns yield 'supported' and their absence
+    'inconclusive'.
     """
     found = []
     for pat in _BOUNDS_PATTERNS:
@@ -419,7 +492,7 @@ def _check_sanitization(
 def _check_attacker_control(
     source: str, file: str, func: str,
     parameter: str, expect_absent: bool,
-    context_map: Optional[Dict[str, Any]] = None,
+    context_map: dict[str, Any] | None = None,
 ) -> CheckResult:
     """Check if a function's input is attacker-controlled.
 
@@ -467,10 +540,12 @@ def _check_attacker_control(
         # Check 2-hop
         for caller in callers_of_func:
             for edge in context_map.get("call_edges", []):
-                if edge.get("callee") == caller:
-                    if edge.get("caller", "") in entry_points:
-                        reachable = True
-                        break
+                if (
+                    edge.get("callee") == caller
+                    and edge.get("caller", "") in entry_points
+                ):
+                    reachable = True
+                    break
             if reachable:
                 break
 

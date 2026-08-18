@@ -36,6 +36,22 @@ class TestFlowStep:
         )
         assert FlowStep.from_dict(step.to_dict()) == step
 
+    def test_non_numeric_line_string_falls_back(self):
+        step = FlowStep.from_dict({"file": "a.c", "line": "N/A"})
+        assert step.line == 0
+
+    def test_null_line_falls_back(self):
+        step = FlowStep.from_dict({"file": "a.c", "line": None})
+        assert step.line == 0
+
+    def test_numeric_line_string_still_parses(self):
+        step = FlowStep.from_dict({"file": "a.c", "line": "42"})
+        assert step.line == 42
+
+    def test_numeric_line_int_unchanged(self):
+        step = FlowStep.from_dict({"file": "a.c", "line": 7})
+        assert step.line == 7
+
 
 class TestTaintFlow:
     def test_from_dict_basic(self):
@@ -92,6 +108,40 @@ class TestTaintFlow:
         assert flow.steps == []
         assert not flow.is_inter_procedural
 
+    def test_non_numeric_sink_arg_idx_falls_back(self):
+        flow = TaintFlow.from_dict({"sink_call": "memcpy", "sink_arg_idx": "?"})
+        assert flow.sink_arg_idx == -1
+
+    def test_null_sink_arg_idx_falls_back(self):
+        flow = TaintFlow.from_dict({"sink_call": "memcpy", "sink_arg_idx": None})
+        assert flow.sink_arg_idx == -1
+
+    def test_numeric_sink_arg_idx_string_still_parses(self):
+        flow = TaintFlow.from_dict({"sink_call": "memcpy", "sink_arg_idx": "2"})
+        assert flow.sink_arg_idx == 2
+
+    def test_unattributed_step_does_not_make_flow_inter_procedural(self):
+        d = {
+            "steps": [
+                {"file": "a.c", "function": "f", "line": 1,
+                 "code": "x", "variable": "x"},
+                {"file": "a.c", "function": "", "line": 2,
+                 "code": "y", "variable": "y"},
+            ],
+        }
+        assert not TaintFlow.from_dict(d).is_inter_procedural
+
+    def test_two_named_functions_still_inter_procedural(self):
+        d = {
+            "steps": [
+                {"file": "a.c", "function": "f", "line": 1,
+                 "code": "x", "variable": "x"},
+                {"file": "b.c", "function": "g", "line": 2,
+                 "code": "y", "variable": "y"},
+            ],
+        }
+        assert TaintFlow.from_dict(d).is_inter_procedural
+
 
 class TestJoernCPG:
     def test_exists_false(self, tmp_path: Path):
@@ -128,3 +178,12 @@ class TestJoernResult:
         assert d["query"] == "q"
         assert d["errors"] == ["e"]
         assert d["elapsed_ms"] == 100
+        assert d["dark_methods"] == []
+
+    def test_to_dict_carries_dark_methods(self):
+        """dark_methods must survive serialisation — methods with lost
+        taint coverage are the first thing to check when a sweep comes
+        back thin."""
+        r = JoernResult(query="q", dark_methods=["parse_hdr", "decode"])
+        d = r.to_dict()
+        assert d["dark_methods"] == ["parse_hdr", "decode"]

@@ -1,11 +1,15 @@
 """Tests for core.audit.frida_observe — Frida runtime observation."""
 
 import json
+import logging
 import os
+import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+import core.audit.frida_observe as fo
 from core.audit.frida_observe import (
     FridaObserveResult,
     _build_hook_targets,
@@ -195,3 +199,66 @@ class TestFridaObserveResult:
             evidence_strength="confirmed",
         )
         assert r.evidence_strength == "confirmed"
+
+
+def _raise_timeout(*args, **kwargs):
+    raise subprocess.TimeoutExpired(cmd=["frida"], timeout=kwargs.get("timeout", 0))
+
+
+class TestRunFridaSession:
+    """Timeout handling in _run_frida_session logs the applied timeout value."""
+
+    def test_config_override_timeout_logged(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        log_file = tmp_path / "obs.jsonl"
+        config = SimpleNamespace(frida_timeout_s=7)
+
+        with caplog.at_level(logging.DEBUG, logger="core.audit.frida_observe"):
+            ok = fo._run_frida_session(1234, "// script", log_file, config)
+
+        assert ok is False
+        timeout_msgs = [
+            r.getMessage() for r in caplog.records if "timed out" in r.getMessage()
+        ]
+        assert timeout_msgs, "expected a timeout log line"
+        assert "after 7s" in timeout_msgs[0]
+        assert f"after {fo._OBSERVE_TIMEOUT_S}s" not in timeout_msgs[0]
+
+    def test_default_timeout_logged_without_override(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        log_file = tmp_path / "obs.jsonl"
+        config = SimpleNamespace()  # no frida_timeout_s
+
+        with caplog.at_level(logging.DEBUG, logger="core.audit.frida_observe"):
+            fo._run_frida_session(1234, "// script", log_file, config)
+
+        timeout_msgs = [
+            r.getMessage() for r in caplog.records if "timed out" in r.getMessage()
+        ]
+        assert timeout_msgs
+        assert f"after {fo._OBSERVE_TIMEOUT_S}s" in timeout_msgs[0]
+
+    def test_timeout_with_partial_log_reports_success(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        log_file = tmp_path / "obs.jsonl"
+        log_file.write_text('{"type": "ready", "hooked": 1}\n')
+        config = SimpleNamespace(frida_timeout_s=1)
+
+        assert fo._run_frida_session(1234, "// script", log_file, config) is True
+
+    def test_script_tempfile_cleaned_up(self, tmp_path, monkeypatch):
+        created: list[Path] = []
+        real_mkstemp = fo.tempfile.mkstemp
+
+        def _tracking_mkstemp(*args, **kwargs):
+            fd, path = real_mkstemp(*args, **kwargs)
+            created.append(Path(path))
+            return fd, path
+
+        monkeypatch.setattr(fo.tempfile, "mkstemp", _tracking_mkstemp)
+        monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
+        fo._run_frida_session(1234, "// script", tmp_path / "obs.jsonl",
+                              SimpleNamespace(frida_timeout_s=1))
+        assert created and not any(p.exists() for p in created)

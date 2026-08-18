@@ -76,7 +76,7 @@ MEMORY_CORRUPTION_TYPES = frozenset({
 # canonical vuln_type. Pre-fix (and historically): the two lists
 # could drift apart silently. A vuln_type added to
 # MEMORY_CORRUPTION_TYPES but not VULN_TYPES would be silently
-# untracked by validators that whitelist against VULN_TYPES; a
+# untracked by validators that allowlist against VULN_TYPES; a
 # typo like "double_freee" would survive code review and only
 # manifest as a missed Stage-E-skipped finding months later.
 # Assert on import so any drift fails the test suite immediately.

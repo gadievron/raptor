@@ -115,7 +115,7 @@ Verify skill will auto-load correctly:
 **Skill size limits:**
 - Minimum: 200 tokens (enough for useful content)
 - Recommended: 300-400 tokens (sweet spot)
-- Maximum: 500 tokens (hard limit, enforced)
+- Maximum: 500 tokens (hard limit — keep to it; not mechanically enforced)
 
 **Total skills warning:**
 - Yellow (5 skills): 1,500-2,000 tokens in skills

@@ -94,7 +94,7 @@ class GoalPlanner:
         # Detect goal type from user input
         if any(vuln in user_goal_lower for vuln in [
             "heap overflow", "stack overflow", "use-after-free",
-            "buffer overflow", "null pointer"
+            "buffer overflow", "null pointer", "uaf"
         ]):
             # Extract vulnerability type
             if "heap overflow" in user_goal_lower:
@@ -300,7 +300,7 @@ class GoalPlanner:
 
         # Log progress
         if goal.progress > 0:
-            logger.info("Goal progress: %.1f%", goal.progress * 100)
+            logger.info("Goal progress: %.1f%%", goal.progress * 100)
 
     def should_continue_towards_goal(self, fuzzing_state) -> bool:
         """
@@ -340,5 +340,7 @@ class GoalPlanner:
                 "achieved": self.current_goal.achieved,
             } if self.current_goal else None,
             "total_goals_attempted": len(self.goal_history) + (1 if self.current_goal else 0),
-            "goals_achieved": sum(1 for g in self.goal_history if g.achieved),
+            "goals_achieved": sum(1 for g in self.goal_history if g.achieved) + (
+                1 if self.current_goal and self.current_goal.achieved else 0
+            ),
         }

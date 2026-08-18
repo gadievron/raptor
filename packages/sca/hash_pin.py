@@ -8,9 +8,19 @@ Composer git) currently get a warning; those handlers can drop in here.
 Auth strategy: use ``git ls-remote <repo> <ref>`` rather than the
 GitHub REST API. ``ls-remote`` works against public repos without any
 token, side-stepping the design's noted 60 req/hour unauthenticated
-rate limit. When a token IS available (``GITHUB_TOKEN`` env), we pass
-it via ``http.extraheader`` — useful for private repos and gives a
-modest speedup on large monorepos.
+rate limit. When a token IS available (``GITHUB_TOKEN`` env), it is
+passed via the ``GIT_CONFIG_*`` environment mechanism as an
+``http.extraheader`` — useful for private repos and gives a modest
+speedup on large monorepos. The token never appears on argv (argv is
+readable by every same-uid process via /proc/<pid>/cmdline) and is
+never logged.
+
+Execution posture: every resolve goes through
+:func:`core.git.ls_remote` — sandbox-routed (namespace + Landlock),
+egress-proxied with the allowlist pinned to ``github.com``, safe-git
+config pins applied. Pre-fix this module ran a raw ``subprocess.run``
+with ambient proxy env (bypassing the egress allowlist) and carried
+the bearer token on argv.
 
 The rewriter is line-based, idempotent (already-SHA refs are skipped),
 and preserves the original ref as a trailing comment so operators can
@@ -23,11 +33,16 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Egress allowlist for the resolver's sandboxed ls-remote. GitHub
+# Actions ``uses:`` refs always live on github.com — the URL below is
+# constructed from that literal, so the allowlist is exactly one host.
+_LS_REMOTE_PROXY_HOSTS = ("github.com",)
 
 
 # ``uses: org/action@<ref>`` — captures the ref so we can decide whether
@@ -70,16 +85,16 @@ class HashPinChange:
 
 @dataclass
 class HashPinResult:
-    changed_files: List[Path]
-    changes: List[HashPinChange]
-    skipped: List[Tuple[Path, int, str, str]]   # (file, line, action, reason)
+    changed_files: list[Path]
+    changes: list[HashPinChange]
+    skipped: list[tuple[Path, int, str, str]]   # (file, line, action, reason)
 
 
 def hash_pin_workflows(
     target: Path,
     *,
-    workflows_dir: Optional[Path] = None,
-    github_token: Optional[str] = None,
+    workflows_dir: Path | None = None,
+    github_token: str | None = None,
     write: bool = False,
 ) -> HashPinResult:
     """Walk ``.github/workflows/*.yml`` and rewrite mutable refs to
@@ -95,11 +110,11 @@ def hash_pin_workflows(
         return HashPinResult([], [], [])
 
     token = github_token or os.environ.get("GITHUB_TOKEN")
-    cache: Dict[Tuple[str, str], Optional[str]] = {}
+    cache: dict[tuple[str, str], str | None] = {}
 
-    changes: List[HashPinChange] = []
-    skipped: List[Tuple[Path, int, str, str]] = []
-    changed_files: List[Path] = []
+    changes: list[HashPinChange] = []
+    skipped: list[tuple[Path, int, str, str]] = []
+    changed_files: list[Path] = []
 
     for wf_path in sorted(workflows.glob("*.y*ml")):
         try:
@@ -132,12 +147,12 @@ def hash_pin_workflows(
 # ---------------------------------------------------------------------------
 
 def _rewrite_file(
-    text: str, path: Path, cache: dict, token: Optional[str],
-) -> Tuple[str, List[HashPinChange], List[Tuple[Path, int, str, str]]]:
-    changes: List[HashPinChange] = []
-    skipped: List[Tuple[Path, int, str, str]] = []
+    text: str, path: Path, cache: dict, token: str | None,
+) -> tuple[str, list[HashPinChange], list[tuple[Path, int, str, str]]]:
+    changes: list[HashPinChange] = []
+    skipped: list[tuple[Path, int, str, str]] = []
     lines = text.splitlines(keepends=True)
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     for idx, raw in enumerate(lines):
         m = _USES_RE.search(raw)
         if not m:
@@ -183,65 +198,63 @@ def _rewrite_file(
 
 def _resolve_sha(
     owner: str, repo: str, ref: str, cache: dict,
-    token: Optional[str],
-) -> Optional[str]:
+    token: str | None,
+) -> str | None:
     """Use ``git ls-remote`` to resolve a tag/branch/ref to a SHA."""
+    # A leading dash in any component could be parsed by git as an
+    # option rather than a URL / ref pattern. The ``_USES_RE`` grammar
+    # doesn't currently admit a leading ``-``, but validate here too so
+    # this function stays safe for any future caller.
+    if any(s.startswith("-") for s in (owner, repo, ref)):
+        logger.warning(
+            "sca.hash_pin: refusing to resolve %s/%s@%s "
+            "(leading dash in component)", owner, repo, ref,
+        )
+        return None
     key = (f"{owner}/{repo}", ref)
     if key in cache:
         return cache[key]
     url = f"https://github.com/{owner}/{repo}.git"
-    # Pass token via -c http.extraheader rather than embedding in the
-    # URL. The token still appears in our own /proc/<pid>/cmdline (so
-    # same-uid processes can read it), but it no longer appears inside
-    # the URL — keeping it out of git's URL-rewriting code paths and
-    # its on-disk credential cache. For full token isolation, callers
-    # should set the GIT_HTTP_EXTRAHEADER env var or use GIT_ASKPASS.
-    cmd = ["git"]
-    if token:
-        cmd += ["-c", f"http.extraheader=Authorization: bearer {token}"]
-    cmd += ["ls-remote", url, ref,
-            f"refs/tags/{ref}", f"refs/heads/{ref}"]
+    # Sandbox-routed, egress-allowlisted ls-remote via the safe-git
+    # substrate (same convergence as cve_diff's agent tools). The
+    # token rides the GIT_CONFIG_* env mechanism inside ls_remote —
+    # never argv, never logged.
     try:
-        from core.config import RaptorConfig
-        from core.sandbox.preexec import set_pdeathsig
-        proc = subprocess.run(
-            cmd,
-            capture_output=True, text=True, timeout=20,
-            env=RaptorConfig.get_safe_env(),
-            preexec_fn=set_pdeathsig(),
+        from core.git import ls_remote
+        refs = ls_remote(
+            url,
+            proxy_hosts=_LS_REMOTE_PROXY_HOSTS,
+            timeout=20,
+            patterns=(ref, f"refs/tags/{ref}", f"refs/heads/{ref}"),
+            bearer_token=token,
         )
-    except (subprocess.SubprocessError, OSError) as e:
+    except (RuntimeError, ValueError, OSError,
+            subprocess.SubprocessError) as e:
         logger.warning("sca.hash_pin: git ls-remote failed for %s/%s@%s: %s",
                         owner, repo, ref, e)
         cache[key] = None
         return None
-    if proc.returncode != 0:
-        cache[key] = None
-        return None
-    # Output: ``<sha>\t<refname>\n``. Prefer the annotated-tag commit
+    # Refs: ``[(sha, refname), ...]``. Prefer the annotated-tag commit
     # (``^{}`` suffix) when present — that's the actual commit, not the
     # tag-object SHA.
-    sha = _pick_sha(proc.stdout)
+    sha = _pick_sha(refs)
     cache[key] = sha
     return sha
 
 
-def _pick_sha(stdout: str) -> Optional[str]:
-    """Pick the right SHA from git ls-remote output.
+def _pick_sha(refs: Iterable[tuple[str, str]]) -> str | None:
+    """Pick the right SHA from git ls-remote ref pairs.
 
-    Prefers the dereferenced-tag entry (``<sha>\\trefs/tags/<tag>^{}``)
-    over the annotated-tag entry (``<sha>\\trefs/tags/<tag>``) so we
+    Prefers the dereferenced-tag entry (``(<sha>, refs/tags/<tag>^{})``)
+    over the annotated-tag entry (``(<sha>, refs/tags/<tag>)``) so we
     record the commit SHA, not the tag-object SHA.
     """
     annotated_lines = []
     tag_lines = []
     head_lines = []
     bare_lines = []
-    for line in stdout.splitlines():
-        parts = line.split("\t", 1)
-        if len(parts) != 2:
-            continue
-        sha, refname = parts[0].strip(), parts[1].strip()
+    for sha, refname in refs:
+        sha, refname = sha.strip(), refname.strip()
         if not _SHA_RE.match(sha):
             continue
         if refname.endswith("^{}"):

@@ -25,13 +25,15 @@ A rule has a metavariable header between @@ delimiters, then a body:
 <pattern body>
 ```
 
-Anonymous rules omit the name:
+Anonymous rules omit the name, but RAPTOR's harness CANNOT inject
+structured output into anonymous rules — they silently produce
+zero matches. **ALWAYS use a named rule.**
 
 ```
+@@              -- WRONG: anonymous, will silently produce 0 matches
+expression E;
 @@
-<metavariable declarations>
-@@
-<pattern body>
+foo(E)
 ```
 
 ### Metavariable types
@@ -95,7 +97,7 @@ position pos;
 Remove lines with - prefix, add with + prefix:
 
 ```
-@@
+@ rule @
 expression E;
 @@
 - kfree(E);
@@ -108,7 +110,7 @@ expression E;
 code points:
 
 ```
-@@
+@ rule @
 expression E;
 @@
   E = malloc(...);
@@ -158,7 +160,7 @@ Group alternatives with ( ... | ... ) — opening paren, pipe, and
 closing paren must be in column 0 or preceded by backslash:
 
 ```
-@@
+@ rule @
 expression E;
 position pos;
 @@
@@ -191,10 +193,12 @@ cocci.print_main("msg", p)
 
 ### Common patterns for security checkers
 
-Missing NULL check after allocation:
+Missing NULL check after allocation.  Match the allocation site
+only — do NOT add a second `* E` line to match the use/dereference
+(a bare `* E` matches E as a statement, not `*E` the dereference):
 
 ```
-@ rule @
+@ malloc_check @
 expression E;
 position pos;
 @@
@@ -216,19 +220,46 @@ position pos;
 * kfree@pos(E)
 ```
 
-Format string (user-controlled format argument):
+Format string (user-controlled format argument).  Note:
+`expression E` matches string literals too, so `printf@pos(E)`
+fires on `printf("hello")`.  The test_negative fixture must
+differ structurally — e.g. use `printf("%s", var)` (two args)
+vs the violation `printf(var)` (one arg).  Alternatively, use a
+`constant` metavariable in a separate rule with `depends on`:
 
 ```
-@ rule @
+@ safe @
+constant C;
+@@
+printf(C, ...)
+
+@ format_string_violation depends on !safe @
 expression E;
 position pos;
 @@
 (
-* snprintf@pos(..., E)
+* printf@pos(E)
+|
+* printf@pos(E, ...)
+)
+```
+
+The simple (no depends-on) form for when fixtures differ in
+argument count:
+
+```
+@ format_string_violation @
+expression E;
+position pos;
+@@
+(
+* printf@pos(E)
+|
+* fprintf@pos(..., E)
 |
 * sprintf@pos(..., E)
 |
-* printf@pos(E)
+* snprintf@pos(..., E)
 )
 ```
 
@@ -246,6 +277,38 @@ position pos;
 - String constants use `"..."` — Coccinelle matches C string literal
   syntax, not SmPL-level regex.
 - Parentheses in disjunctions ( | ) must start in column 0.
+- **ALWAYS use a named rule** (`@ rule_name @`), never an anonymous
+  rule (`@@`). RAPTOR's harness cannot inject structured output
+  reporting into anonymous rules — they silently produce zero matches
+  even when spatch finds patterns. Example:
+  ```
+  @ check_malloc @          -- correct: named rule
+  expression E;
+  position pos;
+  @@
+  * E@pos = malloc(...)
+  ```
+- **`when !=` clauses can only negate EXPRESSIONS and simple
+  statements, not compound statements.** `when != E == NULL` is valid
+  (negates an expression). `when != if (E)` is INVALID and causes a
+  parse error. To exclude null-checked paths, use:
+  ```
+  ... when != E == NULL
+      when != E != NULL
+      when != !E
+  ```
+  Do NOT write `when != if (E)` — that causes "minus: parse error".
+- **`<+...+>` (one-or-more nest) is rarely needed and commonly
+  misused.** Stick to `...` (zero-or-more) for statement sequences
+  and `when` clauses for constraints.
+- **Prefer the simplest rule that works.** A single pattern with one
+  `*` context-mode line and a `when !=` clause is almost always
+  better than nested disjunctions or multi-rule dependencies. If the
+  pattern matches `foo(E, E, ...)` (same metavariable at two argument
+  positions), that enforces syntactic identity — no disjunction needed.
+- In context mode (`*`), the `*` prefix goes on the line you want to
+  REPORT, not on every line in the rule. Multiple `*` lines within a
+  single disjunction alternative cause parse errors.
 """
 
 SEMGREP_GRAMMAR = r"""\
@@ -418,8 +481,75 @@ Taint mode fields:
 When to use taint mode vs pattern mode:
 - Taint mode: when the bug is a DATA FLOW from untrusted input to
   a dangerous sink (SQL injection, XSS, command injection, SSRF).
+  The source and sink are typically in DIFFERENT functions or scopes.
 - Pattern mode: when the bug is a STRUCTURAL pattern (weak hash,
-  hardcoded secret, missing check, use of deprecated API).
+  hardcoded secret, missing check, use of deprecated API, double
+  free, format string argument).
+
+**Do NOT use taint mode for local/single-function patterns.**  If the
+violation is "X without nearby Y" or "X followed by X" within one
+function, use `patterns:` with ellipsis and `pattern-not` /
+`pattern-not-inside`.  Taint mode has higher overhead, needs proper
+source→sink propagation through assignments, and fails silently on
+minimal code snippets.
+
+Missing null check (pattern mode — correct).  Match the
+ALLOCATION site and exclude when a guard is present.  Do NOT
+try to also match the dereference — expressions like `*$PTR`
+or `$PTR[$IDX]` are sub-expressions, not statements, and won't
+match in statement position:
+
+```yaml
+rules:
+- id: malloc-no-null-check
+  languages: [c]
+  severity: HIGH
+  message: malloc result used without null check
+  patterns:
+    - pattern: $PTR = malloc(...);
+    - pattern-not-inside: |
+        $PTR = malloc(...);
+        ...
+        if ($PTR != NULL) { ... }
+    - pattern-not-inside: |
+        $PTR = malloc(...);
+        ...
+        if ($PTR) { ... }
+    - pattern-not-inside: |
+        $PTR = malloc(...);
+        ...
+        if (!$PTR) { ... }
+```
+
+Format string (pattern mode — correct):
+
+```yaml
+rules:
+- id: printf-format-string
+  languages: [c]
+  severity: HIGH
+  message: non-literal format string
+  patterns:
+    - pattern-either:
+      - pattern: printf($FMT, ...)
+      - pattern: printf($FMT)
+    - pattern-not: printf("...", ...)
+    - pattern-not: printf("...")
+```
+
+Double free (pattern mode — correct):
+
+```yaml
+rules:
+- id: double-free
+  languages: [c]
+  severity: HIGH
+  message: pointer freed twice without reassignment
+  pattern: |
+    free($PTR);
+    ...
+    free($PTR);
+```
 
 Each source/sink/sanitizer entry accepts `exact` (bool) and
 `by-side-effect` (bool). Sources default to `exact: false`
@@ -504,6 +634,36 @@ rules:
 
 ### Syntax pitfalls (AVOID these)
 
+- **C/C++ multi-line patterns: ALWAYS include semicolons.**
+  `$PTR = malloc(...)` (no semicolon) in a multi-line `pattern-not-inside`
+  causes Semgrep to mis-parse the statement boundary, making the
+  exclusion match everything and suppressing all results. Always write
+  `$PTR = malloc(...);` with the trailing semicolon.
+- **In multi-line patterns, each line must be a full STATEMENT, not
+  a sub-expression.** `$PTR[$IDX]` or `*$PTR` alone are expressions,
+  not statements — they silently fail to match in statement position.
+  This is the #1 cause of "rule did not match positive test fixture."
+  ```yaml
+  # WRONG — *$PTR is a sub-expression, not a statement:
+  pattern: |
+    $PTR = malloc(...);
+    ...
+    *$PTR
+  # ALSO WRONG — missing semicolons in pattern-not-inside:
+  patterns:
+    - pattern: $PTR = malloc(...)
+    - pattern-not-inside: |
+        $PTR = malloc(...)
+        ...
+        if ($PTR != NULL) { ... }
+  # RIGHT — match the call site, exclude the guard, semicolons present:
+  patterns:
+    - pattern: $PTR = malloc(...);
+    - pattern-not-inside: |
+        $PTR = malloc(...);
+        ...
+        if ($PTR != NULL) { ... }
+  ```
 - `pattern` and `patterns` are mutually exclusive at the same level.
   Use `patterns:` with a list when combining, or `pattern:` alone.
 - **`pattern-not` / `pattern-not-inside` at the top level are
@@ -574,5 +734,23 @@ rules:
   `languages: [javascript]` silently produces zero matches on
   Python files (no error).
 - Rule IDs must be kebab-case with no spaces or special characters.
+- **`focus-metavariable` SILENTLY FAILS if the named metavariable
+  does not appear in the accompanying pattern.** The metavariable
+  must be BOUND — i.e. actually present as `$NAME` in the pattern
+  text. Common mistake:
+  ```yaml
+  pattern-sources:
+    - patterns:
+      - pattern: malloc(...)
+      - focus-metavariable: $ALLOC    # WRONG — $ALLOC not in pattern
+  ```
+  Fix: either add the metavariable to the pattern
+  (`$ALLOC = malloc(...)`) or drop `focus-metavariable` entirely.
+  When a simple `pattern: malloc(...)` suffices as a taint source,
+  no `focus-metavariable` or `patterns:` wrapper is needed.
+- **Prefer the simplest rule that works.** A single `pattern:` is
+  better than `patterns:` wrapping one item. A bare source/sink is
+  better than a `patterns:` + `pattern-either:` + `focus-metavariable`
+  stack. Unnecessary nesting is the #1 cause of silent failures.
 """
 

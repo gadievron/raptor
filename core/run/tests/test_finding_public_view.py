@@ -17,7 +17,6 @@ from core.run.findings import (
     finding_public_view,
 )
 
-
 # --- allowlist enforcement -----------------------------------------------
 
 
@@ -106,11 +105,14 @@ def test_file_relativized_against_target_path_arg() -> None:
     assert out["file"] == "src/a.c"
 
 
-def test_file_relativized_via_provenance_refs_when_no_arg(
+def test_absolute_manifest_path_is_never_dereferenced(
     tmp_path: Path,
 ) -> None:
-    # Manifest carrying target_path that the projector reads via the
-    # absolute manifest_path on provenance_refs[0].
+    # Stamping only ever writes the run-dir-relative ".raptor-run.json";
+    # an absolute manifest_path can only appear in a crafted record. The
+    # projector treats it as a missing manifest: even though this
+    # manifest exists on disk and carries a resolvable target_path, it
+    # is not read, so the file collapses to basename.
     target = tmp_path / "repo"
     target.mkdir()
     src = target / "src" / "a.c"
@@ -124,7 +126,20 @@ def test_file_relativized_via_provenance_refs_when_no_arg(
             {"run_id": "r1", "manifest_path": str(manifest)},
         ],
     })
-    assert out["file"] == "src/a.c"
+    assert out["file"] == "a.c"
+
+
+def test_relative_manifest_path_not_resolved_without_target_path() -> None:
+    # The stamped (relative) manifest_path convention: without an
+    # explicit target_path the projector has no run dir to resolve it
+    # against, so the file still falls back to basename.
+    out = finding_public_view({
+        "file": "/abs/repo/src/a.c",
+        PROVENANCE_REFS_FIELD: [
+            {"run_id": "r1", "manifest_path": ".raptor-run.json"},
+        ],
+    })
+    assert out["file"] == "a.c"
 
 
 def test_file_falls_back_to_basename_when_no_anchor() -> None:
@@ -175,9 +190,10 @@ def test_ansi_escape_drops_field() -> None:
 
 def test_rtl_override_drops_field() -> None:
     # Homograph / spoofing vector — U+202E reverses display direction.
+    # Escaped form keeps the raw control character out of this source file.
     out = finding_public_view({
         "id": "F",
-        "function": "safe_‮gnp.exe",
+        "function": "safe_\u202egnp.exe",
     })
     assert "function" not in out
 

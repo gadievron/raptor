@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 try:
     from .condition_extraction import (
+        _FUNCTION_TYPES,
         _get_parser,
         language_for_file,
-        _FUNCTION_TYPES,
     )
     _TS_AVAILABLE = True
 except ImportError:
@@ -34,10 +34,10 @@ except ImportError:
     def _get_parser(lang: str):  # type: ignore[misc]
         return None
 
-    def language_for_file(filepath: str) -> Optional[str]:  # type: ignore[misc]
+    def language_for_file(filepath: str) -> str | None:  # type: ignore[misc]
         return None
 
-    _FUNCTION_TYPES: Dict[str, tuple] = {}  # type: ignore[no-redef]
+    _FUNCTION_TYPES: dict[str, tuple] = {}  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ class FunctionReturns:
 
     function: str
     file: str
-    returns: List[ReturnInfo] = field(default_factory=list)
+    returns: list[ReturnInfo] = field(default_factory=list)
 
     @property
     def sentinel_ambiguous(self) -> bool:
@@ -93,7 +93,7 @@ class CallChain:
     file: str
     function: str
     variable: str
-    steps: List[CallStep] = field(default_factory=list)
+    steps: list[CallStep] = field(default_factory=list)
 
 
 @dataclass
@@ -115,7 +115,7 @@ class DispatchTable:
     function: str
     file: str
     line: int
-    keys: List[str] = field(default_factory=list)
+    keys: list[str] = field(default_factory=list)
     table_type: str = "switch"  # "switch"/"dict"/"if_chain"/"match"
 
 
@@ -133,7 +133,7 @@ class LoopCap:
 # Node type tables
 # ---------------------------------------------------------------------------
 
-_CALL_TYPES: Dict[str, Tuple[str, ...]] = {
+_CALL_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("call_expression",),
     "cpp": ("call_expression",),
     "python": ("call",),
@@ -148,7 +148,7 @@ _CALL_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("invocation_expression",),
 }
 
-_ASSIGNMENT_TYPES: Dict[str, Tuple[str, ...]] = {
+_ASSIGNMENT_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("assignment_expression",),
     "cpp": ("assignment_expression",),
     "python": ("assignment",),
@@ -163,7 +163,7 @@ _ASSIGNMENT_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("assignment_expression",),
 }
 
-_RETURN_TYPES: Dict[str, Tuple[str, ...]] = {
+_RETURN_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("return_statement",),
     "cpp": ("return_statement",),
     "python": ("return_statement",),
@@ -178,7 +178,7 @@ _RETURN_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("return_statement",),
 }
 
-_ERROR_HANDLER_TYPES: Dict[str, Tuple[str, ...]] = {
+_ERROR_HANDLER_TYPES: dict[str, tuple[str, ...]] = {
     "c": (),
     "cpp": ("catch_clause",),
     "python": ("except_clause",),
@@ -193,7 +193,7 @@ _ERROR_HANDLER_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("catch_clause",),
 }
 
-_SWITCH_TYPES: Dict[str, Tuple[str, ...]] = {
+_SWITCH_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("switch_statement",),
     "cpp": ("switch_statement",),
     "python": ("match_statement",),
@@ -208,7 +208,7 @@ _SWITCH_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("switch_statement", "switch_expression"),
 }
 
-_CASE_TYPES: Dict[str, Tuple[str, ...]] = {
+_CASE_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("case_statement",),
     "cpp": ("case_statement",),
     "python": ("case_clause",),
@@ -223,7 +223,7 @@ _CASE_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("switch_section",),
 }
 
-_STRING_TYPES: Dict[str, Tuple[str, ...]] = {
+_STRING_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("string_literal",),
     "cpp": ("string_literal", "raw_string_literal"),
     "python": ("string",),
@@ -238,7 +238,7 @@ _STRING_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("string_literal", "verbatim_string_literal", "interpolated_string_expression"),
 }
 
-_NULL_TYPES: Dict[str, Tuple[str, ...]] = {
+_NULL_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("null",),
     "cpp": ("null", "nullptr"),
     "python": ("none",),
@@ -253,7 +253,7 @@ _NULL_TYPES: Dict[str, Tuple[str, ...]] = {
     "csharp": ("null_literal",),
 }
 
-_LOOP_TYPES: Dict[str, Tuple[str, ...]] = {
+_LOOP_TYPES: dict[str, tuple[str, ...]] = {
     "c": ("for_statement", "while_statement", "do_statement"),
     "cpp": ("for_statement", "while_statement", "do_statement", "for_range_loop"),
     "python": ("for_statement", "while_statement"),
@@ -422,7 +422,7 @@ def _parse_file(file_path: str, source: str):
     src = source.encode("utf-8", errors="replace")
     try:
         tree = parser.parse(src)
-    except Exception:
+    except Exception:  # noqa: BLE001 — unparseable source: no extraction
         return None
     return tree, lang, src
 
@@ -444,7 +444,7 @@ def _iter_functions(tree, lang: str, src: bytes, file_path: str):
 def extract_function_returns(
     file_path: str,
     source: str,
-) -> Optional[List[FunctionReturns]]:
+) -> list[FunctionReturns] | None:
     """Extract return-path semantics for each function.
 
     Returns None if tree-sitter is unavailable for this file type.
@@ -454,7 +454,7 @@ def extract_function_returns(
         return None
     tree, lang, src = parsed
 
-    results: List[FunctionReturns] = []
+    results: list[FunctionReturns] = []
     return_types = _RETURN_TYPES.get(lang, ())
 
     for func_node, func_name, body in _iter_functions(tree, lang, src, file_path):
@@ -489,7 +489,7 @@ def extract_function_returns(
 def extract_call_chains(
     file_path: str,
     source: str,
-) -> Optional[List[CallChain]]:
+) -> list[CallChain] | None:
     """Extract ordered transform sequences (same-variable reassignment and method chains).
 
     Returns None if tree-sitter is unavailable for this file type.
@@ -501,11 +501,11 @@ def extract_call_chains(
 
     assign_types = _ASSIGNMENT_TYPES.get(lang, ())
     call_types = _CALL_TYPES.get(lang, ())
-    results: List[CallChain] = []
+    results: list[CallChain] = []
 
     for func_node, func_name, body in _iter_functions(tree, lang, src, file_path):
         # Track reassignment chains: var → [steps]
-        var_chains: Dict[str, List[CallStep]] = {}
+        var_chains: dict[str, list[CallStep]] = {}
 
         for desc in _walk_descendants(body):
             if desc.type not in assign_types:
@@ -550,7 +550,7 @@ def extract_call_chains(
 
 def _extract_assignment_parts(
     node, lang: str, src: bytes,
-) -> Tuple[str, Any]:
+) -> tuple[str, Any]:
     """Extract (lhs_name, rhs_node) from an assignment."""
     if lang == "go":
         # assignment_statement: expr_list = expr_list
@@ -583,14 +583,14 @@ def _extract_assignment_parts(
 
         return lhs_name, rhs
 
-    if lang in ("javascript", "typescript", "tsx"):
-        # variable_declarator: identifier = expr
-        if node.type == "variable_declarator":
-            name_node = node.child_by_field_name("name")
-            value_node = node.child_by_field_name("value")
-            if name_node and value_node:
-                return _node_text(name_node, src), value_node
-            return "", None
+    # variable_declarator: identifier = expr
+    if (lang in ("javascript", "typescript", "tsx")
+            and node.type == "variable_declarator"):
+        name_node = node.child_by_field_name("name")
+        value_node = node.child_by_field_name("value")
+        if name_node and value_node:
+            return _node_text(name_node, src), value_node
+        return "", None
 
     # General: assignment_expression: lhs = rhs
     children = node.children
@@ -616,7 +616,7 @@ def _extract_assignment_parts(
 
 
 def _extract_call_name(
-    node, lang: str, src: bytes, call_types: Tuple[str, ...],
+    node, lang: str, src: bytes, call_types: tuple[str, ...],
 ) -> str:
     """Extract the call name from an expression that may be a call."""
     # Java method_invocation uses "name"/"object" fields, not "function"
@@ -642,7 +642,7 @@ def _extract_call_name(
 
 
 def _extract_first_arg(
-    node, lang: str, src: bytes, call_types: Tuple[str, ...],
+    node, lang: str, src: bytes, call_types: tuple[str, ...],
 ) -> str:
     """Extract the first argument's text from a call."""
     args_node = node.child_by_field_name("arguments")
@@ -662,13 +662,13 @@ def _extract_first_arg(
 
 
 def _extract_method_chain(
-    node, lang: str, src: bytes, call_types: Tuple[str, ...],
-) -> Optional[CallChain]:
+    node, lang: str, src: bytes, call_types: tuple[str, ...],
+) -> CallChain | None:
     """Extract a method chain like x.strip().lower().replace(...)."""
     if node.type not in call_types:
         return None
 
-    steps: List[CallStep] = []
+    steps: list[CallStep] = []
     var_name = ""
     current = node
 
@@ -718,7 +718,7 @@ def _extract_method_chain(
 def extract_string_literals(
     file_path: str,
     source: str,
-) -> Optional[List[StringLiteralSite]]:
+) -> list[StringLiteralSite] | None:
     """Extract string literals with their context role.
 
     Returns None if tree-sitter is unavailable for this file type.
@@ -729,7 +729,7 @@ def extract_string_literals(
     tree, lang, src = parsed
 
     string_types = _STRING_TYPES.get(lang, ())
-    results: List[StringLiteralSite] = []
+    results: list[StringLiteralSite] = []
 
     for node in _walk_descendants(tree.root_node):
         if node.type not in string_types:
@@ -777,7 +777,7 @@ def _strip_string_delimiters(text: str, lang: str) -> str:
             break
     if len(s) < 2:
         return ""
-    if s.startswith('"""') or s.startswith("'''"):
+    if s.startswith(('"""', "'''")):
         return s[3:-3] if len(s) >= 6 else ""
     if s.startswith('`'):
         return s[1:-1] if s.endswith('`') else s[1:]
@@ -822,9 +822,9 @@ def _classify_string_context(node, lang: str) -> str:
     _RETURN_CONTEXT = ("return_statement", "return", "return_expression")
     if parent.type in _RETURN_CONTEXT:
         return "return"
-    if grandparent is not None and grandparent.type in _RETURN_CONTEXT:
-        if parent.type == "expression_list":
-            return "return"
+    if (grandparent is not None and grandparent.type in _RETURN_CONTEXT
+            and parent.type == "expression_list"):
+        return "return"
 
     # Assignment RHS (some grammars wrap in expression_list)
     _ASSIGN_CONTEXT = (
@@ -834,9 +834,9 @@ def _classify_string_context(node, lang: str) -> str:
     )
     if parent.type in _ASSIGN_CONTEXT:
         return "assignment"
-    if grandparent is not None and grandparent.type in _ASSIGN_CONTEXT:
-        if parent.type == "expression_list":
-            return "assignment"
+    if (grandparent is not None and grandparent.type in _ASSIGN_CONTEXT
+            and parent.type == "expression_list"):
+        return "assignment"
 
     # Argument to a call
     if parent.type in ("arguments", "argument_list"):
@@ -852,7 +852,7 @@ def _classify_string_context(node, lang: str) -> str:
 def extract_dispatch_tables(
     file_path: str,
     source: str,
-) -> Optional[List[DispatchTable]]:
+) -> list[DispatchTable] | None:
     """Extract switch/case and dict-literal dispatch tables.
 
     Returns None if tree-sitter is unavailable for this file type.
@@ -865,7 +865,7 @@ def extract_dispatch_tables(
     switch_types = _SWITCH_TYPES.get(lang, ())
     case_types = _CASE_TYPES.get(lang, ())
     string_types = _STRING_TYPES.get(lang, ())
-    results: List[DispatchTable] = []
+    results: list[DispatchTable] = []
 
     for node in _walk_descendants(tree.root_node):
         if node.type not in switch_types:
@@ -874,7 +874,7 @@ def extract_dispatch_tables(
         func_node = _find_enclosing_function(node, lang)
         func_name = _get_func_name(func_node, lang, src) if func_node else "<module>"
 
-        keys: List[str] = []
+        keys: list[str] = []
         for desc in _walk_descendants(node):
             if desc.type in case_types:
                 # Skip case nodes belonging to a nested switch
@@ -917,7 +917,7 @@ _TRUNCATION_KEYWORDS = frozenset({
 def extract_loop_caps(
     file_path: str,
     source: str,
-) -> Optional[List[LoopCap]]:
+) -> list[LoopCap] | None:
     """Extract loops with break-at-limit patterns.
 
     Returns None if tree-sitter is unavailable for this file type.
@@ -928,7 +928,7 @@ def extract_loop_caps(
     tree, lang, src = parsed
 
     loop_types = _LOOP_TYPES.get(lang, ())
-    results: List[LoopCap] = []
+    results: list[LoopCap] = []
 
     for node in _walk_descendants(tree.root_node):
         if node.type not in loop_types:
@@ -990,7 +990,7 @@ def extract_function_body(
     file_path: str,
     source: str,
     func_name: str,
-) -> Optional[str]:
+) -> str | None:
     """Extract the source text of a named function.
 
     Returns None if tree-sitter is unavailable for this file type.
@@ -1016,39 +1016,12 @@ def extract_function_body(
 # Convenience: file-level batch extraction
 # ---------------------------------------------------------------------------
 
-def extract_all_returns(
-    source_text: Dict[str, str],
-) -> Dict[str, List[FunctionReturns]]:
-    """Batch extract return semantics for all non-Python files."""
-    results: Dict[str, List[FunctionReturns]] = {}
-    for fp, src in source_text.items():
-        if fp.endswith(".py"):
-            continue
-        ret = extract_function_returns(fp, src)
-        if ret:
-            results[fp] = ret
-    return results
-
-
-def extract_all_call_chains(
-    source_text: Dict[str, str],
-) -> Dict[str, List[CallChain]]:
-    """Batch extract call chains for all non-Python files."""
-    results: Dict[str, List[CallChain]] = {}
-    for fp, src in source_text.items():
-        if fp.endswith(".py"):
-            continue
-        chains = extract_call_chains(fp, src)
-        if chains:
-            results[fp] = chains
-    return results
-
 
 def extract_all_string_literals(
-    source_text: Dict[str, str],
-) -> Dict[str, List[StringLiteralSite]]:
+    source_text: dict[str, str],
+) -> dict[str, list[StringLiteralSite]]:
     """Batch extract string literals for all non-Python files."""
-    results: Dict[str, List[StringLiteralSite]] = {}
+    results: dict[str, list[StringLiteralSite]] = {}
     for fp, src in source_text.items():
         if fp.endswith(".py"):
             continue
@@ -1059,10 +1032,10 @@ def extract_all_string_literals(
 
 
 def extract_all_dispatch_tables(
-    source_text: Dict[str, str],
-) -> Dict[str, List[DispatchTable]]:
+    source_text: dict[str, str],
+) -> dict[str, list[DispatchTable]]:
     """Batch extract dispatch tables for all non-Python files."""
-    results: Dict[str, List[DispatchTable]] = {}
+    results: dict[str, list[DispatchTable]] = {}
     for fp, src in source_text.items():
         if fp.endswith(".py"):
             continue

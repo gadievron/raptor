@@ -455,3 +455,39 @@ def test_from_dict_names_finding_id_on_spine_error():
     blob["outcome"] = "nonsense-value"
     with pytest.raises(ValueError, match="finding_id='FND-001'"):
         LabeledAttempt.from_dict(blob)
+
+
+# --------------------------------------------------------------------------
+# Reproducibility invariant — web evidence is point-in-time.
+# --------------------------------------------------------------------------
+
+
+def test_web_evidence_derives_reproducible_false():
+    """Web evidence is a live-HTTP point-in-time confirmation — never
+    replayable. The invariant is derived at construction even when the
+    producer leaves the ``reproducible=True`` default."""
+    a = _attempt(
+        sandbox_evidence=None,
+        web_evidence=_web_evidence(),
+        reproducible=True,
+    )
+    assert a.reproducible is False
+
+
+def test_web_reproducible_derivation_applies_on_load():
+    """A record persisted before the invariant existed (web evidence +
+    ``reproducible: true`` on disk) loads with the derived False."""
+    a = _attempt(
+        sandbox_evidence=None,
+        web_evidence=_web_evidence(),
+        reproducible=False,
+    )
+    blob = a.to_dict()
+    blob["reproducible"] = True
+    assert LabeledAttempt.from_dict(blob).reproducible is False
+
+
+def test_sandbox_and_codeql_reproducible_unaffected():
+    assert _attempt().reproducible is True
+    b = _attempt(sandbox_evidence=None, codeql_evidence=_codeql_evidence())
+    assert b.reproducible is True

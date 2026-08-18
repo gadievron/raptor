@@ -10,7 +10,7 @@ The shape we exercise per client:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from packages.sca.registries.crates import CratesClient
 from packages.sca.registries.debian import DebianClient, _extract_versions
@@ -23,26 +23,25 @@ from packages.sca.registries.packagist import PackagistClient
 from packages.sca.registries.pypi import PyPIClient
 from packages.sca.registries.rubygems import RubyGemsClient
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
 
 class _FakeHttp:
-    def __init__(self, json_payload: Optional[Any] = None,
-                 bytes_payload: Optional[bytes] = None,
-                 raise_exc: Optional[Exception] = None) -> None:
+    def __init__(self, json_payload: Any | None = None,
+                 bytes_payload: bytes | None = None,
+                 raise_exc: Exception | None = None) -> None:
         self.json_payload = json_payload
         self.bytes_payload = bytes_payload
         self.raise_exc = raise_exc
-        self.calls: List[str] = []
+        self.calls: list[str] = []
 
     def get_json(self, url: str, timeout: int = 30,
-                 headers: Optional[Dict[str, str]] = None,
+                 headers: dict[str, str] | None = None,
                  *,
                  max_bytes: int = 0,
                  **kw,
-                 ) -> Dict[str, Any]:
+                 ) -> dict[str, Any]:
         # ``max_bytes`` is recorded per call so per-registry tests can
         # assert specific caps (e.g. npm should pass a higher cap than
         # the global default to handle large scoped namespaces).
@@ -160,8 +159,8 @@ def test_npm_negative_caches_404_failures(tmp_path) -> None:
     burning thousands of duplicate 404s before the operator
     killed the run.
     """
-    from core.json import JsonCache
     from core.http import HttpError
+    from core.json import JsonCache
     cache = JsonCache(root=tmp_path)
     http = _FakeHttp(raise_exc=HttpError("404"))
     client = NpmClient(http, cache=cache)
@@ -175,8 +174,8 @@ def test_npm_negative_caches_404_failures(tmp_path) -> None:
 
 def test_pypi_negative_caches_404_failures(tmp_path) -> None:
     """Same negative-caching contract for PyPI."""
-    from core.json import JsonCache
     from core.http import HttpError
+    from core.json import JsonCache
     cache = JsonCache(root=tmp_path)
     http = _FakeHttp(raise_exc=HttpError("404"))
     client = PyPIClient(http, cache=cache)
@@ -250,12 +249,12 @@ def test_rubygems_version_meta_strips_platform_suffix() -> None:
 
 def test_golang_filters_pseudo_and_prerelease() -> None:
     text = (
-        "v1.0.0\n"
-        "v2.0.0\n"
-        "v2.0.0-rc.1\n"
-        "v0.0.0-20210101000000-abcdef123456\n"   # pseudo-version
-        "v1.5.0\n"
-    ).encode("utf-8")
+        b"v1.0.0\n"
+        b"v2.0.0\n"
+        b"v2.0.0-rc.1\n"
+        b"v0.0.0-20210101000000-abcdef123456\n"   # pseudo-version
+        b"v1.5.0\n"
+    )
     client = GoClient(_FakeHttp(bytes_payload=text))
     assert client.list_versions("github.com/foo/bar") == [
         "v2.0.0", "v1.5.0", "v1.0.0",
@@ -284,7 +283,7 @@ def test_golang_offline_skips_http() -> None:
 # name, then suite, then version. The same version recurs across suites
 # (incl. the -debug shadow) and must be deduped; output is newest-first by
 # dpkg ordering (epoch dominance, ``+debNuM`` security bumps, etc.).
-def _madison(pkg: str, by_suite: Dict[str, List[str]]) -> List[dict]:
+def _madison(pkg: str, by_suite: dict[str, list[str]]) -> list[dict]:
     return [{pkg: {
         suite: {ver: {"component": "main", "source": pkg} for ver in vers}
         for suite, vers in by_suite.items()
@@ -378,6 +377,7 @@ def test_debian_suite_query_cached_separately_from_all_suites() -> None:
     """The all-suites list and a per-suite list use distinct cache keys."""
     import tempfile
     from pathlib import Path
+
     from core.json import JsonCache
     with tempfile.TemporaryDirectory() as d:
         cache = JsonCache(root=Path(d))
@@ -569,3 +569,123 @@ def test_packagist_prerelease_regex_spares_tools_suffix() -> None:
     suffixes."""
     from packages.sca.registries.packagist import _PRERELEASE_RE
     assert _PRERELEASE_RE.search("1.0-tools") is None
+
+
+# ---------------------------------------------------------------------------
+# Cache-key hygiene: name validation + injective (percent-encoded) keys
+# ---------------------------------------------------------------------------
+
+def test_npm_invalid_name_returns_not_found_without_caching(tmp_path) -> None:
+    """A name failing the npm registry grammar (``lodash/..``) must
+    return the not-found result WITHOUT fetching and WITHOUT writing
+    any cache entry — pre-fix, its 404 result was cached into the
+    file that ``lodash`` reads (the cache layer drops degenerate
+    path segments)."""
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(json_payload={"versions": {"1.0.0": {}}})
+    client = NpmClient(http, cache=cache)
+
+    assert client.get_metadata("lodash/..") is None
+    assert client.list_versions("lodash/..") == []
+    assert http.calls == [], "invalid name must never reach the registry"
+    # No cache entry was created anywhere under the root (ignore the
+    # cache's internal bookkeeping markers like ``.reap_last_run``).
+    written = list(tmp_path.rglob("*.json"))
+    assert written == [], f"invalid name wrote cache entries: {written}"
+
+
+def test_npm_degenerate_name_cannot_poison_victim_entry(tmp_path) -> None:
+    """End-to-end collision check: caching a real ``lodash`` payload,
+    then querying ``lodash/..`` (which pre-fix aliased the same cache
+    file) must leave the ``lodash`` entry intact."""
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(json_payload={"name": "lodash", "versions": {"1.0.0": {}}})
+    client = NpmClient(http, cache=cache)
+
+    meta = client.get_metadata("lodash")
+    assert meta is not None
+    n_calls = len(http.calls)
+
+    # Degenerate alias: rejected pre-fetch, no cache interaction.
+    assert client.get_metadata("lodash/..") is None
+    assert len(http.calls) == n_calls
+
+    # Victim still served from its own (unpoisoned) cache entry.
+    assert client.get_metadata("lodash") == meta
+    assert len(http.calls) == n_calls, "lodash must still be cache-served"
+
+
+def test_npm_scoped_name_cached_under_single_encoded_segment(
+    tmp_path,
+) -> None:
+    """``@babel/traverse`` is cached under one percent-encoded path
+    segment — no ``@babel`` subdirectory whose segments the cache
+    layer could sanitise into another package's identity — and is
+    still served on the second call."""
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(json_payload={"name": "a", "versions": {"1.0.0": {}}})
+    client = NpmClient(http, cache=cache)
+
+    assert client.get_metadata("@babel/traverse") is not None
+    assert len(http.calls) == 1
+    # The raw name would have produced an ``npm-meta:@babel/`` subdir.
+    assert not any(p.is_dir() for p in tmp_path.iterdir()), (
+        "scoped-name cache key must be a single encoded segment"
+    )
+    # Round-trip: served from the encoded entry.
+    assert client.get_metadata("@babel/traverse") is not None
+    assert len(http.calls) == 1
+
+
+def test_npm_grammar_rejects_registry_impossible_names() -> None:
+    from packages.sca.registries.npm import _valid_npm_name
+
+    assert _valid_npm_name("lodash")
+    assert _valid_npm_name("@babel/traverse")
+    assert _valid_npm_name("some-pkg_1.2~x")
+    assert not _valid_npm_name("lodash/..")
+    assert not _valid_npm_name("../etc")
+    assert not _valid_npm_name("UpperCase")
+    assert not _valid_npm_name("@scope/a/b")
+    assert not _valid_npm_name("")
+    assert not _valid_npm_name("a" * 215)
+
+
+def test_pypi_slash_name_key_distinct_from_flattened(tmp_path) -> None:
+    """Sibling clients share the encoded-key fix: a name carrying a
+    ``/`` must not collide with its ``_``-flattened form."""
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    http = _FakeHttp(json_payload={"releases": {"1.0": [{"yanked": False}]}})
+    client = PyPIClient(http, cache=cache)
+
+    client.get_metadata("weird/name")
+    n = len(http.calls)
+    client.get_metadata("weird-name")   # PEP 503 canonical of weird_name
+    assert len(http.calls) == n + 1, (
+        "flattened name must not be served from the slash-name entry"
+    )
+
+
+def test_packagist_vendor_name_key_injective(tmp_path) -> None:
+    """Composer names legitimately contain ``/`` — the key encoding
+    must keep ``vendor/pkg`` and a hostile ``vendor/../pkg`` apart."""
+    from core.json import JsonCache
+    cache = JsonCache(root=tmp_path)
+    payload = {
+        "packages": {"vendor/pkg": [{"version": "1.2.3"}]},
+    }
+    http = _FakeHttp(json_payload=payload)
+    client = PackagistClient(http, cache=cache)
+
+    assert client.list_versions("vendor/pkg") == ["1.2.3"]
+    n = len(http.calls)
+    # Different (degenerate) name → different cache entry → refetch.
+    client.list_versions("vendor/../pkg")
+    assert len(http.calls) == n + 1
+    # Original entry unaffected.
+    assert client.list_versions("vendor/pkg") == ["1.2.3"]
+    assert len(http.calls) == n + 1

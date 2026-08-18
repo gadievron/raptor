@@ -20,6 +20,8 @@ Usage:
                       tabular stdout only.
   --target-prefix S   filter corpus entries by filename prefix
                       (e.g. ``source_intel_``).
+  --model NAME        pin the LLM model for both conditions;
+                      otherwise the LLMClient default applies.
   --verdict V         restrict the sample to entries with this
                       ground-truth verdict (``true_positive`` or
                       ``false_positive``). Cannot be combined with
@@ -332,7 +334,7 @@ def main() -> int:
     print()
 
     from core.llm.client import LLMClient
-    llm = LLMClient()
+    llm = LLMClient(pinned_model=args.model) if args.model else LLMClient()
 
     # Two validators differ only in collector.
     # Baseline: sanitizer-only (the PR1 V2 default for non-injection

@@ -7,12 +7,12 @@ dispatch: python3 raptor.py agentic
 
 Generate secure patches to fix vulnerabilities.
 
-**Requires:** SARIF file from previous /scan
+**Requires:** a target repository (agentic re-scans it, or pass `--sarif <file>` to reuse findings from a previous /scan)
 
 **What it does:**
 - Analyzes findings with LLM
 - Generates secure patch code
-- Saves to out/*/patches/
+- Saves to out/*/autonomous/patches/
 - Does NOT generate exploits (use /exploit for that)
 
 **Run:** `python3 raptor.py agentic --repo <path> --no-exploits --max-findings <N>`

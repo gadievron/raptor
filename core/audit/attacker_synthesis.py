@@ -85,7 +85,6 @@ _STEP_OUTPUT_INPUT: Dict[tuple, str] = {
     ("xss", "auth_bypass"): "XSS steals credentials for auth bypass",
     ("race", "write"): "race window enables memory corruption",
     ("write", "execute"): "memory corruption enables code execution",
-    ("dos", "race"): "denial-of-service creates race window",
 }
 
 _IMPACT_SEVERITY: Dict[str, str] = {
@@ -178,6 +177,9 @@ def group_by_reachability(
     """Group finding indices by shared entry points or call paths.
 
     Falls back to file-proximity grouping when no context map is available.
+    Findings that end up in no shared group are collected into a single
+    residual group — which may span files and entry points — so every
+    finding stays visible to chain synthesis.
     """
     finding_indices = [
         i for i, o in enumerate(outcomes)
@@ -255,30 +257,49 @@ def synthesize_chains(
                 if not combined:
                     continue
 
+                # Normalise step order: when only the reverse direction
+                # is a valid output→input transition, swap so the chain
+                # always follows the forward direction. This keeps the
+                # strict multi-step step check, the symmetric pairwise
+                # check, and the narrative order in agreement.
+                forward_ok = (
+                    pair in _STEP_OUTPUT_INPUT or pair in _COMPOSABLE_PAIRS
+                )
+                reverse_ok = (
+                    reverse_pair in _STEP_OUTPUT_INPUT
+                    or reverse_pair in _COMPOSABLE_PAIRS
+                )
+                if not forward_ok and reverse_ok:
+                    first_idx, first_prim = idx_b, prim_b
+                    second_idx, second_prim = idx_a, prim_a
+                else:
+                    first_idx, first_prim = idx_a, prim_a
+                    second_idx, second_prim = idx_b, prim_b
+
                 chain_counter += 1
-                key_a = f"{getattr(outcomes[idx_a], 'file', '')}:{getattr(outcomes[idx_a], 'function', '')}"
-                key_b = f"{getattr(outcomes[idx_b], 'file', '')}:{getattr(outcomes[idx_b], 'function', '')}"
+                key_a = f"{getattr(outcomes[first_idx], 'file', '')}:{getattr(outcomes[first_idx], 'function', '')}"
+                key_b = f"{getattr(outcomes[second_idx], 'file', '')}:{getattr(outcomes[second_idx], 'function', '')}"
 
                 constraint_failures = _check_chain_constraints(
-                    outcomes[idx_a], outcomes[idx_b],
-                    prim_a, prim_b,
+                    outcomes[first_idx], outcomes[second_idx],
+                    first_prim, second_prim,
                 )
                 status = "hypothetical" if constraint_failures else "confirmed"
                 severity = _IMPACT_SEVERITY.get(combined, "medium")
 
                 narrative = _build_narrative(
-                    outcomes[idx_a], outcomes[idx_b],
-                    prim_a, prim_b, combined,
+                    outcomes[first_idx], outcomes[second_idx],
+                    first_prim, second_prim, combined,
                 )
 
                 mitigations = _infer_chain_mitigations(
-                    prim_a, prim_b, combined,
+                    first_prim, second_prim, combined,
                 )
 
                 chains.append(AttackChain(
                     chain_id=f"CHAIN-{chain_counter:03d}",
                     finding_keys=[key_a, key_b],
-                    primitives=[prim_a, prim_b],
+                    primitives=[first_prim, second_prim],
                     combined_impact=combined,
                     severity=severity,
                     narrative=narrative,
@@ -629,19 +650,23 @@ def _check_chain_constraints(
     """
     failures = []
 
-    for constraint in prim_a.constraints:
-        c_lower = constraint.lower()
-        if "local" in c_lower and "only" in c_lower:
-            failures.append(
-                f"Finding A ({prim_a.kind}) requires local access"
-            )
-        if "authentication required" in c_lower or "auth required" in c_lower:
-            if prim_b.kind == "auth_bypass":
-                pass
-            else:
+    for label, prim, other in (
+        ("A", prim_a, prim_b),
+        ("B", prim_b, prim_a),
+    ):
+        for constraint in prim.constraints:
+            c_lower = constraint.lower()
+            if "local" in c_lower and "only" in c_lower:
                 failures.append(
-                    "Finding A requires authentication"
+                    f"Finding {label} ({prim.kind}) requires local access"
                 )
+            if "authentication required" in c_lower or "auth required" in c_lower:
+                if other.kind == "auth_bypass":
+                    pass
+                else:
+                    failures.append(
+                        f"Finding {label} requires authentication"
+                    )
 
     # Output→input type compatibility check.
     pair = (prim_a.kind, prim_b.kind)

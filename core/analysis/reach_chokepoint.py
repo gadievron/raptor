@@ -30,55 +30,37 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from pathlib import Path, PurePosixPath
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any
+
+from core.paths import path_to_module as _path_to_module
+from core.paths import to_repo_relative
 
 logger = logging.getLogger(__name__)
 
 
-def normalise_path(file_path: str, repo_root: Path) -> Optional[str]:
+def normalise_path(file_path: str, repo_root: Path) -> str | None:
     """SARIF emitters / semgrep / scanner output produce a mix of
     absolute paths, ``file://``-URI paths, and repo-relative paths.
     Normalise to a repo-relative ``a/b/c.ext`` form so the inventory
     lookup (keyed on repo-relative paths) matches. Returns ``None``
     when the input is absolute but not under ``repo_root`` —
-    something outside the analysed tree, do not suppress.
+    something outside the analysed tree, do not suppress. Delegates to
+    :func:`core.paths.to_repo_relative` (strict mode), which also
+    collapses ``./``/``..`` segments in relative paths and returns
+    ``None`` for a relative path that escapes the root — an escaping
+    path must never license suppression.
     """
-    if not file_path:
-        return None
-    if file_path.startswith("file://"):
-        file_path = file_path[len("file://"):]
-    p = Path(file_path)
-    if p.is_absolute():
-        try:
-            return str(p.relative_to(repo_root.resolve()))
-        except ValueError:
-            return None
-    # Strip a leading ./ that some tools emit so it matches the
-    # inventory's ``files[].path`` convention (no leading ./).
-    if file_path.startswith("./"):
-        file_path = file_path[2:]
-    return file_path
+    return to_repo_relative(file_path, repo_root, outside_root="none")
 
 
-def path_to_module(rel_path: str) -> Optional[str]:
-    """``packages/foo/bar.py`` → ``packages.foo.bar``. For non-Python
-    languages, strip the extension and replace path separators with
-    dots — the call_graph extractor produces dotted-form keys for
-    every language it covers. Returns ``None`` for paths with no
-    extension (can't derive a module).
+def path_to_module(rel_path: str) -> str | None:
+    """``packages/foo/bar.py`` → ``packages.foo.bar``. Delegates to
+    :func:`core.paths.path_to_module` (re-exported here for the
+    chokepoint's existing importers).
     """
-    if not rel_path:
-        return None
-    p = PurePosixPath(rel_path.replace("\\", "/"))
-    if not p.suffix:
-        return None
-    parts = list(p.parts)
-    parts[-1] = p.stem
-    return ".".join(parts)
+    return _path_to_module(rel_path)
 
 
 def check_suppress(
@@ -90,7 +72,7 @@ def check_suppress(
     repo_root: Path,
     allow_unreachable: bool = False,
     manual_override: object = None,
-) -> Optional[Tuple[str, str]]:
+) -> tuple[str, str] | None:
     """Single source of truth for "should this finding be suppressed?"
 
     Returns ``(verdict, reason)`` if the finding's enclosing function
@@ -160,11 +142,11 @@ def check_suppress(
 def record_suppression(
     out_dir: Path,
     *,
-    finding: Dict[str, Any],
+    finding: dict[str, Any],
     verdict: str,
     reason: str,
     dropped: bool = True,
-    extra: Optional[Dict[str, Any]] = None,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """Append one record to ``out_dir/suppressions.jsonl`` describing
     the finding the chokepoint just dropped. Best-effort — IO errors
@@ -234,7 +216,7 @@ def record_suppression(
     """
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        record: Dict[str, Any] = {
+        record: dict[str, Any] = {
             "finding_id": (finding.get("finding_id")
                            or finding.get("id") or ""),
             "rule_id":    finding.get("rule_id") or "",
@@ -250,22 +232,16 @@ def record_suppression(
         }
         if extra:
             record.update(extra)
-        line = (json.dumps(record) + "\n").encode("utf-8")
-        fd = os.open(
-            str(out_dir / "suppressions.jsonl"),
-            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-            0o644,
-        )
-        try:
-            os.write(fd, line)
-        finally:
-            os.close(fd)
+        from core.json import append_jsonl
+        append_jsonl(out_dir / "suppressions.jsonl", record)
     except OSError as e:
         logger.debug(
             "reach_chokepoint: failed to write suppression record: %s", e)
 
 
 __all__ = [
-    "normalise_path", "path_to_module",
-    "check_suppress", "record_suppression",
+    "check_suppress",
+    "normalise_path",
+    "path_to_module",
+    "record_suppression",
 ]

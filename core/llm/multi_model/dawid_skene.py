@@ -84,7 +84,6 @@ class FindingPosterior:
     finding_id: str
     decision_class: str
     posterior: float  # P(truly exploitable | panel)
-    posterior_log_odds: float
     credible_interval: Tuple[float, float]
     n_models: int
 
@@ -98,7 +97,6 @@ class DawidSkeneResult:
     iterations: int
     converged: bool
     class_prior: BetaPrior
-    fixed_class_rate: float
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +252,6 @@ def estimate(
             iterations=0,
             converged=True,
             class_prior=prior,
-            fixed_class_rate=prior.mean,
         )
 
     # ----- 1. Index records by finding and model ------------------------
@@ -314,14 +311,10 @@ def estimate(
         lo, hi = _credible_interval_for_posterior(
             p_i, n_models, prior, credible_interval_level,
         )
-        # Compute log-odds from the clipped posterior so callers
-        # downstream don't have to re-clip.
-        p_clip = _clip(p_i, clip_eps)
         findings.append(FindingPosterior(
             finding_id=fid,
             decision_class=decision_class,
             posterior=p_i,
-            posterior_log_odds=_logit(p_clip),
             credible_interval=(lo, hi),
             n_models=n_models,
         ))
@@ -339,7 +332,6 @@ def estimate(
         iterations=iterations,
         converged=converged,
         class_prior=prior,
-        fixed_class_rate=fixed_class_rate,
     )
 
 

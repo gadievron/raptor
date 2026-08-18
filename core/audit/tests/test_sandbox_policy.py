@@ -72,6 +72,12 @@ class TestValidateAllToolsSandboxed:
         )
         assert missing == []
 
+    def test_summary_phase_excluded(self):
+        # The pre-loop LLM summary pass books its spend as a "summary"
+        # phase on every budget-governed run — it is LLM-only and must
+        # not trip the missing-sandbox-policy warning.
+        assert validate_all_tools_sandboxed(["summary"]) == []
+
     def test_llm_phases_mixed_with_tools(self):
         missing = validate_all_tools_sandboxed(
             ["review", "semgrep", "checker_synthesis", "unknown_tool"]

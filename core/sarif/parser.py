@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 RAPTOR SARIF Utilities
 
@@ -8,9 +7,11 @@ including validation, deduplication, and merging.
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
+from urllib.parse import unquote
 
 from core.config import RaptorConfig
 from core.json import load_json
@@ -20,15 +21,43 @@ from core.security.log_sanitisation import escape_nonprintable
 logger = get_logger()
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Untrusted-shape guard: return *value* if it is a dict, else {}.
+
+    SARIF nesting (`tool.driver`, `physicalLocation.region`, ...) is
+    attacker-controlled — a crafted file can put a string or null where
+    the spec says object, and a bare `.get()` chain then raises
+    AttributeError and aborts the whole import."""
+    return value if isinstance(value, dict) else {}
+
+
+def _coerce_line(value: Any) -> int | None:
+    """Coerce an untrusted SARIF line/column value to int, or None.
+
+    CPython's json.loads accepts strings, floats, and Infinity/NaN
+    where SARIF says integer. Non-integer values that flow into line
+    arithmetic or list slicing raise TypeError far from the parse
+    boundary, so anything that is not a genuine integer (or an
+    integral finite float) becomes None — downstream gates then treat
+    the field as absent instead of crashing."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return None
+
+
 def _path_from_locations(
-    locations: List[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    locations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     """Build a {source, sink, steps, total_steps} dict from one
     SARIF threadFlow's locations array. Returns None if there are
     fewer than 2 locations (no source-to-sink path)."""
     if len(locations) < 2:
         return None
-    path: Dict[str, Any] = {
+    path: dict[str, Any] = {
         "source": None,
         "sink": None,
         "steps": [],
@@ -54,8 +83,8 @@ def _path_from_locations(
         )
         step_info = {
             "file": artifact.get("uri", ""),
-            "line": region.get("startLine", 0),
-            "column": region.get("startColumn", 0),
+            "line": _coerce_line(region.get("startLine")) or 0,
+            "column": _coerce_line(region.get("startColumn")) or 0,
             "label": message,
             "snippet": snippet,
         }
@@ -68,7 +97,7 @@ def _path_from_locations(
     return path
 
 
-def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def extract_dataflow_path(code_flows: list[dict[str, Any]]) -> dict[str, Any] | None:
     """
     Extract dataflow path information from SARIF codeFlows.
 
@@ -90,7 +119,7 @@ def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str
     if not code_flows:
         return None
 
-    all_paths: List[Dict[str, Any]] = []
+    all_paths: list[dict[str, Any]] = []
     for flow in code_flows:
         try:
             for tflow in (flow.get("threadFlows") or []):
@@ -98,7 +127,7 @@ def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str
                 p = _path_from_locations(locations)
                 if p is not None:
                     all_paths.append(p)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("SARIF parser: skipping malformed codeFlow: %s", e)
             continue
 
@@ -110,9 +139,14 @@ def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str
     return primary
 
 
-def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    Remove duplicate findings based on fingerprints.
+    Remove duplicate findings by (file, startLine, endLine, rule_id)
+    identity.
+
+    Operates on parsed finding dicts and does not consult SARIF
+    ``partialFingerprints`` — that lives in :func:`_result_key`, the
+    raw-result dedup used by :func:`merge_sarif`.
 
     Args:
         findings: List of finding dictionaries
@@ -120,11 +154,11 @@ def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     Returns:
         List of unique findings
     """
-    seen: Set[Tuple] = set()
-    unique: List[Dict[str, Any]] = []
+    seen: set[tuple] = set()
+    unique: list[dict[str, Any]] = []
 
     for finding in findings:
-        # Create fingerprint from location + rule
+        # Identity key from location + rule
         fp = (
             finding.get("file"),
             finding.get("startLine"),
@@ -140,8 +174,8 @@ def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 
 def _result_key(
-    result: Dict[str, Any],
-) -> Tuple[str, str, int, int, int, str]:
+    result: dict[str, Any],
+) -> tuple[str, str, int, int, int, str]:
     """Dedup key for a SARIF result.
 
     Pre-fix the key was just (ruleId, uri, startLine). That collapsed
@@ -164,19 +198,28 @@ def _result_key(
     keeps deduping like before.
     """
     rule_id = result.get("ruleId", "")
-    locs = result.get("locations") or [{}]
-    phys = (locs[0].get("physicalLocation") or {}) if locs else {}
-    uri = (phys.get("artifactLocation") or {}).get("uri", "")
-    region = phys.get("region", {}) or {}
-    line = region.get("startLine", 0)
-    end_line = region.get("endLine", line)  # multi-line spans differ
-    start_col = region.get("startColumn", 0)
+    if not isinstance(rule_id, str):
+        rule_id = repr(rule_id)
+    locs = result.get("locations")
+    first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
+    phys = _as_dict(first_loc.get("physicalLocation"))
+    uri = _as_dict(phys.get("artifactLocation")).get("uri", "")
+    if not isinstance(uri, str):
+        uri = repr(uri)
+    region = _as_dict(phys.get("region"))
+    line = _coerce_line(region.get("startLine")) or 0
+    end_line = _coerce_line(region.get("endLine"))  # multi-line spans differ
+    if end_line is None:
+        end_line = line
+    start_col = _coerce_line(region.get("startColumn")) or 0
     # `partialFingerprints` is a tool-supplied dict; serialise the
     # primary `primaryLocationLineHash` if present, else collapse the
     # whole dict to a stable string. SARIF spec recommends
     # `primaryLocationLineHash` as the dedup-quality fingerprint.
-    fp = result.get("partialFingerprints") or {}
-    fingerprint = fp.get("primaryLocationLineHash") or ""
+    fp = _as_dict(result.get("partialFingerprints"))
+    fingerprint = fp.get("primaryLocationLineHash")
+    if not isinstance(fingerprint, str):
+        fingerprint = ""
     if not fingerprint and fp:
         # Fall back to a stable serialisation of the whole dict —
         # different fingerprint sets mean different findings.
@@ -184,12 +227,13 @@ def _result_key(
     return (rule_id, uri, line, end_line, start_col, fingerprint)
 
 
-def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
+def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
     """
     Merge multiple SARIF files into a single SARIF dict.
 
     Groups runs by tool name, deduplicates results within each tool by
-    (ruleId, uri, startLine). Latest occurrence wins on collision.
+    ``_result_key`` (ruleId, uri, startLine, endLine, startColumn,
+    fingerprint). Latest occurrence wins on collision.
 
     Args:
         sarif_paths: List of paths to SARIF files
@@ -198,17 +242,22 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
         Merged SARIF dict with deduplicated results per tool
     """
     # Group runs by tool name so same-tool runs get their results merged
-    tool_runs: Dict[str, Dict[str, Any]] = {}  # tool_name -> merged run
+    tool_runs: dict[str, dict[str, Any]] = {}  # tool_name -> merged run
 
     for sarif_path in sarif_paths:
         sarif_data = load_sarif(Path(sarif_path))
         if not sarif_data:
             continue
         for run in (sarif_data.get("runs") or []):
-            tool_name = run.get("tool", {}).get("driver", {}).get("name", "unknown")
+            if not isinstance(run, dict):
+                logger.warning(
+                    "SARIF merge: skipping non-object run in %s", sarif_path
+                )
+                continue
+            tool_name = get_tool_name(run)
             if tool_name not in tool_runs:
                 tool_runs[tool_name] = {
-                    "tool": run.get("tool", {}),
+                    "tool": _as_dict(run.get("tool")),
                     # Track rules by id so we union the rule list across
                     # same-tool runs without duplicates. Pre-fix the
                     # `tool` block was set once (first run wins) and any
@@ -237,13 +286,9 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
             # Union this run's rules into the per-tool index. Same-id
             # rules from later runs win on collision (matches the
             # latest-occurrence-wins semantic the result dedup uses).
-            for rule in run.get("tool", {}).get("driver", {}).get("rules", []) or []:
-                if isinstance(rule, dict):
-                    rule_id = rule.get("id")
-                    if rule_id:
-                        tool_runs[tool_name]["rules_by_id"][rule_id] = rule
+            tool_runs[tool_name]["rules_by_id"].update(get_rules(run))
             # Merge originalUriBaseIds — keyed dict, later wins.
-            for base_id, base in (run.get("originalUriBaseIds") or {}).items():
+            for base_id, base in _as_dict(run.get("originalUriBaseIds")).items():
                 if isinstance(base, dict):
                     tool_runs[tool_name]["uri_bases"][base_id] = base
             # Append invocations — each input run is its own
@@ -251,7 +296,9 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
             for inv in run.get("invocations") or []:
                 if isinstance(inv, dict):
                     tool_runs[tool_name]["invocations"].append(inv)
-            for result in run.get("results", []):
+            for result in run.get("results") or []:
+                if not isinstance(result, dict):
+                    continue
                 key = _result_key(result)
                 tool_runs[tool_name]["results"][key] = result
 
@@ -264,7 +311,7 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
         if run_data["rules_by_id"]:
             driver["rules"] = list(run_data["rules_by_id"].values())
         tool_block["driver"] = driver
-        run_out: Dict[str, Any] = {
+        run_out: dict[str, Any] = {
             "tool": tool_block,
         }
         if run_data["uri_bases"]:
@@ -284,7 +331,7 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
 _CWE_TAG_RE = re.compile(r"cwe[-_]?(\d+)", re.IGNORECASE)
 
 
-def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
+def _extract_cwe_from_rule(rule: dict[str, Any]) -> str | None:
     """Extract CWE ID from a SARIF rule.
 
     SARIF tools emit CWE metadata in several places — pre-fix this
@@ -308,7 +355,7 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
     break downstream consumers expecting a single string.
     """
     from core.cve.cwe import format_cwe
-    props = rule.get("properties") or {}
+    props = _as_dict(rule.get("properties"))
 
     # `properties.cwe` — string OR list.
     raw_cwe = props.get("cwe") or props.get("cwe_id")
@@ -324,7 +371,8 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
                     return format_cwe(m.group(1))
 
     # `properties.tags` — list of strings, may contain external/cwe/cwe-N.
-    for tag in props.get("tags", []) or []:
+    tags = props.get("tags")
+    for tag in (tags if isinstance(tags, list) else []):
         if isinstance(tag, str):
             m = _CWE_TAG_RE.search(tag)
             if m:
@@ -360,7 +408,7 @@ def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
+def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
     """
     Load a SARIF file with safety guards.
 
@@ -418,9 +466,6 @@ def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError as e:
         logger.error("SARIF: invalid JSON in %s: %s", sarif_path, e)
         return None
-    except OSError as e:
-        logger.error("SARIF: could not read %s: %s", sarif_path, e)
-        return None
 
     if not isinstance(data, dict):
         logger.error("SARIF: root must be an object in %s", sarif_path)
@@ -429,26 +474,68 @@ def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
     return data
 
 
-def get_tool_name(run: Dict[str, Any]) -> str:
+def get_tool_name(run: dict[str, Any]) -> str:
     """Extract tool name from a SARIF run."""
-    return run.get("tool", {}).get("driver", {}).get("name") or "unknown"
+    driver = _as_dict(_as_dict(run.get("tool")).get("driver"))
+    name = driver.get("name")
+    return name if isinstance(name, str) and name else "unknown"
 
 
-def get_rules(run: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Extract rules from a SARIF run, keyed by rule ID."""
+def get_rules(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Extract rules from a SARIF run, keyed by rule ID.
+
+    Non-object rules and non-string rule ids (spec violations in
+    untrusted SARIF) are dropped rather than crashing the parse."""
+    driver = _as_dict(_as_dict(run.get("tool")).get("driver"))
+    rules = driver.get("rules")
+    if not isinstance(rules, list):
+        return {}
     return {
-        r.get("id", ""): r
-        for r in run.get("tool", {}).get("driver", {}).get("rules", [])
-        if r.get("id")
+        r["id"]: r
+        for r in rules
+        if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]
     }
 
 
-def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
+def _uri_escapes_root(uri: str, source_root: Path) -> bool:
+    """Containment check for a resolved artifact URI against a known
+    source root — same defence as ``import_normalizer._is_under_root``,
+    applied at the parse boundary so parser safety doesn't depend on
+    every caller running the normalizer afterwards.
+
+    SARIF is untrusted input: a crafted URI (``../../etc/passwd``, an
+    absolute path, or a percent-encoded traversal) must not flow
+    downstream as an in-tree file path. Returns True when the URI
+    resolves OUTSIDE *source_root*. Purely lexical + symlink
+    resolution — the file is not required to exist, so in-root URIs
+    keep parsing exactly as before.
+    """
+    # file:///abs/path → /abs/path (kept absolute; the join below
+    # then yields the absolute path itself, which must still land
+    # under the root to survive).
+    clean = unquote(uri).removeprefix("file://")
+    try:
+        root = source_root.resolve()
+        resolved = (root / clean).resolve()
+    except (OSError, ValueError):
+        return True
+    return resolved != root and not str(resolved).startswith(str(root) + "/")
+
+
+def parse_sarif_findings(
+    sarif_path: Path, source_root: Path | None = None,
+) -> list[dict[str, Any]]:
     """
     Parse findings from a SARIF file.
 
     Args:
         sarif_path: Path to SARIF file
+        source_root: Optional root of the analysed source tree. When
+            given, findings whose (base-joined) artifact URI resolves
+            outside this root are skipped with a warning — mirroring
+            how ``import_normalizer`` drops unmappable URIs. When
+            None (default), behaviour is unchanged: all findings are
+            returned and containment is the caller's responsibility.
 
     Returns:
         List of finding dictionaries with normalized structure
@@ -457,14 +544,28 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
     if not data:
         return []
 
-    findings: List[Dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
 
     runs = data.get("runs") or []
-    logger.info("SARIF parser: found %d run(s) in SARIF file", len(runs))
-    
+    # Debug: parsing internals — this fires for every SARIF file every
+    # pipeline stage touches, so at INFO it was per-finding chatter in
+    # the audit trail. Malformed-input warnings above stay WARNING.
+    logger.debug("SARIF parser: found %d run(s) in SARIF file", len(runs))
+
     for run_idx, run in enumerate(runs):
-        results = run.get("results", [])
-        logger.info("SARIF parser: run %d: %d result(s)", run_idx + 1, len(results))
+        if not isinstance(run, dict):
+            logger.warning(
+                "SARIF parser: skipping non-object run %d", run_idx + 1
+            )
+            continue
+        results = run.get("results") or []
+        if not isinstance(results, list):
+            logger.warning(
+                "SARIF parser: run %d has non-array results; skipping",
+                run_idx + 1,
+            )
+            continue
+        logger.debug("SARIF parser: run %d: %d result(s)", run_idx + 1, len(results))
 
         tool_name = get_tool_name(run)
 
@@ -484,22 +585,22 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
         # editor-jump links, dedup keyed on file path) treated as a
         # path relative to wherever they happened to be running.
         # Resolve via the run's `originalUriBaseIds` table.
-        uri_bases = run.get("originalUriBaseIds") or {}
+        uri_bases = _as_dict(run.get("originalUriBaseIds"))
 
         def _resolve_uri(
-            art: Dict[str, Any], _uri_bases=uri_bases,
-        ) -> Optional[str]:
+            art: dict[str, Any], _uri_bases=uri_bases,
+        ) -> str | None:
             """Resolve `art.uri` against the run's `originalUriBaseIds`,
             following nested `uriBaseId` references up to a small depth
             cap. Returns the final URI string, or None if the input
             has no `uri`."""
             uri = art.get("uri")
-            if uri is None:
+            if not isinstance(uri, str):
                 return None
             base_id = art.get("uriBaseId")
-            seen: Set[str] = set()
+            seen: set[str] = set()
             depth = 0
-            while base_id and base_id not in seen and depth < 16:
+            while isinstance(base_id, str) and base_id not in seen and depth < 16:
                 seen.add(base_id)
                 depth += 1
                 base = _uri_bases.get(base_id)
@@ -519,6 +620,12 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
             return uri
 
         for result in results:
+            if not isinstance(result, dict):
+                logger.warning(
+                    "SARIF parser: skipping non-object result in run %d",
+                    run_idx + 1,
+                )
+                continue
             # finding_id resolution:
             #   1. SARIF tool-supplied fingerprint (best — survives
             #      reformatting / line-shifts that the tool tracked).
@@ -544,34 +651,67 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
             except (TypeError, ValueError):
                 canonical = repr(sorted(result.items()))
             sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            finding_id = (
-                (result.get("fingerprints") or {}).get("matchBasedId/v1")
-                or result.get("ruleId")
-                or sha
-            )
+            rule_id = result.get("ruleId")
+            if not isinstance(rule_id, str):
+                rule_id = None
+            fingerprint = _as_dict(result.get("fingerprints")).get("matchBasedId/v1")
+            if not isinstance(fingerprint, str):
+                fingerprint = None
+            finding_id = fingerprint or rule_id or sha
 
-            loc = (result.get("locations") or [{}])[0].get("physicalLocation") or {}
-            artifact = loc.get("artifactLocation") or {}
-            region = loc.get("region") or {}
-            snippet = (region.get("snippet") or {}).get("text", "")
+            locs = result.get("locations")
+            first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
+            loc = _as_dict(first_loc.get("physicalLocation"))
+            artifact = _as_dict(loc.get("artifactLocation"))
+            region = _as_dict(loc.get("region"))
+            snippet = _as_dict(region.get("snippet")).get("text", "")
+            if not isinstance(snippet, str):
+                snippet = ""
 
             # Extract dataflow path if present
             code_flows = result.get("codeFlows") or []
             dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
 
-            rule_id = result.get("ruleId")
             rule_meta = rules_by_id.get(rule_id, {})
+
+            file_uri = _resolve_uri(artifact)
+            # Containment gate at the parse boundary (opt-in via
+            # source_root). Out-of-root URIs degrade the same way the
+            # import normalizer treats unmappable URIs: skip + warn.
+            if (
+                source_root is not None
+                and file_uri
+                and _uri_escapes_root(file_uri, source_root)
+            ):
+                logger.warning(
+                    "SARIF parser: skipping finding with out-of-root "
+                    "URI: %s (rule_id=%s)",
+                    escape_nonprintable(file_uri),
+                    escape_nonprintable(str(rule_id)),
+                )
+                continue
+
+            message_text = _as_dict(result.get("message")).get("text")
+            if not isinstance(message_text, str):
+                message_text = None
+            level = result.get("level", "warning")
+            if not isinstance(level, str):
+                level = "warning"
 
             findings.append(
                 {
                     "finding_id": finding_id,
                     "rule_id": rule_id,
-                    "message": result.get("message", {}).get("text"),
-                    "file": _resolve_uri(artifact),
-                    "startLine": region.get("startLine"),
-                    "endLine": region.get("endLine"),
+                    "message": message_text,
+                    "file": file_uri,
+                    # Untrusted numeric fields: coerced to int-or-None at
+                    # the parse boundary so downstream arithmetic and
+                    # slicing (snippet synthesis in the import
+                    # normalizer) never see a string / Infinity / NaN.
+                    "startLine": _coerce_line(region.get("startLine")),
+                    "endLine": _coerce_line(region.get("endLine")),
                     "snippet": snippet,
-                    "level": result.get("level", "warning"),
+                    "level": level,
                     "cwe_id": rule_meta.get("cwe_id"),
                     "tool": tool_name,
                     # Dataflow information
@@ -585,8 +725,8 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
 
 
 def validate_sarif(
-    sarif_path: Path, schema_path: Optional[Path] = None,
-) -> Optional[bool]:
+    sarif_path: Path, schema_path: Path | None = None,
+) -> bool | None:
     """
     Validate SARIF file against schema.
 
@@ -655,6 +795,11 @@ def validate_sarif(
             "SARIF validation: jsonschema not installed; "
             "skipping full validation"
         )
+    except jsonschema.SchemaError as e:
+        # The bundled schema itself is invalid — that is a local
+        # deployment problem, not evidence about the SARIF file, so
+        # report "couldn't verify" rather than pass/fail.
+        logger.warning("SARIF validation: schema file invalid: %s", e.message)
     except jsonschema.ValidationError as e:
         logger.warning("SARIF validation: schema validation failed: %s", e.message)
         return False
@@ -662,7 +807,22 @@ def validate_sarif(
     return True if full_validation_ran else None
 
 
-def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
+_TOOL_NAME_MAP = {
+    "semgrep oss": "semgrep",
+    "semgrep": "semgrep",
+    "codeql": "codeql",
+    "coccinelle": "coccinelle",
+}
+
+
+def _normalise_tool_name(driver_name: str) -> str:
+    """Map a SARIF ``tool.driver.name`` to the canonical key used by
+    ``scan_coverage.py`` (``semgrep``, ``codeql``, ``coccinelle``).
+    Falls back to a lowercased version of the driver name."""
+    return _TOOL_NAME_MAP.get(driver_name.lower(), driver_name.lower())
+
+
+def generate_scan_metrics(sarif_paths: list[str]) -> dict[str, Any]:
     """
     Generate metrics from scan results.
 
@@ -672,7 +832,7 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary containing scan metrics
     """
-    metrics: Dict[str, Any] = {
+    metrics: dict[str, Any] = {
         "total_files_scanned": 0,
         "total_findings": 0,
         "findings_by_severity": {
@@ -682,6 +842,7 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
             "none": 0,
         },
         "findings_by_rule": {},
+        "findings_by_tool": {},
         "tools_used": [],
     }
 
@@ -691,26 +852,39 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
             continue
 
         for run in (sarif_data.get("runs") or []):
+            if not isinstance(run, dict):
+                continue
             tool_name = get_tool_name(run)
             if tool_name not in metrics["tools_used"]:
                 metrics["tools_used"].append(tool_name)
 
             # Count artifacts (files)
-            artifacts = run.get("artifacts", [])
+            artifacts = run.get("artifacts") or []
             metrics["total_files_scanned"] += len(artifacts)
 
             # Count findings
-            results = run.get("results", [])
+            results = run.get("results") or []
+            if not isinstance(results, list):
+                results = []
             metrics["total_findings"] += len(results)
 
+            tool_key = _normalise_tool_name(tool_name)
+            metrics["findings_by_tool"][tool_key] = (
+                metrics["findings_by_tool"].get(tool_key, 0) + len(results)
+            )
+
             for result in results:
+                if not isinstance(result, dict):
+                    continue
                 # Count by severity
                 level = result.get("level", "warning")
-                if level in metrics["findings_by_severity"]:
+                if isinstance(level, str) and level in metrics["findings_by_severity"]:
                     metrics["findings_by_severity"][level] += 1
 
                 # Count by rule
                 rule_id = result.get("ruleId", "unknown")
+                if not isinstance(rule_id, str):
+                    rule_id = "unknown"
                 metrics["findings_by_rule"][rule_id] = (
                     metrics["findings_by_rule"].get(rule_id, 0) + 1
                 )
@@ -718,7 +892,7 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
     return metrics
 
 
-def sanitize_finding_for_display(finding: Dict[str, Any]) -> Dict[str, Any]:
+def sanitize_finding_for_display(finding: dict[str, Any]) -> dict[str, Any]:
     """
     Sanitize a finding for safe display, truncating long fields.
 

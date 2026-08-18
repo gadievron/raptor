@@ -67,8 +67,9 @@ def test_cache_hit_skips_http(tmp_path):
     """A pre-populated cache short-circuits the HTTP call."""
     from core.json import JsonCache
     cache = JsonCache(root=tmp_path / "cache")
+    # Key uses the percent-encoded slug (injective cache identity).
     cache.put(
-        "ghactions-latest:actions/checkout",
+        "ghactions-latest:actions%2Fcheckout",
         {"tag_name": "v5.2.1"},
         ttl_seconds=24 * 3600,
     )

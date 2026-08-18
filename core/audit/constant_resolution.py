@@ -13,7 +13,9 @@ suppress allowlist.  Resolved constants feed INTO the proof chain
 
 from __future__ import annotations
 
+import ast
 import logging
+import operator
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -32,12 +34,33 @@ logger = logging.getLogger(__name__)
 
 _IF_RE = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b", re.MULTILINE)
 _ENDIF_RE = re.compile(r"^\s*#\s*endif\b", re.MULTILINE)
-_DEFINE_LINE_RE = re.compile(r"^\s*#\s*define\s+(\w+)", re.MULTILINE)
 
 _IDENT_RE = re.compile(r"[a-zA-Z_]")
 _SAFE_ARITH_RE = re.compile(
     r"^[-()\s0-9a-fA-FxX+*/%|&^~<>]+$"
 )
+
+# Evaluation caps: macro bodies come from the audited (untrusted) repo,
+# so the evaluator must be bounded. Legitimate C macro constants sit far
+# below these limits (typical: (1<<31), 0xFFFFFFFFFFFFFFFF, byte sizes);
+# a body like (1<<999999999999) would otherwise force a huge bigint.
+_MAX_BODY_LEN = 512
+_MAX_LITERAL_MAGNITUDE = 1 << 64
+_MAX_SHIFT_BITS = 256
+_MAX_RESULT_MAGNITUDE = 1 << 128
+
+_ARITH_BINOPS: dict[type[ast.operator], object] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+    ast.BitOr: operator.or_,
+    ast.BitAnd: operator.and_,
+    ast.BitXor: operator.xor,
+}
 
 
 @dataclass(frozen=True)
@@ -71,16 +94,69 @@ class _RawDefinition:
     conditional_depth: int
 
 
+def _eval_arith_node(node: ast.AST) -> int | None:
+    """Bounded bottom-up evaluation of an arithmetic AST node.
+
+    Returns None for any node kind, literal magnitude, shift amount,
+    or intermediate result outside the caps above.
+    """
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if type(value) is int and abs(value) <= _MAX_LITERAL_MAGNITUDE:
+            return value
+        return None
+
+    if isinstance(node, ast.UnaryOp):
+        operand = _eval_arith_node(node.operand)
+        if operand is None:
+            return None
+        if isinstance(node.op, ast.USub):
+            return -operand
+        if isinstance(node.op, ast.UAdd):
+            return operand
+        if isinstance(node.op, ast.Invert):
+            return ~operand
+        return None
+
+    if isinstance(node, ast.BinOp):
+        left = _eval_arith_node(node.left)
+        if left is None:
+            return None
+        right = _eval_arith_node(node.right)
+        if right is None:
+            return None
+        op_type = type(node.op)
+        fn = _ARITH_BINOPS.get(op_type)
+        if fn is None:
+            return None
+        if op_type in (ast.LShift, ast.RShift) and not (
+            0 <= right <= _MAX_SHIFT_BITS
+        ):
+            return None
+        try:
+            result = fn(left, right)  # type: ignore[operator]
+        except (ZeroDivisionError, ValueError, OverflowError):
+            return None
+        if abs(result) > _MAX_RESULT_MAGNITUDE:
+            return None
+        return result
+
+    return None
+
+
 def _try_evaluate(body: str) -> int | None:
     """Evaluate a constant body to an integer, or None if unsafe.
 
-    Accepts: integer literals (decimal, hex, octal, negative),
-    and pure arithmetic on integer literals (e.g. ``4 * 1024``).
-    Rejects: anything containing identifiers, function calls,
-    casts, or sizeof.
+    Accepts: integer literals (decimal, hex, negative), and pure
+    arithmetic on integer literals (e.g. ``4 * 1024``, ``(1 << 12)``).
+    Rejects: anything containing identifiers, function calls, casts,
+    or sizeof — and any body exceeding the evaluation caps (oversized
+    literals, huge shift amounts, results beyond 2**128), since macro
+    bodies come from the audited repo and must not be able to force
+    unbounded bigint work.
     """
     cleaned = body.strip()
-    if not cleaned:
+    if not cleaned or len(cleaned) > _MAX_BODY_LEN:
         return None
 
     if not _SAFE_ARITH_RE.match(cleaned):
@@ -90,12 +166,10 @@ def _try_evaluate(body: str) -> int | None:
         return None
 
     try:
-        result = eval(cleaned, {"__builtins__": {}}, {})  # noqa: S307
-        if isinstance(result, int):
-            return result
-    except Exception:
-        pass
-    return None
+        tree = ast.parse(cleaned, mode="eval")
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+    return _eval_arith_node(tree.body)
 
 
 def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
@@ -138,7 +212,7 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             # that is absent in text_joined.
             extra = 0
             orig_pos = joined_pos
-            for off in _cont_offsets:
+            for off in _cont_offsets:  # noqa: B023 — closure used only within this file's iteration
                 # In the joined text the continuation at original offset
                 # `off` becomes offset `off - extra` (each prior removal
                 # shifted by 1). If joined_pos is past that point, the
@@ -148,7 +222,7 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
                     orig_pos += 1
                 else:
                     break
-            return text[:orig_pos].count("\n") + 1
+            return text[:orig_pos].count("\n") + 1  # noqa: B023 — closure used only within this file's iteration
 
         rel = str(p.relative_to(target_path)) if p.is_relative_to(target_path) else str(p)
 
@@ -186,9 +260,10 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
 def _compute_conditional_depths(text: str) -> dict[int, int]:
     """Map line numbers to their #if/#ifdef nesting depth.
 
-    Returns a dict where keys are line numbers (1-based) that contain
-    a #define, and values are the conditional nesting depth at that line.
-    Depth 0 means unconditional.
+    Returns a dict with an entry for EVERY line (1-based): the
+    conditional nesting depth at that line. Depth 0 means
+    unconditional. Callers look up #define lines and enum-block
+    start lines by number.
     """
     depths: dict[int, int] = {}
     depth = 0
@@ -199,10 +274,6 @@ def _compute_conditional_depths(text: str) -> dict[int, int]:
                 depth += 1
             elif _ENDIF_RE.match(raw_line):
                 depth = max(0, depth - 1)
-            if _DEFINE_LINE_RE.match(raw_line):
-                depths[i] = depth
-        # Also record depth for non-#define lines that start enum blocks
-        # (handled by caller using block_line lookup)
         depths[i] = depth
     return depths
 

@@ -25,7 +25,6 @@ except IndexError:                                      # pragma: no cover
 from core.llm import egress
 from core.llm.config import LLMConfig, ModelConfig
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -57,7 +56,7 @@ def stub_proxy(monkeypatch):
 
 
 def _model(provider: str = "anthropic", model_name: str = "x",
-           api_base: str = None) -> ModelConfig:
+           api_base: str | None = None) -> ModelConfig:
     return ModelConfig(
         provider=provider,
         model_name=model_name,
@@ -333,3 +332,245 @@ class TestSubprocessStripStillWorks:
         env = RaptorConfig.get_safe_env()
         assert "HTTPS_PROXY" not in env
         assert "https_proxy" not in env
+
+
+# ---------------------------------------------------------------------------
+# Loopback helpers + Ollama-only NO_PROXY hygiene
+# ---------------------------------------------------------------------------
+
+
+class TestUrlIsLoopback:
+    def test_loopback_forms(self):
+        assert egress.url_is_loopback("http://localhost:11434/v1")
+        assert egress.url_is_loopback("http://127.0.0.1:11434")
+        assert egress.url_is_loopback("http://127.1.2.3:8080/x")
+        assert egress.url_is_loopback("http://0.0.0.0:11434")
+        assert egress.url_is_loopback("http://[::1]:11434")
+
+    def test_remote_forms(self):
+        assert not egress.url_is_loopback("https://api.anthropic.com")
+        assert not egress.url_is_loopback("http://ollama.internal.corp:11434")
+        assert not egress.url_is_loopback("not a url")
+
+
+class TestLoopbackSafeGet:
+    def test_loopback_bypasses_proxy_env(self, monkeypatch):
+        captured = {}
+
+        class _FakeSession:
+            def __init__(self):
+                self.trust_env = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, timeout=None):
+                captured["trust_env"] = self.trust_env
+                captured["url"] = url
+                return "session-response"
+
+        import requests
+        monkeypatch.setattr(requests, "Session", _FakeSession)
+        out = egress.loopback_safe_get("http://localhost:11434/api/tags",
+                                       timeout=2)
+        assert out == "session-response"
+        assert captured["trust_env"] is False
+
+    def test_remote_keeps_proxy_env(self, monkeypatch):
+        captured = {}
+
+        import requests
+        def _fake_get(url, timeout=None):
+            captured["url"] = url
+            return "get-response"
+
+        monkeypatch.setattr(requests, "get", _fake_get)
+        out = egress.loopback_safe_get("https://ollama.corp/api/tags",
+                                       timeout=2)
+        assert out == "get-response"
+        assert captured["url"] == "https://ollama.corp/api/tags"
+
+
+class TestOllamaOnlyProxiedHost:
+    def test_no_proxy_augmented_without_chokepoint(self, stub_proxy,
+                                                   monkeypatch):
+        """Ollama-only config on a mandatory-proxy host: NO_PROXY must
+        gain the loopback entries (or the SDK routes localhost through
+        the corporate proxy), while HTTPS_PROXY stays untouched and no
+        chokepoint proxy is brought up."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+        monkeypatch.setenv("NO_PROXY", "169.254.169.254")
+        cfg = _config(primary=_model(
+            provider="ollama",
+            model_name="llama3",
+            api_base="http://localhost:11434/v1",
+        ))
+        egress.enable_llm_egress(cfg)
+        no_proxy = os.environ["NO_PROXY"]
+        assert "169.254.169.254" in no_proxy   # operator entry kept
+        assert "localhost" in no_proxy
+        assert "127.0.0.1" in no_proxy
+        assert os.environ["HTTPS_PROXY"] == "http://proxy.corp:3128"
+        assert stub_proxy == []                 # no chokepoint
+
+    def test_loopback_path_snapshots_operator_env(self, stub_proxy,
+                                                   monkeypatch):
+        """The loopback-only NO_PROXY mutation must snapshot the
+        operator's proxy env FIRST — operator_proxy_env() hands
+        trusted subprocesses the operator's route, and pre-fix this
+        path mutated without snapshotting so children inherited our
+        augmented NO_PROXY."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+        monkeypatch.setenv("NO_PROXY", "corp.example")
+        cfg = _config(primary=_model(
+            provider="ollama",
+            model_name="llama3",
+            api_base="http://localhost:11434/v1",
+        ))
+        egress.enable_llm_egress(cfg)
+        assert "localhost" in os.environ["NO_PROXY"]  # mutated live env
+        snap = egress.operator_proxy_env()
+        assert snap["NO_PROXY"] == "corp.example"     # pristine snapshot
+        assert snap["HTTPS_PROXY"] == "http://proxy.corp:3128"
+
+    def test_no_mutation_without_operator_proxy(self, stub_proxy,
+                                                monkeypatch):
+        """Unproxied host: the Ollama-only path stays mutation-free."""
+        for v in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY",
+                  "http_proxy", "NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(v, raising=False)
+        cfg = _config(primary=_model(
+            provider="ollama",
+            model_name="llama3",
+            api_base="http://localhost:11434/v1",
+        ))
+        egress.enable_llm_egress(cfg)
+        assert "NO_PROXY" not in os.environ
+        assert "HTTPS_PROXY" not in os.environ
+        assert stub_proxy == []
+
+
+# ---------------------------------------------------------------------------
+# derive_allowlist — Bedrock hosts
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveAllowlistBedrock:
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient_aws(self, monkeypatch):
+        for var in ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE",
+                    "RAPTOR_BEDROCK_PROFILE", "AWS_ENDPOINT_URL_BEDROCK",
+                    "AWS_CONFIG_FILE"):
+            monkeypatch.delenv(var, raising=False)
+
+    def _bedrock_model(self, **kw):
+        mc = _model(provider="bedrock",
+                    model_name="anthropic.claude-sonnet-5")
+        mc.api_key = None
+        for k, v in kw.items():
+            setattr(mc, k, v)
+        return mc
+
+    def test_mantle_entry_yields_endpoint_and_sts(self):
+        cfg = _config(primary=self._bedrock_model(aws_region="us-east-1"))
+        hosts = egress.derive_allowlist(cfg)
+        assert "bedrock-mantle.us-east-1.api.aws" in hosts
+        assert "sts.amazonaws.com" in hosts
+        assert "sts.us-east-1.amazonaws.com" in hosts
+
+    def test_runtime_entry_yields_runtime_host(self):
+        cfg = _config(primary=self._bedrock_model(
+            aws_region="eu-west-1", bedrock_api="runtime"))
+        hosts = egress.derive_allowlist(cfg)
+        assert "bedrock-runtime.eu-west-1.amazonaws.com" in hosts
+        assert not any(h.startswith("bedrock-mantle") for h in hosts)
+
+    def test_env_region_fallback(self, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        cfg = _config(primary=self._bedrock_model())
+        hosts = egress.derive_allowlist(cfg)
+        assert "bedrock-mantle.us-west-2.api.aws" in hosts
+
+    def test_endpoint_override_wins(self, monkeypatch):
+        monkeypatch.setenv(
+            "AWS_ENDPOINT_URL_BEDROCK", "https://bedrock-stub.test:9443",
+        )
+        cfg = _config(primary=self._bedrock_model(aws_region="us-east-1"))
+        hosts = egress.derive_allowlist(cfg)
+        assert "bedrock-stub.test" in hosts
+
+    def test_endpoint_override_still_covers_sts(self, monkeypatch):
+        """The override replaces the surface endpoint only — botocore
+        still refreshes credentials through STS, so the STS hosts
+        must ride the allowlist or every refresh 503s at the
+        chokepoint."""
+        monkeypatch.setenv(
+            "AWS_ENDPOINT_URL_BEDROCK", "https://bedrock-stub.test:9443",
+        )
+        cfg = _config(primary=self._bedrock_model(aws_region="us-east-1"))
+        hosts = egress.derive_allowlist(cfg)
+        assert "sts.amazonaws.com" in hosts
+        assert "sts.us-east-1.amazonaws.com" in hosts
+
+    def test_endpoint_override_no_region_keeps_global_sts(
+        self, monkeypatch, tmp_path,
+    ):
+        monkeypatch.setenv(
+            "AWS_ENDPOINT_URL_BEDROCK", "https://bedrock-stub.test:9443",
+        )
+        monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "absent"))
+        cfg = _config(primary=self._bedrock_model())
+        hosts = egress.derive_allowlist(cfg)
+        assert "bedrock-stub.test" in hosts
+        assert "sts.amazonaws.com" in hosts
+        assert not any(h.startswith("sts.") and h != "sts.amazonaws.com"
+                       for h in hosts)
+
+    def test_no_region_yields_no_guess(self, monkeypatch, tmp_path):
+        """Unresolvable region → no invented host; the dispatcher's
+        own no-region 503 carries the diagnostic."""
+        monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "absent"))
+        cfg = _config(primary=self._bedrock_model())
+        hosts = egress.derive_allowlist(cfg)
+        assert not any("bedrock" in h for h in hosts)
+
+    def test_multi_region_entries_both_covered(self):
+        cfg = _config(
+            primary=self._bedrock_model(aws_region="us-east-1"),
+            fallbacks=[self._bedrock_model(
+                aws_region="eu-west-1", bedrock_api="runtime")],
+        )
+        hosts = egress.derive_allowlist(cfg)
+        assert "bedrock-mantle.us-east-1.api.aws" in hosts
+        assert "bedrock-runtime.eu-west-1.amazonaws.com" in hosts
+        assert "sts.eu-west-1.amazonaws.com" in hosts
+
+
+def test_no_proxy_augmentation_excludes_imds():
+    """IMDS is a credential-bearing metadata service, not a local
+    service — it must NEVER bypass the chokepoint. Listing it in
+    _LOCAL_BYPASS made url_is_loopback()/loopback_safe_get() treat it
+    as loopback-safe and exempted it from every proxied path, so
+    hostile in-process code could read role credentials without
+    meeting the allowlist. (IMDS is plain HTTP and the chokepoint
+    rewrites HTTPS_PROXY only, so botocore's role-credential fetch
+    does not need the exemption.)"""
+    out = egress._augment_no_proxy("corp.example")
+    assert "169.254.169.254" not in out.split(",")
+    assert out.startswith("corp.example")
+
+
+def test_imds_is_not_loopback():
+    assert not egress._is_loopback("169.254.169.254")
+    assert not egress.url_is_loopback("http://169.254.169.254/latest/api")
+
+
+def test_operator_no_proxy_imds_entry_preserved():
+    """An operator who explicitly NO_PROXY-exempts IMDS keeps their
+    entry — we only stop ADDING it ourselves."""
+    out = egress._augment_no_proxy("169.254.169.254,corp.example")
+    assert out.split(",")[0] == "169.254.169.254"

@@ -69,7 +69,10 @@ It blocks credential helpers, hooks, dangerous env vars, `RAPTOR_*` and
 `SAGE_*` prefixes, stdio MCP servers, symlinks, and malformed files.
 The trust override is a process-wide flag, not an env var, specifically
 because a target repo's `env` dict propagates into subprocesses and
-could forge an env var override.
+could forge an env var override. Trust can also be persisted per
+project as an operator assertion (`raptor project trust config`, never
+auto-set and never read from the scanned repo); per-run flags win in
+both directions (`--no-trust-repo` > `--trust-repo` > marker > off).
 
 ### 4. Module Shadowing
 
@@ -125,7 +128,11 @@ traversal.
 `_RAPTOR_TRUSTED` at the top before any imports. The check is inlined
 (not imported) so it fires before `sys.path` is modified and cannot be
 bypassed by module shadowing. Direct invocation without the marker exits
-with code 2.
+with code 2. Additionally, `run_untrusted()` /
+`run_untrusted_networked()` strip both markers from the child
+environment (the pid1 shim path already stripped them before the
+target exec), so a target-spawned process inside the sandbox cannot
+replay them to pass this gate.
 
 ### Defence-in-Depth Summary
 
@@ -144,19 +151,35 @@ with code 2.
 
 ### What Is Not Fully Defended
 
-- **Natural language injection in code comments and strings** is the
-  largest remaining gap. The nonce envelope defeats structural tag
-  escapes, but plain English instructions in source code need only be
-  persuasive enough to influence a language model's reasoning.
-- **LLM-generated autofetch markup.** Stripping occurs on input, not
-  output.
+- **Natural language injection in code comments and strings** remains
+  the fundamental gap — per the adaptive-attacker literature, no
+  input-side stack fully defeats persuasive plain-English instructions.
+  What bounds it in practice is the mechanical-verdict principle:
+  findings are promoted by tool evidence, never by LLM claims, and the
+  promotion-without-tool-evidence alarm (`promotion-alarms.jsonl`, a
+  CRITICAL event class that is empty on every legitimate run) detects
+  the one move that matters — an injected self-promotion. The inverse
+  attack (an injected false-"clean") is narrowed by negative controls
+  and the finding-survival machinery, not eliminated.
+- **LLM-generated autofetch markup** is stripped on OUTPUT as well as
+  input: every registered report writer routes free text through the
+  output sanitiser, and a report-writer AST lint
+  (`core/security/report_writer_audit.py`) fails the build when an
+  LLM-derived value reaches a write sink unsanitised. Structured LLM
+  output is schema-validated with unknown fields rejected at the
+  generation chokepoint, and LLM-derived artifacts carry a
+  `provenance.untrusted` stamp enforced by `raptor-validate-schema`.
+  The residual: semantically poisoned content inside valid structure.
 - **Subtly backdoored patches.** If the researcher copy-pastes an
   LLM-suggested patch, a prompt-injected patch corrupts the output text,
   not the running RAPTOR process. There is no output-layer semantic
-  analysis of patch content.
+  analysis of patch content — the honest residual after hunk-scope and
+  detector-quiet checks.
 - **Side-channel resource exhaustion.** rlimits bound memory, file size
   and CPU time, but a crafted input maximising LLM token consumption is
   a slow denial-of-service against API budget, not a security bypass.
+  Budget caps are the mitigation; nothing smarter passes the
+  no-false-positive bar.
 
 ---
 
@@ -185,18 +208,20 @@ approval before execution.
 | oss-hypothesis-former-agent | Read, Write | Y | N | N | 1 | floor-safe |
 | oss-hypothesis-checker-agent | Read, Write | N | N | N | 0 | tight |
 | oss-report-generator-agent | Read, Write | N | N | N | 0 | tight |
-| coverage-analyzer | all tools | Y | Y | N | 2 | needs-tightening |
-| crash-analyzer | all tools | Y | Y | N | 2 | needs-tightening |
-| crash-analysis-checker | all tools | Y | Y | N | 2 | needs-tightening |
+| audit-reviewer | Read, Grep, Glob, Bash | Y | Y | N | 2 | needs-tightening |
+| coverage-analyzer | Read, Write, Edit, Bash, Grep, Glob | Y | Y | N | 2 | needs-tightening |
+| crash-analyzer | Read, Write, Edit, Bash, Grep, Glob | Y | Y | N | 2 | needs-tightening |
+| crash-analysis-checker | Read, Write, Bash, Grep, Glob | Y | Y | N | 2 | needs-tightening |
 | exploitability-validator-agent | Read, Write, Edit, Bash, Grep, Glob, Task | Y | Y | N | 2 | needs-tightening |
-| function-trace-generator | all tools | Y | Y | N | 2 | needs-tightening |
+| function-trace-generator | Read, Write, Edit, Bash, Grep, Glob | Y | Y | N | 2 | needs-tightening |
 | oss-evidence-verifier-agent | Read, Write, Bash | Y | Y | N | 2 | needs-tightening |
 | oss-investigator-ioc-extractor-agent | Read, Write, WebFetch | Y | Y | N | 2 | needs-tightening |
 | oss-investigator-local-git-agent | Bash, Read, Write, Glob, Grep | Y | Y | N | 2 | needs-tightening |
 | oss-investigator-wayback-agent | Bash, Read, Write, WebFetch | Y | Y | N | 2 | needs-tightening |
-| crash-analysis-agent | Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch, Git, Task | Y | Y | Y | 3 | needs-HITL |
-| offsec-specialist | all tools | Y | Y | Y | 3 | needs-HITL |
-| oss-investigator-gh-archive-agent | Bash, Read, Write | Y | Y | Y | 3 | needs-HITL |
+| crash-analysis-agent | Read, Write, Edit, Bash, Grep, Glob, Task | Y | Y | N | 2 | needs-tightening |
+| crash-report-fetcher-agent | Read, Write, WebFetch | Y | N | Y | 2 | needs-tightening |
+| oss-investigator-gh-archive-agent | Bash, Read, Write | Y | N | Y | 2 | needs-tightening |
+| offsec-specialist | all tools | Y | Y | Y | 3 | needs-HITL (mechanically enforced) |
 | oss-investigator-github-agent | Bash, Read, Write, WebFetch | Y | Y | Y | 3 | needs-HITL |
 
 **Verdicts:**
@@ -204,10 +229,52 @@ approval before execution.
 - **floor-safe** (1 agent) -- reads untrusted data but has no dangerous
   tools.
 - **tight** (2 agents) -- properly constrained; no changes needed.
-- **needs-tightening** (9 agents) -- Rule of Two score of 2; tool
+- **needs-tightening** (13 agents) -- Rule of Two score of 2; tool
   access could be narrowed.
-- **needs-HITL** (4 agents) -- Rule of Two score of 3 (all three axes);
-  requires human-in-the-loop approval.
+- **needs-HITL** (2 agents) -- Rule of Two score of 3 (all three axes);
+  requires human-in-the-loop approval. For `offsec-specialist` this is
+  mechanically enforced, not just documented: the agent name is
+  registered in `core.security.rule_of_two.HITL_REQUIRED_AGENTS`, any
+  future programmatic dispatcher must call
+  `require_human_for_agent_dispatch()` (which refuses headless
+  sessions -- an effective sandbox does not substitute for the human,
+  since containment cannot sever enough legs from an inherently
+  three-legged job), and an inventory test
+  (`core/security/tests/test_hitl_dispatch_inventory.py`) fails on any
+  reference to the agent name in `libexec/`, `core/`, `packages/`, or
+  `raptor.py` outside allowlisted non-dispatch files.
+
+The `crash-report-fetcher-agent` row scores A+C without B: its only
+write is `bug-report.json` — a single artifact that is
+provenance-stamped `untrusted`, run through the output sanitiser at
+write time, and refused by `raptor-validate-schema bug-report` when
+either property is missing — so the sensitive-access leg is treated as
+severed even though the Write tool is technically present. Its C leg
+is domain-gated: the WebFetch hook pins fetches to the registrable
+domain of the operator-supplied bug-tracker URL (anchor file written
+by the orchestrator before dispatch), with off-domain attachment hosts
+allowed only as logged, operator-visible additions.
+
+The `oss-investigator-gh-archive-agent` row scores A+C without B: its
+Bash is mechanically pinned by a per-agent `PreToolUse` hook
+(`.claude/hooks/bash-command-allowlist.py`) to plain single
+invocations of exactly two commands — the typed read-only BigQuery
+wrapper `libexec/raptor-bq-query` (SELECT/WITH only, single statement,
+bytes-billed cap, structured errors) and the evidence-kit ingest
+script — with compound commands, substitution, and redirects rejected,
+and its only writes are `evidence.json` plus SQL/rows scratch files in
+the working directory. The C leg (BigQuery egress) stays: by default
+the wrapper runs the client under `run_untrusted_networked` with the
+egress proxy pinned to {bigquery.googleapis.com,
+oauth2.googleapis.com, www.googleapis.com} + the key file's
+`token_uri` host, and the real read-only boundary is the service
+account's `BigQuery User`-only role — the wrapper's statement
+validation is misuse prevention, not SQL sandboxing. Honest residuals:
+`--no-sandbox` (needed for gcloud ADC) drops the egress pin, and the
+frontmatter `tools:` field cannot express `Bash(prefix *)` rules —
+qualified entries are permission-rule syntax and would stop the agent
+from launching — so the hook is the enforcement point, active only
+when the workspace is trusted.
 
 ### Patterns Identified
 
@@ -222,16 +289,55 @@ approval before execution.
    passing to checker agents.
 
 3. **Network-reaching agents without domain restriction** --
-   `oss-investigator-github-agent`, `oss-investigator-wayback-agent`,
-   `oss-investigator-ioc-extractor-agent` all have unrestricted
-   WebFetch. Recommendation: add domain allowlists (github.com,
-   web.archive.org, etc.).
+   ADDRESSED: `oss-investigator-github-agent`,
+   `oss-investigator-wayback-agent`, and
+   `oss-investigator-ioc-extractor-agent` now enforce WebFetch
+   restrictions via per-agent `PreToolUse` hooks
+   (`.claude/hooks/webfetch-domain-allowlist.py`, wired in each
+   agent's `hooks:` frontmatter). The github agent is pinned to
+   {github.com, api.github.com, raw.githubusercontent.com}, the
+   wayback agent to {web.archive.org, archive.org}; the
+   ioc-extractor fetches operator-supplied vendor reports on
+   arbitrary domains, so it is constrained to https-only plus a
+   body-level instruction to fetch only the supplied report and its
+   internal links. Note: the hook constrains WebFetch, not Bash-level
+   network access (`curl`), which remains bounded by the sandbox /
+   permission layers. For the gh-archive agent the Bash side IS now
+   constrained: `.claude/hooks/bash-command-allowlist.py` (same
+   per-agent `PreToolUse` mechanism) restricts it to the typed
+   `libexec/raptor-bq-query` wrapper and the evidence-kit ingest
+   script — see the matrix note above.
 
 4. **Default "all tools" agents** --
-   `coverage-analyzer`, `crash-analyzer`, `crash-analysis-checker`,
-   `function-trace-generator`, `offsec-specialist` default to all tools.
-   Recommendation: explicitly specify tool lists rather than relying on
-   defaults.
+   ADDRESSED for the pipeline agents: `coverage-analyzer`,
+   `crash-analyzer`, `crash-analysis-checker`,
+   `function-trace-generator`, and `audit-reviewer` now declare
+   explicit `tools:` lists matching their documented workflows
+   (dropping the WebFetch/WebSearch/Task grants the all-tools default
+   silently included). `offsec-specialist` deliberately remains
+   all-tools: its job inherently spans untrusted input, exploitation
+   tooling, and network reach, so it stays in the needs-HITL class
+   rather than pretending a narrower list fits. The HITL requirement
+   is mechanically anchored via the `rule_of_two` dispatch gate and
+   the dispatch-inventory test (see the needs-HITL verdict note
+   above).
+
+5. **Network reach in the crash-analysis pipeline** --
+   ADDRESSED: `crash-analysis-agent` no longer carries
+   WebFetch/WebSearch/Git — fetching the bug tracker is split into the
+   dedicated `crash-report-fetcher-agent` (Read, Write, WebFetch;
+   WebFetch domain-gated via the anchor-file mode of
+   `.claude/hooks/webfetch-domain-allowlist.py`), whose sole output is
+   the schema-gated `bug-report.json`. Repository cloning is
+   mechanical (`libexec/raptor-clone-repo` → `core.git.clone`:
+   URL allowlist, sandboxed git, hardened env), as are attachment
+   downloads (`libexec/raptor-fetch-attachment`: URL must appear in
+   the validated report; egress-allowlisted HTTP client). Honest
+   residual: the orchestrator and builder/analyzer agents keep Bash
+   because builds, rr, and gdb require it — tool-level network denial
+   is the enforced boundary; Bash-level egress remains bounded by the
+   sandbox / permission layers, same residual as the forensics
+   fetchers in pattern 3.
 
 ---
 
@@ -243,8 +349,10 @@ snippets, crash data) that flows into LLM prompts.
 
 ### Attack Surface
 
-An audit of the codebase identified **42 distinct LLM prompt callsites**
-across five packages:
+A 2026 audit identified **42 distinct LLM prompt callsites** across
+five packages (historical snapshot — kept because it shaped the
+envelope programme; see the lint-enforced current state below the
+table):
 
 | Package | Callsites | Classification |
 |---------|-----------|----------------|
@@ -255,16 +363,23 @@ across five packages:
 | `packages/web/` | 1 | Untrusted-touching |
 | `packages/diagram/` | 4 | Non-prompt: LLM visualisation hints (not security-critical) |
 
-Of the 42 callsites:
+The callsite census above is historical (it motivated the envelope
+work); the current state is lint-enforced rather than hand-counted:
 
-- **23** directly interpolate untrusted content (scanner output, code
-  snippets, file paths, crash data) via f-strings.
-- **10** are mixed -- task-based dispatch with delegated prompt builders
-  where CC tools provide code-reading isolation.
-- **9** are trusted-only -- system prompts, hardcoded instructions,
-  infrastructure.
-- **0** apply active sanitisation (XML wrapping, escaping, or base64
-  encoding of untrusted content).
+- `core/security/prompt_envelope_audit.py` registers **32 prompt-
+  construction files**; every interpolation in them is either
+  envelope-constructed (`build_prompt` with UntrustedBlocks and slots)
+  or carries an audited allowlist entry with a written justification.
+  The lint fails on any unregistered interpolation, so the census
+  cannot silently regress — read the registry for the authoritative
+  file list.
+- Fragment builders that inject sections into a larger enveloped
+  prompt use tag-forgery neutralisation, which the lint recognises as
+  an accepted defence.
+- Prompt-side coverage is complemented output-side by the report-
+  writer lint, the strict schema floor at the structured-generation
+  chokepoint, and provenance stamping (see "What Is Not Fully
+  Defended" above).
 
 ### Existing Defences
 
@@ -373,9 +488,12 @@ scanner findings.
 `.claude/settings.local.json`, `.mcp.json` patterns that would override
 the sub-agent's hooks, tool list, env, or load malicious MCP servers.
 This is a different threat from source-level prompt injection. The
-`--trust-repo` CLI flag overrides cc_trust for operators who have
-manually verified a target. It does not relax I2 -- LLM-driven
-sandboxes still treat source as adversarial.
+`--trust-repo` CLI flag overrides cc_trust (and the CodeQL pack/config
+check, `core/security/codeql_trust.py`) for operators who have manually
+verified a target; the project `config` trust marker persists the same
+assertion, and the separate `build` marker gates `--traced-build` repo
+code execution. It does not relax I2 -- LLM-driven sandboxes still
+treat source as adversarial.
 
 ### Common Confusions
 
@@ -403,3 +521,148 @@ implementation notes, and open work tracking lives at
 - `core/security/prompt_input_preflight.py` -- preflight regex corpus
 - `core/security/rule_of_two.py` -- Rule of Two CI gate
 - `core/security/injection_patterns/` -- injection pattern corpus
+
+---
+
+## Security-Event Stream
+
+Security-relevant rejections and denials are recorded on a dedicated
+observability stream: `log_security_event()` in `core/logging/`.  It is
+observability, not a control -- emitters call it on rejection, denial,
+and fail-closed paths whose behaviour is already decided, and the call
+never raises.
+
+**What emits today:**
+
+- Rejected git clone/fetch URLs (`invalid_repo_url`) -- URL allowlist
+  violations, with secrets redacted from the logged URL
+- Sandbox denials (`sandbox_denial`) -- denial type and return code from
+  sandboxed subprocesses
+- Repo-supplied scanner config rejection (`untrusted_rules_dir_rejected`)
+  -- repo YAML never loads as Semgrep configuration
+- Environment sanitisation failure (`env_sanitisation_failed`) during
+  validation-stage binary discovery
+
+**Where it lands:** the framework-level JSONL audit trail under
+`out/logs/raptor_<timestamp>_pid<pid>_<nnnn>.jsonl` (not the per-run
+output directory).  Each event is a WARNING record whose message is
+`SECURITY: <event_type> - <message>`, with `event_type` and the
+emitter's structured fields as JSON keys.  Payloads carry identifiers
+only -- never environment values or key material.
+
+There is no dedicated viewer; inspect with standard JSONL tooling:
+
+```bash
+jq -c 'select(.message | startswith("SECURITY:"))' out/logs/raptor_*.jsonl
+```
+
+---
+
+## Deliberate Posture Decisions
+
+Security choices that look surprising out of context, made consciously
+and worth not re-litigating each time someone reads the code. Each
+entry: the decision, why, and where it is enforced.
+
+### Group-writable files and the privileged launcher
+
+The capability-granted helpers (`core/sandbox/helpers/`) enforce
+trusted-path execution: they only exec files owned by root or by the
+operator who owns the launcher binary, and refuse world-writable
+files. **Group-write is allowed only when the file's group is the
+owner's own primary group.** Debian/Ubuntu use user-private groups
+(each user's primary group has that user as its only member) with
+`umask 002`, so every fresh `git checkout` produces mode-664 files —
+group-writable by a single-member group, which is security-equivalent
+to owner-writable. Refusing it would break the launcher on the default
+configuration of the most common distros and train operators to chmod
+after every clone. Group-write by any *shared* group (the case where
+other humans actually hold write access) is still refused. Accepted
+edge: an operator whose primary group is deliberately shared has made
+that trust choice machine-wide via their umask; the launcher does not
+try to be stricter than the operator's own filesystem posture.
+Enforced in `raptor-coord-launcher.c` / `raptor-gidmap-allow.c`.
+
+### No Landlock BIND_TCP restrictions
+
+Sandboxed tools and targets may legitimately `bind()` — servers under
+test, fuzz harnesses, Frida-instrumented daemons — even when the
+listener is unreachable from outside the sandbox. Restricting bind
+breaks those workloads for no containment gain; egress is what
+matters, and CONNECT_TCP is denied when `block_network` degrades to
+Landlock-only mode. Enforced (by absence) in `core/sandbox/landlock.py`.
+
+### `diff.external=` pinned empty — diff callers fail closed
+
+The safe git overrides pin `diff.external=` (empty). git treats the
+empty value as a command to run, so `git diff` through the overrides
+*fails loudly* unless the caller passes `--no-ext-diff`. Deliberate: a
+future diff call site that forgets to disable external drivers fails
+at development time instead of silently honouring a repo-named
+program. Both in-repo diff consumers pass the flag; an
+execution-level test pins both directions. Enforced in
+`core/git/clone.py`; pinned by `core/git/tests/test_clone.py`.
+
+### `%G?` status B counts toward the signing rate — and gets its own signal
+
+A commit whose signature FAILS verification (`B`) still counts as
+"signed" for the workflow signing-rate regime split (it is visible to
+a reviewer, unlike an unsigned commit), but every `B` commit also
+emits its own per-commit finding in every regime — key present,
+check failed is anomalous regardless of the repo's norm. Enforced in
+`packages/sca/supply_chain/workflow_signing.py`.
+
+### Canonical bot email downgrades, never suppresses
+
+An unsigned commit's author email is free text; matching the canonical
+`<id>+bot@users.noreply.github.com` shape proves nothing. The
+bot+unsigned+date-skew conjunction therefore always surfaces — at
+reduced severity/confidence for the canonical shape (legitimate
+rebased bot commits look identical) instead of being hidden. Enforced
+in `packages/sca/supply_chain/commit_provenance.py`.
+
+### Repo-derived egress hosts are logged, not trust-gated
+
+Image registries and Helm chart hosts declared by the scanned repo are
+added to the egress allowlist without an operator gate: the scan
+legitimately needs them, and blocking them behind trust would break
+SCA on every untrusted target (the common case). Compensations: strict
+hostname-grammar validation, and one WARNING per run listing every
+repo-derived addition by source. Repo-sourced *configuration*
+(suppression overlays, policy toggles) IS trust-gated — data the scan
+needs vs config the operator writes. Enforced in
+`packages/sca/__init__.py` / `pipeline.py` / `bump/policy.py`.
+
+### Incomplete trust scans block; the override persists
+
+A trust verdict computed from a knowably-incomplete enumeration (the
+CodeQL pack-file walk hitting its cap) is treated as blocking, not
+best-effort — operators override deliberately with `--trust-repo` or
+the project `config` marker after seeing the findings. Gate outcomes
+are never persisted to journals or cross-run memory, so a later
+trusted re-run starts clean. Enforced in
+`core/security/codeql_trust.py`.
+
+### Dependency resolution is metadata-only; sdists are a per-run opt-in
+
+`pip-compile` runs with `PIP_ONLY_BINARY=:all:` (and composer with
+`--no-scripts --no-plugins`): resolving versions must never execute a
+package's build backend. Sdist-only manifests fail the dry-run loudly;
+`--allow-sdist-builds` is the explicit per-run risk acceptance.
+Enforced in `packages/sca/resolvers/`.
+
+### SAGE row-authentication key never rotates
+
+Memory rows consumed *mechanically* carry an HMAC minted with a
+per-install key (`$XDG_DATA_HOME/raptor/rowmac.key`, default
+`~/.local/share/raptor/rowmac.key`; created at setup, used forever).
+The key lives outside the repo tree on purpose: several sandbox
+profiles grant children repo-root read, and a sandboxed target that
+could read an in-repo key could mint valid MACs for poisoned rows —
+so the key must sit outside every sandbox-readable tree. There is no
+rotation machinery: deleting the key simply demotes every existing
+row to a human-visible hint, and rows re-earn mechanical status as
+new outcomes are stored — memories decay anyway, so key loss is a
+graceful reset, not an incident. Enforced in `core/sage/rowmac.py` /
+`hooks.py`. Operator-facing key setup and rotation guidance:
+[sage.md](sage.md#hmac-key-setup).

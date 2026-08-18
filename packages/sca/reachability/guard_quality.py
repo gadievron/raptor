@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from ..models import Reachability
 
@@ -40,10 +40,10 @@ class CallSiteGuardAnalysis:
     adequacy_verdict: str
     has_bound_guard: bool
     all_decorative: bool
-    guard_details: List[Dict[str, Any]] = field(default_factory=list)
+    guard_details: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "evidence": self.evidence_entry,
             "sink_api": self.sink_api,
             "guards_found": self.guards_found,
@@ -62,13 +62,13 @@ class GuardQualityResult:
     """Aggregate guard quality for all call sites of one dep."""
 
     dep_key: str
-    call_sites: List[CallSiteGuardAnalysis]
+    call_sites: list[CallSiteGuardAnalysis]
     any_unguarded: bool
     any_inadequate: bool
     all_adequately_guarded: bool
     summary: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "dep_key": self.dep_key,
             "call_sites": [cs.to_dict() for cs in self.call_sites],
@@ -80,14 +80,14 @@ class GuardQualityResult:
 
 
 def analyze_call_site_guards(
-    reachability: Dict[str, Reachability],
+    reachability: dict[str, Reachability],
     target: Path,
     *,
-    cve_dep_keys: Optional[Set[str]] = None,
-    affected_functions: Optional[Dict[str, List[str]]] = None,
-    joern_server: Optional[Any] = None,
-    out_dir: Optional[Any] = None,
-) -> Dict[str, GuardQualityResult]:
+    cve_dep_keys: set[str] | None = None,
+    affected_functions: dict[str, list[str]] | None = None,
+    joern_server: Any | None = None,
+    out_dir: Any | None = None,
+) -> dict[str, GuardQualityResult]:
     """Analyze guard quality at call sites for likely_called deps.
 
     Args:
@@ -110,9 +110,9 @@ def analyze_call_site_guards(
         return {}
 
     try:
-        from core.audit.condition_extraction import extract_sink_guards
         from core.audit.condition_adequacy import assess_guard_adequacy
         from core.audit.condition_binding import check_guard_binding
+        from core.audit.condition_extraction import extract_sink_guards
     except ImportError:
         logger.debug(
             "guard_quality: core.audit.condition_* not importable; "
@@ -120,16 +120,21 @@ def analyze_call_site_guards(
         )
         return {}
 
-    # Load IRIS-confirmed sanitisers (graceful: empty set on failure)
-    iris_sanitisers: Set[str] = set()
+    # Load IRIS-confirmed sanitisers (graceful: empty set on failure).
+    # The IRIS store loader self-catches malformed/missing store files;
+    # only store-path resolution can legitimately fail here (OSError).
+    iris_sanitisers: set[str] = set()
     if out_dir is not None:
         try:
             from core.iris.api import get_project_sanitisers
             iris_sanitisers = set(get_project_sanitisers(out_dir=out_dir))
-        except Exception:
-            pass
+        except OSError as e:
+            logger.warning(
+                "guard_quality: IRIS sanitiser load failed (%s) — "
+                "scoring without project-confirmed sanitisers", e,
+            )
 
-    results: Dict[str, GuardQualityResult] = {}
+    results: dict[str, GuardQualityResult] = {}
 
     for dep_key, reach in reachability.items():
         if reach.verdict != "likely_called":
@@ -162,19 +167,19 @@ def analyze_call_site_guards(
 
 def _analyze_dep_call_sites(
     dep_key: str,
-    evidence: List[str],
-    affected_functions: List[str],
+    evidence: list[str],
+    affected_functions: list[str],
     target: Path,
     *,
-    joern_server: Optional[Any] = None,
-    iris_sanitisers: Optional[Set[str]] = None,
+    joern_server: Any | None = None,
+    iris_sanitisers: set[str] | None = None,
     _extract=None,
     _adequacy=None,
     _binding=None,
-) -> Optional[GuardQualityResult]:
+) -> GuardQualityResult | None:
     """Analyze all call sites for one dep."""
-    call_sites: List[CallSiteGuardAnalysis] = []
-    source_cache: Dict[str, str] = {}
+    call_sites: list[CallSiteGuardAnalysis] = []
+    source_cache: dict[str, str] = {}
 
     for entry in evidence[:10]:
         path, line = _parse_evidence(entry)
@@ -278,22 +283,32 @@ def _analyze_dep_call_sites(
 def _enrich_cpg(
     sg: Any,
     joern_server: Any,
-    guard_details: List[Dict[str, Any]],
+    guard_details: list[dict[str, Any]],
 ) -> None:
-    """Optionally enrich guard details with CPG verification."""
-    try:
-        from core.audit.condition_cpg import verify_guard_relevance_cpg
+    """Optionally enrich guard details with CPG verification.
 
-        cpg_results = verify_guard_relevance_cpg(
-            sg, joern_server=joern_server,
+    ``verify_guard_relevance_cpg`` degrades per-guard internally
+    (query failures land in ``cr.error``) and returns ``[]`` without
+    a server, so no handler is needed here — an exception escaping
+    it is a wiring bug (or a safety-contract violation) and must
+    propagate.
+    """
+    from core.audit.condition_cpg import verify_guard_relevance_cpg
+
+    cpg_results = verify_guard_relevance_cpg(
+        sg, joern_server=joern_server,
+    )
+    errored = sum(1 for cr in cpg_results if cr.error)
+    if errored:
+        logger.debug(
+            "guard_quality: %d/%d CPG guard checks errored — "
+            "guard evidence degraded", errored, len(cpg_results),
         )
-        for cr in cpg_results:
-            guard_details.append({
-                "cpg_verified": cr.verified_relevant,
-                "data_dep_bound": cr.data_dep_bound,
-            })
-    except Exception:  # noqa: BLE001
-        pass
+    for cr in cpg_results:
+        guard_details.append({
+            "cpg_verified": cr.verified_relevant,
+            "data_dep_bound": cr.data_dep_bound,
+        })
 
 
 def _parse_evidence(entry: str) -> tuple:

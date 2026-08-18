@@ -554,3 +554,57 @@ class TestRefineLoopBypass:
             convergence_threshold=0.99,
         )
         assert len(round_calls) >= 2
+
+
+class TestRefineTierCarriedThroughSavePath:
+    """End-to-end tier flow: refine loop → persist → gated reader.
+
+    The precondition the baseline-reduction note documented: refined
+    SANITISER specs must not flow into suppression-direction readers
+    untiered. A tool-confirmed sanitiser (promoted to XREF_BACKED in
+    the loop) reaches ``get_project_sanitisers``; an unconfirmed
+    heuristic one persists as hint-only and does not.
+    """
+
+    def test_confirmed_suppresses_heuristic_does_not(self, tmp_path):
+        from core.iris.api import get_project_sanitisers, load_project_specs
+        from core.iris.store import load_specs, persist_refined_specs
+
+        confirmed = _spec(fn="real_sanitiser", role="sanitiser")
+        unconfirmed = _spec(fn="llm_guess", file="src/b.py",
+                            role="sanitiser")
+        confirmed_key = _spec_key(confirmed)
+
+        def tool_runner(specs):
+            return RefinementFeedback(
+                confirmed_keys=[
+                    k for k in (_spec_key(s) for s in specs)
+                    if k == confirmed_key
+                ],
+            )
+
+        refined, history, assumptions, _bypass = refine_loop(
+            [_cand(fn="sanitize_extra", file="src/c.py")],
+            llm_client=None, tool_runner=tool_runner,
+            prior_specs=[confirmed, unconfirmed], max_rounds=1,
+        )
+
+        by_fn = {s.function: s for s in refined}
+        assert by_fn["real_sanitiser"].evidence_tier == EvidenceTier.XREF_BACKED
+        assert by_fn["llm_guess"].evidence_tier == EvidenceTier.HEURISTIC
+
+        run_dir = tmp_path / "project" / "run_001"
+        run_dir.mkdir(parents=True)
+        persist_refined_specs(run_dir, refined, history=[])
+
+        stored = {s.function: s for s in load_specs(run_dir)}
+        assert stored["real_sanitiser"].evidence_tier == EvidenceTier.XREF_BACKED
+        assert stored["llm_guess"].evidence_tier == EvidenceTier.HEURISTIC
+
+        # Suppression-direction reader: only the corroborated one.
+        assert get_project_sanitisers(out_dir=run_dir) == {"real_sanitiser"}
+        # Prompt-direction: both visible as context.
+        assert {
+            s.function
+            for s in load_project_specs(out_dir=run_dir, roles={"sanitiser"})
+        } == {"real_sanitiser", "llm_guess", "sanitize_extra"}

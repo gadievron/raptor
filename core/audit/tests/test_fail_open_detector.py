@@ -10,6 +10,7 @@ except ImportError:
     _HAS_TS = False
 pytestmark = pytest.mark.skipif(not _HAS_TS, reason="tree-sitter not installed")
 
+import core.audit.fail_open_detector as mod  # noqa: E402
 from core.audit.fail_open_detector import (  # noqa: E402
     FailOpenPattern,
     detect_fail_open_patterns,
@@ -603,3 +604,33 @@ def scan_items(items, limit=100):
             description="test", confidence="medium",
         )
         assert p.pattern_type == "truncation_consumed_unchecked"
+
+
+# ---------------------------------------------------------------
+# Module-level regex constants
+# ---------------------------------------------------------------
+
+
+class TestDeadConstantRemoved:
+    """Only the regexes actually consumed by the detectors exist."""
+
+    def test_return_collection_re_gone(self):
+        assert not hasattr(mod, "_RETURN_COLLECTION_RE")
+
+    def test_detectors_still_work(self):
+        source = (
+            "def load():\n"
+            "    try:\n"
+            "        return fetch()\n"
+            "    except Exception:\n"
+            "        return {}\n"
+            "    return {}\n"
+        )
+        results = mod.detect_fail_open_patterns({"a.py": source})
+        assert any(
+            r.pattern_type == "error_conflated_with_empty" for r in results
+        )
+
+    def test_truncation_signal_re_intact(self):
+        body = "for x in items:\n    if len(out) >= cap:\n        break\nreturn out, True\n"
+        assert mod._TRUNCATION_SIGNAL_RE.search(body)

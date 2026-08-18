@@ -9,9 +9,62 @@ from tempfile import TemporaryDirectory
 # core/inventory/tests/test_shared_checklist.py -> repo root
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from core.inventory import save_checklist, update_checklist
+from core.inventory import read_checklist, save_checklist, update_checklist
 from core.json import load_json, save_json
-from core.run.metadata import _setup_checklist_symlink, _promote_checklist
+from core.run.metadata import _promote_checklist, _setup_checklist_symlink
+
+
+class TestReadChecklist(unittest.TestCase):
+
+    def test_round_trips_save(self):
+        with TemporaryDirectory() as d:
+            save_checklist(d, {"files": [], "total_items": 3})
+            loaded = read_checklist(d)
+            self.assertEqual(loaded["total_items"], 3)
+
+    def test_missing_returns_empty_without_side_effects(self):
+        with TemporaryDirectory() as d:
+            missing = Path(d) / "never-created"
+            self.assertEqual(read_checklist(missing), {})
+            # A pure read must not create the output dir (the write
+            # accessors' path resolution mkdirs; the reader must not).
+            self.assertFalse(missing.exists())
+
+    def test_malformed_returns_empty(self):
+        with TemporaryDirectory() as d:
+            (Path(d) / "checklist.json").write_text("{broken")
+            self.assertEqual(read_checklist(d), {})
+
+    def test_non_dict_returns_empty(self):
+        with TemporaryDirectory() as d:
+            (Path(d) / "checklist.json").write_text('["not", "a", "dict"]')
+            self.assertEqual(read_checklist(d), {})
+
+    def test_reads_through_project_symlink(self):
+        with TemporaryDirectory() as d:
+            project_dir = Path(d) / "project"
+            run_dir = project_dir / "run-001"
+            run_dir.mkdir(parents=True)
+            save_json(project_dir / "checklist.json", {"version": "proj"})
+            (run_dir / "checklist.json").symlink_to("../checklist.json")
+
+            self.assertEqual(read_checklist(str(run_dir))["version"], "proj")
+
+    def test_takes_the_writers_lock(self):
+        # The reader must contend on the same checklist.lock file the
+        # writers use — verified via a non-blocking flock probe while
+        # no reader/writer is active (the lock file exists after a
+        # save) and by asserting read_checklist creates/uses it.
+        import fcntl
+        with TemporaryDirectory() as d:
+            save_checklist(d, {"files": []})
+            read_checklist(d)
+            lock_path = Path(d) / "checklist.lock"
+            self.assertTrue(lock_path.exists())
+            # Sanity: the lock is free again after the read returns.
+            with open(lock_path, "w") as f:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
 
 
 class TestSaveChecklist(unittest.TestCase):

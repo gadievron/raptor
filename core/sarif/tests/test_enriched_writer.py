@@ -6,12 +6,11 @@ import pytest
 
 from core.sarif.enriched_writer import (
     _build_raptor_properties,
-    _verdict_from_analysis,
     _reachability_from_analysis,
+    _verdict_from_analysis,
     build_enriched_sarif,
     write_enriched_sarif,
 )
-
 
 # ---------------------------------------------------------------------------
 # Verdict mapping
@@ -362,3 +361,48 @@ class TestLineFallback:
         sarif = build_enriched_sarif([finding])
         loc = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
         assert loc["region"]["startLine"] == 10
+
+
+class TestAtomicWrite:
+    """The write path uses the shared atomic-write primitive, not a
+    predictable ``<name>.tmp`` sibling."""
+
+    def _finding(self):
+        return {
+            "file_path": "src/a.c",
+            "start_line": 1,
+            "rule_id": "r1",
+            "message": "m",
+        }
+
+    def test_no_predictable_tmp_sibling_left_behind(self, tmp_path):
+        out = tmp_path / "out.sarif"
+        write_enriched_sarif([self._finding()], out)
+        assert out.is_file()
+        assert not (tmp_path / "out.sarif.tmp").exists()
+        # Nothing else lingers in the directory after a clean write.
+        assert [p.name for p in tmp_path.iterdir()] == ["out.sarif"]
+
+    def test_symlink_squat_at_old_tmp_name_is_not_followed(self, tmp_path):
+        """A symlink squatted at the previously-predictable temp name
+        must not receive the SARIF payload."""
+        victim = tmp_path / "victim.txt"
+        victim.write_text("untouched")
+        out = tmp_path / "out.sarif"
+        (tmp_path / "out.sarif.tmp").symlink_to(victim)
+
+        write_enriched_sarif([self._finding()], out)
+
+        assert victim.read_text() == "untouched"
+        doc = json.loads(out.read_text())
+        assert doc["version"] == "2.1.0"
+
+    def test_overwrite_leaves_valid_document(self, tmp_path):
+        out = tmp_path / "out.sarif"
+        write_enriched_sarif([self._finding()], out)
+        n = write_enriched_sarif(
+            [self._finding(), dict(self._finding(), rule_id="r2")], out,
+        )
+        assert n == 2
+        doc = json.loads(out.read_text())
+        assert len(doc["runs"][0]["results"]) == 2

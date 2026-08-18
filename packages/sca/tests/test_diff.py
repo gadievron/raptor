@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
-
+from typing import Any
 
 from packages.sca import diff
 
@@ -16,13 +15,13 @@ def _vuln_row(
     name: str = "lodash",
     version: str = "4.17.4",
     advisory_id: str = "GHSA-jf85",
-    aliases: List[str] | None = None,
+    aliases: list[str] | None = None,
     severity: str = "critical",
     in_kev: bool = False,
     epss: float | None = None,
     suppressed: bool = False,
     reason: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "id": f"sca:vuln:{eco}:{name}:{version}:{advisory_id}",
         "vuln_type": "sca:vulnerable_dependency",
@@ -41,7 +40,7 @@ def _vuln_row(
 def _hygiene_row(kind: str = "loose_pin", eco: str = "npm",
                  name: str = "lodash", version: str = "4.17.4",
                  severity: str = "low",
-                 suppressed: bool = False) -> Dict[str, Any]:
+                 suppressed: bool = False) -> dict[str, Any]:
     return {
         "id": f"sca:hygiene:{kind}:{eco}:{name}",
         "vuln_type": f"sca:hygiene:{kind}",
@@ -52,7 +51,7 @@ def _hygiene_row(kind: str = "loose_pin", eco: str = "npm",
     }
 
 
-def _write(tmp_path: Path, name: str, rows: List[Dict[str, Any]]) -> Path:
+def _write(tmp_path: Path, name: str, rows: list[dict[str, Any]]) -> Path:
     p = tmp_path / name
     p.write_text(json.dumps(rows), encoding="utf-8")
     return p
@@ -374,7 +373,7 @@ def test_pr_comment_kev_finding_lifted_to_blocker_verdict() -> None:
     """A new KEV-listed finding is the most operator-actionable
     signal we have: surface it as a leading 🛑 verdict so PR
     reviewers don't have to scroll into the table to see it."""
-    rows_a: List[Dict[str, Any]] = []
+    rows_a: list[dict[str, Any]] = []
     rows_b = [_vuln_row(advisory_id="GHSA-kev",
                          severity="high",   # not even critical
                          in_kev=True)]
@@ -490,3 +489,70 @@ def test_pr_comment_via_main_writes_to_stdout(
     assert "myrepo · pr#42" in out
     assert "🛑" in out
     assert "GHSA-flag" in out
+
+
+# ---------------------------------------------------------------------------
+# Markdown-injection hardening — table cells must stay inert
+# ---------------------------------------------------------------------------
+
+def test_table_pipe_in_name_stays_one_cell() -> None:
+    """A ``|`` in a package name must not split the markdown row —
+    it lands in findings.json from manifests/registries we don't
+    control."""
+    row = _vuln_row(name="bad|name", advisory_id="GHSA-pipe")
+    d = diff.compute_delta([], [row])
+    md = diff.render_pr_comment(d)
+    assert "bad\\|name" in md
+    assert "bad|name" not in md
+    # Every table row keeps the 4-column shape (5 pipes incl. edges).
+    for line in md.splitlines():
+        if "GHSA-pipe" in line and line.startswith("|"):
+            assert line.count("|") - line.count("\\|") == 5
+
+
+def test_table_details_breakout_neutralised() -> None:
+    """``</details>`` in a finding label must not close the real
+    <details> section render_pr_comment wraps the table in."""
+    payload = "</details><h1>all clear, merge away</h1>"
+    row = _vuln_row(name=f"evil{payload}", advisory_id="GHSA-esc")
+    d = diff.compute_delta([], [row])
+    md = diff.render_pr_comment(d)
+    assert payload not in md
+    assert "&lt;/details&gt;" in md
+    # The renderer's own open/close pairs stay balanced.
+    assert md.count("<details") == md.count("</details>")
+
+
+def test_table_newline_in_reason_stays_one_row() -> None:
+    """Raw newlines in a suppression reason would terminate the
+    table row and let the remainder render as top-level markdown
+    (e.g. a forged heading)."""
+    reason = "accepted risk\n# Verdict: no findings"
+    rows_a = [_vuln_row(advisory_id="GHSA-sup")]
+    rows_b = [_vuln_row(advisory_id="GHSA-sup", suppressed=True,
+                        reason=reason)]
+    d = diff.compute_delta(rows_a, rows_b)
+    md = diff._render_markdown("a.json", "b.json", d)
+    assert not any(line.startswith("# Verdict") for line in md.splitlines())
+    assert "accepted risk" in md
+
+
+def test_md_cell_caps_length_and_escapes_controls() -> None:
+    long_value = "x" * 5000
+    cell = diff._md_cell(long_value)
+    assert len(cell) <= diff._MD_CELL_LIMIT + 1  # +1 for the ellipsis
+    assert cell.endswith("…")
+    # ANSI escape defanged, backtick escaped.
+    cell2 = diff._md_cell("a\x1b[31mred`tick")
+    assert "\x1b" not in cell2
+    assert "\\x1b" in cell2
+    assert "\\`" in cell2
+
+
+def test_pr_comment_neutralises_repo_label() -> None:
+    d = diff.compute_delta([], [])
+    md = diff.render_pr_comment(
+        d, repo_label="repo</details><script>x</script>",
+    )
+    assert "<script>" not in md
+    assert "&lt;script&gt;" in md

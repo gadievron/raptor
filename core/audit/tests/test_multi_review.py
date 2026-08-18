@@ -115,8 +115,55 @@ class TestAuditVerdictAdapter:
         merged = self.adapter.merge(per_model)
         assert len(merged) == 1
         assert merged[0]["status"] == "clean"
-        assert len(merged[0]["multi_model_analyses"]) == 1
-        assert merged[0]["multi_model_analyses"][0]["model"] == "model-a"
+        # Base-adapter distinct-model gate: a single-model panel is NOT
+        # annotated as a multi-model analysis (key absent, not []).
+        assert "multi_model_analyses" not in merged[0]
+        assert "_model" not in merged[0]
+
+    def test_merge_two_models_full_records(self):
+        # Audit consumers read body/hypothesis from the per-model
+        # records — the audit adapter overrides the base's truncated
+        # record shape.
+        per_model = {
+            "model-a": [{"file": "a.c", "function": "f",
+                         "status": "clean", "body": "looks fine",
+                         "hypothesis": ""}],
+            "model-b": [{"file": "a.c", "function": "f",
+                         "status": "finding", "body": "overflow",
+                         "hypothesis": "off-by-one"}],
+        }
+        merged = self.adapter.merge(per_model)
+        analyses = merged[0]["multi_model_analyses"]
+        assert {a["model"] for a in analyses} == {"model-a", "model-b"}
+        by_model = {a["model"]: a for a in analyses}
+        assert by_model["model-b"]["body"] == "overflow"
+        assert by_model["model-b"]["hypothesis"] == "off-by-one"
+        assert all("_model" not in a for a in analyses)
+
+    def test_merge_skips_malformed_items(self):
+        per_model = {
+            "model-a": [
+                {"status": "finding"},  # no file/function — dropped
+                {"file": "a.c", "function": "f", "status": "clean"},
+            ],
+        }
+        merged = self.adapter.merge(per_model)
+        assert len(merged) == 1
+        assert merged[0]["function"] == "f"
+
+    def test_merge_intra_model_duplicate_is_not_a_panel(self):
+        # One model answering twice must not masquerade as
+        # a multi-model analysis (the distinct-model gate the
+        # hand-rolled merge lacked).
+        per_model = {
+            "model-a": [
+                {"file": "a.c", "function": "f", "status": "clean"},
+                {"file": "a.c", "function": "f", "status": "finding"},
+            ],
+        }
+        merged = self.adapter.merge(per_model)
+        assert len(merged) == 1
+        assert "multi_model_analyses" not in merged[0]
 
     def test_merge_two_models_agree(self):
         per_model = {
@@ -155,7 +202,10 @@ class TestAuditVerdictAdapter:
         merged = self.adapter.merge(per_model)
         assert len(merged) == 2
 
-    def test_correlate_unanimous(self):
+    def test_correlate_unanimous_negative(self):
+        # Base-adapter correlation shape: agreement_matrix +
+        # confidence_signals. Two models agreeing "clean" (negative)
+        # is a high-negative signal.
         per_model = {
             "model-a": [
                 {"file": "a.c", "function": "f", "status": "clean"}
@@ -166,10 +216,22 @@ class TestAuditVerdictAdapter:
         }
         merged = self.adapter.merge(per_model)
         corr = self.adapter.correlate(merged, per_model)
-        item_info = corr["per_item"]["a.c:f"]
-        assert item_info["classification"] == "unanimous"
-        assert corr["summary"]["unanimous"] == 1
+        assert corr["confidence_signals"]["a.c:f"] == "high-negative"
+        assert corr["summary"]["agreed"] == 1
         assert corr["summary"]["disputed"] == 0
+
+    def test_correlate_unanimous_positive(self):
+        per_model = {
+            "model-a": [
+                {"file": "a.c", "function": "f", "status": "finding"}
+            ],
+            "model-b": [
+                {"file": "a.c", "function": "f", "status": "suspicious"}
+            ],
+        }
+        merged = self.adapter.merge(per_model)
+        corr = self.adapter.correlate(merged, per_model)
+        assert corr["confidence_signals"]["a.c:f"] == "high"
 
     def test_correlate_disputed(self):
         per_model = {
@@ -182,11 +244,13 @@ class TestAuditVerdictAdapter:
         }
         merged = self.adapter.merge(per_model)
         corr = self.adapter.correlate(merged, per_model)
-        item_info = corr["per_item"]["a.c:f"]
-        assert item_info["classification"] == "disputed"
+        assert corr["confidence_signals"]["a.c:f"] == "disputed"
         assert corr["summary"]["disputed"] == 1
 
-    def test_correlate_majority(self):
+    def test_correlate_majority_split_is_disputed(self):
+        # Base semantics: ANY pos+neg mix is a dispute — a 2:1 split
+        # still surfaces the dissenting reasoning as a unique insight
+        # rather than being smoothed into "majority".
         per_model = {
             "model-a": [
                 {"file": "a.c", "function": "f", "status": "clean"}
@@ -195,13 +259,16 @@ class TestAuditVerdictAdapter:
                 {"file": "a.c", "function": "f", "status": "clean"}
             ],
             "model-c": [
-                {"file": "a.c", "function": "f", "status": "finding"}
+                {"file": "a.c", "function": "f", "status": "finding",
+                 "body": "unchecked memcpy length"}
             ],
         }
         merged = self.adapter.merge(per_model)
         corr = self.adapter.correlate(merged, per_model)
-        item_info = corr["per_item"]["a.c:f"]
-        assert item_info["classification"] == "majority"
+        assert corr["confidence_signals"]["a.c:f"] == "disputed"
+        # The lone-positive dissent is surfaced for review.
+        assert any(i["item_id"] == "a.c:f"
+                   for i in corr["unique_insights"])
 
     def test_correlate_single_model(self):
         per_model = {
@@ -211,8 +278,7 @@ class TestAuditVerdictAdapter:
         }
         merged = self.adapter.merge(per_model)
         corr = self.adapter.correlate(merged, per_model)
-        item_info = corr["per_item"]["a.c:f"]
-        assert item_info["classification"] == "unanimous"
+        assert corr["confidence_signals"]["a.c:f"] == "single_model"
 
 
 class TestAdversarialReviewer:
@@ -347,7 +413,7 @@ class TestRunAuditMultiReview:
             review_fn=_review_clean,
         )
         assert len(result.items) == 1
-        assert result.correlation["summary"]["unanimous"] == 1
+        assert result.correlation["summary"]["agreed"] == 1
 
     def test_two_models_disagreement(self):
         def review_fn(_ctx, model):
@@ -439,13 +505,13 @@ class TestConsensusStatus:
 class TestIsDisputed:
     def test_disputed(self):
         result = MultiModelResult(
-            correlation={"per_item": {"a.c:f": {"classification": "disputed"}}},
+            correlation={"confidence_signals": {"a.c:f": "disputed"}},
         )
         assert is_disputed(result) is True
 
     def test_unanimous(self):
         result = MultiModelResult(
-            correlation={"per_item": {"a.c:f": {"classification": "unanimous"}}},
+            correlation={"confidence_signals": {"a.c:f": "high"}},
         )
         assert is_disputed(result) is False
 

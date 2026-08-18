@@ -1026,28 +1026,18 @@ class _CPPCFGBuilder:
         # the loop "header" for continue.
         self._loop_stack.append((tail, tail))
         self._break_stack.append(tail)
+        # Tail loops back to body entry.  _build_stmts links incoming →
+        # first body node(s), so we snapshot incoming's successors before
+        # and diff after to recover the body entry set.
+        pre_succs = {n: set(self._adjacency.get(n, ())) for n in incoming}
         body_out = self._build_stmts(body, incoming) if body is not None else list(incoming)
-        # Body falls through to tail (the cond test)
+        # Body falls through to tail (the condition test)
         self._link_many(body_out, tail)
-        # Tail loops back to body entry. We don't have a direct
-        # handle on body entry; the first stmt in body had `incoming`
-        # as predecessor. Link tail → all predecessor-successors of
-        # body — i.e. re-walk the body starting from tail. To keep
-        # this finite, we explicitly add the edge tail → first body
-        # node by linking tail to whatever incoming was used for body.
-        # Simplest correct model: tail → header == body's first node.
-        # We approximate by linking tail to every node whose only
-        # predecessor was in incoming. For straight-line bodies that
-        # is one node; for complex bodies (e.g. nested if) the
-        # over-approximation is permissive and the vertex-cut still
-        # works correctly.
-        body_entry_candidates = [
-            n for n, _ in self._adjacency.items()
-            if any(succ for succ in self._adjacency.get(n, ())
-                   if succ in body_out)
-        ]
-        for cand in body_entry_candidates:
-            self._link(tail, cand)
+        body_entry = set()
+        for n in incoming:
+            body_entry |= set(self._adjacency.get(n, ())) - pre_succs.get(n, set())
+        for entry in body_entry:
+            self._link(tail, entry)
         self._break_stack.pop()
         self._loop_stack.pop()
         return [tail]

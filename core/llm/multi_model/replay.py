@@ -18,7 +18,8 @@ update (Phase 4). Given one or more historical
 
 The harness does *not* mutate the input files and does not touch any
 scorecard. It is read-only and side-effect-free except for stdout
-output and the optional ``--out`` JSON dump.
+output and the optional ``--out`` files (the rendered report —
+markdown unless ``--json`` — plus a ``.json`` sibling).
 
 Why it ships as a CLI now even though phase 3 already attaches
 calibrated verdicts inline at orchestration time:
@@ -469,7 +470,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         json_out = args.out.with_suffix(args.out.suffix + ".json")
         json_out.write_text(render_json(report), encoding="utf-8")
 
-    # Exit 0 always — replay is informational, no pass/fail semantics.
+    # Exit 0 on any completed replay — informational, no pass/fail
+    # semantics.  (Usage errors return 2 above, before replaying.)
     return 0
 
 

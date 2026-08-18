@@ -12,19 +12,23 @@ What remains here:
 - :func:`_compute_hash` — source-content hash for staleness detection.
   Called by :func:`core.audit.collector.append_journal_for_outcome`.
 - :func:`load_audit_log` / :func:`append_audit_log` — the
-  ``.audit-log.jsonl`` event log (context-load / tool-dispatch / batch-
-  flush events). Review outcomes went to the review journal from
-  2026-07-28 onwards; this log carries non-review events only.
+  ``.audit-log.jsonl`` event log. Carries non-review events
+  (context-load / tool-dispatch / batch-flush) PLUS per-review
+  telemetry: Collector.submit still appends one
+  ``action="orchestrator_review"`` record per review (status,
+  hypothesis, evidence_tool, cost) which strategy_stats aggregates
+  for cross-run strategy win rates. The review journal (from
+  2026-07-28 onwards) remains the sole AUTHORITY for verdicts —
+  these log records are telemetry, not review state.
 - :func:`_resolve_annotations_dir` — project-level annotations dir
   resolution, used by consumers that write / read human annotations.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -48,43 +52,40 @@ def _resolve_annotations_dir(out_dir: Path) -> Path:
     return out_dir / "annotations"
 
 
-def load_audit_log(out_dir: Path) -> List[Dict[str, Any]]:
+def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     """Load the audit event log (one JSON record per line).
 
-    Since 2026-07-28 this log carries non-review events only —
-    ``action=context``, ``action=tool_dispatch``, ``action=batch_flush``,
+    Carries operational events — ``action=context``,
+    ``action=tool_dispatch``, ``action=batch_flush``,
     ``action=record_migrated`` stub (one-shot per run for grep
-    discoverability), etc. Review outcomes moved to
-    ``review-journal.jsonl`` in the same directory.
+    discoverability) — plus one ``action=orchestrator_review``
+    telemetry record per review (written by Collector, consumed by
+    strategy_stats). Authoritative review VERDICTS live in
+    ``review-journal.jsonl`` in the same directory (since 2026-07-28).
     """
     log_path = out_dir / ".audit-log.jsonl"
-    if not log_path.exists():
-        return []
-    records = []
-    with open(log_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return records
+    from core.json import load_jsonl
+    return load_jsonl(log_path)
 
 
-def append_audit_log(out_dir: Path, entry: Dict[str, Any]) -> None:
-    """Append an entry to the audit event log."""
+def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
+    """Append an entry to the audit event log.
+
+    Routed through ``core.json.append_jsonl`` so the trail gets the
+    same O_APPEND line-atomicity and O_NOFOLLOW symlink refusal as
+    every other JSONL trail writer.
+    """
     log_path = out_dir / ".audit-log.jsonl"
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    from core.json import append_jsonl
+    append_jsonl(log_path, entry, compact=True)
 
 
 def _compute_hash(
     target_path: Path,
     file_path: str,
     line_start: int,
-    line_end: Optional[int],
-) -> Optional[str]:
+    line_end: int | None,
+) -> str | None:
     """Compute source hash for staleness detection.
 
     Returns None if the source file is missing or hashing failed —
@@ -100,6 +101,6 @@ def _compute_hash(
         from core.annotations.storage import compute_function_hash
         end = line_end if line_end is not None else line_start
         return compute_function_hash(full_path, line_start, end)
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort: missing hash only widens review
         logger.debug("hash computation failed for %s:%d", file_path, line_start)
         return None

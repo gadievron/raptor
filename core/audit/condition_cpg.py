@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from .condition_extraction import SinkGuard
 
@@ -49,11 +49,11 @@ class CpgGuardResult:
     sink_api: str
     guard_text: str
     # Does the guard operate on a variable on the data-dependency path?
-    data_dep_bound: Optional[bool] = None
+    data_dep_bound: bool | None = None
     # Does the guard dominate the sink in the CFG?
-    dominates_sink: Optional[bool] = None
+    dominates_sink: bool | None = None
     # Identifiers on the taint path that the guard references
-    tainted_vars_in_guard: List[str] = field(default_factory=list)
+    tainted_vars_in_guard: list[str] = field(default_factory=list)
     error: str = ""
 
     @property
@@ -64,8 +64,8 @@ class CpgGuardResult:
             and self.dominates_sink is True
         )
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "sink_file": self.sink_file,
             "sink_line": self.sink_line,
             "sink_api": self.sink_api,
@@ -92,7 +92,7 @@ class CallerGuard:
     guard_text: str
     guard_category: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "caller_file": self.caller_file,
             "caller_function": self.caller_function,
@@ -111,12 +111,12 @@ class InterproceduralGuardResult:
     total_callers: int
     guarded_callers: int
     unguarded_callers: int
-    caller_guards: List[CallerGuard] = field(default_factory=list)
+    caller_guards: list[CallerGuard] = field(default_factory=list)
     all_callers_guarded: bool = False
     error: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "callee_function": self.callee_function,
             "callee_file": self.callee_file,
             "total_callers": self.total_callers,
@@ -136,17 +136,17 @@ class InterproceduralGuardResult:
 # ---------------------------------------------------------------------------
 
 # These produce CPGQL strings compatible with JoernServer.query().
-# Use cpg.method.fullNameExact() for precise matching (demand_explore.py:53),
-# or cpg.method.name() for substring matching. We use .name() here because
+# Use cpg.method.fullNameExact() for precise matching, or
+# cpg.method.name() for substring matching. We use .name() here because
 # sink_function is often just a bare name without package prefix.
 #
 # Query patterns validated against:
-#   - demand_explore.py QueryType.CALLERS: .caller.fullName.l
-#   - demand_explore.py QueryType.GUARDS: .ast.isControlStructure.condition.code.l
+#   - callers: .caller.fullName.l
+#   - guards:  .ast.isControlStructure.condition.code.l
 #   - packages/joern/runner.py _build_taint_query: reachableByFlows
 
 
-def _safe_name(value: str) -> Optional[str]:
+def _safe_name(value: str) -> str | None:
     """Validate and escape a name for Joern query interpolation.
 
     Returns the escaped string or None if the value is unsafe.
@@ -173,7 +173,7 @@ def _safe_name(value: str) -> Optional[str]:
 def _build_guard_identifiers_query(
     method_name: str,
     guard_line: int,
-) -> Optional[str]:
+) -> str | None:
     """Get identifiers used in a guard condition at a specific line."""
     safe = _safe_name(method_name)
     if safe is None:
@@ -189,7 +189,7 @@ def _build_guard_identifiers_query(
 def _build_sink_arg_identifiers_query(
     method_name: str,
     sink_line: int,
-) -> Optional[str]:
+) -> str | None:
     """Get identifiers in a sink call's arguments at a specific line."""
     safe = _safe_name(method_name)
     if safe is None:
@@ -205,7 +205,7 @@ def _build_sink_arg_identifiers_query(
 def _build_taint_reaches_guard_query(
     method_name: str,
     sink_api: str,
-) -> Optional[str]:
+) -> str | None:
     """Check if taint flows from method params through guards to the sink.
 
     Uses reachableByFlows — the gold standard from the Joern paper.
@@ -230,7 +230,7 @@ def _build_dominance_query(
     method_name: str,
     guard_line: int,
     sink_line: int,
-) -> Optional[str]:
+) -> str | None:
     """Check if a guard node dominates the sink in the CFG.
 
     Joern's .dominates traversal walks the dominator tree.
@@ -248,10 +248,11 @@ def _build_dominance_query(
     )
 
 
-def _build_callers_query(function_name: str) -> Optional[str]:
+def _build_callers_query(function_name: str) -> str | None:
     """Find all callers of a function.
 
-    Uses .caller (not .callIn) per demand_explore.py:56.
+    Uses .caller (not .callIn) — resolves to the calling METHOD
+    rather than the call site node.
     """
     safe = _safe_name(function_name)
     if safe is None:
@@ -267,10 +268,10 @@ def _build_callers_query(function_name: str) -> Optional[str]:
 def _build_caller_guards_query(
     caller_method: str,
     call_line: int,
-) -> Optional[str]:
+) -> str | None:
     """Find guard conditions enclosing a call site in a caller.
 
-    Pattern from demand_explore.py QueryType.GUARDS:
+    Pattern:
     .ast.isControlStructure.controlStructureType("IF").condition.code.l
     """
     safe = _safe_name(caller_method)
@@ -293,8 +294,8 @@ def _build_caller_guards_query(
 def verify_guard_relevance_cpg(
     sink_guard: SinkGuard,
     *,
-    joern_server: Optional[Any] = None,
-) -> List[CpgGuardResult]:
+    joern_server: Any | None = None,
+) -> list[CpgGuardResult]:
     """Verify guard relevance via Joern CPG queries.
 
     For each guard condition, checks:
@@ -315,7 +316,7 @@ def verify_guard_relevance_cpg(
     if joern_server is None:
         return []
 
-    results: List[CpgGuardResult] = []
+    results: list[CpgGuardResult] = []
 
     for guard in sink_guard.guards:
         result = CpgGuardResult(
@@ -339,7 +340,7 @@ def verify_guard_relevance_cpg(
                     from .condition_binding import extract_identifiers
                     guard_idents = extract_identifiers(guard.text)
                     taint_codes = set(taint_result)
-                    taint_idents: Set[str] = set()
+                    taint_idents: set[str] = set()
                     for code in taint_codes:
                         taint_idents.update(extract_identifiers(str(code)))
                     overlap = guard_idents & taint_idents
@@ -375,7 +376,7 @@ def verify_guard_relevance_cpg(
                 if dom_result is not None:
                     result.dominates_sink = len(dom_result) > 0
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — advisory CPG check: record and degrade
             result.error = str(e)
             logger.debug(
                 "CPG guard check failed for %s:%d: %s",
@@ -396,8 +397,8 @@ def check_interprocedural_guards(
     function_name: str,
     file_path: str,
     *,
-    joern_server: Optional[Any] = None,
-    source_map: Optional[Dict[str, str]] = None,
+    joern_server: Any | None = None,
+    source_map: dict[str, str] | None = None,
 ) -> InterproceduralGuardResult:
     """Check whether all callers of a function guard the call site.
 
@@ -441,7 +442,7 @@ def check_interprocedural_guards(
                 all_callers_guarded=False,
             )
 
-        caller_guards: List[CallerGuard] = []
+        caller_guards: list[CallerGuard] = []
         guarded = 0
         unguarded = 0
 
@@ -487,7 +488,7 @@ def check_interprocedural_guards(
             all_callers_guarded=(unguarded == 0 and total > 0),
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — advisory check: degrade to unknown
         logger.debug("interprocedural guard check failed: %s", e)
         return InterproceduralGuardResult(
             callee_function=function_name,
@@ -513,8 +514,6 @@ class ExposureContext:
     sink_api: str
     entry_point_route: str = ""
     requires_auth: bool = False
-    requires_permission: str = ""
-    http_method: str = ""
     exposure_level: str = "unknown"  # public, authenticated, admin, internal
 
     @property
@@ -532,7 +531,7 @@ class ExposureContext:
         }
         return adjustments.get(self.exposure_level, 0.0)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "sink_file": self.sink_file,
             "sink_line": self.sink_line,
@@ -546,9 +545,9 @@ class ExposureContext:
 
 def assess_exposure_context(
     sink_guard: SinkGuard,
-    entry_points: List[Dict[str, Any]],
-    reachability: Optional[Dict[str, List[str]]] = None,
-) -> Optional[ExposureContext]:
+    entry_points: list[dict[str, Any]],
+    reachability: dict[str, list[str]] | None = None,
+) -> ExposureContext | None:
     """Assess a sink's exposure level from entry-point annotations.
 
     Connects the guard analysis to the /understand --map context:
@@ -560,7 +559,7 @@ def assess_exposure_context(
         entry_points: Entry points from context-map (with decorators, auth info).
         reachability: Map of function → reachable entry points.
     """
-    reaching_eps: List[Dict[str, Any]] = []
+    reaching_eps: list[dict[str, Any]] = []
 
     if reachability:
         reach_key = f"{sink_guard.sink_file}:{sink_guard.sink_function}"
@@ -579,7 +578,7 @@ def assess_exposure_context(
         return None
 
     # Determine highest exposure level among reaching entry points
-    exposure_levels: Set[str] = set()
+    exposure_levels: set[str] = set()
 
     for ep in reaching_eps:
         decorators = ep.get("decorators", [])
@@ -624,7 +623,7 @@ def assess_exposure_context(
 # ---------------------------------------------------------------------------
 
 
-def _run_query(server: Any, query: str) -> Optional[list]:
+def _run_query(server: Any, query: str) -> list | None:
     """Run a Joern query and return parsed results as a list.
 
     Compatible with packages.joern.server.JoernServer.query() which
@@ -651,7 +650,7 @@ def _run_query(server: Any, query: str) -> Optional[list]:
 
     except (TimeoutError, KeyboardInterrupt):
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — advisory query: degrade to no answer
         logger.debug("Joern query failed: %s — %s", query[:80], e)
         return None
 
@@ -732,7 +731,7 @@ def _classify_guard_text(text: str) -> str:
 def _fallback_interprocedural(
     function_name: str,
     file_path: str,
-    source_map: Optional[Dict[str, str]],
+    source_map: dict[str, str] | None,
 ) -> InterproceduralGuardResult:
     """Fallback interprocedural check using grep + condition_extraction.
 
@@ -751,13 +750,14 @@ def _fallback_interprocedural(
         )
 
     import re
+
     from .condition_extraction import extract_sink_guards, language_for_file
 
     call_pattern = re.compile(
         rf"\b{re.escape(function_name)}\s*\(",
     )
 
-    caller_guards: List[CallerGuard] = []
+    caller_guards: list[CallerGuard] = []
     guarded = 0
     unguarded = 0
 

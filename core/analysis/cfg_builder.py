@@ -606,6 +606,8 @@ class _PythonCFGBuilder:
             self._link_many(incoming, node)
             self._link(node, cont_target)
             return []
+        if hasattr(ast, "Match") and isinstance(stmt, ast.Match):
+            return self._build_match(stmt, incoming)
         # Straight-line stmt: assignments, expr stmts, defs, etc.
         node = self._new_node("stmt", stmt)
         self._link_many(incoming, node)
@@ -630,51 +632,49 @@ class _PythonCFGBuilder:
     ) -> List[PyCFGNode]:
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
-        # Successor after loop — pre-allocate so ``break`` can target it.
-        # We model the post-loop join as the existing else-branch
-        # successor; ``orelse`` runs when the loop falls through
-        # normally.
-        after_loop_candidates: List[PyCFGNode] = []
-        self._loop_stack.append((header, header))
-        # Body
+        exit_node = self._new_node("join", stmt, label=f"while-exit (line {stmt.lineno})")
+        self._loop_stack.append((exit_node, header))
         body_out = self._build_stmts(stmt.body, [header])
-        # Body falls back to header
         for tail in body_out:
             self._link(tail, header)
         self._loop_stack.pop()
-        # Else / fall-through
         if stmt.orelse:
-            after_loop_candidates.extend(
-                self._build_stmts(stmt.orelse, [header])
-            )
+            orelse_out = self._build_stmts(stmt.orelse, [header])
+            for tail in orelse_out:
+                self._link(tail, exit_node)
         else:
-            after_loop_candidates.append(header)
-        # Break targets — the loop_stack entry pointed at ``header``
-        # because we want every break to merge at the same join. Use
-        # the after_loop_candidates list as the final successor set.
-        return after_loop_candidates
+            self._link(header, exit_node)
+        return [exit_node]
 
     def _build_for(
         self, stmt: ast.For, incoming: List[PyCFGNode],
     ) -> List[PyCFGNode]:
-        # Modeled identically to While: a synthetic header that
-        # represents "evaluate the iterable / check exhausted",
-        # body loops back, else / fall-through join after.
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
-        after_loop_candidates: List[PyCFGNode] = []
-        self._loop_stack.append((header, header))
+        exit_node = self._new_node("join", stmt, label=f"for-exit (line {stmt.lineno})")
+        self._loop_stack.append((exit_node, header))
         body_out = self._build_stmts(stmt.body, [header])
         for tail in body_out:
             self._link(tail, header)
         self._loop_stack.pop()
         if stmt.orelse:
-            after_loop_candidates.extend(
-                self._build_stmts(stmt.orelse, [header])
-            )
+            orelse_out = self._build_stmts(stmt.orelse, [header])
+            for tail in orelse_out:
+                self._link(tail, exit_node)
         else:
-            after_loop_candidates.append(header)
-        return after_loop_candidates
+            self._link(header, exit_node)
+        return [exit_node]
+
+    def _build_match(
+        self, stmt: "ast.Match", incoming: List[PyCFGNode],
+    ) -> List[PyCFGNode]:
+        subject = self._new_node("stmt", stmt, label=f"match (line {stmt.lineno})")
+        self._link_many(incoming, subject)
+        exits: List[PyCFGNode] = []
+        for case in stmt.cases:
+            case_out = self._build_stmts(case.body, [subject])
+            exits.extend(case_out)
+        return exits
 
     def _build_try(
         self, stmt: ast.Try, incoming: List[PyCFGNode],

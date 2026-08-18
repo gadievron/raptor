@@ -18,7 +18,7 @@ operator annotations.
 /review coverage [file]             # mechanical tool coverage
 /review note <file> <fn> -m "..."   # add operator note
 /review edit <file> <fn>            # edit note in $EDITOR
-/review stale                       # source-drifted operator notes
+/review stale                       # source-drifted operator notes (--source annotation|journal|both, --target <repo>)
 /review notes                       # list all operator notes
 /review history <file> <fn>         # all reviews over time
 /review stats                       # entry counts, costs, coverage %
@@ -38,6 +38,7 @@ Output the result verbatim. Do not summarise.
 ## Options
 
 `--out DIR` — explicit output directory (default: active project's latest run)
+`--project DIR` — explicit project directory
 `--raw` — output raw JSON instead of formatted text
 
 ## Graceful degradation

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 LLM Configuration — types, config file reading, model selection.
 
@@ -10,23 +9,32 @@ Static model data (costs, limits, endpoints) lives in model_data.py.
 Availability detection (SDK flags, Ollama, Claude Code) lives in detection.py.
 """
 
+import contextlib
 import os
 import threading as _threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from core.logging import get_logger
 
+from .detection import (
+    OPENAI_SDK_AVAILABLE,
+    _get_available_ollama_models,
+    _read_config_models,
+    _validate_ollama_url,
+    bedrock_sigv4_intent,
+    detect_llm_availability,
+)
+
 # Re-export from submodules for backward compatibility
 from .model_data import (
-    PROVIDER_ENDPOINTS, PROVIDER_DEFAULT_MODELS, PROVIDER_FAST_MODELS,
-    MODEL_COSTS, MODEL_LIMITS, PROVIDER_ENV_KEYS,
-)
-from .detection import (
-    OPENAI_SDK_AVAILABLE, detect_llm_availability,
-    _get_available_ollama_models, _validate_ollama_url,
-    _read_config_models,
+    MODEL_COSTS,
+    MODEL_LIMITS,
+    PROVIDER_DEFAULT_MODELS,
+    PROVIDER_ENDPOINTS,
+    PROVIDER_ENV_KEYS,
+    PROVIDER_FAST_MODELS,
 )
 
 logger = get_logger()
@@ -56,7 +64,7 @@ _DEFAULT_MAX_OUTPUT_LOCAL: int = 4_096            # local quant safe default
 # Config file reading
 # ---------------------------------------------------------------------------
 
-def _get_configured_models() -> List[Dict]:
+def _get_configured_models() -> list[dict]:
     """
     Get all models from RAPTOR config file.
 
@@ -131,7 +139,10 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
             # Tier 3: Latest capable models (fallback)
             ("anthropic", "claude-sonnet-4-6", 70),
+            ("gemini", "gemini-3.1-pro-preview", 68),
             ("gemini", "gemini-2.5-pro", 65),
+            ("gemini", "gemini-3.7-flash", 60),
+            ("gemini", "gemini-3.6-flash", 58),
             ("gemini", "gemini-2.5-flash", 55),
         ]
 
@@ -232,7 +243,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                             )
                         break
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — malformed entries skipped
                 logger.debug("Error processing model entry %s: %s", model_entry.get('model', 'unknown'), e)
                 continue
 
@@ -322,12 +333,14 @@ def _build_ollama_config() -> Optional['ModelConfig']:
         return None
     preferred = ['mistral', 'qwen', 'codellama', 'llama', 'gemma', 'deepseek-coder', 'deepseek']
     selected_model = ollama_models[0]
+    found = False
     for pref in preferred:
         for model in ollama_models:
             if pref in model.lower():
                 selected_model = model
+                found = True
                 break
-        if selected_model != ollama_models[0]:
+        if found:
             break
     ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
     # Look up the actual limits when known. Pre-fix the log claimed
@@ -361,42 +374,152 @@ def _build_ollama_config() -> Optional['ModelConfig']:
     )
 
 
+# Sentinel model name for the claudecode fallback: "inherit whatever
+# model the operator's `claude` CLI session is configured to use".
+# ClaudeCodeLLMProvider omits `--model` when it sees this, so the
+# subprocess resolves its model exactly like an interactive session
+# (settings.json, ANTHROPIC_MODEL, Bedrock/Vertex model mapping).
+# Hardcoding a name here breaks installs whose backend doesn't serve
+# that ID — e.g. a Bedrock-backed CLI with no mapping for the bare
+# Anthropic name hangs/fails on every call. Operators who want a
+# specific model on the claudecode provider set it in models.json.
+CLAUDECODE_SESSION_MODEL = "session-default"
+
+
+def _resolve_claudecode_model() -> str:
+    """Model name for the claudecode fallback config.
+
+    Resolution order:
+
+    1. ``RAPTOR_CC_MODEL`` — explicit operator pin, passed to
+       ``claude -p --model`` verbatim.
+    2. The cached pre-flight probe result (``cc_probe``): the
+       backend-resolved identity of the CLI session's own default
+       (e.g. a Bedrock id). Pinning it makes the transport
+       deterministic — a mid-run settings.json edit can no longer
+       silently switch models — gives the scorecard a real name, and
+       lets ``rpm_for``/``derive_max_workers`` resolve actual
+       capacity limits (the ``session-default`` sentinel resolves to
+       0 RPM, which serialised every review loop to one worker).
+       Safe on alternate backends because the id came from THIS
+       backend's own result envelope, not a hardcoded Anthropic
+       name. Cache-only — never runs a live probe here.
+       ``RAPTOR_CC_PIN_MODEL=0`` opts out.
+    3. The ``session-default`` sentinel (probe cache cold or pinning
+       disabled): ``--model`` is omitted and the subprocess resolves
+       its model like an interactive session.
+    """
+    import os
+    explicit = os.environ.get("RAPTOR_CC_MODEL", "").strip()
+    if explicit:
+        return explicit
+    if os.environ.get("RAPTOR_CC_PIN_MODEL", "1") != "0":
+        # cached_cc_session_model handles cache-read errors itself;
+        # only residual filesystem races (which() / stat paths) are a
+        # legitimate reason to fall through to the sentinel.
+        with contextlib.suppress(OSError):
+            from core.llm.cc_probe import cached_cc_session_model
+            cached = cached_cc_session_model()
+            if cached:
+                return cached
+    return CLAUDECODE_SESSION_MODEL
+
+
 def _build_claudecode_config() -> Optional['ModelConfig']:
     """Last-resort fallback: ``claude`` CLI on PATH, no API key needed.
     Slower (subprocess + ``--json-schema`` structured output for
     tool-use) but works for users who only have Claude Code installed.
 
-    ``timeout=300`` is calibrated from real-CC runs: simple turns are
-    5-15s, ``--json-schema`` against a rich tool catalog can push to
-    60-180s. 300s gives 2-3x headroom for worst case without letting
-    a single turn consume a whole ``ToolUseLoop.max_seconds`` budget.
-    Cloud APIs default to 120s in ``ModelConfig`` (well-tuned for
-    them); CC's subprocess + structured-output overhead needs more.
+    ``timeout=600`` is calibrated from real-CC runs: simple turns are
+    5-15s, ``--json-schema`` against a rich tool catalog 60-180s, and
+    audit-sized structured reviews (large system prompt + context
+    slice) measured 170s+ on Bedrock-backed CLIs — the previous 300s
+    ceiling killed the heaviest re-review calls after they had already
+    billed. Cloud APIs default to 120s in ``ModelConfig`` (well-tuned
+    for them); CC's subprocess + structured-output overhead needs more.
     """
     import shutil
     if not shutil.which("claude"):
         return None
-    default_model = PROVIDER_DEFAULT_MODELS["anthropic"]
-    limits = MODEL_LIMITS.get(default_model, {})
+    model_name = _resolve_claudecode_model()
+    if model_name != CLAUDECODE_SESSION_MODEL:
+        # Real identity known — use ITS limits (normalised through
+        # the same alias/Bedrock-prefix stripping as rpm_for).
+        # Unknown ids (an operator's RAPTOR_CC_MODEL alias) keep the
+        # flagship-proxy defaults rather than raising.
+        from core.llm.model_data import context_window_for, max_output_for
+        try:
+            max_tokens = max_output_for(model_name)
+        except KeyError:
+            max_tokens = 32000
+        try:
+            max_context = context_window_for(model_name)
+        except KeyError:
+            max_context = 1000000
+    else:
+        # Capacity limits are unknowable without asking the CLI which
+        # model it will use; assume the current Anthropic flagship's
+        # as a proxy.
+        limits = MODEL_LIMITS.get(PROVIDER_DEFAULT_MODELS["anthropic"], {})
+        max_tokens = limits.get("max_output", 32000)
+        max_context = limits.get("max_context", 1000000)
     return ModelConfig(
         provider="claudecode",
-        model_name=default_model,
+        model_name=model_name,
         api_key=None,
-        max_tokens=limits.get("max_output", 32000),
-        max_context=limits.get("max_context", 1000000),
+        max_tokens=max_tokens,
+        max_context=max_context,
         temperature=0.7,
-        timeout=300,
+        timeout=600,
         cost_per_1k_tokens=0.0,
     )
 
 
+def _cc_bedrock_topology() -> tuple[str | None, str | None]:
+    """``(surface, model)`` observed from a Claude Code install that is
+    itself on Bedrock — the backfill source for minimal Bedrock config
+    (an entry or env opt-in that omits the surface or model).  A CC
+    session working against Bedrock is live proof of a valid
+    (surface, model, region, entitlement) combination, so it is the
+    best available default when the operator left a field blank.
+
+    ``(None, None)`` when CC is not on Bedrock: in that case CC's
+    model id is direct-API-shaped and must never leak into a Bedrock
+    request.  Backfill never *selects* the provider — that stays an
+    explicit statement (config entry / RAPTOR_BEDROCK_* / bearer).
+
+    The model comes from the cc-probe cache when warm (the
+    backend-resolved identity — authoritative over env, and its cache
+    signature covers the CC env AND ~/.claude/settings.json mtime),
+    else from the ``ANTHROPIC_MODEL`` env pin.  Cache-only: this never
+    spawns a probe call.
+    """
+    if not os.getenv("CLAUDE_CODE_USE_BEDROCK"):
+        return None, None
+    surface = "mantle" if os.getenv("CLAUDE_CODE_USE_MANTLE") else "runtime"
+    model: str | None = None
+    try:
+        from core.llm.cc_probe import cached_cc_session_model
+        model = cached_cc_session_model()
+    except Exception as e:  # noqa: BLE001 — backfill is best-effort
+        logger.debug("cc-probe cache read failed: %s", e)
+    model = model or os.getenv("ANTHROPIC_MODEL") or None
+    return surface, model
+
+
 def _build_bedrock_config() -> Optional['ModelConfig']:
-    """Builder for AWS Bedrock — fires when the explicit opt-in signal
-    (``AWS_BEARER_TOKEN_BEDROCK``) is present.  Returns a bare Bedrock
-    model id; Bedrock Mantle (the dispatcher's upstream) routes by
-    hostname (``bedrock-mantle.<region>.api.aws``), not by model-id
-    prefix — so model IDs are bare (``anthropic.claude-haiku-4-5``)
-    regardless of region.
+    """Builder for AWS Bedrock — fires on an explicit opt-in signal:
+    ``AWS_BEARER_TOKEN_BEDROCK`` (bearer auth), or one of the
+    RAPTOR-specific env vars ``RAPTOR_BEDROCK_MODEL`` /
+    ``RAPTOR_BEDROCK_PROFILE`` (SigV4 auth — the dispatcher signs with
+    the resolved AWS credential chain; ``api_key`` stays ``None`` by
+    design).  Ambient AWS credentials alone (AWS_PROFILE, credentials
+    file) never fire this builder — selection is always an explicit
+    statement.  Returns a bare Bedrock model id; Bedrock Mantle (the
+    dispatcher's upstream) routes by hostname
+    (``bedrock-mantle.<region>.api.aws``), not by model-id prefix — so
+    model IDs are bare (``anthropic.claude-haiku-4-5``) regardless of
+    region.
 
     Without this, ``has_bedrock=True`` in detection.py would report
     "LLM available" but ``_get_default_primary_model()`` would fall
@@ -419,38 +542,95 @@ def _build_bedrock_config() -> Optional['ModelConfig']:
     process boundary regardless.
     """
     bearer = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
-    if not bearer:
+    sigv4_selected = bool(
+        os.getenv("RAPTOR_BEDROCK_MODEL")
+        or os.getenv("RAPTOR_BEDROCK_PROFILE")
+    )
+    if not bearer and not sigv4_selected:
         return None
-    # Use the same bare default Anthropic chooses.  Operator can
-    # override via config file to pick a different Claude tier.
-    bare_default = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
-    if not bare_default:
-        return None
-    model_name = f"anthropic.{bare_default}"
+    # Surface: explicit env wins; else inherit from a Bedrock-backed
+    # Claude Code install (its surface is proven working); else
+    # mantle.  Per-model overrides live in models.json (handled by
+    # ``_model_config_from_entry``).  Unrecognised values fall back to
+    # mantle with a quiet log — we don't hard-fail here because the
+    # builder runs at import time and a noisy traceback would block
+    # startup over a typo.
+    cc_surface, cc_model = _cc_bedrock_topology()
+    bedrock_api = (
+        os.getenv("RAPTOR_BEDROCK_API") or cc_surface or "mantle"
+    ).lower()
+    if bedrock_api not in ("mantle", "runtime"):
+        bedrock_api = "mantle"
+    # Model: the operator's pinned id wins; else inherit CC's model,
+    # but only same-surface (bare vs prefixed id shapes are
+    # surface-specific — a cross-surface inherit would produce opaque
+    # 4xxs); else the same bare default Anthropic chooses.
+    # Config-file entries override all of these (they resolve via
+    # ``_model_config_from_entry``, not here).
+    from core.security.llm_family import bare_model_id
+    pinned_model = os.getenv("RAPTOR_BEDROCK_MODEL")
+    if pinned_model:
+        model_name = pinned_model
+        bare_default = bare_model_id(pinned_model)
+    elif cc_model and cc_surface == bedrock_api:
+        model_name = cc_model
+        bare_default = bare_model_id(cc_model)
+    else:
+        bare_default = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+        if not bare_default:
+            return None
+        model_name = f"anthropic.{bare_default}"
+    # Surface-keyed id normalization, same contract as
+    # ``_model_config_from_entry``: Mantle takes bare ids only;
+    # runtime ids pass verbatim with a region-compatibility warning.
+    from core.llm.bedrock_prefixes import (
+        mantle_model_id,
+        prefix_region_mismatch,
+    )
+    if bedrock_api == "mantle":
+        model_name = mantle_model_id(model_name)
+    else:
+        check_region = (os.getenv("RAPTOR_BEDROCK_REGION")
+                        or os.getenv("AWS_REGION")
+                        or os.getenv("AWS_DEFAULT_REGION") or "")
+        mismatch = prefix_region_mismatch(model_name, check_region)
+        if mismatch:
+            logger.warning("bedrock: %s", mismatch)
     limits = MODEL_LIMITS.get(bare_default, {})
     costs = MODEL_COSTS.get(bare_default, {})
     avg_cost_per_1k = (
         (costs.get("input", 0.005) + costs.get("output", 0.025)) / 2
     )
-    # Read the per-run Bedrock API default.  Per-model overrides live
-    # in models.json (handled by ``_model_config_from_entry``).
-    # Unrecognised values fall back to mantle with a quiet log — we
-    # don't hard-fail here because the builder runs at import time and
-    # a noisy traceback would block startup over a typo.
-    bedrock_api = (os.getenv("RAPTOR_BEDROCK_API") or "mantle").lower()
-    if bedrock_api not in ("mantle", "runtime"):
-        bedrock_api = "mantle"
     return ModelConfig(
         provider="bedrock",
         model_name=model_name,
-        # Bearer token IS the auth; carried in api_key so downstream
-        # providers can pick it up via the dispatcher.
+        # Bearer token IS the auth when present; carried in api_key so
+        # downstream providers can pick it up via the dispatcher.  In
+        # SigV4 mode this stays None — the dispatcher resolves the AWS
+        # credential chain and signs per request.
         api_key=bearer,
+        # Worker-leg request timeout. Must cover a full non-streaming
+        # frontier generation and match the dispatcher's forwarding-leg
+        # ceiling (``_UPSTREAM_DEFAULT_TIMEOUT_S = 600`` — its contract
+        # note says the upstream leg must be AT LEAST the largest
+        # worker-side timeout, which pins the worker side at <= 600).
+        # At the 120s dataclass default every Bedrock generation longer
+        # than 120s died inside the SDK's silent internal retries: the
+        # worker abandons the request at 120s and re-sends, while the
+        # dispatcher's upstream leg keeps each abandoned generation
+        # running to completion — billed upstream, booked nowhere, and
+        # surfacing only as dispatcher BrokenPipeError audit rows when
+        # the write-back hits the closed worker socket (observed live:
+        # 200-360s audit calls, 3x duplicated). Call classes that want
+        # a tighter wall still get it per request via ``timeout_s``.
+        timeout=600,
         max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_FRONTIER),
         max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_FRONTIER),
         temperature=0.7,
         cost_per_1k_tokens=avg_cost_per_1k,
         bedrock_api=bedrock_api,
+        aws_profile=os.getenv("RAPTOR_BEDROCK_PROFILE") or None,
+        aws_region=os.getenv("RAPTOR_BEDROCK_REGION") or None,
     )
 
 
@@ -516,8 +696,42 @@ def set_operator_primary_override(model: Optional['ModelConfig']) -> None:
     _operator_primary_override = model
 
 
+def _config_bedrock_primary() -> Optional['ModelConfig']:
+    """First config-file Bedrock entry eligible to serve as the
+    default model for API work.
+
+    Bedrock is the one provider whose entries the thinking-model
+    scorer can never match (its pattern table is keyed to direct
+    cloud providers) and whose env builder ignores the config file —
+    without this hook a role-less Bedrock entry could never become
+    the auto-selected primary.  Scoped to Bedrock deliberately so no
+    other provider's selection semantics change.
+
+    Eligible = resolves to provider "bedrock", carries no role (the
+    "default for API work" convention) or an analysis/code role, and
+    can authenticate (bearer or SigV4 signal).  Entries with an
+    auxiliary role (fallback / consensus / judge / aggregate) are
+    auxiliaries by declaration and never become primary here.
+    """
+    from core.security.llm_family import provider_of as _provider_of
+    for entry in _get_configured_models():
+        if not isinstance(entry, dict):
+            continue
+        provider = entry.get("provider", "")
+        if not provider and entry.get("model"):
+            provider = _provider_of(entry.get("model", "")) or ""
+        if provider != "bedrock":
+            continue
+        if (entry.get("role") or None) not in (None, "analysis", "code"):
+            continue
+        mc = _model_config_from_entry(entry)
+        if _entry_auth_resolvable(mc):
+            return mc
+    return None
+
+
 def _get_default_primary_model(
-    prefer: Optional[List[str]] = None,
+    prefer: list[str] | None = None,
 ) -> Optional['ModelConfig']:
     """
     Get default primary model based on available providers.
@@ -535,6 +749,9 @@ def _get_default_primary_model(
        provider+key combinations that don't fit the env-var
        convention (e.g. Gemini via Vertex auth). When ``prefer`` is
        set, only return it if its provider matches the preference.
+       2b: a config-file Bedrock entry without an auxiliary role —
+       the thinking-model scorer can't match Bedrock ids, so those
+       entries get their own step (see ``_config_bedrock_primary``).
     3. **Default-order autodetect** via env var: Anthropic > OpenAI
        > Gemini > Mistral > Ollama > Claude Code (subprocess,
        absolute last resort).
@@ -582,7 +799,7 @@ def _get_default_primary_model(
     # ignored `prefer`.
     thinking_model = _get_best_thinking_model()
     if (thinking_model
-            and thinking_model.api_key
+            and _entry_auth_resolvable(thinking_model)
             and (prefer_set is None or thinking_model.provider in prefer_set)):
         if not getattr(_get_default_primary_model, "_logged", False):
             logger.info(
@@ -591,6 +808,21 @@ def _get_default_primary_model(
             )
             _get_default_primary_model._logged = True
         return thinking_model
+
+    # Step 2b: a config-file Bedrock entry with no auxiliary role is
+    # the operator's declared default for API work — the thinking-model
+    # scorer above can never match it (see ``_config_bedrock_primary``).
+    bedrock_primary = _config_bedrock_primary()
+    if (bedrock_primary is not None
+            and (prefer_set is None or "bedrock" in prefer_set)):
+        if not getattr(_get_default_primary_model, "_bedrock_logged", False):
+            logger.info(
+                f"Using configured Bedrock model: "
+                f"{bedrock_primary.model_name} "
+                f"({bedrock_primary.bedrock_api})"
+            )
+            _get_default_primary_model._bedrock_logged = True
+        return bedrock_primary
 
     # Step 3: default-order autodetect via env vars. Skip providers
     # already tried in step 1.
@@ -605,11 +837,16 @@ def _get_default_primary_model(
     return None
 
 
-def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
+def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     """Build a ModelConfig from a config file entry.
 
     API key resolution: inline api_key → provider env var.
     Other config fields (timeout, max_context, max_output) are honoured.
+    Bedrock entries additionally honour ``bedrock_api`` (surface),
+    ``aws_profile`` (signing profile name) and ``region``; a minimal
+    ``{"provider": "bedrock"}`` entry backfills surface and model from
+    a Bedrock-backed Claude Code install (see
+    :func:`_cc_bedrock_topology`).
 
     When the entry omits ``provider`` but specifies a model id whose
     shape implies a routing provider (Bedrock-prefixed Claude / Meta
@@ -628,6 +865,48 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
             provider = derived
     if not model_name and provider:
         model_name = PROVIDER_DEFAULT_MODELS.get(provider, "")
+    if not model_name and provider in ("claudecode", "claudecode-resumable"):
+        # CLI transport: same backend-resolved / sentinel model the env
+        # builder would pick — a bare {"provider": "claudecode"} entry
+        # is valid config.
+        model_name = _resolve_claudecode_model()
+
+    # Bedrock: resolve the surface first (the model backfill below is
+    # surface-keyed), then backfill a missing model.  Surface ladder:
+    # entry field → RAPTOR_BEDROCK_API env → a Bedrock-backed Claude
+    # Code install's surface → mantle.  Unrecognised values snap to
+    # mantle, same defensive shape as ``_build_bedrock_config``.
+    if provider == "bedrock":
+        cc_surface, cc_model = _cc_bedrock_topology()
+        bedrock_api = (
+            entry.get("bedrock_api")
+            or os.getenv("RAPTOR_BEDROCK_API")
+            or cc_surface
+            or "mantle"
+        ).lower()
+        if bedrock_api not in ("mantle", "runtime"):
+            bedrock_api = "mantle"
+        if not model_name:
+            # Minimal entry ({"provider": "bedrock"}): inherit the
+            # model a working CC install resolved — but only
+            # same-surface (bare vs prefixed id shapes are
+            # surface-specific); else the bare Anthropic default.
+            if cc_model and cc_surface == bedrock_api:
+                model_name = cc_model
+            else:
+                if cc_model and cc_surface != bedrock_api:
+                    logger.warning(
+                        "bedrock config entry pins surface %r but the "
+                        "Claude Code install uses %r — not inheriting "
+                        "its model id (surface-specific shape); set "
+                        "'model' explicitly in the entry",
+                        bedrock_api, cc_surface,
+                    )
+                bare_default = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+                if bare_default:
+                    model_name = f"anthropic.{bare_default}"
+    else:
+        bedrock_api = "mantle"
 
     api_key = entry.get("api_key")
     if not api_key:
@@ -642,9 +921,18 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         api_key = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
     from core.llm.model_data import _strip_dated_alias
+    from core.security.llm_family import bare_model_id as _bare_model_id
     undated = _strip_dated_alias(model_name)
-    limits = MODEL_LIMITS.get(model_name, {}) or MODEL_LIMITS.get(undated, {})
-    costs = MODEL_COSTS.get(model_name, {}) or MODEL_COSTS.get(undated, {})
+    # Peel Bedrock prefixes too (``anthropic.claude-x`` /
+    # ``us.anthropic.claude-x``) so prefixed entries resolve real
+    # catalog limits/costs instead of the 0.005 fallback rate.
+    bare = _bare_model_id(model_name)
+    limits = (MODEL_LIMITS.get(model_name, {})
+              or MODEL_LIMITS.get(undated, {})
+              or MODEL_LIMITS.get(bare, {}))
+    costs = (MODEL_COSTS.get(model_name, {})
+             or MODEL_COSTS.get(undated, {})
+             or MODEL_COSTS.get(bare, {}))
     cost_per_1k = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2
 
     # Honour the operator-configured remote Ollama host (see
@@ -659,19 +947,46 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         api_base = f"{ollama_base.rstrip('/')}/v1"
     else:
         api_base = PROVIDER_ENDPOINTS.get(provider)
-    # Bedrock-only: per-model API surface override.  Falls back to
-    # ``RAPTOR_BEDROCK_API`` env (mantle default).  Unrecognised values
-    # snap to mantle, same defensive shape as ``_build_bedrock_config``.
+    # Bedrock-only: per-model signing profile and region (both
+    # non-secret names — the signer resolves the actual credential).
+    # Region ladder: entry field → RAPTOR_BEDROCK_REGION env; ``None``
+    # leaves ambient resolution (env region, then the signing
+    # profile's configured region) to the dispatcher.
     if provider == "bedrock":
-        bedrock_api = (
-            entry.get("bedrock_api")
-            or os.getenv("RAPTOR_BEDROCK_API")
-            or "mantle"
-        ).lower()
-        if bedrock_api not in ("mantle", "runtime"):
-            bedrock_api = "mantle"
+        aws_profile = entry.get("aws_profile") or None
+        aws_region = (
+            entry.get("region")
+            or os.getenv("RAPTOR_BEDROCK_REGION")
+            or None
+        )
+        # Surface-keyed id normalization: Mantle takes ONLY bare
+        # ``<provider>.<model>`` ids (lossless fixes applied
+        # automatically); runtime ids pass verbatim (prefixed ids,
+        # versioned ids and ARNs are all legal there) with a loud
+        # warning when the geographic prefix contradicts the region.
+        if model_name:
+            from core.llm.bedrock_prefixes import (
+                mantle_model_id,
+                prefix_region_mismatch,
+            )
+            if bedrock_api == "mantle":
+                normalized = mantle_model_id(model_name)
+                if normalized != model_name:
+                    logger.info(
+                        "bedrock: normalized model id %r -> %r for the "
+                        "mantle surface (bare ids only)",
+                        model_name, normalized,
+                    )
+                    model_name = normalized
+            else:
+                check_region = aws_region or os.getenv("AWS_REGION") \
+                    or os.getenv("AWS_DEFAULT_REGION") or ""
+                mismatch = prefix_region_mismatch(model_name, check_region)
+                if mismatch:
+                    logger.warning("bedrock: %s", mismatch)
     else:
-        bedrock_api = "mantle"
+        aws_profile = None
+        aws_region = None
     return ModelConfig(
         provider=provider,
         model_name=model_name,
@@ -684,6 +999,8 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         cost_per_1k_tokens=cost_per_1k,
         role=entry.get("role") or None,
         bedrock_api=bedrock_api,
+        aws_profile=aws_profile,
+        aws_region=aws_region,
     )
 
 
@@ -739,7 +1056,33 @@ def _build_fast_model_for(primary: 'ModelConfig') -> Optional['ModelConfig']:
     )
 
 
-def _get_default_fallback_models() -> List['ModelConfig']:
+def _entry_auth_resolvable(mc: 'ModelConfig') -> bool:
+    """True when a config-file entry can authenticate at call time.
+
+    Most providers need ``api_key`` (inline or env-resolved).  Bedrock
+    is the exception: in SigV4 mode ``api_key`` is ``None`` by design —
+    the dispatcher resolves the AWS credential chain (profile / SSO /
+    IMDS / static keys) and signs per request — so the entry counts
+    when the environment carries either the bearer token or any SigV4
+    credential signal.
+    """
+    if mc.api_key:
+        return True
+    if mc.provider == "bedrock":
+        return bool(
+            os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+        ) or bedrock_sigv4_intent()
+    if mc.provider in ("claudecode", "claudecode-resumable"):
+        # CLI transport authenticates through the installed ``claude``
+        # binary's own session — no key to carry.  Lets an operator
+        # declare CC as an explicit safety net behind an API primary
+        # ({"provider": "claudecode", "role": "fallback"}).
+        import shutil
+        return shutil.which("claude") is not None
+    return False
+
+
+def _get_default_fallback_models() -> list['ModelConfig']:
     """
     Get default fallback models based on primary model tier.
 
@@ -762,7 +1105,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
     config_providers = set()  # Track which providers the config covers
 
     # --- Config file entries first ---
-    primary = _get_best_thinking_model()
+    primary = _get_default_primary_model()
     primary_key = (primary.provider, primary.model_name) if primary else None
 
     for entry in _get_configured_models():
@@ -778,7 +1121,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
             continue
 
         mc = _model_config_from_entry(entry)
-        if mc.api_key:
+        if _entry_auth_resolvable(mc):
             fallbacks.append(mc)
             config_providers.add(provider)
 
@@ -836,14 +1179,17 @@ def _get_default_fallback_models() -> List['ModelConfig']:
                 cost_per_1k_tokens=(costs.get("input", 0.002) + costs.get("output", 0.010)) / 2,
             ))
 
-    if "mistral" not in config_providers and os.getenv("MISTRAL_API_KEY"):
-        if not _is_primary("mistral", "mistral-large-latest"):
-            fallbacks.append(ModelConfig(
+    if (
+        "mistral" not in config_providers
+        and os.getenv("MISTRAL_API_KEY")
+        and not _is_primary("mistral", "mistral-large-latest")
+    ):
+        fallbacks.append(ModelConfig(
                 provider="mistral",
                 model_name="mistral-large-latest",
                 api_key=os.getenv("MISTRAL_API_KEY"),
                 api_base=PROVIDER_ENDPOINTS["mistral"],
-                max_tokens=128000,
+                max_tokens=8192,
                 max_context=128000,
                 temperature=0.7,
                 cost_per_1k_tokens=0.002,
@@ -873,20 +1219,20 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge", "aggregate"}
 
 
-def get_configured_models() -> List[Dict]:
+def get_configured_models() -> list[dict]:
     """Return all model entries from the operator's config file."""
     return _get_configured_models()
 
 
-def model_config_from_entry(entry: Dict) -> 'ModelConfig':
+def model_config_from_entry(entry: dict) -> 'ModelConfig':
     """Build a ModelConfig from a config-file entry dict."""
     return _model_config_from_entry(entry)
 
 
 def resolve_model_roles(
     primary_model: Optional['ModelConfig'] = None,
-    fallback_models: Optional[List['ModelConfig']] = None,
-) -> Dict[str, Any]:
+    fallback_models: list['ModelConfig'] | None = None,
+) -> dict[str, Any]:
     """Resolve model roles from configured models.
 
     If no roles are specified, applies defaults:
@@ -966,7 +1312,7 @@ def resolve_model_roles(
     }
 
 
-def _validate_model_roles(models: List['ModelConfig']) -> None:
+def _validate_model_roles(models: list['ModelConfig']) -> None:
     """Validate model role configuration. Raises ConfigError on invalid combos."""
     roles = [m.role for m in models if m.role]
 
@@ -1042,7 +1388,6 @@ def _validate_model_roles(models: List['ModelConfig']) -> None:
 
 class ConfigError(Exception):
     """Configuration validation error."""
-    pass
 
 
 @dataclass
@@ -1050,15 +1395,15 @@ class ModelConfig:
     """Configuration for a specific model."""
     provider: str  # "anthropic", "openai", "mistral", "ollama", "gemini"
     model_name: str  # "claude-opus-4-6", "gpt-5.2", "llama3:70b", etc.
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None  # For non-Anthropic providers
+    api_key: str | None = None
+    api_base: str | None = None  # For non-Anthropic providers
     max_tokens: int = 4096
     max_context: int = 32000
     temperature: float = 0.7
     timeout: int = 120
     cost_per_1k_tokens: float = 0.0  # Fallback rate — used only when model not in MODEL_COSTS
     enabled: bool = True
-    role: Optional[str] = None  # "analysis", "code", "consensus", "fallback", "judge", "aggregate"
+    role: str | None = None  # "analysis", "code", "consensus", "fallback", "judge", "aggregate"
     # Bedrock-only: which Bedrock surface to route this model through.
     # ``"mantle"`` (default) → ``bedrock-mantle.<region>.api.aws/anthropic/
     # v1/messages`` (native Anthropic Messages API, bare model IDs, full
@@ -1069,6 +1414,20 @@ class ModelConfig:
     # ``RAPTOR_BEDROCK_API`` or per-model via the ``bedrock_api`` field
     # in ``models.json``.
     bedrock_api: str = "mantle"
+    # Bedrock-only: pin the AWS profile that signs this model's
+    # requests (a profile NAME — non-secret; the credential itself is
+    # resolved by the dispatcher's signer at request time).  ``None``
+    # → ambient resolution (RAPTOR_BEDROCK_PROFILE / AWS_PROFILE /
+    # credential chain).  Set per-model via ``aws_profile`` in
+    # ``models.json``.
+    aws_profile: str | None = None
+    # Bedrock-only: region used for BOTH the endpoint hostname and the
+    # SigV4 signing scope — one value, they must agree.  ``None`` →
+    # ambient resolution (AWS_REGION / AWS_DEFAULT_REGION, then the
+    # signing profile's configured region).  Set per-model via
+    # ``region`` in ``models.json`` or globally via
+    # ``RAPTOR_BEDROCK_REGION``.
+    aws_region: str | None = None
 
 
 def _shared_prefix_len(a: str, b: str) -> int:
@@ -1083,18 +1442,39 @@ def _shared_prefix_len(a: str, b: str) -> int:
     return n
 
 
+def _default_cache_ttl() -> float | None:
+    """Default LLM-cache TTL: 24h, env-overridable.
+
+    ``RAPTOR_LLM_CACHE_TTL_S`` accepts a number of seconds, or
+    ``none`` / ``off`` / ``0`` (or any non-positive value) to disable
+    expiry entirely. A garbled value falls back to the 24h default —
+    unlike audit-data deletion, cache expiry only costs a re-query, so
+    defaulting on a bad value is safe.
+    """
+    raw = os.environ.get("RAPTOR_LLM_CACHE_TTL_S", "").strip().lower()
+    if not raw:
+        return 86_400.0
+    if raw in ("none", "off"):
+        return None
+    try:
+        val = float(raw)
+    except ValueError:
+        return 86_400.0
+    return val if val > 0 else None
+
+
 @dataclass
 class LLMConfig:
     """Main LLM configuration for RAPTOR."""
 
     # Primary model (fastest/most capable). None when no provider is available.
-    primary_model: Optional[ModelConfig] = field(default_factory=_get_default_primary_model)
+    primary_model: ModelConfig | None = field(default_factory=_get_default_primary_model)
 
     # Fallback models (in priority order)
-    fallback_models: List[ModelConfig] = field(default_factory=_get_default_fallback_models)
+    fallback_models: list[ModelConfig] = field(default_factory=_get_default_fallback_models)
 
     # Analysis-specific models (for different task types)
-    specialized_models: Dict[str, ModelConfig] = field(default_factory=dict)
+    specialized_models: dict[str, ModelConfig] = field(default_factory=dict)
 
     # Global settings
     enable_fallback: bool = True
@@ -1103,24 +1483,39 @@ class LLMConfig:
     retry_delay_remote: float = 5.0
     enable_caching: bool = True
     cache_dir: Path = Path("out/llm_cache")
-    # Optional: drop cache entries older than this on read. None = no
-    # TTL. Useful when an upgraded model would now produce different
-    # output for a previously-cached prompt.
-    cache_ttl_seconds: Optional[float] = None
-    # Optional: cap cache size by number of entries. After each
-    # successful save the oldest files (by mtime) are evicted until at
-    # or under this cap. None = no eviction (cache grows unboundedly).
-    # The directory-walk per save is O(N); fine to ~10k entries, beyond
-    # which a real cache backend would be more appropriate.
-    cache_max_entries: Optional[int] = None
+    # Drop cache entries older than this on read. Default 24h: repeat
+    # queries within a working day stay free and deterministic, while a
+    # verdict from last month's model behaviour doesn't silently steer
+    # today's analysis (the cache key pins the model NAME, so this
+    # guards same-name drift — alias re-points, provider-side updates —
+    # not model switches, which miss naturally). Entries without a
+    # timestamp predate the TTL field and are honoured rather than
+    # mass-evicted on upgrade. Override via RAPTOR_LLM_CACHE_TTL_S:
+    # seconds, or "none"/"off"/0 to never expire.
+    cache_ttl_seconds: float | None = field(default_factory=_default_cache_ttl)
+    # Cap cache size by number of entries. After each successful save
+    # the oldest files (by mtime) are evicted until at or under this
+    # cap. None = no eviction (cache grows unboundedly — the pre-cap
+    # default; out/llm_cache accumulated for the life of the install).
+    # The directory-walk per save is O(N); the 10k default sits at the
+    # documented comfort limit of that walk, beyond which a real cache
+    # backend would be more appropriate.
+    cache_max_entries: int | None = 10_000
     enable_cost_tracking: bool = True
     max_cost_per_scan: float = 10.0  # USD
     # Model scorecard (core/llm/scorecard) — track per-model
     # reliability across decision classes and use measured miss-rate
     # to gate fast-tier short-circuit decisions. None or False
     # means consumers run their full path without scorecard
-    # consultation.
-    scorecard_path: Path = Path("out/llm_scorecard.json")
+    # consultation. RAPTOR_SCORECARD_PATH overrides the default so
+    # tests and sandboxed runs can isolate the on-disk reliability
+    # data (read at construction time, per config instance).
+    scorecard_path: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("RAPTOR_SCORECARD_PATH")
+            or "out/llm_scorecard.json"
+        )
+    )
     scorecard_enabled: bool = True
     # When False, do not retain disagreement-sample reasoning text.
     # Defense-in-depth privacy switch for operators on shared
@@ -1144,7 +1539,7 @@ class LLMConfig:
     # identical to the pre-freshness behaviour. Enabling lowers the effective
     # sample size, so confirm the cold-start impact with the offline measurement
     # before turning it on by default. See the design memo.
-    scorecard_freshness_half_life_days: Optional[float] = None
+    scorecard_freshness_half_life_days: float | None = None
 
     def __post_init__(self) -> None:
         """Seed ``specialized_models`` with same-provider fast-tier
@@ -1169,10 +1564,10 @@ class LLMConfig:
         for task in FAST_TIER_TASKS:
             self.specialized_models.setdefault(task, fast_config)
 
-    def _configured_models(self) -> List[ModelConfig]:
+    def _configured_models(self) -> list[ModelConfig]:
         """Every model the operator has configured: primary + fallbacks +
         specialized."""
-        models: List[ModelConfig] = []
+        models: list[ModelConfig] = []
         if self.primary_model is not None:
             models.append(self.primary_model)
         models.extend(self.fallback_models or [])
@@ -1200,13 +1595,13 @@ class LLMConfig:
           4. otherwise a bare config (api_key=None) so the SDK / dispatcher /
              provider env var supplies the credential at call time.
         """
+        from core.llm.model_data import _strip_dated_alias
         from core.security.llm_family import (
             bare_model_id,
             provider_of,
             resolve_model_shorthand,
             unknown_model_message,
         )
-        from core.llm.model_data import _strip_dated_alias
 
         candidates = self._configured_models()
         bare = bare_model_id(model_id)
@@ -1314,7 +1709,7 @@ class LLMConfig:
             "fallback_enabled": self.enable_fallback,
         }, mode=0o600)
 
-    def get_model_for_task(self, task_type: str) -> Optional[ModelConfig]:
+    def get_model_for_task(self, task_type: str) -> ModelConfig | None:
         """Get the model registered for `task_type`, falling back to
         ``primary_model``. Returns None if neither is configured.
 

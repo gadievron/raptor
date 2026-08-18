@@ -69,5 +69,6 @@ sudo afl-system-config
   - ASAN: `-fsanitize=address`
 - Crashes are saved to `out/fuzz_<binary>_<timestamp>/afl_output/main/crashes/`
 - RAPTOR automatically analyzes crashes and generates exploits
+- When `--dict` is not passed, an audit-generated `fuzz.dict` is auto-discovered (own run directory first, then the newest sibling run); an explicit `--dict` always wins
 
 Be patient and explain fuzzing concepts clearly!

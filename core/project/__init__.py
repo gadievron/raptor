@@ -6,6 +6,9 @@ so results accumulate instead of scattering across separate output dirs.
 
 Public API:
     from core.project import Project, ProjectManager
+    from core.project import is_project_output_dir
+    from core.project import clean_project, plan_clean, execute_clean
+    from core.project import generate_project_report
 """
 
 from .project import Project, ProjectManager, is_project_output_dir

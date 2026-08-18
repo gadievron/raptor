@@ -48,7 +48,6 @@ import fnmatch
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +62,24 @@ _POLICY_FILE = ".raptor-sca-bump.yml"
 _POLICY_FILE_GITHUB = ".github/sca/raptor-sca-bump-policy.yml"
 _POLICY_LOCATIONS = (_POLICY_FILE, _POLICY_FILE_GITHUB)
 
+# The policy file ships INSIDE the scanned repo, so on an untrusted
+# run every key in it is attacker-writable. ``skip:`` rules and
+# loosened thresholds (``rapid_release_days: 0``) let a hostile
+# target hide its own outdated-pin findings — the same reason the
+# scan-side suppression overlay is trust-gated. The whole file is
+# therefore honoured only on repo-trusted runs (``--trust-repo`` or
+# the project ``config`` trust marker); untrusted runs get the
+# default policy plus a warning naming the opt-in.
+
 
 @dataclass(frozen=True)
 class SkipRule:
     """One entry in the ``skip:`` list. A rule with multiple fields set
     matches only when ALL of them match (AND)."""
 
-    kind: Optional[str] = None       # None → any kind matches
-    locator: Optional[str] = None    # None → any locator matches; ``*``-glob ok
-    path: Optional[str] = None       # None → any file; target-relative glob
+    kind: str | None = None       # None → any kind matches
+    locator: str | None = None    # None → any locator matches; ``*``-glob ok
+    path: str | None = None       # None → any file; target-relative glob
     reason: str = ""
 
     def matches(self, *, candidate_kind: str, candidate_locator: str,
@@ -80,9 +88,7 @@ class SkipRule:
             return False
         if self.locator and not _locator_match(self.locator, candidate_locator):
             return False
-        if self.path and not _path_match(self.path, candidate_path):
-            return False
-        return True
+        return not self.path or _path_match(self.path, candidate_path)
 
 
 @dataclass(frozen=True)
@@ -119,7 +125,7 @@ class Thresholds:
 class BumpPolicy:
     """Loaded policy. Defaults yield "no override" behaviour."""
 
-    skip: List[SkipRule] = field(default_factory=list)
+    skip: list[SkipRule] = field(default_factory=list)
     thresholds: Thresholds = field(default_factory=Thresholds)
     # OFF by default: binary-capability-delta requires radare2 +
     # r2pipe + network egress to pull layers + significant compute.
@@ -131,7 +137,7 @@ class BumpPolicy:
 
     def is_skipped(
         self, *, kind: str, locator: str, path: str = "",
-    ) -> Optional[SkipRule]:
+    ) -> SkipRule | None:
         """Return the first matching skip rule, or ``None``."""
         for rule in self.skip:
             if rule.matches(candidate_kind=kind, candidate_locator=locator,
@@ -140,7 +146,7 @@ class BumpPolicy:
         return None
 
 
-def load_policy(target: Path) -> BumpPolicy:
+def load_policy(target: Path, *, trust_repo: bool = False) -> BumpPolicy:
     """Load the bump policy from the target directory.
 
     Searched in order (see ``_POLICY_LOCATIONS``): the root
@@ -151,12 +157,28 @@ def load_policy(target: Path) -> BumpPolicy:
     thresholds). Malformed file → warning log + default policy. The bumper
     never crashes on a bad policy — operators get the default behaviour and
     a log entry to fix the file.
+
+    ``trust_repo`` gates the WHOLE file: the policy ships inside the
+    scanned repo, and its suppressions/thresholds can hide the repo's
+    own outdated-pin findings. On untrusted runs the file is ignored
+    with a warning naming the opt-in (``--trust-repo`` or the project
+    ``config`` trust marker) — matching the scan-side suppression
+    overlay's trust gate.
     """
     policy_path = next(
         (target / rel for rel in _POLICY_LOCATIONS if (target / rel).exists()),
         None,
     )
     if policy_path is None:
+        return BumpPolicy()
+    if not trust_repo:
+        logger.warning(
+            "sca.bump.policy: %s found but the run is not repo-trusted "
+            "— a scanned repo's skip rules and thresholds can hide its "
+            "own outdated-pin findings, so the file is ignored; set the "
+            "project `config` trust marker or pass --trust-repo to "
+            "honour it", policy_path,
+        )
         return BumpPolicy()
     try:
         text = policy_path.read_text(encoding="utf-8")
@@ -167,7 +189,7 @@ def load_policy(target: Path) -> BumpPolicy:
         )
         return BumpPolicy()
     try:
-        import yaml          # type: ignore[import-untyped]
+        import yaml  # type: ignore[import-untyped]
     except ImportError:
         logger.warning(
             "sca.bump.policy: PyYAML not installed; cannot parse "
@@ -190,7 +212,7 @@ def load_policy(target: Path) -> BumpPolicy:
         )
         return BumpPolicy()
 
-    skips: List[SkipRule] = []
+    skips: list[SkipRule] = []
     raw_skip = data.get("skip")
     if isinstance(raw_skip, list):
         for entry in raw_skip:
@@ -246,6 +268,8 @@ def load_policy(target: Path) -> BumpPolicy:
     # ``binary_capability_delta`` is the top-level toggle name in
     # the YAML — keeping the YAML key short while the field name
     # stays explicit. False / missing yields the default (off).
+    # (trust_repo is already guaranteed True here — the untrusted
+    # path returned the default policy above.)
     bcd_enabled = data.get("binary_capability_delta") is True
 
     return BumpPolicy(

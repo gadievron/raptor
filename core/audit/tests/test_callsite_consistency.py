@@ -135,10 +135,13 @@ class TestDetectDeviations:
         src = textwrap.dedent("""\
             def a():
                 result = obj.validate(x)
+                use(result)
             def b():
                 result = other.validate(y)
+                use(result)
             def c():
                 result = third.validate(z)
+                use(result)
             def d():
                 something.validate(w)
         """)
@@ -166,19 +169,25 @@ class TestDetectDeviations:
         src = textwrap.dedent("""\
             def a():
                 result = frobnicate(x)
+                use(result)
             def b():
                 result = frobnicate(y)
+                use(result)
             def c():
                 result = frobnicate(z)
+                use(result)
             def d():
                 frobnicate(w)
 
             def e():
                 result = validate(1)
+                use(result)
             def f():
                 result = validate(2)
+                use(result)
             def g():
                 result = validate(3)
+                use(result)
             def h():
                 validate(4)
         """)
@@ -215,6 +224,136 @@ class TestGoCallSites:
         devs = detect_callsite_deviations({"srv.go": src}, min_sites=3)
         assert len(devs) == 1
         assert devs[0].enclosing_function == "handlerD"
+
+    def test_go_blank_assignment_is_discard(self):
+        """`_ = f()` explicitly discards the return — it must count as
+        a deviant site among capturing siblings, not as captured."""
+        src = textwrap.dedent("""\
+            package main
+
+            func handlerA() {
+                err := validate(x)
+                use(err)
+            }
+
+            func handlerB() {
+                err := validate(y)
+                use(err)
+            }
+
+            func handlerC() {
+                err := validate(z)
+                use(err)
+            }
+
+            func handlerD() {
+                _ = validate(w)
+            }
+        """)
+        devs = detect_callsite_deviations({"srv.go": src}, min_sites=3)
+        assert len(devs) == 1
+        assert devs[0].callee == "validate"
+        assert devs[0].enclosing_function == "handlerD"
+        assert devs[0].discarded_count == 1
+
+    def test_go_all_blank_multi_assignment_is_discard(self):
+        """`_, _ = g()` discards every return value."""
+        src = textwrap.dedent("""\
+            package main
+
+            func handlerA() {
+                n, err := parseInput(x)
+                use(n, err)
+            }
+
+            func handlerB() {
+                n, err := parseInput(y)
+                use(n, err)
+            }
+
+            func handlerC() {
+                n, err := parseInput(z)
+                use(n, err)
+            }
+
+            func handlerD() {
+                _, _ = parseInput(w)
+            }
+        """)
+        devs = detect_callsite_deviations({"srv.go": src}, min_sites=3)
+        assert len(devs) == 1
+        assert devs[0].enclosing_function == "handlerD"
+
+    def test_go_partial_blank_assignment_stays_captured(self):
+        """`v, _ := f()` captures at least one value — not a discard."""
+        src = textwrap.dedent("""\
+            package main
+
+            func handlerA() {
+                n, err := parseInput(x)
+                use(n, err)
+            }
+
+            func handlerB() {
+                n, err := parseInput(y)
+                use(n, err)
+            }
+
+            func handlerC() {
+                n, err := parseInput(z)
+                use(n, err)
+            }
+
+            func handlerD() {
+                n, _ := parseInput(w)
+                use(n)
+            }
+        """)
+        devs = detect_callsite_deviations({"srv.go": src}, min_sites=3)
+        assert devs == []
+
+    def test_go_blank_assignment_regex_fallback(self):
+        """The regex fallback must classify `_ = f()` as a discard too."""
+        from core.audit.callsite_consistency import _extract_callsites_regex
+
+        src = textwrap.dedent("""\
+            package main
+
+            func handlerA() {
+                err := validate(x)
+            }
+
+            func handlerD() {
+                _ = validate(w)
+            }
+        """)
+        sites = _extract_callsites_regex("srv.go", src)
+        by_func = {s.enclosing_function: s for s in sites if s.callee == "validate"}
+        assert by_func["handlerA"].discarded is False
+        assert by_func["handlerD"].discarded is True
+
+    def test_python_underscore_assignment_not_discard(self):
+        """Python `_ = f()` is an acknowledged discard idiom — it must
+        NOT create a deviation against capturing siblings (the author
+        demonstrably saw the return value)."""
+        src = textwrap.dedent("""\
+            def a():
+                r = validate(1)
+                return r
+
+            def b():
+                r = validate(2)
+                return r
+
+            def c():
+                r = validate(3)
+                return r
+
+            def d():
+                _ = validate(4)
+        """)
+        devs = detect_callsite_deviations({"app.py": src}, min_sites=3)
+        assert devs == []
 
 
 class TestJsCallSites:
@@ -280,10 +419,13 @@ class TestIRISExtraSecurityNames:
         src = textwrap.dedent("""\
             def a():
                 result = frobnicate(x)
+                use(result)
             def b():
                 result = frobnicate(y)
+                use(result)
             def c():
                 result = frobnicate(z)
+                use(result)
             def d():
                 frobnicate(w)
         """)

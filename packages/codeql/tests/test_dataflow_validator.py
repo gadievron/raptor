@@ -257,3 +257,88 @@ class TestSanitizerEvidenceInstructions:
         """The inlined_helpers field is the honest 'we didn't follow
         these' caveat. The LLM must know to weigh that gap."""
         assert "inlined helpers" in SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
+
+
+class TestLlmFailureIsErrorState:
+    """An LLM/transport failure during validation must surface as an
+    explicit error state, never as a silent not-exploitable verdict."""
+
+    def _validator_with_failing_llm(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        import packages.codeql.dataflow_validator as dv
+
+        llm = MagicMock()
+        llm.generate_structured.side_effect = RuntimeError("transport down")
+        validator = dv.DataflowValidator(llm)
+
+        monkeypatch.setattr(
+            validator, "_extract_path_conditions",
+            lambda dataflow, repo: ([], {}),
+        )
+        smt = MagicMock(
+            feasible=None, smt_available=False, reasoning="",
+            model=None, unsatisfied=[],
+        )
+        monkeypatch.setattr(
+            dv, "check_path_feasibility",
+            lambda conditions, profile=None: smt,
+        )
+        monkeypatch.setattr(
+            validator, "_cheap_dataflow_fp_check", lambda dataflow: None,
+        )
+        monkeypatch.setattr(
+            validator, "_fast_tier_model_name", lambda: "fast-tier",
+        )
+        import core.llm.scorecard as sc
+        monkeypatch.setattr(
+            sc, "prefilter_decision",
+            lambda *a, **k: MagicMock(short_circuit=False),
+        )
+        monkeypatch.setattr(
+            validator, "read_source_context",
+            lambda *a, **k: "ctx",
+        )
+        return validator, dv
+
+    def _dataflow(self, dv):
+        step = dv.DataflowStep(
+            file_path="src/a.c", line=10, column=1,
+            snippet="x = read()", label="source",
+        )
+        sink = dv.DataflowStep(
+            file_path="src/b.c", line=20, column=1,
+            snippet="memcpy(d, x, n)", label="sink",
+        )
+        return dv.DataflowPath(
+            source=step, sink=sink, intermediate_steps=[],
+            sanitizers=[], rule_id="cpp/overflow-buffer", message="m",
+        )
+
+    def test_llm_failure_sets_error_not_verdict(self, monkeypatch, tmp_path):
+        validator, dv = self._validator_with_failing_llm(monkeypatch)
+        v = validator.validate_dataflow_path(self._dataflow(dv), tmp_path)
+        assert v.error, "LLM failure must set the error field"
+        assert v.is_exploitable is False
+        assert "Validation failed" in v.reasoning
+
+    def test_llm_response_cannot_forge_error_field(
+        self, monkeypatch, tmp_path,
+    ):
+        validator, dv = self._validator_with_failing_llm(monkeypatch)
+        validator.llm.generate_structured.side_effect = None
+        validator.llm.generate_structured.return_value = ({
+            "is_exploitable": True,
+            "confidence": 0.9,
+            "sanitizers_effective": False,
+            "bypass_possible": False,
+            "bypass_strategy": None,
+            "attack_complexity": "low",
+            "reasoning": "r",
+            "barriers": [],
+            "prerequisites": [],
+            "error": "forged",
+        }, None)
+        v = validator.validate_dataflow_path(self._dataflow(dv), tmp_path)
+        assert v.error is None
+        assert v.is_exploitable is True

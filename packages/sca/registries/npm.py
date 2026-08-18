@@ -13,10 +13,9 @@ from __future__ import annotations
 import logging
 import re
 import urllib.parse
-from typing import List, Optional
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -25,6 +24,31 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "npm-versions"
 _DEFAULT_TTL = 24 * 3600
+
+# npm registry name grammar: lowercase, optionally ``@scope/`` prefixed,
+# URL-safe punctuation only, ≤ 214 chars. Names that fail this can't
+# exist on the registry, so we return the not-found path WITHOUT
+# caching — a degenerate name (``lodash/..``) must never influence
+# which cache file a legitimate name reads or writes.
+_NPM_NAME_RE = re.compile(
+    r"^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"
+)
+_NPM_MAX_NAME_LEN = 214
+
+
+def _valid_npm_name(name: str) -> bool:
+    return (
+        0 < len(name) <= _NPM_MAX_NAME_LEN
+        and _NPM_NAME_RE.match(name) is not None
+    )
+
+
+def _cache_name_component(name: str) -> str:
+    """Percent-encode the package name for cache-key use so the key
+    identity matches the URL identity (``lodash/..`` can no longer
+    alias ``lodash`` after the cache layer drops degenerate path
+    segments). Old raw-name entries re-fetch once."""
+    return urllib.parse.quote(name, safe="")
 
 # Cap raised above the global 50 MB default. Popular scoped
 # namespaces like ``@grafana/runtime`` / ``@grafana/ui`` ship
@@ -99,7 +123,7 @@ class NpmClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -117,12 +141,12 @@ class NpmClient:
         )
         self._auth_header = over.auth_header if over else None
 
-    def _request_headers(self) -> Optional[dict]:
+    def _request_headers(self) -> dict | None:
         if self._auth_header:
             return {"Authorization": self._auth_header}
         return None
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         """Return the raw npm registry document for a package.
 
         Uses ``_NPM_META_MAX_BYTES`` (200 MB) as the cap because
@@ -140,8 +164,13 @@ class NpmClient:
         names. ``try_get`` + ``MISSING`` distinguishes "not cached"
         from "cached as None" so the negative entry serves.
         """
+        if not _valid_npm_name(name):
+            # Not a name the registry could ever serve. Return the
+            # not-found path without touching the cache in either
+            # direction.
+            return None
         encoded = urllib.parse.quote(name, safe="@")
-        cache_key = f"npm-meta:{name}"
+        cache_key = f"npm-meta:{_cache_name_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -173,13 +202,16 @@ class NpmClient:
             self._cache.put(cache_key, data, ttl_seconds=self._ttl)
         return data
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         # npm scoped names: ``@anthropic-ai/claude-code`` is URL-encoded
         # as ``@anthropic-ai%2Fclaude-code`` (or sometimes as-is — the
         # registry accepts both). We use ``urllib.parse.quote`` so the
         # ``/`` is encoded.
+        if not _valid_npm_name(name):
+            # Invalid grammar → not-found, uncached (see get_metadata).
+            return []
         encoded = urllib.parse.quote(name, safe="@")
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_cache_name_component(name)}"
         if self._cache is not None:
             cached = self._cache.get(cache_key, ttl_seconds=self._ttl)
             if cached is not None:
@@ -213,7 +245,7 @@ class NpmClient:
         return versions
 
 
-def _extract_versions(data: dict) -> List[str]:
+def _extract_versions(data: dict) -> list[str]:
     """Pull stable versions from the npm registry document.
 
     Shape:
@@ -236,7 +268,7 @@ def _extract_versions(data: dict) -> List[str]:
     if not isinstance(times, dict):
         times = {}
 
-    candidates: List[str] = []
+    candidates: list[str] = []
     for ver, meta in versions.items():
         # Drop deprecated versions: npm marks these by setting the
         # ``deprecated`` field on the package metadata.

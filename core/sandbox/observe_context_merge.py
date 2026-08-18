@@ -63,11 +63,13 @@ def _matches_path(observed: str, ep_or_sink: dict,
     Two modes:
 
     * ``target_dir`` set — STRICT. The observed path must lie under
-      the target directory (with a "/" boundary), and after stripping
-      the prefix it must equal the recorded relative path exactly.
-      Right shape for monorepos where many directories contain a
-      ``src/utils.py`` — the suffix heuristic below would falsely
-      match all of them.
+      the target directory (with a "/" boundary) and, after stripping
+      the prefix, equal the recorded relative path exactly — or,
+      failing the prefix test, be exactly equal to the recorded path
+      (deliberate fallback for callers that pre-normalised both sides
+      to the same shape). Right shape for monorepos where many
+      directories contain a ``src/utils.py`` — the suffix heuristic
+      below would falsely match all of them.
     * ``target_dir`` unset — SUFFIX HEURISTIC. The observed path is
       checked against the recorded relative path with a "/"-anchored
       endswith match. Backward-compat with callers that don't know
@@ -182,7 +184,9 @@ def merge_observation_into_context_map(
             correlation is STRICT: an observed absolute path must
             start with ``target_dir`` (with "/" boundary) and the
             stripped suffix must equal the entry-point/sink relative
-            path EXACTLY. When None, falls back to a "/"-anchored
+            path EXACTLY (bare equality with the recorded path also
+            matches, for pre-normalised callers — see _matches_path).
+            When None, falls back to a "/"-anchored
             endswith heuristic that's prone to false positives in
             monorepos with same-named files in many directories
             (e.g. ``services/auth/src/utils.py`` and
@@ -191,7 +195,7 @@ def merge_observation_into_context_map(
             the context map is the canonical source.
         binary: optional path to the probed binary, recorded for
             traceability so a reader knows which binary produced this
-            evidence. None = "unknown" recorded literally.
+            evidence. None is stored as-is (JSON null).
         command: optional list of argv elements for the spawned probe;
             useful for re-running ("we observed claude --version, not
             claude --print 'hello'"). Coerced to a list before storing.

@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.paths import confine
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -28,19 +29,14 @@ def safe_join(base: Path, relative: str) -> Path | None:
 
     Returns None when the path contains ``..`` segments or resolves
     outside *base*.  Callers should treat None as "path rejected".
+
+    The containment half delegates to :func:`core.paths.confine`; the
+    lexical ``..``-segment pre-reject is this helper's own, stricter
+    policy (a non-escaping ``a/../b`` is still rejected) and is kept.
     """
     if ".." in relative.split("/"):
         return None
-    full = base / relative
-    try:
-        resolved = full.resolve()
-        base_resolved = base.resolve()
-        if not str(resolved).startswith(str(base_resolved) + "/") and \
-           resolved != base_resolved:
-            return None
-    except (OSError, ValueError):
-        return None
-    return resolved
+    return confine(base, relative)
 
 
 def is_valid_identifier(name: str) -> bool:
@@ -261,3 +257,98 @@ def extract_functions_from_source(source: str) -> list:
         body = "\n".join(lines[body_start_idx:end_idx])
         funcs.append((name, start_line, body))
     return funcs
+
+
+# ── Progress-line rendering (operator-facing) ────────────────────────
+
+# Verdict glyphs for per-function progress lines. OUTPUT STYLE: ✓/✗
+# are fine, no red/green circles. The historical map used a bare "x"
+# for error, which rendered as "→ error x" — the trailing letter read
+# as noise next to the status word rather than as a failure mark.
+STATUS_GLYPHS = {
+    "clean": "✓",
+    "suspicious": "?",
+    "finding": "!",
+    "dormant": "~",
+    "error": "✗",
+}
+
+
+def format_progress_line(idx: int, total: int, outcome: Any) -> str:
+    """Render one review-progress line for the operator stream.
+
+    ``idx < 0`` is the protocol's "print body verbatim" channel used
+    for loop-level announcements (e.g. the budget-exhaustion stop).
+    """
+    if idx < 0:
+        return f"  {outcome.body}"
+    glyph = STATUS_GLYPHS.get(outcome.status, "·")
+    return (
+        f"  [{idx + 1}/{total}] {outcome.file}:{outcome.function} "
+        f"→ {outcome.status} {glyph}"
+    )
+
+
+def envelope_prompt(
+    system: str,
+    blocks: Any,
+    slots: dict[str, Any] | None = None,
+    *,
+    model_id: str = "",
+    transparent_payload: bool = False,
+) -> tuple[str, str]:
+    """Build a ``(user, system)`` message pair via the prompt envelope.
+
+    Canonical construction for the auxiliary /audit LLM calls
+    (summaries, glance batches, classification, chain evaluation,
+    dark-verify witness generation): trusted instructions in the
+    system message, target-/LLM-derived content in ``UntrustedBlock``
+    envelopes, identifiers in slots.  The per-model defence profile is
+    resolved the same way sibling callsites do — ``get_profile_for``
+    when the model is known, CONSERVATIVE otherwise.
+
+    ``transparent_payload=True`` renders the untrusted blocks in the
+    clear (no base64, no datamark sentinels) while keeping every
+    structural defence: nonce envelope, tag-forgery neutralization
+    (which the base64 path skips), autofetch stripping, slot
+    discipline, priming. Reserved for the SECURITY-EXTRACTION call
+    classes (taint summaries, spec inference): measured live, those
+    two asks over an encoded payload are hard-refused 100% by Claude
+    models (stop_reason=refusal, ~3s) — "decode this opaque blob and
+    extract what reaches memcpy/system/exec" reads as attack mapping
+    over deliberately hidden content — while the identical ask over a
+    plaintext payload succeeds, and the encoded envelope keeps months
+    of clean service on every OTHER call class. The trigger is the
+    conjunction, so only the two known-bad classes opt out; general
+    classes keep the proven base64 configuration.
+
+    ``blocks`` is an iterable of ``UntrustedBlock``; ``slots`` maps
+    slot names to ``TaintedString`` values.  The returned pair plugs
+    straight into ``LLMClient.generate(user, system_prompt=system)``.
+    """
+    import dataclasses
+
+    from core.security.prompt_defense_profiles import (
+        CONSERVATIVE,
+        get_profile_for,
+    )
+    from core.security.prompt_envelope import build_prompt
+
+    profile = get_profile_for(model_id) if model_id else CONSERVATIVE
+    if transparent_payload and (profile.base64_code or profile.datamarking):
+        profile = dataclasses.replace(
+            profile, base64_code=False, datamarking=False,
+        )
+    bundle = build_prompt(
+        system=system,
+        profile=profile,
+        untrusted_blocks=tuple(blocks),
+        slots=slots or None,
+    )
+    user = "\n\n".join(
+        m.content for m in bundle.messages if m.role == "user"
+    )
+    system_text = next(
+        (m.content for m in bundle.messages if m.role == "system"), "",
+    )
+    return user, system_text

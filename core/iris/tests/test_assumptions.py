@@ -63,6 +63,25 @@ class TestSafetyAssumption:
         a = assumption_from_dict(d)
         assert a.evidence_tier == EvidenceTier.HEURISTIC
 
+    def test_params_affected_strings_coerced_to_int(self):
+        d = {"target": "f", "file": "x.c", "assumption": "test",
+             "params_affected": ["0", "1", "2"]}
+        a = assumption_from_dict(d)
+        assert a.params_affected == [0, 1, 2]
+        assert all(isinstance(p, int) for p in a.params_affected)
+
+    def test_params_affected_non_numeric_skipped(self):
+        d = {"target": "f", "file": "x.c", "assumption": "test",
+             "params_affected": ["0", "abc", "2"]}
+        a = assumption_from_dict(d)
+        assert a.params_affected == [0, 2]
+
+    def test_params_affected_scalar_int(self):
+        d = {"target": "f", "file": "x.c", "assumption": "test",
+             "params_affected": 3}
+        a = assumption_from_dict(d)
+        assert a.params_affected == [3]
+
 
 class TestBypassFinding:
     def test_to_dict(self):

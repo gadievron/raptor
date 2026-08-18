@@ -73,10 +73,9 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import yaml
-
 
 # Cap how deep we walk when matching ``**``-style globs. 4 levels
 # covers ``src/<subsystem>/<file>.c`` shapes without exploding on
@@ -102,18 +101,18 @@ class CatalogEntry:
     description: str = ""
 
     # Detection signals
-    file_globs: Tuple[str, ...] = field(default_factory=tuple)
-    file_extensions: Tuple[str, ...] = field(default_factory=tuple)
-    function_names: Tuple[str, ...] = field(default_factory=tuple)
-    negative_globs: Tuple[str, ...] = field(default_factory=tuple)
+    file_globs: tuple[str, ...] = field(default_factory=tuple)
+    file_extensions: tuple[str, ...] = field(default_factory=tuple)
+    function_names: tuple[str, ...] = field(default_factory=tuple)
+    negative_globs: tuple[str, ...] = field(default_factory=tuple)
 
     # Default policy hints — consumers consult these but the
     # substrate doesn't enforce them (operator overrides win).
-    semgrep_packs_default: Tuple[str, ...] = field(default_factory=tuple)
-    semgrep_packs_optional: Tuple[str, ...] = field(default_factory=tuple)
-    attack_surface_high: Tuple[str, ...] = field(default_factory=tuple)
-    attack_surface_low: Tuple[str, ...] = field(default_factory=tuple)
-    pipeline_recommended: Tuple[str, ...] = field(default_factory=tuple)
+    semgrep_packs_default: tuple[str, ...] = field(default_factory=tuple)
+    semgrep_packs_optional: tuple[str, ...] = field(default_factory=tuple)
+    attack_surface_high: tuple[str, ...] = field(default_factory=tuple)
+    attack_surface_low: tuple[str, ...] = field(default_factory=tuple)
+    pipeline_recommended: tuple[str, ...] = field(default_factory=tuple)
 
     typical_findings_count: int = 0
     typical_cost_per_run_usd: float = 0.0
@@ -124,7 +123,7 @@ class CatalogEntry:
     version: int = 1
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CatalogEntry":
+    def from_dict(cls, data: dict[str, Any]) -> CatalogEntry:
         """Build a CatalogEntry from parsed YAML. Tolerant of
         missing optional sections — only ``name`` is required."""
         if "name" not in data:
@@ -138,7 +137,7 @@ class CatalogEntry:
         budget = data.get("budget_defaults") or {}
 
         def _t(seq):
-            return tuple(seq) if seq else tuple()
+            return tuple(seq) if seq else ()
 
         return cls(
             name=data["name"],
@@ -165,10 +164,10 @@ class CatalogEntry:
 
 
 _CATALOG_DIR = Path(__file__).parent
-_CACHED_CATALOG: Optional[Tuple[CatalogEntry, ...]] = None
+_CACHED_CATALOG: tuple[CatalogEntry, ...] | None = None
 
 
-def _load_one(yml_path: Path) -> Optional[CatalogEntry]:
+def _load_one(yml_path: Path) -> CatalogEntry | None:
     """Parse a single catalog YAML. Returns None on missing file /
     malformed YAML / missing required fields — substrate stays
     best-effort so a single broken entry doesn't break the loader
@@ -183,14 +182,14 @@ def _load_one(yml_path: Path) -> Optional[CatalogEntry]:
         return None
 
 
-def all_entries() -> Tuple[CatalogEntry, ...]:
+def all_entries() -> tuple[CatalogEntry, ...]:
     """Load every ``<name>.yml`` in the catalog dir (excluding
     ``tests/``). Cached after first call — entries are immutable so
     re-reading the YAML on every call would be wasted IO."""
     global _CACHED_CATALOG
     if _CACHED_CATALOG is not None:
         return _CACHED_CATALOG
-    entries: List[CatalogEntry] = []
+    entries: list[CatalogEntry] = []
     for p in sorted(_CATALOG_DIR.glob("*.yml")):
         entry = _load_one(p)
         if entry is not None:
@@ -199,7 +198,7 @@ def all_entries() -> Tuple[CatalogEntry, ...]:
     return _CACHED_CATALOG
 
 
-def load_by_name(name: str) -> Optional[CatalogEntry]:
+def load_by_name(name: str) -> CatalogEntry | None:
     """Direct lookup by catalog name (e.g. ``c.userspace-daemon``).
     Returns None if no entry matches — caller should fall back to
     ``generic`` or operator-prompt."""
@@ -214,14 +213,14 @@ def load_by_name(name: str) -> Optional[CatalogEntry]:
 # ---------------------------------------------------------------------------
 
 
-def _walk_target(target_path: Path) -> List[str]:
+def _walk_target(target_path: Path) -> list[str]:
     """Walk ``target_path`` up to ``_MAX_DETECT_DEPTH`` levels deep,
     returning relative POSIX paths (cap at ``_MAX_DETECT_FILES``).
     Skips dotted directories (``.git``, ``.cache``) — these are
     never the structural signals catalog entries care about."""
     if not target_path.is_dir():
         return []
-    rels: List[str] = []
+    rels: list[str] = []
     target_path = target_path.resolve()
     for root, dirs, files in __import__("os").walk(target_path):
         # Skip dotted dirs.
@@ -244,7 +243,7 @@ def _walk_target(target_path: Path) -> List[str]:
     return rels
 
 
-def _matches_any(paths: List[str], globs: Tuple[str, ...]) -> int:
+def _matches_any(paths: list[str], globs: tuple[str, ...]) -> int:
     """Count how many ``globs`` match at least one path. (Not
     ''how many path-glob pairs match'' — that would over-weight
     distinctive globs that happen to hit many files.)"""
@@ -255,7 +254,7 @@ def _matches_any(paths: List[str], globs: Tuple[str, ...]) -> int:
     return hits
 
 
-def _has_extension(paths: List[str], extensions: Tuple[str, ...]) -> int:
+def _has_extension(paths: list[str], extensions: tuple[str, ...]) -> int:
     """Count distinct extensions matched (same intent as
     ``_matches_any`` — bool-per-signal, not per-file)."""
     matched: set = set()
@@ -267,7 +266,7 @@ def _has_extension(paths: List[str], extensions: Tuple[str, ...]) -> int:
     return len(matched)
 
 
-def _score_entry(entry: CatalogEntry, paths: List[str]) -> Optional[float]:
+def _score_entry(entry: CatalogEntry, paths: list[str]) -> float | None:
     """Score how well ``entry``'s detection signals match the
     target's file tree. Returns None when negative signals match
     (entry disqualified). Otherwise: positive-signal-count
@@ -302,7 +301,7 @@ def _score_entry(entry: CatalogEntry, paths: List[str]) -> Optional[float]:
     return file_glob_score + ext_score
 
 
-def detect(target_path: Path) -> List[Tuple[CatalogEntry, float]]:
+def detect(target_path: Path) -> list[tuple[CatalogEntry, float]]:
     """Walk the target and return all catalog entries ranked by
     confidence score (descending). Entries with score 0 are
     excluded — no positive signal matched.
@@ -314,7 +313,7 @@ def detect(target_path: Path) -> List[Tuple[CatalogEntry, float]]:
     paths = _walk_target(Path(target_path))
     if not paths:
         return []
-    scored: List[Tuple[CatalogEntry, float]] = []
+    scored: list[tuple[CatalogEntry, float]] = []
     for entry in all_entries():
         s = _score_entry(entry, paths)
         if s is None or s <= 0:
@@ -324,10 +323,11 @@ def detect(target_path: Path) -> List[Tuple[CatalogEntry, float]]:
     return scored
 
 
-def load(target_path: Path) -> Optional[CatalogEntry]:
+def load(target_path: Path) -> CatalogEntry | None:
     """Pick the best-matching catalog entry for ``target_path``.
-    Returns None when nothing scored above 0 — caller falls back
-    to the ``generic`` entry or operator prompt."""
+    Returns the best-scoring entry, else the ``generic`` entry when
+    nothing scored above 0, else None when no generic entry exists
+    (caller prompts the operator)."""
     ranked = detect(target_path)
     if not ranked:
         # Fall back to ``generic`` when present — operator gets a
@@ -346,7 +346,7 @@ def _reset_cache_for_tests() -> None:
 __all__ = [
     "CatalogEntry",
     "all_entries",
-    "load_by_name",
     "detect",
     "load",
+    "load_by_name",
 ]

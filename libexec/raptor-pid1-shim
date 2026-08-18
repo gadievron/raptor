@@ -1,4 +1,6 @@
 #!/usr/bin/python3 -I
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """RAPTOR pid-1 shim for the subprocess-path sandbox.
 
 -I (isolated mode) is belt-and-braces: the sandbox's get_safe_env() strips
@@ -75,6 +77,7 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -84,6 +87,7 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 
@@ -93,6 +97,68 @@ if not (os.environ.get("CLAUDECODE")
 # reaps it (the orchestrator is gone); distinct from the target's own codes
 # and the 254/255 sentinels purely for post-mortem log clarity.
 _DEATH_TEARDOWN_EXIT = 137
+
+
+def _lo_up_ioctl() -> None:
+    """SIOCSIFFLAGS to set IFF_UP on lo in the current netns. Inline
+    copy of core/sandbox/_proxy_bridge._bring_up_loopback (this script
+    runs with -I and no RAPTOR sys.path; it cannot import core.*).
+    Raises OSError on failure."""
+    import fcntl
+    import socket
+    import struct
+    SIOCSIFFLAGS = 0x8914
+    IFF_UP, IFF_LOOPBACK, IFF_RUNNING = 0x1, 0x8, 0x40
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        ifr = b"lo".ljust(16, b"\x00") + struct.pack(
+            "h", IFF_UP | IFF_LOOPBACK | IFF_RUNNING
+        )
+        fcntl.ioctl(s, SIOCSIFFLAGS, ifr)
+    finally:
+        s.close()
+
+
+def _ensure_loopback_up() -> None:
+    """Bring lo up in the sandbox netns (--netns-lo flag from context).
+
+    A fresh netns (``unshare --net``) has lo DOWN: bind() works but
+    self-connect fails ENETUNREACH, which breaks every loopback-IPC
+    tool (gradle daemon, language servers, self-connecting test
+    suites) under block_network. Two attempts:
+
+    1. Direct SIOCSIFFLAGS — works when this process still holds
+       CAP_NET_ADMIN over the netns (map_root runs: the mapped euid 0
+       retains capabilities across the exec into this shim).
+    2. Nested in-process ``unshare(CLONE_NEWUSER | CLONE_NEWNET)`` +
+       retry — only possible when a uid mapping exists (an UNMAPPED
+       euid cannot create a child user-ns, user_namespaces(7) EPERM).
+
+    On the default subprocess chain neither works: the unshare CLI
+    writes no uid_map, deliberately — the NPROC containment design
+    needs the sandbox uid to be ns-nobody (zero pre-existing
+    processes), and mapping the current user would count the
+    operator's host processes against the fork-bomb limit. So the
+    unmapped case stays loopback-down (exactly the pre-flag
+    behaviour), SILENTLY — this runs on every block_network subprocess
+    call and a routine stderr line would pollute captured tool output.
+    The spawn path (core/sandbox/_spawn), which creates namespaces
+    in-process and never drops capabilities, brings lo up reliably —
+    that is the path loopback-IPC workloads take (target/output set,
+    tool visible in the mount tree).
+    """
+    try:
+        _lo_up_ioctl()
+        return
+    except OSError:
+        pass
+    CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
+    CLONE_NEWNET = getattr(os, "CLONE_NEWNET", 0x40000000)
+    try:
+        os.unshare(CLONE_NEWUSER | CLONE_NEWNET)
+        _lo_up_ioctl()
+    except OSError:
+        pass
 
 
 def _resolve_death_fd():
@@ -137,6 +203,19 @@ def main() -> int:
         return 2
 
     target_argv = sys.argv[1:]
+
+    # --netns-lo (from context.py, only when the unshare chain used
+    # --net): bring lo up in the fresh netns. Before fork so the whole
+    # target subtree sees a working loopback. Consumed here — the
+    # target never sees the flag.
+    if target_argv and target_argv[0] == "--netns-lo":
+        target_argv = target_argv[1:]
+        _ensure_loopback_up()
+        if not target_argv:
+            sys.stderr.write(
+                "raptor-pid1-shim: missing target argv after --netns-lo\n"
+            )
+            return 2
 
     # Orchestrator-liveness pipe (read end), or None when not configured.
     # Resolved BEFORE the fork so the CLOEXEC set here is in place for the
@@ -246,7 +325,17 @@ def main() -> int:
             # trust marker authorizes RAPTOR's OWN dispatch scripts (this shim
             # included) and has no business being visible to the sandboxed
             # target. Strip both so nothing _RAPTOR_* crosses into the target.
-            for _m in ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED", "CLAUDECODE"):
+            # Exception: _RAPTOR_KEEP_TRUST_MARKERS (set only by
+            # run_untrusted_networked(keep_trust_markers=True) for RAPTOR's
+            # own Claude Code skill dispatches) keeps the two trust markers
+            # so the child can drive libexec/ helpers; the flag itself and
+            # the death fd are stripped unconditionally.
+            _keep_trust = os.environ.pop("_RAPTOR_KEEP_TRUST_MARKERS", None)
+            _strip = (
+                ("_RAPTOR_DEATH_FD",) if _keep_trust
+                else ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED", "CLAUDECODE")
+            )
+            for _m in _strip:
                 os.environ.pop(_m, None)
             try:
                 os.execvp(target_argv[0], target_argv)

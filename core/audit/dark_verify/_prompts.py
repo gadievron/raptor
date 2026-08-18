@@ -19,13 +19,16 @@ logger = logging.getLogger(__name__)
 # Prompt templates — one per language (C/C++ share one)
 # ---------------------------------------------------------------------------
 
+# The finding's file / function arrive as untrusted slots and the
+# hypothesis / detail as untrusted envelope blocks in the user
+# message; the template text below stays interpolation-free and
+# forms the system prompt.
 _FINDING_HEADER = """\
 ## Finding
 
-- **File:** {file}
-- **Function:** {function}
-- **Hypothesis:** {hypothesis}
-- **Detail:** {body}
+The finding's file and function are given in the `file` and
+`function` slots.  Its hypothesis and detail arrive as untrusted
+blocks (kinds `finding-hypothesis` and `finding-detail`).
 
 ## Task
 """
@@ -39,7 +42,7 @@ _TEMPLATES: dict[str, str] = {
 You are verifying a suspected vulnerability in a Python codebase.
 
 """ + _FINDING_HEADER + """
-Provide a concrete witness: specific arguments to call `{function}` with
+Provide a concrete witness: specific arguments to call the function named in the `function` slot with
 that would demonstrate the bug. You must provide STRUCTURED DATA, not code.
 
 ## Output format
@@ -58,7 +61,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a C/C++ codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug. The harness compiles with
 -fsanitize=address,undefined — an ASan/UBSan report is a confirmed bug.
 
@@ -81,7 +84,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a Go codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug. A panic is a confirmed bug.
 
 ## Output format
@@ -101,7 +104,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a JavaScript codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -119,7 +122,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a TypeScript codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -137,7 +140,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a Ruby codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -155,7 +158,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a PHP codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -173,7 +176,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a Rust codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug. The harness compiles with ASan when
 available — a sanitizer report or panic is a confirmed bug.
 
@@ -195,7 +198,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a Java codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -216,7 +219,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a Lua codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -234,7 +237,7 @@ Return a JSON object with these fields:
 You are verifying a suspected vulnerability in a Perl codebase.
 
 """ + _FINDING_HEADER + """
-Provide structured data for a witness: the arguments to call `{function}`
+Provide structured data for a witness: the arguments to call the function named in the `function` slot
 with that would trigger the bug.
 
 ## Output format
@@ -259,16 +262,45 @@ def build_witness_prompt(
     body: str,
     *,
     language: str = "",
-) -> str:
-    """Build the LLM prompt for witness generation."""
+    model_id: str = "",
+) -> tuple[str, str]:
+    """Build the enveloped LLM prompt for witness generation.
+
+    The language template (task + output format, interpolation-free)
+    becomes the system prompt; the finding's hypothesis / detail go
+    into untrusted blocks and its file / function into slots.
+    Returns ``(user, system)``.
+    """
+    from core.security.prompt_envelope import TaintedString, UntrustedBlock
+    from core.security.prompt_framing import with_audit_framing
+
+    from .._util import envelope_prompt
+
     lang = language or language_for_file(file) or "python"
-    template = _TEMPLATES.get(lang, _TEMPLATES["python"])
-    return template.format(
-        file=file,
-        function=function,
-        hypothesis=hypothesis or "(no hypothesis)",
-        body=body[:2000],
+    # Audit-purpose framing: witness generation is the most
+    # exploit-shaped auxiliary ask — carry the same defensive-audit
+    # context the review class carries (see core.security.
+    # prompt_framing; the witness is executed in the run's sandbox to
+    # confirm or refute the finding, never against a live system).
+    template = with_audit_framing(_TEMPLATES.get(lang, _TEMPLATES["python"]))
+    key = f"{file}:{function}"
+    blocks = (
+        UntrustedBlock(
+            content=hypothesis or "(no hypothesis)",
+            kind="finding-hypothesis",
+            origin=key,
+        ),
+        UntrustedBlock(
+            content=body[:2000],
+            kind="finding-detail",
+            origin=key,
+        ),
     )
+    slots = {
+        "file": TaintedString(value=file, trust="untrusted"),
+        "function": TaintedString(value=function, trust="untrusted"),
+    }
+    return envelope_prompt(template, blocks, slots, model_id=model_id)
 
 
 # ---------------------------------------------------------------------------

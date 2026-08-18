@@ -12,6 +12,7 @@ from packages.sca.license import (
     LicensePolicy,
     _spdx_from_npm,
     _spdx_from_pypi,
+    detect_project_license,
     enrich_licenses,
     evaluate,
     load_policy,
@@ -807,3 +808,70 @@ def test_enrich_licenses_skips_maven_without_version():
 
     n = enrich_licenses(deps, http=_StubHttp())
     assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# detect_project_license — the scanned project's OWN license
+# ---------------------------------------------------------------------------
+
+
+def test_detect_project_license_from_package_json(tmp_path: Path):
+    import json
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "x", "license": "MIT"}), encoding="utf-8",
+    )
+    assert detect_project_license(tmp_path) == "MIT"
+
+
+def test_detect_project_license_from_pyproject(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nlicense = "Apache-2.0"\n',
+        encoding="utf-8",
+    )
+    assert detect_project_license(tmp_path) == "Apache-2.0"
+
+
+def test_detect_project_license_from_pom(tmp_path: Path):
+    (tmp_path / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <artifactId>demo</artifactId>
+  <licenses><license><name>Apache-2.0</name></license></licenses>
+</project>
+""",
+        encoding="utf-8",
+    )
+    assert detect_project_license(tmp_path) == "Apache-2.0"
+
+
+def test_detect_project_license_none_when_no_manifest(tmp_path: Path):
+    assert detect_project_license(tmp_path) is None
+
+
+def test_detect_project_license_none_when_undeclared(tmp_path: Path):
+    import json
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "x"}), encoding="utf-8",
+    )
+    assert detect_project_license(tmp_path) is None
+
+
+def test_detect_project_license_skips_licenseless_manifest(tmp_path: Path):
+    # A root manifest without a license declaration must not shadow
+    # a sibling manifest that does declare one.
+    import json
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "x"}), encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nlicense = "BSD-3-Clause"\n',
+        encoding="utf-8",
+    )
+    assert detect_project_license(tmp_path) == "BSD-3-Clause"
+
+
+def test_detect_project_license_malformed_manifest_is_skipped(tmp_path: Path):
+    (tmp_path / "package.json").write_text("{ not json", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nlicense = "ISC"\n', encoding="utf-8",
+    )
+    assert detect_project_license(tmp_path) == "ISC"

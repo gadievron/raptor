@@ -10,27 +10,28 @@ into a seamless automated pipeline.
 import argparse
 import sys
 import time
-from dataclasses import dataclass, asdict
-from datetime import datetime
-
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 # packages/codeql/agent.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from core.json import save_json
-
-from core.config import RaptorConfig
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-from core.logging import get_logger
-from core.run.safe_io import safe_run_mkdir
-from core.run.output import unique_run_suffix as _unique_run_suffix
-from packages.codeql.language_detector import LanguageDetector, LanguageInfo
 from core.build.build_detector import BuildDetector, BuildSystem
-from packages.codeql.database_manager import DatabaseManager, DatabaseResult
-from packages.codeql.query_runner import QueryRunner, QueryResult
+from core.config import RaptorConfig
+from core.json import save_json
+from core.logging import get_logger
+from core.run.output import unique_run_suffix as _unique_run_suffix
+from core.run.safe_io import safe_run_mkdir
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from packages.codeql.database_manager import (
+    BUILDLESS_DEFAULT_LANGUAGES,
+    DatabaseManager,
+    DatabaseResult,
+)
+from packages.codeql.language_detector import LanguageDetector, LanguageInfo
+from packages.codeql.query_runner import QueryResult, QueryRunner
 
 logger = get_logger()
 
@@ -74,12 +75,12 @@ class CodeQLWorkflowResult:
     repo_path: str
     timestamp: str
     duration_seconds: float
-    languages_detected: Dict[str, LanguageInfo]
-    databases_created: Dict[str, DatabaseResult]
-    analyses_completed: Dict[str, QueryResult]
+    languages_detected: dict[str, LanguageInfo]
+    databases_created: dict[str, DatabaseResult]
+    analyses_completed: dict[str, QueryResult]
     total_findings: int
-    sarif_files: List[str]
-    errors: List[str]
+    sarif_files: list[str]
+    errors: list[str]
 
     def to_dict(self):
         """
@@ -153,8 +154,8 @@ class CodeQLAgent:
     def __init__(
         self,
         repo_path: Path,
-        out_dir: Optional[Path] = None,
-        codeql_cli: Optional[str] = None
+        out_dir: Path | None = None,
+        codeql_cli: str | None = None
     ):
         """
         Initialize CodeQL agent.
@@ -202,11 +203,12 @@ class CodeQLAgent:
 
     def run_autonomous_analysis(
         self,
-        languages: Optional[List[str]] = None,
-        build_commands: Optional[Dict[str, str]] = None,
+        languages: list[str] | None = None,
+        build_commands: dict[str, str] | None = None,
         force_db_creation: bool = False,
         use_extended: bool = False,
         min_files: int = 3,
+        traced_build: bool = False,
     ) -> CodeQLWorkflowResult:
         """
         Run complete autonomous CodeQL analysis workflow.
@@ -217,19 +219,25 @@ class CodeQLAgent:
             force_db_creation: Force database recreation
             use_extended: Use extended security suites
             min_files: Minimum files to consider a language present
+            traced_build: Opt into traced-build extraction for C/C++.
+                Default False: C/C++ databases are created with
+                ``--build-mode=none`` — the untrusted repo's build
+                scripts never execute, and build detection is skipped
+                entirely for those languages.  An explicit per-language
+                entry in ``build_commands`` also opts that language in.
 
         Returns:
             CodeQLWorkflowResult with complete analysis results
         """
         errors = []
 
-        sage_build_cmd: Optional[str] = None
-        sage_build_langs: Optional[str] = None
+        sage_build_cmd: str | None = None
+        sage_build_langs: str | None = None
         try:
             from core.sage.hooks import (
-                recall_context_for_codeql_build,
                 infer_codeql_build_from_sage_recall_row,
                 pick_strongest_recall_row,
+                recall_context_for_codeql_build,
             )
             rows = recall_context_for_codeql_build(
                 str(self.repo_path), languages)
@@ -243,7 +251,20 @@ class CodeQLAgent:
                     " (languages: %s)",
                     sage_build_cmd, sage_build_langs or "unknown",
                 )
-        except Exception:
+            elif hint.get("unverified_build_command"):
+                # Row failed MAC verification (or predates the row-MAC
+                # mechanism) — never auto-execute it. Surface it once
+                # so the operator can opt in explicitly.
+                logger.warning(
+                    "SAGE suggests build command %s (unverified) — "
+                    "pass --build-command to use it",
+                    hint["unverified_build_command"],
+                )
+        except ImportError:
+            # SAGE recall is best-effort. The hooks self-catch all
+            # transport/service failures (returning []/None/{}), so
+            # only a partial install's import can legitimately fail
+            # here; anything else is a wiring bug and must propagate.
             pass
 
         try:
@@ -326,7 +347,7 @@ class CodeQLAgent:
                 return CodeQLWorkflowResult(
                     success=False,
                     repo_path=str(self.repo_path),
-                    timestamp=datetime.now().isoformat(),
+                    timestamp=datetime.now(timezone.utc).isoformat(),
                     duration_seconds=time.time() - self.start_time,
                     languages_detected={},
                     databases_created={},
@@ -348,7 +369,41 @@ class CodeQLAgent:
             logger.info("%s", '=' * 70)
 
             language_build_map = {}
+            traced_languages = set()
             for lang in detected:
+                if traced_build or (build_commands and lang in build_commands):
+                    # Operator explicitly opted this language into a
+                    # traced build (asserts trust in the repo).
+                    traced_languages.add(lang)
+                if (
+                    lang in BUILDLESS_DEFAULT_LANGUAGES
+                    and lang not in traced_languages
+                ):
+                    # Buildless default for C/C++: never run build
+                    # detection / synthesis for an untrusted repo —
+                    # `codeql database create --build-mode=none`
+                    # extracts without executing any repo code.
+                    supported, detail = (
+                        self.database_manager.supports_buildless_cpp()
+                    )
+                    if not supported:
+                        msg = (
+                            f"{lang}: buildless extraction unavailable "
+                            f"({detail}); skipping this language — pass "
+                            "--traced-build or --build-command to run a "
+                            "traced build on a repo you trust"
+                        )
+                        logger.warning(msg)
+                        errors.append(msg)
+                        continue
+                    logger.info(
+                        "%s: buildless mode (--build-mode=none) — repo "
+                        "build scripts will not execute", lang,
+                    )
+                    language_build_map[lang] = (
+                        self.build_detector.generate_no_build_config(lang)
+                    )
+                    continue
                 if build_commands and lang in build_commands:
                     # Use custom build command
                     logger.info("%s: Using custom build command", lang)
@@ -409,6 +464,7 @@ class CodeQLAgent:
                 language_build_map,
                 force=force_db_creation,
                 audit_run_dir=self.out_dir,
+                traced_languages=traced_languages,
             )
 
             # Clean up synthesised build artifacts. Per-path try
@@ -462,7 +518,7 @@ class CodeQLAgent:
                 return CodeQLWorkflowResult(
                     success=False,
                     repo_path=str(self.repo_path),
-                    timestamp=datetime.now().isoformat(),
+                    timestamp=datetime.now(timezone.utc).isoformat(),
                     duration_seconds=time.time() - self.start_time,
                     languages_detected=detected,
                     databases_created=db_results,
@@ -530,7 +586,7 @@ class CodeQLAgent:
             workflow_result = CodeQLWorkflowResult(
                 success=len(sarif_files) > 0,
                 repo_path=str(self.repo_path),
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 duration_seconds=time.time() - self.start_time,
                 languages_detected=detected,
                 databases_created=db_results,
@@ -546,11 +602,12 @@ class CodeQLAgent:
             return workflow_result
 
         except Exception as e:
-            logger.error("Workflow failed with exception: %s", e, exc_info=True)
+            # RaptorLogger has no .exception method
+            logger.error("Workflow failed with exception: %s", e, exc_info=True)  # noqa: G201
             return CodeQLWorkflowResult(
                 success=False,
                 repo_path=str(self.repo_path),
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 duration_seconds=time.time() - self.start_time,
                 languages_detected={},
                 databases_created={},
@@ -585,7 +642,7 @@ class CodeQLAgent:
             save_json(report_path, result.to_dict())
             logger.info("✓ Report saved: %s", report_path)
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — fall through to minimal report
             logger.error("Failed to save full report: %s", e)
         # Fallback: minimal report with stats we know are JSON-safe.
         try:
@@ -600,7 +657,7 @@ class CodeQLAgent:
             }
             save_json(report_path, minimal)
             logger.info("✓ Minimal-fallback report saved: %s", report_path)
-        except Exception as e2:
+        except Exception as e2:  # noqa: BLE001 — report is best-effort
             logger.error("Minimal report also failed: %s", e2)
 
     def print_summary(self, result: CodeQLWorkflowResult):
@@ -670,7 +727,7 @@ class CodeQLAgent:
         print(f"{'=' * 70}\n")
 
     def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5,
-                                    *, sarif_data: Optional[Dict] = None) -> list:
+                                    *, sarif_data: dict | None = None) -> list:
         """Extract example dataflow paths from SARIF for visualization.
 
         Pre-fix this always called `load_sarif(sarif_path)`. The
@@ -704,7 +761,7 @@ class CodeQLAgent:
 
                     # Extract path information
                     rule_id = result.get("ruleId", "unknown")
-                    message = result.get("message", {}).get("text", "")
+                    message = (result.get("message") or {}).get("text", "")
 
                     # Get the dataflow path
                     flow = code_flows[0]
@@ -750,7 +807,7 @@ class CodeQLAgent:
                         "steps": len(locations)
                     })
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — display-only helper
             logger.debug("Failed to extract dataflow examples: %s", e)
 
         return examples
@@ -784,7 +841,7 @@ class CodeQLAgent:
             print("\n  Example Dataflow Paths:")
             for i, example in enumerate(dataflow_examples, 1):
                 print(f"    {i}. {example['rule']}: {example['source']} → {example['sink']} ({example['steps']} steps)")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — display-only helper
             logger.debug("Failed to print dataflow table: %s", e)
 
 
@@ -816,6 +873,19 @@ Examples:
     parser.add_argument("--repo", required=True, help="Repository path to analyze")
     parser.add_argument("--languages", help="Comma-separated languages (auto-detected if not specified)")
     parser.add_argument("--build-command", help="Custom build command")
+    parser.add_argument(
+        "--traced-build", action="store_true",
+        help="Opt into traced-build C/C++ extraction (executes the repo's "
+             "build system — asserts trust in the repo). Default is "
+             "buildless (--build-mode=none): no repo code runs during "
+             "database creation.",
+    )
+    parser.add_argument(
+        "--no-traced-build", action="store_true",
+        help="Force buildless extraction for this run, overriding "
+             "--traced-build. Escape hatch for wrappers that forward "
+             "--traced-build from persisted project trust.",
+    )
     parser.add_argument("--force", action="store_true", help="Force database recreation (ignore cache)")
     parser.add_argument("--extended", action="store_true", help="Use extended security suites")
     parser.add_argument("--out", help="Output directory (auto-generated if not specified)")
@@ -837,6 +907,12 @@ Examples:
 
     args = parser.parse_args()
     apply_cli_args(args, parser=parser)
+
+    # Explicit negative beats positive (per-run escape hatch; no
+    # project-marker consumption here — the /agentic and /codeql
+    # entry points resolve markers before forwarding --traced-build).
+    if getattr(args, "no_traced_build", False):
+        args.traced_build = False
 
     # Flip the IRIS Tier 1 master switch for this invocation. The
     # config is process-scoped so /codeql subprocesses don't bleed
@@ -905,6 +981,7 @@ Examples:
             force_db_creation=args.force,
             use_extended=args.extended,
             min_files=args.min_files,
+            traced_build=args.traced_build,
         )
 
         # Print summary
@@ -943,7 +1020,8 @@ Examples:
               file=sys.stderr)
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
-        logger.error("Fatal error: %s", e, exc_info=True)
+        # RaptorLogger has no .exception method
+        logger.error("Fatal error: %s", e, exc_info=True)  # noqa: G201
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 

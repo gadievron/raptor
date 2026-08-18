@@ -20,6 +20,11 @@ import pytest
 
 from core.ast import view
 from core.ast.model import SCHEMA_VERSION
+from core.ast.view import (
+    _ts_grammar_module,
+    _walk_returns_python,
+    _walk_returns_ts,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -260,6 +265,96 @@ class TestEdgeCases:
         # The disambiguation worked iff the view covers a range
         # that includes line 5.
         assert fv.lines[0] <= 5 <= fv.lines[1]
+
+
+# ---------------------------------------------------------------------------
+# Hostile-input robustness
+# ---------------------------------------------------------------------------
+
+
+# Deep enough to overflow the default recursion limit many times over
+# with a recursive walk.
+_DEPTH = 50_000
+
+_TS_C_MODULE = _ts_grammar_module("c")
+
+
+def _deep_c_source() -> str:
+    return (
+        "int f(void) {\n"
+        "  return " + "(" * _DEPTH + "1" + ")" * _DEPTH + ";\n"
+        "}\n"
+    )
+
+
+class TestTreeSitterWalkDepth:
+    """Deeply-nested attacker-shaped source must not crash the view:
+    the iterative return walk survives arbitrarily deep parse trees,
+    where a recursive walk hits Python's recursion limit and lets
+    RecursionError escape ``view``."""
+
+    pytestmark = pytest.mark.skipif(
+        not _HAS_TS_C, reason="tree_sitter_c grammar not installed",
+    )
+
+    def test_deeply_nested_parens_no_recursion_error(self):
+        returns = _walk_returns_ts(_deep_c_source(), _TS_C_MODULE, 1, 3)
+        assert len(returns) == 1
+        assert returns[0].line == 2
+
+    def test_view_end_to_end_on_deep_c_file(self, tmp_path: Path):
+        p = tmp_path / "deep.c"
+        p.write_text(_deep_c_source(), encoding="utf-8")
+        fv = view(p, "f")
+        assert fv is not None
+        assert fv.returns and fv.returns[0].line == 2
+
+    def test_walk_output_order_preserved(self):
+        # The explicit-stack walk must keep the recursive walk's
+        # pre-order (source-order) output, including returns nested
+        # inside other constructs.
+        src = (
+            "int f(int x) {\n"
+            "  if (x) {\n"
+            "    return 1;\n"
+            "  }\n"
+            "  return 0;\n"
+            "}\n"
+        )
+        returns = _walk_returns_ts(src, _TS_C_MODULE, 1, 6)
+        assert [r.line for r in returns] == [3, 5]
+        assert [r.value_text for r in returns] == ["1", "0"]
+
+
+class TestPythonParseFailures:
+    """The Python branch must not let ``ast.parse`` limit signals on
+    hostile source (RecursionError / MemoryError / ValueError) escape;
+    a SyntaxError-only catch is not enough. All degrade to best-effort
+    empty output instead of an unhandled crash."""
+
+    def test_deep_unary_chain_returns_empty(self):
+        # ast.parse raises MemoryError or RecursionError (version
+        # dependent) on this input; both must degrade to ().
+        src = "def f():\n    return " + "-" * 100_000 + "1\n"
+        assert _walk_returns_python(src, 1, 2) == ()
+
+    def test_deep_nested_parens_returns_empty_or_parses(self):
+        src = "def f():\n    return " + "(" * 100_000 + "1" + ")" * 100_000 + "\n"
+        # Interpreter-dependent: either the parser handles it (fine)
+        # or it signals a limit — which must not propagate.
+        result = _walk_returns_python(src, 1, 2)
+        assert isinstance(result, tuple)
+
+    def test_null_byte_source_returns_empty(self):
+        # ValueError pre-3.12, SyntaxError after; both handled.
+        src = "def f():\n    return 1\x00\n"
+        assert _walk_returns_python(src, 1, 2) == ()
+
+    def test_normal_source_still_extracted(self):
+        src = "def f(x):\n    if x:\n        return 1\n    return 0\n"
+        returns = _walk_returns_python(src, 1, 4)
+        assert [r.line for r in returns] == [3, 4]
+        assert [r.value_text for r in returns] == ["1", "0"]
 
 
 # ---------------------------------------------------------------------------

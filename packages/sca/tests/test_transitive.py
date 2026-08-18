@@ -688,3 +688,88 @@ def test_collapse_cargo_workspaces_keeps_standalone(tmp_path):
     m = _manifest("Cargo", proj / "Cargo.toml")
     result = _collapse_cargo_workspaces({("Cargo", proj): [m]}, {})
     assert ("Cargo", proj) in result
+
+
+def test_include_only_manifest_still_dispatches_cascade(tmp_path, monkeypatch):
+    """A top-level requirements.txt containing only `-r reqs/base.txt`
+    carries deps whose declared_in is the INCLUDED file — the zero-
+    direct-deps filter must not drop it from cascade dispatch."""
+    proj = tmp_path / "proj"
+    (proj / "reqs").mkdir(parents=True)
+    top = proj / "requirements.txt"
+    base = proj / "reqs" / "base.txt"
+    top.write_text("-r reqs/base.txt\n", encoding="utf-8")
+    base.write_text("a==1.0\n", encoding="utf-8")
+
+    # find_manifests discovers only the conventional top-level name;
+    # the included file surfaces through the parser's include walk,
+    # so its deps carry declared_in=base.
+    manifests = [_manifest("PyPI", top)]
+    direct = [_direct("PyPI", "a", "1.0", base)]
+
+    fake_resolver = MagicMock()
+    fake_resolver.is_available.return_value = True
+    fake_resolver.dry_run.return_value = ResolverResult(
+        ecosystem="PyPI", success=True, available=True,
+        proposed_lockfile=b"a==1.0\nb==2.0\n",
+    )
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver",
+        lambda eco, project_dir=None: fake_resolver,
+    )
+
+    deps, statuses = expand_missing_transitives(manifests, direct)
+
+    assert [d.name for d in deps] == ["b"]
+    assert statuses and statuses[0].method == "cascade_resolver"
+
+
+def test_nested_include_chain_dispatches_cascade(tmp_path, monkeypatch):
+    """-r chains nest: top -> mid -> base. The fixpoint walk must reach
+    the top-level manifest through the intermediate include file."""
+    proj = tmp_path / "proj"
+    (proj / "reqs").mkdir(parents=True)
+    top = proj / "requirements.txt"
+    mid = proj / "reqs" / "mid.txt"
+    base = proj / "reqs" / "base.txt"
+    top.write_text("-r reqs/mid.txt\n", encoding="utf-8")
+    mid.write_text("-r base.txt\n", encoding="utf-8")
+    base.write_text("a==1.0\n", encoding="utf-8")
+
+    manifests = [_manifest("PyPI", top), _manifest("PyPI", mid)]
+    direct = [_direct("PyPI", "a", "1.0", base)]
+
+    fake_resolver = MagicMock()
+    fake_resolver.is_available.return_value = True
+    fake_resolver.dry_run.return_value = ResolverResult(
+        ecosystem="PyPI", success=True, available=True,
+        proposed_lockfile=b"a==1.0\nb==2.0\n",
+    )
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver",
+        lambda eco, project_dir=None: fake_resolver,
+    )
+
+    deps, statuses = expand_missing_transitives(manifests, direct)
+
+    # Two dispatch groups (proj/ and proj/reqs/) each resolve — the
+    # point is that NEITHER include-only manifest was filtered out.
+    assert {d.name for d in deps} == {"b"}
+    assert len(statuses) == 2
+    assert all(s.method == "cascade_resolver" for s in statuses)
+
+
+def test_zero_dep_yaml_manifest_still_filtered(tmp_path):
+    """The include augmentation must not resurrect the noise the filter
+    exists for: a speculatively-routed YAML with zero parsed deps stays
+    out of cascade dispatch."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    rules = proj / "rules.yaml"
+    rules.write_text("just: config\n", encoding="utf-8")
+
+    manifests = [_manifest("Kubernetes", rules)]
+    deps, statuses = expand_missing_transitives(manifests, [])
+
+    assert deps == []
+    assert statuses == []

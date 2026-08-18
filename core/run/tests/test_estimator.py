@@ -109,6 +109,29 @@ class TestEstimateFromScorecard:
         )
         assert est is None
 
+    def test_default_path_resolves_via_raptor_dir(self, tmp_path, monkeypatch):
+        """Without an explicit ``scorecard_path`` the estimator must read
+        the shared ``$RAPTOR_DIR/out/llm_scorecard.json`` sidecar — the
+        production call shape of /describe and the analysis orchestrator,
+        which pass no path at all."""
+        out = tmp_path / "out"
+        out.mkdir()
+        self._write_scorecard(
+            out / "llm_scorecard.json", "test-model", 100, 10.0, 500000,
+        )
+        monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
+        monkeypatch.chdir(tmp_path / "out")  # cwd-independence
+        est = estimate_from_scorecard("test-model", 20, max_parallel=1)
+        assert est is not None
+        assert est.cost_low > 0
+
+    def test_default_path_missing_scorecard_returns_none(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
+        est = estimate_from_scorecard("test-model", 20)
+        assert est is None
+
 
 class TestFormatEstimate:
     """Renderer: None → empty string; populated → operator-facing

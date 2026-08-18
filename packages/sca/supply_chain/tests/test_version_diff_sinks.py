@@ -5,6 +5,7 @@ import pytest
 from packages.sca.supply_chain.version_diff_sinks import (
     SinkChange,
     VersionDiffSinkResult,
+    _detect_guard_changes,
     analyze_version_diff_sinks,
 )
 
@@ -238,3 +239,114 @@ class TestAnalyzeVersionDiffSinks:
         assert "1 unconditional" in summary
         assert "1 sink(s) removed" in summary
         assert "1 guard(s) added" in summary
+
+
+# ---------------------------------------------------------------------------
+# _detect_guard_changes classification
+# ---------------------------------------------------------------------------
+
+
+class _StubGuard:
+    def __init__(self, category="value"):
+        self.category = category
+
+
+class _StubSinkGuard:
+    """Duck-typed stand-in for core.audit's SinkGuard."""
+
+    def __init__(self, line=1, n_guards=0, categories=()):
+        self.sink_line = line
+        self.guards = [
+            _StubGuard(categories[i] if i < len(categories) else "value")
+            for i in range(n_guards)
+        ]
+        self.unconditional = n_guards == 0
+
+    @property
+    def guard_count(self):
+        return len(self.guards)
+
+
+class TestDetectGuardChanges:
+    def _run(self, old_guards, new_guards):
+        out: list[SinkChange] = []
+        _detect_guard_changes(
+            "lib/util.py", "eval", old_guards, new_guards, out,
+        )
+        return out
+
+    def test_sole_guard_removed(self):
+        out = self._run(
+            [_StubSinkGuard(n_guards=1)],
+            [_StubSinkGuard(n_guards=0)],
+        )
+        assert len(out) == 1
+        assert out[0].change_type == "guard_removed"
+        assert out[0].was_unconditional is False
+        assert out[0].is_unconditional is True
+
+    def test_sole_guard_removed_masked_by_new_guarded_site(self):
+        # Existing site loses its only guard while a new guarded call
+        # site raises the aggregate guard total — the conditional →
+        # unconditional transition must outrank the raw totals.
+        out = self._run(
+            [_StubSinkGuard(line=3, n_guards=1)],
+            [
+                _StubSinkGuard(line=3, n_guards=0),
+                _StubSinkGuard(line=9, n_guards=2),
+            ],
+        )
+        assert len(out) == 1
+        assert out[0].change_type == "guard_removed"
+        assert out[0].is_unconditional is True
+
+    def test_guard_added_to_unconditional_sink(self):
+        out = self._run(
+            [_StubSinkGuard(n_guards=0)],
+            [_StubSinkGuard(n_guards=1, categories=("auth",))],
+        )
+        assert len(out) == 1
+        assert out[0].change_type == "guard_added"
+        assert out[0].was_unconditional is True
+        assert out[0].is_unconditional is False
+        assert out[0].guard_categories == ["auth"]
+
+    def test_guard_added_despite_total_drop(self):
+        # The unconditional site gains its first guard while another
+        # site sheds guards: totals drop, but no site is left
+        # unconditional.
+        out = self._run(
+            [
+                _StubSinkGuard(line=3, n_guards=0),
+                _StubSinkGuard(line=9, n_guards=3),
+            ],
+            [
+                _StubSinkGuard(line=3, n_guards=1),
+                _StubSinkGuard(line=9, n_guards=1),
+            ],
+        )
+        assert len(out) == 1
+        assert out[0].change_type == "guard_added"
+
+    def test_guard_weakened_counts_as_removed(self):
+        out = self._run(
+            [_StubSinkGuard(n_guards=2)],
+            [_StubSinkGuard(n_guards=1)],
+        )
+        assert len(out) == 1
+        assert out[0].change_type == "guard_removed"
+
+    def test_guard_strengthened_counts_as_added(self):
+        out = self._run(
+            [_StubSinkGuard(n_guards=1)],
+            [_StubSinkGuard(n_guards=2)],
+        )
+        assert len(out) == 1
+        assert out[0].change_type == "guard_added"
+
+    def test_no_change_emits_nothing(self):
+        out = self._run(
+            [_StubSinkGuard(n_guards=1)],
+            [_StubSinkGuard(n_guards=1)],
+        )
+        assert out == []

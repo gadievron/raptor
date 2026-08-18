@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from packages.frida import available, parse_events
 
-
 # ── available() ────────────────────────────────────────────────────────
 
 class TestAvailable:
@@ -152,6 +151,20 @@ def test_bb_coverage_template_exists():
     assert "Stalker" in text
 
 
+def test_bb_coverage_template_sanitises_module_paths():
+    """Module paths come from the instrumented process; a path with a
+    \\n would forge module-table rows. The header concat must route
+    m.path through the sanitiser, never embed it raw."""
+    tpl = Path(__file__).resolve().parents[1] / "templates" / "bb-coverage.js"
+    text = tpl.read_text()
+    assert "function sanitizePath" in text
+    assert "sanitizePath(m.path)" in text
+    # No line of the header build may concatenate m.path directly.
+    for line in text.splitlines():
+        if "header +=" in line and "m.path" in line:
+            assert "sanitizePath(m.path)" in line, f"raw m.path concat: {line!r}"
+
+
 # ── drcov write path in runner ─────────────────────────────────────────
 
 def test_drcov_payload_written_to_file(tmp_path: Path):
@@ -159,7 +172,9 @@ def test_drcov_payload_written_to_file(tmp_path: Path):
     by firing a _drcov message through a FakeScript during run()."""
     from packages.frida import runner
     from packages.frida.tests.test_runner import (
-        FakeDevice, FakeScript, _fake_frida,
+        FakeDevice,
+        FakeScript,
+        _fake_frida,
     )
 
     drcov_bytes = b"DRCOV VERSION: 2\ntest blob\n"
@@ -253,8 +268,10 @@ class TestSandboxedMain:
 
     def test_python_runtime_prefixes_are_allowlisted(self, tmp_path):
         """Framework/venv Python roots must be readable for inner re-exec."""
-        from unittest.mock import MagicMock, patch as mock_patch
-        import packages.frida.sandboxed as sandboxed
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
+
+        from packages.frida import sandboxed
 
         framework_prefix = tmp_path / "Python.framework" / "Versions" / "3.14"
         base_prefix = tmp_path / "base-python"
@@ -291,8 +308,10 @@ class TestSandboxedMain:
 
     def test_spawn_mode_passes_block_network(self):
         """--spawn → sandbox_run called with block_network=True."""
-        from unittest.mock import MagicMock, patch as mock_patch
-        import packages.frida.sandboxed as sandboxed
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
+
+        from packages.frida import sandboxed
 
         fake_result = MagicMock()
         fake_result.returncode = 0
@@ -317,8 +336,10 @@ class TestSandboxedMain:
 
     def test_attach_mode_allows_network(self):
         """No --spawn → sandbox_run called with block_network=False."""
-        from unittest.mock import MagicMock, patch as mock_patch
-        import packages.frida.sandboxed as sandboxed
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
+
+        from packages.frida import sandboxed
 
         fake_result = MagicMock()
         fake_result.returncode = 0
@@ -340,8 +361,9 @@ class TestSandboxedMain:
 
     def test_missing_separator_returns_usage_error(self):
         """No -- separator → exit 2."""
-        import packages.frida.sandboxed as sandboxed
         from unittest.mock import patch as mock_patch
+
+        from packages.frida import sandboxed
 
         with mock_patch.object(sandboxed, "sys") as mock_sys:
             mock_sys.argv = ["sandboxed", "--out", "/tmp/run"]
@@ -353,7 +375,8 @@ class TestSandboxedMain:
         """When core.sandbox is not importable, hard-fail (never run unsandboxed)."""
         import io
         from unittest.mock import patch as mock_patch
-        import packages.frida.sandboxed as sandboxed
+
+        from packages.frida import sandboxed
 
         stderr_capture = io.StringIO()
 
@@ -407,7 +430,7 @@ class TestLibexecSandboxFlags:
         )
         r = subprocess.run(
             ["bash", "-c", script],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         )
         vals = {}
         for token in r.stdout.strip().split():

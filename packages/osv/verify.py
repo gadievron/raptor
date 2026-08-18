@@ -169,6 +169,7 @@ def verify(
     for s, sha in ref_pairs:
         if (
             s != pslug
+            and len(psha) >= 7 and len(sha) >= 7
             and sha.startswith(psha[:12]) and psha.startswith(sha[:12])
         ):
             return OracleVerdict(

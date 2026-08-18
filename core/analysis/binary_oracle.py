@@ -33,14 +33,16 @@ classifier is the consumer-facing contract, not the parsing details.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
-import time
+import tempfile
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
-    Dict, Iterable, Iterator, List, Literal, Optional, Set, Tuple,
+    Literal,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,8 +78,8 @@ class BinaryOracleWitness:
     classification: Classification
     build_id: str
     binary_path: str
-    address: Optional[int] = None
-    edges_added: List[Tuple[str, str]] = field(default_factory=list)
+    address: int | None = None
+    edges_added: list[tuple[str, str]] = field(default_factory=list)
     tier: str = "full"
 
 
@@ -86,23 +88,33 @@ class BinaryOracleWitness:
 # gets added as a dep).
 # ---------------------------------------------------------------------------
 
-def _run(argv: List[str], timeout: int = 60) -> str:
+def _run(argv: list[str], timeout: int = 60,
+         binary: Path | str | None = None) -> str:
     """Capture stdout from a system tool; return ``''`` on any failure
     rather than raise — the classifier is best-effort and surface-only.
 
-    Uses ``core.sandbox.run_trusted`` (matches the existing pattern for
-    ELF/binutils tools in ``exploit_feasibility``/``binary_analysis``):
-    applies ``RaptorConfig.get_safe_env()`` + resource rlimits to keep
-    the tool's ambient state hostile-input-resistant. Read-only tools
-    (readelf, nm, objdump, c++filt) are RAPTOR-picked even when the
-    binary path is operator-supplied.
+    Runs under the FULL sandbox (network blocked, Landlock, seccomp,
+    rlimits), not ``run_trusted``: the tool binaries (readelf, nm,
+    objdump, c++filt) are RAPTOR-picked, but the BYTES they parse come
+    from the target's build tree — or, for explicit ``--binary``, an
+    operator-supplied path of unverified provenance — and binutils'
+    ELF/DWARF parsers have a long CVE history. A malformed ELF planted
+    in ``build/`` must not get its exploit payload parsed by a process
+    with the user's full filesystem and network (byte-for-byte output
+    parity with the unsandboxed run was verified 2026-08-15; r2 already
+    gets the same treatment in ``binary_oracle_edges``).
+
+    ``binary`` scopes the read side: its parent directory becomes the
+    sandbox ``target`` so the tool can read the file under mount-ns.
     """
     # Lazy import — keep the classifier independently importable in
     # unit tests that stub the sandbox module.
-    from core.sandbox import run_trusted
+    from core.sandbox import run as _sandbox_run
+    target = str(Path(binary).resolve().parent) if binary else None
     try:
-        proc = run_trusted(argv, capture_output=True, text=True,
-                           check=False, timeout=timeout)
+        proc = _sandbox_run(argv, block_network=True, target=target,
+                            capture_output=True, text=True,
+                            timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle: %s failed: %s", argv[0], e)
         return ""
@@ -112,60 +124,57 @@ def _run(argv: List[str], timeout: int = 60) -> str:
     return proc.stdout or ""
 
 
-def _stream(argv: List[str], timeout: int) -> Iterator[str]:
+def _stream(argv: list[str], timeout: int,
+            binary: Path | str | None = None) -> Iterator[str]:
     """Stream stdout line-by-line from a system tool. Used when the
     output may be large (e.g. ``objdump --dwarf=info`` on a multi-MB
     binary produces 1-3 GB of text); ``_run`` would buffer it all into
     memory and OOM. Yields each line stripped of its trailing newline.
 
-    Manual ``get_safe_env`` application — ``run_trusted`` is one-shot
-    (capture_output=True) and would defeat the memory-bounded streaming
-    we need here. Same env hygiene as ``_run`` (no namespace/Landlock —
-    that's the ``run_trusted`` protection level: env + rlimits only).
+    Same sandbox posture as ``_run`` (the parsed bytes are untrusted).
+    The sandbox runners capture output rather than stream it, so the
+    tool runs to completion with stdout redirected to a file inside a
+    throwaway sandbox-writable directory, and the file is then streamed
+    from the parent. Trade-off vs the old unsandboxed Popen: the full
+    output transits $TMPDIR once (bounded by the sandbox's
+    ``max_file_mb`` rlimit); hosts with a small tmpfs /tmp can point
+    TMPDIR elsewhere. The redirect happens inside bash via "$@"/env so
+    attacker-influenced paths never enter a shell string.
 
     On any failure (tool missing, non-zero rc with no output, timeout)
     yields nothing — same swallow-and-degrade contract as ``_run``.
     """
     from core.config import RaptorConfig
-    from core.sandbox.preexec import set_pdeathsig
-    deadline = time.monotonic() + timeout
-    try:
-        proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1, env=RaptorConfig.get_safe_env(),
-            preexec_fn=set_pdeathsig(),
-        )
-    except OSError as e:
-        logger.debug("binary_oracle: %s failed to start: %s", argv[0], e)
-        return
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            if time.monotonic() > deadline:
-                logger.warning(
-                    "binary_oracle: %s exceeded %ss timeout; killing",
-                    argv[0], timeout,
-                )
-                proc.kill()
-                break
-            yield line.rstrip("\n")
-    finally:
-        # Explicit stdout close: the generator may be abandoned mid-
-        # iteration (caller breaks early, raises, or gets GC'd),
-        # which leaves proc.stdout open until Popen.__del__ finalises
-        # it — firing a ResourceWarning under ``-W default``. Closing
-        # here ties the fd lifetime to the generator's finally scope.
-        if proc.stdout is not None:
-            proc.stdout.close()
+    from core.sandbox import run as _sandbox_run
+    target = str(Path(binary).resolve().parent) if binary else None
+    with tempfile.TemporaryDirectory(prefix="raptor-bo-stream-") as td:
+        out_path = os.path.join(td, "stdout.txt")
+        env = RaptorConfig.get_safe_env()
+        env["RAPTOR_BO_OUT"] = out_path
+        wrapper = ["bash", "-c", 'exec "$@" > "$RAPTOR_BO_OUT"',
+                   "bo-stream"] + list(argv)
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            proc = _sandbox_run(wrapper, block_network=True, target=target,
+                                output=td, env=env, strict_env=True,
+                                capture_output=True, text=True,
+                                timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.warning("binary_oracle: %s failed/timed out: %s",
+                           argv[0], e)
+            return
+        if proc.returncode != 0:
+            logger.debug("binary_oracle: %s rc=%s stderr=%s",
+                         argv[0], proc.returncode, (proc.stderr or "")[:200])
+        if not os.path.exists(out_path):
+            return
+        with open(out_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                yield line.rstrip("\n")
 
 
-def read_build_id(binary_path: Path) -> Optional[str]:
+def read_build_id(binary_path: Path) -> str | None:
     """Return the ELF ``.note.gnu.build-id`` (40-hex SHA1), or ``None``."""
-    out = _run(["readelf", "-n", str(binary_path)])
+    out = _run(["readelf", "-n", str(binary_path)], binary=binary_path)
     m = re.search(r"Build ID:\s*([0-9a-fA-F]+)", out)
     return m.group(1).lower() if m else None
 
@@ -206,7 +215,22 @@ def _strip_ipa_suffix(name: str) -> str:
         name = stripped
 
 
-def _nm_symbols(binary_path: Path) -> Dict[str, int]:
+def _strip_params(full: str) -> str:
+    """Strip parameter list from a demangled C++ symbol, preserving
+    ``operator()`` and similar operators whose names contain parens."""
+    if "(" not in full:
+        return full
+    # operator() — the parens are part of the name, not the param list
+    op_marker = "operator()"
+    oi = full.find(op_marker)
+    if oi != -1:
+        after = full[oi + len(op_marker):]
+        prefix = full[: oi + len(op_marker)]
+        return prefix + (after.split("(", 1)[0] if "(" in after else after)
+    return full.split("(", 1)[0]
+
+
+def _nm_symbols(binary_path: Path) -> dict[str, int]:
     """Name → address for every text symbol (local + global) defined in the
     binary. Missing tools / non-ELF input return ``{}``.
 
@@ -218,10 +242,10 @@ def _nm_symbols(binary_path: Path) -> Dict[str, int]:
     scenario B). Also indexes by *bare* name so source ``live_method``
     matches demangled ``Widget::live_method() const``, and so source
     ``gz_skip`` matches the GCC-cloned ``gz_skip.constprop.0``."""
-    out = _run(["nm", "-C", str(binary_path)])
+    out = _run(["nm", "-C", str(binary_path)], binary=binary_path)
     if not out:
-        out = _run(["nm", str(binary_path)])   # fall back if -C unavailable
-    syms: Dict[str, int] = {}
+        out = _run(["nm", str(binary_path)], binary=binary_path)   # fall back if -C unavailable
+    syms: dict[str, int] = {}
     for line in out.splitlines():
         # ``<addr> <type> <demangled name (may contain spaces)>``
         # — split into at most 3 parts so a demangled name with spaces
@@ -241,7 +265,7 @@ def _nm_symbols(binary_path: Path) -> Dict[str, int]:
             #   bare       "Uncompress"           ← legacy bare-name lookup
             # Without ``qualified``, C++ measurement against ``gcov -m``
             # demangled output couldn't match nm — surfaced in snappy Inc 3c.
-            qualified = full.split("(", 1)[0] if "(" in full else full
+            qualified = _strip_params(full)
             qualified = _strip_ipa_suffix(qualified)
             if qualified and qualified != full:
                 syms.setdefault(qualified, addr)
@@ -256,10 +280,10 @@ def _nm_symbols(binary_path: Path) -> Dict[str, int]:
 class _SubprogramDIE:
     name: str = ""                            # DW_AT_name (local)
     namespace_path: str = ""                  # "snappy::Bits" from enclosing scope
-    low_pc: Optional[int] = None
+    low_pc: int | None = None
     has_inline_marker: bool = False           # DW_AT_inline=inlined
-    abstract_origin: Optional[int] = None     # DIE offset (for inline instances)
-    specification: Optional[int] = None       # DIE offset (definition → declaration)
+    abstract_origin: int | None = None     # DIE offset (for inline instances)
+    specification: int | None = None       # DIE offset (definition → declaration)
     linkage_name: str = ""                    # DW_AT_linkage_name (mangled symbol)
 
     @property
@@ -451,7 +475,7 @@ def _qualified_from_demangled(name: str) -> str:
     return head[last_space_at_top + 1:]
 
 
-def _demangle_linkage_names(linkage_names: Iterable[str]) -> Dict[str, str]:
+def _demangle_linkage_names(linkage_names: Iterable[str]) -> dict[str, str]:
     """Batch-demangle DWARF ``DW_AT_linkage_name`` values via ``c++filt``.
     Returns mangled → demangled. Empty dict if c++filt is missing or
     if ``linkage_names`` is empty.
@@ -465,11 +489,15 @@ def _demangle_linkage_names(linkage_names: Iterable[str]) -> Dict[str, str]:
     seen = sorted({n for n in linkage_names if n})
     if not seen or not shutil.which("c++filt"):
         return {}
-    from core.sandbox import run_trusted
+    # Full sandbox, same rationale as _run: the mangled names being
+    # demangled are attacker-derived strings from the binary's DWARF.
+    # input= routes through the subprocess+preexec sandbox path.
+    from core.sandbox import run as _sandbox_run
     try:
-        proc = run_trusted(
-            ["c++filt"], input="\n".join(seen),
-            capture_output=True, text=True, check=False, timeout=30,
+        proc = _sandbox_run(
+            ["c++filt"], block_network=True,
+            input="\n".join(seen),
+            capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return {}
@@ -489,7 +517,7 @@ _SCOPE_TAGS = frozenset({
 })
 
 
-def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int]]:
+def _parse_dwarf(binary_path: Path) -> tuple[dict[int, _SubprogramDIE], list[int]]:
     """Parse ``objdump --dwarf=info`` into:
 
       * ``subs``: DIE-offset → ``_SubprogramDIE`` for every DW_TAG_subprogram.
@@ -507,8 +535,8 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
     # Stream line-by-line via ``_stream`` so peak memory stays bounded
     # to ``subs`` + ``inlines`` (a few MB at most). Default 600s timeout
     # is generous for the largest binaries we expect to see in /agentic.
-    subs: Dict[int, _SubprogramDIE] = {}
-    inlines: List[int] = []
+    subs: dict[int, _SubprogramDIE] = {}
+    inlines: list[int] = []
 
     # DIE header: ``<depth><offset>: Abbrev Number: NN (DW_TAG_...)``
     die_re = re.compile(
@@ -538,8 +566,8 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
     # DW_AT_low_pc is an address.
     addr_re = re.compile(r"0x([0-9a-fA-F]+)")
 
-    cur_offset: Optional[int] = None
-    cur_die: Optional[_SubprogramDIE] = None
+    cur_offset: int | None = None
+    cur_die: _SubprogramDIE | None = None
     cur_is_inline_instance = False
     # Namespace-tracking state for C++ qualified-name resolution
     # (Inc 3c on snappy). ``depth_to_name`` maps DIE-depth → enclosing
@@ -548,8 +576,8 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
     # build ``snappy::Bits`` style prefixes. We separately track the
     # pending scope DIE so we can defer assigning its name until
     # DW_AT_name is parsed (the header arrives before the attributes).
-    depth_to_name: Dict[int, str] = {}
-    cur_scope_depth: Optional[int] = None
+    depth_to_name: dict[int, str] = {}
+    cur_scope_depth: int | None = None
     cur_scope_name: str = ""
 
     def _commit_scope():
@@ -565,12 +593,12 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
     def _flush():
         nonlocal cur_die, cur_offset, cur_is_inline_instance
         _commit_scope()
-        if cur_die is not None and cur_offset is not None:
-            # Store even nameless DIEs — they may carry a DW_AT_specification
-            # we resolve to a name in the post-pass. Drop only if BOTH the
-            # name and specification are absent (nothing recoverable).
-            if cur_die.name or cur_die.specification is not None:
-                subs[cur_offset] = cur_die
+        # Store even nameless DIEs — they may carry a DW_AT_specification
+        # we resolve to a name in the post-pass. Drop only if BOTH the
+        # name and specification are absent (nothing recoverable).
+        if (cur_die is not None and cur_offset is not None
+                and (cur_die.name or cur_die.specification is not None)):
+            subs[cur_offset] = cur_die
         cur_die = None
         cur_offset = None
         cur_is_inline_instance = False
@@ -584,7 +612,8 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
         return "::".join(parts)
 
     for line in _stream(
-            ["objdump", "--dwarf=info", str(binary_path)], timeout=600):
+            ["objdump", "--dwarf=info", str(binary_path)], timeout=600,
+            binary=binary_path):
         m = die_re.match(line)
         if m:
             _flush()
@@ -697,16 +726,16 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
 # Symbol-only tier (stripped-binary fallback)
 # ---------------------------------------------------------------------------
 
-def _dynamic_nm_symbols(binary_path: Path) -> Dict[str, int]:
+def _dynamic_nm_symbols(binary_path: Path) -> dict[str, int]:
     """``nm -D`` — dynamic symbol table. Fully-stripped binaries have
     NO plain-nm symbols (the ``.symtab`` section is removed), but
     ``.dynsym`` survives (the dynamic linker needs it). For a shared
     library, this exposes the entire public API. Same demangle +
     bare-name + qualified-no-args indexing as ``_nm_symbols``."""
-    out = _run(["nm", "-D", "-C", str(binary_path)])
+    out = _run(["nm", "-D", "-C", str(binary_path)], binary=binary_path)
     if not out:
-        out = _run(["nm", "-D", str(binary_path)])
-    syms: Dict[str, int] = {}
+        out = _run(["nm", "-D", str(binary_path)], binary=binary_path)
+    syms: dict[str, int] = {}
     for line in out.splitlines():
         parts = line.split(None, 2)
         if len(parts) >= 3 and len(parts[1]) == 1 and parts[1] in "tTwW":
@@ -716,7 +745,7 @@ def _dynamic_nm_symbols(binary_path: Path) -> Dict[str, int]:
                 continue
             full = parts[2].strip()
             syms[full] = addr
-            qualified = full.split("(", 1)[0] if "(" in full else full
+            qualified = _strip_params(full)
             qualified = _strip_ipa_suffix(qualified)
             if qualified and qualified != full:
                 syms.setdefault(qualified, addr)
@@ -731,8 +760,8 @@ def _classify_symbol_only(
     source_function_names: Iterable[str],
     binary_path: Path,
     build_id: str,
-    nm_syms: Dict[str, int],
-) -> Dict[str, "BinaryOracleWitness"]:
+    nm_syms: dict[str, int],
+) -> dict[str, BinaryOracleWitness]:
     """Classify against an nm-only symbol table (no DWARF). For
     fully-stripped binaries, plain ``nm`` returns nothing — we union
     with ``nm -D`` (dynamic symbol table, survives stripping) so the
@@ -749,7 +778,7 @@ def _classify_symbol_only(
     sym_table = dict(_dynamic_nm_symbols(binary_path))
     sym_table.update(nm_syms)  # plain nm wins on collisions
     bp = str(binary_path)
-    out: Dict[str, BinaryOracleWitness] = {}
+    out: dict[str, BinaryOracleWitness] = {}
     for name in source_function_names:
         cls: Classification = (
             "symbol_present" if name in sym_table else "absent")
@@ -770,7 +799,7 @@ def _classify_symbol_only(
 def classify_binary_evidence(
     source_function_names: Iterable[str],
     binary_path: Path,
-) -> Dict[str, BinaryOracleWitness]:
+) -> dict[str, BinaryOracleWitness]:
     """Classify each ``source_function_names`` entry against ``binary_path``.
 
     Returns a name → ``BinaryOracleWitness`` mapping for every input name.
@@ -784,6 +813,12 @@ def classify_binary_evidence(
     binary_path = Path(binary_path)
     if not binary_path.is_file():
         return {}
+    # Resolve symlinks BEFORE handing the path to the sandboxed tools:
+    # the sandbox scopes its read view to the RESOLVED parent directory
+    # (see _run/_stream), so a symlink living elsewhere is not in the
+    # view and every tool silently reads nothing — the classifier then
+    # reported every function ``absent`` on mount-ns hosts.
+    binary_path = binary_path.resolve()
 
     _missing = [t for t in ("nm", "objdump", "readelf") if not shutil.which(t)]
     if _missing:
@@ -825,8 +860,8 @@ def classify_binary_evidence(
     # gives canonical spelling that matches gcov even when DWARF's
     # ``DW_AT_name`` uses a different type-spelling (e.g. ``long
     # unsigned int`` vs ``unsigned long``; Inc 3c snappy fix).
-    by_qualified: Dict[str, List[_SubprogramDIE]] = {}
-    by_bare: Dict[str, List[_SubprogramDIE]] = {}
+    by_qualified: dict[str, list[_SubprogramDIE]] = {}
+    by_bare: dict[str, list[_SubprogramDIE]] = {}
     demangled_map = _demangle_linkage_names(
         d.linkage_name for d in subs.values() if d.linkage_name)
     for die in subs.values():
@@ -855,7 +890,7 @@ def classify_binary_evidence(
     # against gcov -m / nm -C output hits — Inc 3c on snappy
     # showed every ``snappy::Bits::Log2Floor`` style call misclassifying
     # as absent without namespace qualification.
-    inlined_names: Set[str] = set()
+    inlined_names: set[str] = set()
     for off in inline_origins:
         die = subs.get(off)
         if die and die.qualified_name:
@@ -878,7 +913,7 @@ def classify_binary_evidence(
                         inlined_names.add(canonical)
 
     # Fold detection: two distinct source names mapping to the same address.
-    by_addr: Dict[int, Set[str]] = {}
+    by_addr: dict[int, set[str]] = {}
     for q, dies in by_qualified.items():
         for die in dies:
             if die.low_pc is not None:
@@ -886,7 +921,7 @@ def classify_binary_evidence(
     folded_names = {n for names in by_addr.values() if len(names) > 1
                     for n in names}
 
-    out: Dict[str, BinaryOracleWitness] = {}
+    out: dict[str, BinaryOracleWitness] = {}
     bp = str(binary_path)
     for name in source_function_names:
         # Qualified lookup is the primary path; bare-name falls back so
@@ -938,7 +973,7 @@ _NATIVE_LANGUAGES = frozenset({"c", "cpp", "c++", "rust", "go"})
 # multi-binary suppression sound for hybrid targets (--target-kind=
 # hybrid: library + application, both shipped). Picking the wrong
 # single binary stops being a footgun.
-_CLASS_PRIORITY: Dict[str, int] = {
+_CLASS_PRIORITY: dict[str, int] = {
     "symbol_present": 4,
     "folded":         3,
     "inlined":        2,
@@ -947,7 +982,7 @@ _CLASS_PRIORITY: Dict[str, int] = {
 
 
 def _combine_verdicts(
-    entries: Iterable[Tuple[str, str]],
+    entries: Iterable[tuple[str, str]],
 ) -> Classification:
     """Combine per-binary classifications into one. Each entry is a
     ``(classification, tier)`` pair where tier is ``"full"`` (DWARF +
@@ -984,9 +1019,9 @@ def _combine_verdicts(
 
 
 def enrich_inventory_with_binary_oracle(
-    inventory: Dict,
+    inventory: dict,
     binaries,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Annotate each native-language inventory item with its binary-oracle
     classification, plus a top-level summary on the inventory itself.
 
@@ -1043,7 +1078,7 @@ def enrich_inventory_with_binary_oracle(
     # Collect native function names per file. Track (file_idx, item_idx)
     # back to each name so we can write the combined verdict without re-
     # scanning.
-    targets: List[Tuple[int, int, str]] = []
+    targets: list[tuple[int, int, str]] = []
     files = inventory.get("files") or []
     for fi, f in enumerate(files):
         lang = (f.get("language") or "").lower()
@@ -1067,7 +1102,7 @@ def enrich_inventory_with_binary_oracle(
     # Classify once per binary. Each classify_binary_evidence call shells
     # to nm + objdump (~1-15s per binary depending on size); for the
     # typical 1-3 binary hybrid case the cost is bounded.
-    per_binary: List[Tuple[Path, str, Dict[str, "BinaryOracleWitness"]]] = []
+    per_binary: list[tuple[Path, str, dict[str, BinaryOracleWitness]]] = []
     for bp in binary_paths:
         verdicts = classify_binary_evidence(names, bp)
         build_id = read_build_id(bp) or ""
@@ -1116,7 +1151,7 @@ def enrich_inventory_with_binary_oracle(
     })
     project_names = [n for n in names if n not in _BOILERPLATE_NAMES]
     n_project = len(project_names)
-    kept: List[Tuple[Path, str, Dict[str, "BinaryOracleWitness"]]] = []
+    kept: list[tuple[Path, str, dict[str, BinaryOracleWitness]]] = []
     for bp, build_id, verdicts in per_binary:
         if not verdicts:
             kept.append((bp, build_id, verdicts))
@@ -1168,7 +1203,7 @@ def enrich_inventory_with_binary_oracle(
         for _, _, verdicts in per_binary
     )
     for fi, ii, name in targets:
-        per_binary_entries: List[Dict[str, object]] = []
+        per_binary_entries: list[dict[str, object]] = []
         for bp, build_id, verdicts in per_binary:
             w = verdicts.get(name)
             if w is None:
@@ -1205,7 +1240,7 @@ def enrich_inventory_with_binary_oracle(
     # audits) can see WHICH binaries fell back to symbol-only mode.
     # Determined by inspecting the first verdict from each binary (all
     # verdicts from one classify call share a tier).
-    binaries_with_tier: List[Dict[str, object]] = []
+    binaries_with_tier: list[dict[str, object]] = []
     for bp, bid, verdicts in per_binary:
         first = next(iter(verdicts.values()), None)
         # When a binary produced zero verdicts (corrupt ELF, sandbox
@@ -1252,7 +1287,7 @@ def enrich_inventory_with_binary_oracle(
     return counts
 
 
-def extract_verdicts(inventory: Dict) -> Dict[str, str]:
+def extract_verdicts(inventory: dict) -> dict[str, str]:
     """Extract a flat {function_name: verdict} dict from an enriched inventory.
 
     After ``enrich_inventory_with_binary_oracle`` has annotated items,
@@ -1263,7 +1298,7 @@ def extract_verdicts(inventory: Dict) -> Dict[str, str]:
     binary has ``tier == "full"`` (full-DWARF evidence).  Symbol-only
     tier absent verdicts are not suppression-grade and are excluded.
     """
-    verdicts: Dict[str, str] = {}
+    verdicts: dict[str, str] = {}
     for f in inventory.get("files") or []:
         for item in f.get("items") or []:
             bo = (item.get("metadata") or {}).get("binary_oracle")

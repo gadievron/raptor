@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Operator CLI for per-function annotations.
 
 Usage:
@@ -24,9 +26,15 @@ Add options:
                         staleness detection.
   --target REPO_ROOT    Where to find the source file for hash
                         computation. Defaults to current directory.
-  --meta KEY=VALUE      Extra metadata (repeatable)
-  --source VALUE        Defaults to ``human``. Set ``llm`` only for
-                        scripted, non-operator-driven adds.
+  --meta KEY=VALUE      Extra metadata (repeatable). ``tty`` and
+                        ``provenance`` are reserved (recorded
+                        automatically); ``source`` here may not
+                        conflict with an explicit ``--source``.
+  --source VALUE        ``human`` / ``llm`` / ``agent``. Default is
+                        context-sensitive: ``human`` when the
+                        invocation is interactive (any of stdin /
+                        stdout / stderr is a TTY), ``agent`` when
+                        none is.
   --overwrite MODE      ``all`` (default) or ``respect-manual``.
 
 ls options:
@@ -38,29 +46,30 @@ stale options:
   --target REPO_ROOT    Where to resolve source files for hash
                         recomputation. Defaults to current directory.
 
-All ``add`` calls default to ``metadata.source=human``, so subsequent
-LLM passes that pass ``overwrite=respect-manual`` will not clobber
-operator notes.
+Provenance: every ``add`` / ``edit`` stamps the invocation context
+into the metadata (``tty=<which fds were TTYs>``,
+``provenance=interactive-tty|non-tty``). ``source`` remains
+caller-asserted, but the stamp records the context that can
+contradict it — readers grant human-grade weight only to
+``source=human`` notes with an interactive stamp (or legacy
+pre-stamp notes). A human running fully detached (cron, all fds
+redirected) is stamped ``non-tty`` even with ``--source human``;
+remedy: re-run the add interactively, or accept hint-tier weight.
+See ``core.annotations.provenance`` for the model.
 """
 from __future__ import annotations
 
 import argparse
-import faulthandler
 import logging
 import shlex
-import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -70,21 +79,43 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
 from core.annotations import (  # noqa: E402
+    NON_TTY,
+    PROVENANCE_KEYS,
     Annotation,
     annotation_path,
     compute_function_hash,
+    detect_invocation_context,
+    is_human_grade,
     iter_all_annotations,
     read_annotation,
     read_file_annotations,
     remove_annotation,
     write_annotation,
 )
+from core.security.prompt_output_sanitise import sanitise_string  # noqa: E402
+
+
+def _line(value, max_chars: int = 200) -> str:
+    """Collapse an annotation-derived value to one sanitised line.
+
+    Annotation bodies and metadata can be LLM-authored
+    (``--source llm``), and file / function names come from the scanned
+    repo. This CLI prints them to the operator's terminal, so
+    ANSI/BIDI/control bytes and autofetch markup are defanged first.
+    """
+    text = " ".join(str(value if value is not None else "").split()).strip()
+    return sanitise_string(text, max_chars=max_chars)
+
+
+def _prose(value, max_chars: int = 20_000) -> str:
+    """Sanitise a multi-line annotation body for terminal output."""
+    return sanitise_string(str(value if value is not None else ""), max_chars=max_chars)
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +123,7 @@ from core.annotations import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _resolve_base(explicit: Optional[str]) -> Path:
+def _resolve_base(explicit: str | None) -> Path:
     """Pick the annotation base directory.
 
     Priority:
@@ -111,7 +142,7 @@ def _resolve_base(explicit: Optional[str]) -> Path:
             project = mgr.load(name)
             if project:
                 return Path(project.output_dir).resolve() / "annotations"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — degrade to the explicit-base error message below
         logger.debug("annotation base resolution failed: %s", exc)
     sys.stderr.write(
         "raptor-annotate: no annotation base — pass --base PATH or "
@@ -120,7 +151,7 @@ def _resolve_base(explicit: Optional[str]) -> Path:
     sys.exit(2)
 
 
-def _find_checklist(base_dir: Path, explicit: Optional[str]) -> Optional[Path]:
+def _find_checklist(base_dir: Path, explicit: str | None) -> Path | None:
     """Locate a checklist.json for inventory lookups.
 
     Priority:
@@ -147,7 +178,7 @@ def _find_checklist(base_dir: Path, explicit: Optional[str]) -> Optional[Path]:
 
 def _lookup_bounds_by_name(
     checklist_path: Path, file_path: str, function: str,
-) -> Optional[tuple[int, int]]:
+) -> tuple[int, int] | None:
     """Look up ``(line_start, line_end)`` for ``function`` in
     ``file_path`` from a checklist. Returns ``None`` if either is
     missing or the function isn't in the inventory."""
@@ -181,13 +212,13 @@ def _read_body(opts: argparse.Namespace) -> str:
             return sys.stdin.read()
         try:
             return Path(opts.body_file).read_text(encoding="utf-8")
-        except (FileNotFoundError, IOError) as exc:
+        except (OSError, FileNotFoundError) as exc:
             print(f"error: cannot read body file: {exc}", file=sys.stderr)
             sys.exit(1)
     return ""
 
 
-def _parse_meta(items: List[str]) -> dict:
+def _parse_meta(items: list[str]) -> dict:
     """Parse ``--meta KEY=VALUE`` pairs."""
     out = {}
     for item in items:
@@ -216,14 +247,45 @@ def _parse_lines(spec: str) -> tuple[int, int]:
 def cmd_add(opts: argparse.Namespace) -> int:
     base = _resolve_base(opts.base)
     metadata = _parse_meta(opts.meta or [])
+    for reserved in PROVENANCE_KEYS:
+        if reserved in metadata:
+            sys.stderr.write(
+                f"raptor-annotate: --meta {reserved}=... is reserved — "
+                f"the invocation-context stamp is recorded "
+                f"automatically and cannot be asserted by the caller\n"
+            )
+            return 2
+    meta_source = metadata.pop("source", None)
+    if (
+        meta_source is not None
+        and opts.source is not None
+        and meta_source != opts.source
+    ):
+        sys.stderr.write(
+            f"raptor-annotate: conflicting source values — "
+            f"--source {opts.source!r} vs --meta source={meta_source!r}\n"
+        )
+        return 2
     if opts.status:
         metadata["status"] = opts.status
     if opts.cwe:
         metadata["cwe"] = opts.cwe
-    metadata.setdefault("source", opts.source or "human")
+    # Invocation-context stamp. Recorded unconditionally; ``source``
+    # defaults from it (interactive terminal → human, agent-spawned /
+    # fully-redirected → agent). An explicit --source is preserved
+    # verbatim — it's caller-asserted — but the stamp records the
+    # context that can contradict it.
+    context = detect_invocation_context()
+    interactive = context["provenance"] != NON_TTY
+    metadata["source"] = (
+        opts.source
+        or meta_source
+        or ("human" if interactive else "agent")
+    )
+    metadata.update(context)
     # Resolve line bounds: explicit --lines wins; otherwise try to
     # discover via inventory checklist when one is available.
-    line_bounds: Optional[tuple[int, int]] = None
+    line_bounds: tuple[int, int] | None = None
     if opts.lines:
         try:
             line_bounds = _parse_lines(opts.lines)
@@ -272,7 +334,40 @@ def cmd_add(opts: argparse.Namespace) -> int:
         )
         return 1
     print(f"wrote {path}")
+    _promote_iris_spec(base, opts, metadata)
     return 0
+
+
+def _promote_iris_spec(base: Path, opts: argparse.Namespace,
+                       metadata: dict) -> None:
+    """Close the annotation→IRIS loop: a ``sink`` / ``entry_point`` /
+    ``finding`` annotation promotes any matching IRIS taint spec so
+    next-run taint coverage widens. Human-grade notes (operator at an
+    interactive TTY) promote to xref_backed; everything else — agent /
+    llm sourced, or a human claim stamped non-interactive — promotes
+    to the header_backed hint tier only.
+
+    Best-effort — a missing IRIS store or promotion failure never
+    fails the add. The annotations base lives directly under the
+    project output dir, matching the IRIS store convention of
+    resolving the project dir from a run-level child, so ``base``
+    doubles as the store lookup hint.
+    """
+    if not opts.status:
+        return
+    try:
+        from core.iris import promote_spec_on_annotation
+
+        tier = promote_spec_on_annotation(
+            opts.file, opts.function, opts.status, out_dir=base,
+            human_grade=is_human_grade(metadata),
+        )
+        if tier is not None:
+            print(
+                f"promoted matching IRIS taint spec(s) to {tier.value}"
+            )
+    except Exception:
+        logger.debug("IRIS spec promotion failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +375,7 @@ def cmd_add(opts: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _parse_since(spec: str) -> Optional[float]:
+def _parse_since(spec: str) -> float | None:
     """Parse ``--since`` value (``7d`` / ``24h`` / ``30m``) into a
     cutoff timestamp (mtime threshold). Returns None on bad input."""
     import time
@@ -362,10 +457,10 @@ def cmd_ls(opts: argparse.Namespace) -> int:
     file_w = max(len(a.file) for a in anns)
     fn_w = max(len(a.function) for a in anns)
     for a in anns:
-        status = a.metadata.get("status", "-")
-        source = a.metadata.get("source", "-")
-        snippet = " ".join(a.body.split())[:60]
-        print(f"{a.file:<{file_w}}  {a.function:<{fn_w}}  "
+        status = _line(a.metadata.get("status", "-"), max_chars=40)
+        source = _line(a.metadata.get("source", "-"), max_chars=20)
+        snippet = _line(" ".join(a.body.split())[:60], max_chars=80)
+        print(f"{_line(a.file):<{file_w}}  {_line(a.function, max_chars=80):<{fn_w}}  "
               f"{status:<11}  {source:<5}  {snippet}")
     return 0
 
@@ -384,13 +479,16 @@ def cmd_show(opts: argparse.Namespace) -> int:
             f"{opts.file}:{opts.function}\n"
         )
         return 1
-    print(f"## {ann.function}")
+    print(f"## {_line(ann.function, max_chars=120)}")
     if ann.metadata:
-        meta_str = " ".join(f"{k}={v}" for k, v in sorted(ann.metadata.items()))
+        meta_str = " ".join(
+            f"{_line(k, max_chars=40)}={_line(v, max_chars=120)}"
+            for k, v in sorted(ann.metadata.items())
+        )
         print(f"<!-- meta: {meta_str} -->")
     if ann.body:
         print()
-        print(ann.body)
+        print(_prose(ann.body))
     return 0
 
 
@@ -403,9 +501,20 @@ def cmd_edit(opts: argparse.Namespace) -> int:
     base = _resolve_base(opts.base)
     path = annotation_path(base, opts.file)
     if not path.exists():
-        # Create an empty placeholder so $EDITOR has something to open.
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"# {opts.file}\n\n## {opts.function}\n", encoding="utf-8")
+        # Create an empty placeholder section so $EDITOR has something
+        # to open. Route through write_annotation rather than a raw
+        # write_text: it validates the function name (a newline-bearing
+        # name would forge extra sections in the raw f-string), writes
+        # atomically under the cross-process lock, and stamps the
+        # format-version marker the raw placeholder lacked.
+        try:
+            write_annotation(base, Annotation(
+                file=opts.file, function=opts.function,
+                body="", metadata={},
+            ))
+        except ValueError as e:
+            sys.stderr.write(f"raptor-annotate: {e}\n")
+            return 2
     editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
     cmd = shlex.split(editor) + [str(path)]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
@@ -418,6 +527,29 @@ def cmd_edit(opts: argparse.Namespace) -> int:
         return rc
     # Re-parse to verify the user didn't break the format.
     anns = read_file_annotations(base, opts.file)
+    # An edit is a write: re-stamp the addressed function's section
+    # with THIS invocation's context. A non-interactive edit of a
+    # human note (the laundering shape) thereby demotes its own
+    # provenance; ``source`` is left untouched (editing doesn't
+    # re-assert authorship).
+    target = next((a for a in anns if a.function == opts.function), None)
+    if target is not None:
+        meta = dict(target.metadata)
+        meta.update(detect_invocation_context())
+        try:
+            write_annotation(base, Annotation(
+                file=opts.file, function=target.function,
+                body=target.body, metadata=meta,
+            ))
+        except ValueError as e:
+            # Editor-introduced metadata failed write validation
+            # (e.g. a typoed source enum). Surface it — the edited
+            # text is still on disk, only the re-stamp was refused.
+            sys.stderr.write(
+                f"raptor-annotate: warning — could not re-stamp "
+                f"provenance after edit: {e}\n"
+            )
+        anns = read_file_annotations(base, opts.file)
     print(f"saved {path} ({len(anns)} annotation(s))")
     return 0
 
@@ -468,8 +600,8 @@ def cmd_stale(opts: argparse.Namespace) -> int:
         print("(no stale annotations)")
         return 0
     for ann, old, new in stale:
-        print(f"{ann.file}:{ann.function}  "
-              f"stored={old}  current={new}")
+        print(f"{_line(ann.file)}:{_line(ann.function, max_chars=80)}  "
+              f"stored={_line(old, max_chars=40)}  current={_line(new, max_chars=40)}")
     return 0
 
 
@@ -500,7 +632,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "dir's ancestors)",
     )
     pa.add_argument("--meta", action="append")
-    pa.add_argument("--source", default="human")
+    pa.add_argument(
+        "--source", default=None, choices=("human", "llm", "agent"),
+        help="who authored the note (default: human when the "
+             "invocation is interactive — any std fd a TTY — else "
+             "agent)",
+    )
     pa.add_argument("--overwrite", default="all",
                     choices=("all", "respect-manual"))
 

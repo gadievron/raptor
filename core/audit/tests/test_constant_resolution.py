@@ -10,6 +10,8 @@ Adversarial tests from the safety contract's documented blind spots:
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from pathlib import Path
 
@@ -80,6 +82,98 @@ class TestTryEvaluate:
 
     def test_rejects_string(self):
         assert _try_evaluate('"hello"') is None
+
+    def test_typical_flag_bit(self):
+        assert _try_evaluate("(1 << 31)") == 1 << 31
+
+    def test_all_ones_32(self):
+        assert _try_evaluate("0xFFFFFFFF") == 0xFFFFFFFF
+
+    def test_all_ones_64(self):
+        assert _try_evaluate("0xFFFFFFFFFFFFFFFF") == 2**64 - 1
+
+    def test_invert(self):
+        assert _try_evaluate("~0") == -1
+
+    def test_modulo(self):
+        assert _try_evaluate("7 % 3") == 1
+
+    def test_floor_division(self):
+        assert _try_evaluate("8 // 2") == 4
+
+    def test_bitwise_ops(self):
+        assert _try_evaluate("1 | 2") == 3
+        assert _try_evaluate("6 & 3") == 2
+        assert _try_evaluate("5 ^ 1") == 4
+
+    def test_unary_plus(self):
+        assert _try_evaluate("+7") == 7
+
+    def test_rejects_power(self):
+        assert _try_evaluate("2**64") is None
+        assert _try_evaluate("2 ** 10") is None
+
+    def test_rejects_true_division(self):
+        # Python `/` yields a float; the old eval-based path rejected
+        # the non-int result, and the AST path rejects the operator.
+        assert _try_evaluate("4/2") is None
+
+    def test_rejects_division_by_zero(self):
+        assert _try_evaluate("1 // 0") is None
+        assert _try_evaluate("1 % 0") is None
+
+    def test_rejects_comparison(self):
+        # The eval-based path returned bool(True) for `1<2`; the AST
+        # walker rejects comparisons — a comparison is not a macro
+        # constant this resolver should feed into SMT.
+        assert _try_evaluate("1<2") is None
+        assert _try_evaluate("(1>2)") is None
+
+
+# ── Bounded evaluation caps ──────────────────────────────────────────
+
+
+class TestEvaluationCaps:
+    """_try_evaluate is an AST walker with explicit literal/shift/result
+    caps — a hostile body like ``(1<<999999999999)`` must return None
+    quickly instead of forcing a huge bigint."""
+
+    def test_huge_shift_returns_none_quickly(self):
+        t0 = time.monotonic()
+        assert _try_evaluate("(1<<999999999999)") is None
+        assert time.monotonic() - t0 < 1.0
+
+    def test_shift_past_cap(self):
+        assert _try_evaluate("1 << 257") is None
+        assert _try_evaluate("1 << 300") is None
+
+    def test_negative_shift(self):
+        assert _try_evaluate("1 << -1") is None
+
+    def test_shift_at_result_cap_boundary(self):
+        assert _try_evaluate("1 << 128") == 1 << 128
+        assert _try_evaluate("1 << 129") is None
+
+    def test_chained_shift_result_cap(self):
+        # Each shift amount is under the cap; the intermediate-result
+        # magnitude cap must still stop the chain.
+        assert _try_evaluate("(1<<100)<<100") is None
+
+    def test_multiplication_result_cap(self):
+        assert _try_evaluate("(1<<100) * (1<<100)") is None
+
+    def test_oversized_literal(self):
+        assert _try_evaluate(str(2**65)) is None
+
+    def test_literal_at_cap_boundary(self):
+        assert _try_evaluate(str(2**64)) == 2**64
+
+    def test_oversized_body_length(self):
+        assert _try_evaluate("9" * 600) is None
+        assert _try_evaluate("1+" * 400 + "1") is None
+
+    def test_negative_oversized_literal(self):
+        assert _try_evaluate(f"-{2**65}") is None
 
 
 # ── Conditional depth tracking ───────────────────────────────────────

@@ -16,8 +16,10 @@ Grading happens at two levels:
 from __future__ import annotations
 
 import enum
+import functools
+import importlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class EvidenceSource(str, enum.Enum):
@@ -43,6 +45,8 @@ class EvidenceSource(str, enum.Enum):
     DYNAMIC_CRASH = "dynamic:crash"
     DARK_VERIFY = "mechanical:dark_verify"
     COMPILATION = "mechanical:compilation"
+    COMPILER_ANALYZER = "mechanical:compiler_analyzer"
+    PRECONDITION = "mechanical:precondition"
 
 
 class Confidence(str, enum.Enum):
@@ -53,7 +57,7 @@ class Confidence(str, enum.Enum):
     LOW = "low"
 
 
-_SOURCE_CONFIDENCE: Dict[EvidenceSource, Confidence] = {
+_SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
     EvidenceSource.TREE_SITTER: Confidence.HIGH,
     EvidenceSource.TAINT_APPROX: Confidence.HIGH,
     EvidenceSource.CALL_GRAPH: Confidence.HIGH,
@@ -74,23 +78,112 @@ _SOURCE_CONFIDENCE: Dict[EvidenceSource, Confidence] = {
     EvidenceSource.DYNAMIC_CRASH: Confidence.MEDIUM,
     EvidenceSource.DARK_VERIFY: Confidence.HIGH,
     EvidenceSource.COMPILATION: Confidence.MEDIUM,
+    EvidenceSource.COMPILER_ANALYZER: Confidence.HIGH,
+    # Precondition checks are regex + context-map reachability — real
+    # mechanical evidence, but weaker than an engine match: MEDIUM,
+    # never HIGH, so precondition-promoted findings grade tool-backed
+    # rather than confirmed.
+    EvidenceSource.PRECONDITION: Confidence.MEDIUM,
 }
 
 VALID_EVIDENCE_TOOLS: frozenset = frozenset({
     "semgrep", "coccinelle", "codeql", "smt", "joern",
+    "compiler",
     "compilation", "dynamic:sanitizer", "dynamic:crash", "frida:runtime",
     "dark_verify:confirmed", "dark_verify:refuted",
 })
 
+# NOTE: "triage" is deliberately NOT a tool namespace. The triage
+# stamps ("triage:batch" from the glance batcher, "triage:classifier"
+# from the skip classifier) record which LLM/mechanical shortcut
+# produced the verdict — they are provenance, not verification. A
+# 500-token batch glance blessed as tool evidence used to short-circuit
+# refutation gates, the G2 finding gate, and the promotion alarm.
 _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
-    "prefilter", "critique", "sweep", "sarif_cache", "triage",
-    "dynamic", "frida", "dark_verify",
+    "prefilter", "critique", "sweep", "sarif_cache",
+    "dynamic", "frida", "dark_verify", "precondition",
+    "fail_open", "consistency", "ptr_lifecycle", "lock_region",
+    "resource_bounds", "release_order", "protocol_state",
 })
+
+
+# Channel namespaces whose modules own the detection-grade rule-id
+# classification (each exports ``is_detection_rule_id``). The channel
+# is the single authority for which of its stamps "may not promote
+# alone" — consulting it here keeps this firewall from drifting when a
+# channel adds a variant (the fail_open/ptr_lifecycle/lock_region
+# ``-naming`` stamps passed as full tool evidence for exactly that
+# reason).
+_DETECTION_CLASSIFIER_MODULES: dict[str, str] = {
+    "consistency": "core.audit.peer_evidence",
+    "fail_open": "core.audit.fail_open_verify",
+    "lock_region": "core.audit.lock_region",
+    "ptr_lifecycle": "core.audit.ptr_lifecycle",
+    "release_order": "core.audit.release_order",
+    "resource_bounds": "core.audit.resource_bounds",
+    "protocol_state": "core.audit.protocol_state",
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _channel_detection_classifier(namespace: str):
+    """The channel's own ``is_detection_rule_id``, or None when the
+    channel module is unavailable (fall back to the string heuristics
+    below)."""
+    mod_name = _DETECTION_CLASSIFIER_MODULES.get(namespace)
+    if not mod_name:
+        return None
+    try:
+        mod = importlib.import_module(mod_name)
+    except ImportError:
+        return None
+    return getattr(mod, "is_detection_rule_id", None)
+
+
+def _is_detection_variant(part: str) -> bool:
+    """Detection-role channel stamps (``consistency:*-majority``,
+    ``fail_open:*-naming``, ``ptr_lifecycle:*-naming``, ...).
+
+    A majority statistic / uncorroborated-vocabulary premise
+    corroborates; it does not convict (the ``git_history``
+    epistemology). Such a stamp may ride along in a ``+``-joined
+    aggregation receipt, but alone it is NOT tool evidence — a
+    ``finding`` carrying only a detection variant trips the promotion
+    alarm.
+    """
+    namespace = part.split(":", 1)[0] if ":" in part else part
+    classify = _channel_detection_classifier(namespace)
+    if classify is not None:
+        try:
+            return bool(classify(part))
+        except Exception:  # noqa: BLE001 — fall back to string heuristics
+            pass
+    # String-heuristic fallback for hosts where a channel module is
+    # unavailable — mirrors each channel's DETECTION_VARIANT_SUFFIX
+    # contract.
+    if part.startswith("consistency:") and part.endswith("-majority"):
+        return True
+    if part.startswith((
+        "fail_open:", "ptr_lifecycle:", "lock_region:",
+        "resource_bounds:", "release_order:",
+    )) and part.endswith("-naming"):
+        return True
+    # protocol_state: the -unreceipted invariant variant plus the two
+    # PERMANENTLY detection-grade lead rule-ids (CWE-563-adjacent /
+    # proxy-quality — design §4.3).
+    if part.startswith("protocol_state:"):
+        return part.endswith("-unreceipted") or part in (
+            "protocol_state:dead-state-field",
+            "protocol_state:unvalidated-peer-write",
+        )
+    return False
 
 
 def _is_single_tool_evidence(part: str) -> bool:
     """Check one atomic stamp (no ``+`` separator)."""
     if not part or part == "none":
+        return False
+    if _is_detection_variant(part):
         return False
     root = part.split(":")[0] if ":" in part else part
     return root in _TOOL_NAMESPACES or part in _TOOL_NAMESPACES
@@ -102,11 +195,22 @@ def is_tool_evidence(stamp: str) -> bool:
     Matches canonical stamps (``"dynamic:sanitizer"``, ``"semgrep"``, etc.),
     namespaced composites (``"semgrep:rule-123"``, ``"critique:prefilter:id"``),
     and ``+``-joined multi-tool stamps (``"semgrep+joern"``).
+
+    Detection-role consistency variants (``consistency:*-majority``)
+    qualify only inside a composite that also carries a qualifying
+    receipt (the aggregation-promotion shape); alone they are a
+    statistical prior, not verification.
     """
     if not stamp or stamp == "none":
         return False
     parts = stamp.split("+") if "+" in stamp else [stamp]
-    return all(_is_single_tool_evidence(p) for p in parts)
+    qualifying = 0
+    for p in parts:
+        if _is_single_tool_evidence(p):
+            qualifying += 1
+        elif not _is_detection_variant(p):
+            return False
+    return qualifying > 0
 
 
 _LLM_ONLY_EVIDENCE = frozenset({
@@ -133,11 +237,22 @@ def sanitize_llm_evidence_tool(raw: str) -> str:
     return f"{LLM_CLAIM_PREFIX}{value}"
 
 
-_RECEIPT_MAP: Dict[str, tuple] = {
+_RECEIPT_MAP: dict[str, tuple] = {
     "dynamic:sanitizer": (EvidenceSource.DYNAMIC_SANITIZER, "confirmed by dynamic sanitizer"),
     "dynamic:crash": (EvidenceSource.DYNAMIC_CRASH, "non-zero exit without sanitizer confirmation"),
     "frida": (EvidenceSource.DYNAMIC_FRIDA, "confirmed by Frida runtime observation"),
     "joern": (EvidenceSource.JOERN, "confirmed by Joern CPG analysis"),
+    "joern:guard-dominance": (
+        EvidenceSource.JOERN,
+        (
+            "no check on the named identifier dominates the sink "
+            "(Joern CPG dominator analysis)"
+        ),
+    ),
+    "joern:flow": (
+        EvidenceSource.JOERN,
+        "source-to-sink dataflow confirmed by Joern reachableByFlows",
+    ),
     "semgrep": (EvidenceSource.SEMGREP, "confirmed by Semgrep pattern match"),
     "codeql": (EvidenceSource.CODEQL, "confirmed by CodeQL analysis"),
     "coccinelle": (EvidenceSource.COCCINELLE, "confirmed by Coccinelle"),
@@ -146,11 +261,209 @@ _RECEIPT_MAP: Dict[str, tuple] = {
     "dark_verify:refuted": (EvidenceSource.DARK_VERIFY, "refuted by executed dark witness"),
     "dark_verify": (EvidenceSource.DARK_VERIFY, "dark verification witness"),
     "compilation": (EvidenceSource.COMPILATION, "confirmed by compilation and execution"),
+    "compiler": (EvidenceSource.COMPILER_ANALYZER, "confirmed by compiler static-analyzer diagnostic"),
     "critique": (EvidenceSource.PREFILTER, "confirmed by critique prefilter"),
+    # Fail-open channel receipts (per rule-id; the bare namespace
+    # covers the -naming detection variants).
+    "fail_open:handler-outcome": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a permissive error handler swallows failures of a "
+            "security-role call (role + handler + fallibility receipts)"
+        ),
+    ),
+    "fail_open:ignored-return": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "the return value of a security-role call is neither "
+            "assigned nor compared at the flagged site"
+        ),
+    ),
+    "fail_open:tristate": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "the error value of a tri-state security API is accepted "
+            "by the comparison shape"
+        ),
+    ),
+    "fail_open:recover-continue": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a recover()-style handler swallows a security panic and "
+            "control continues"
+        ),
+    ),
+    "fail_open:unawaited": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a security-role async call's rejection is unobserved "
+            "(unawaited / empty catch)"
+        ),
+    ),
+    "fail_open": (
+        EvidenceSource.TREE_SITTER,
+        "fail-open shape confirmed by the handler-outcome channel",
+    ),
+    # Resource-bounds channel receipts (the bare namespace covers the
+    # -naming detection variants riding in aggregation composites).
+    "resource_bounds:unbounded-accumulation": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "an accumulation site has no dominating bound witness in "
+            "the function or its searched callers (guard walk + "
+            "constant-resolution receipts; the searched scope is "
+            "named in the receipt)"
+        ),
+    ),
+    "resource_bounds": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "unbounded-accumulation shape confirmed by the "
+            "bound-witness comparator"
+        ),
+    ),
+    # Release-order channel receipts (the bare namespace covers the
+    # -naming detection variants riding in aggregation composites).
+    "release_order:release-before-verify": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a release site handing data to an escaping destination "
+            "is not dominated by the integrity finalizer's status "
+            "check (per-site dominator receipts; cfg+joern when the "
+            "engines agree)"
+        ),
+    ),
+    "release_order": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "release-before-verify ordering confirmed by the "
+            "dominance comparator"
+        ),
+    ),
+    # Protocol-state channel receipts (the bare namespace covers the
+    # -unreceipted variant and the detection-grade lead rule-ids
+    # riding in aggregation composites).
+    "protocol_state:invariant-violated": (
+        EvidenceSource.SMT,
+        (
+            "a study-receipted protocol invariant is violable at a "
+            "peer-writable census write site (per-site inductive SMT "
+            "receipts with dominating guards encoded)"
+        ),
+    ),
+    "protocol_state": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "protocol-state shape receipted by the field census "
+            "(dead-state / unvalidated-peer-write legs)"
+        ),
+    ),
+    # Consistency channel receipts (per dimension; the bare namespace
+    # covers the -majority detection variants riding in aggregation
+    # composites). Every premise is a deterministic fact: the usage
+    # classification is AST, the contract is the target's own header
+    # attribute or a receipted learned contract, the majority is
+    # reproducible arithmetic.
+    "consistency:return-check": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a return-contract-bearing callee's result is discarded at "
+            "the flagged site while the checking siblings exhibit the "
+            "convention (census + contract witness receipts)"
+        ),
+    ),
+    "consistency:flag-mode": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a security-relevant flag/mode argument deviates from the "
+            "constant the sibling call sites agree on"
+        ),
+    ),
+    "consistency:cleanup": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "an error path omits the learned release call its sibling "
+            "paths perform on the same acquisition"
+        ),
+    ),
+    "consistency:argument-shape": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a sizeof-over-pointer argument contradicts the declared "
+            "type and the buffer-sizing convention of the sibling "
+            "call sites (declared-type witness receipts)"
+        ),
+    ),
+    "consistency:sanitize-sink": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "an operator-annotated sink's call site lacks the "
+            "dominating sanitizer its sibling sites apply (annotation "
+            "convention witness + sanitizing-exhibit receipts)"
+        ),
+    ),
+    "consistency:guard-presence": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "an access site lacks the bounds/null guard its sibling "
+            "sites apply and condition_smt proves the unguarded path "
+            "feasible (solver witness + caller-walk receipts)"
+        ),
+    ),
+    "consistency:clone-drift": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a near-clone of a past-security-fix region lacks the "
+            "guard the fix added (fix-commit contract witness + "
+            "token-containment receipts)"
+        ),
+    ),
+    "consistency": (
+        EvidenceSource.TREE_SITTER,
+        "peer-majority consistency evidence (PeerEvidence receipts)",
+    ),
+    # ptr_lifecycle channel receipts (leg B; the bare namespace covers
+    # the -naming detection variants riding in aggregation
+    # composites). Leg A (field-parity) emits under the consistency
+    # namespace by construction and needs no row here.
+    "ptr_lifecycle:stale-alias": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a lifecycle event released the aliased owner with the "
+            "alias live and read afterwards (alias edge + event + "
+            "invalidation search + post-event read receipts)"
+        ),
+    ),
+    "ptr_lifecycle": (
+        EvidenceSource.TREE_SITTER,
+        "stale-alias shape confirmed by the ptr_lifecycle census",
+    ),
+    # lock_region channel receipts (the bare namespace covers the
+    # -naming detection variants).
+    "lock_region:callback-under-lock": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a callback-shaped invocation sits between a paired lock "
+            "acquire and its release (region + invocation + setter "
+            "receipts)"
+        ),
+    ),
+    "lock_region": (
+        EvidenceSource.TREE_SITTER,
+        "callback-under-lock shape confirmed by the lock_region "
+        "channel",
+    ),
     "sarif_cache": (EvidenceSource.SEMGREP, "matched prior SARIF result"),
+    "precondition": (
+        EvidenceSource.PRECONDITION,
+        (
+            "LLM-stated preconditions mechanically verified in the "
+            "vulnerability-supporting direction"
+        ),
+    ),
 }
 
-_CONFIDENCE_PRIORITY: Dict[Confidence, int] = {
+_CONFIDENCE_PRIORITY: dict[Confidence, int] = {
     Confidence.HIGH: 0,
     Confidence.MEDIUM: 1,
     Confidence.LOW: 2,
@@ -164,10 +477,10 @@ class GradedEvidence:
     source: EvidenceSource
     confidence: Confidence
     description: str
-    detail: Optional[str] = None
+    detail: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "source": self.source.value,
             "confidence": self.confidence.value,
             "description": self.description,
@@ -190,8 +503,8 @@ def grade_evidence(
     source: EvidenceSource,
     description: str,
     *,
-    detail: Optional[str] = None,
-    confidence_override: Optional[Confidence] = None,
+    detail: str | None = None,
+    confidence_override: Confidence | None = None,
 ) -> GradedEvidence:
     """Create a graded evidence item."""
     conf = confidence_override or default_confidence(source)
@@ -203,7 +516,7 @@ def grade_evidence(
     )
 
 
-def finding_confidence(chain: List[GradedEvidence]) -> Confidence:
+def finding_confidence(chain: list[GradedEvidence]) -> Confidence:
     """Compute overall confidence for a finding from its evidence chain.
 
     The finding's confidence is the highest confidence in the chain.
@@ -233,13 +546,13 @@ def finding_confidence(chain: List[GradedEvidence]) -> Confidence:
     return best
 
 
-def grade_evidence_record(record: Any) -> List[GradedEvidence]:
+def grade_evidence_record(record: Any) -> list[GradedEvidence]:
     """Convert an EvidenceRecord into a list of GradedEvidence items.
 
     Maps each populated field of the existing EvidenceRecord to graded
     evidence with appropriate source tags.
     """
-    items: List[GradedEvidence] = []
+    items: list[GradedEvidence] = []
 
     if getattr(record, "taint_approx", None) is not None:
         approx = record.taint_approx
@@ -372,11 +685,11 @@ def grade_evidence_record(record: Any) -> List[GradedEvidence]:
 
 
 def grade_review_result(
-    review_result: Optional[Dict[str, Any]],
+    review_result: dict[str, Any] | None,
     evidence_tool: str = "",
-) -> List[GradedEvidence]:
+) -> list[GradedEvidence]:
     """Extract graded evidence from an LLM review result."""
-    items: List[GradedEvidence] = []
+    items: list[GradedEvidence] = []
 
     rr = review_result or {}
 
@@ -416,7 +729,7 @@ def grade_review_result(
     return items
 
 
-def format_evidence_chain(chain: List[GradedEvidence]) -> str:
+def format_evidence_chain(chain: list[GradedEvidence]) -> str:
     """Render an evidence chain as human-readable text."""
     if not chain:
         return ""

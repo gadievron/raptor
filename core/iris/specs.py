@@ -100,7 +100,7 @@ def identify_candidates(
     for gap in gaps:
         name = gap.get("name", "")
         file = gap.get("file", "")
-        if not file:
+        if not file or not name:
             continue
         key = f"{file}:{name}"
         name_lower = name.lower()
@@ -212,15 +212,24 @@ def _parse_one_spec(data: Any) -> TaintSpec | None:
     taint_classes = data.get("taint_classes", [])
     if isinstance(taint_classes, str):
         taint_classes = [taint_classes]
-    params_affected = data.get("params_affected", [])
-    if isinstance(params_affected, (int, float)):
-        params_affected = [int(params_affected)]
+    raw_params = data.get("params_affected", [])
+    if isinstance(raw_params, (int, float)):
+        params_affected = [int(raw_params)]
+    elif isinstance(raw_params, list):
+        params_affected = []
+        for x in raw_params:
+            try:
+                params_affected.append(int(x))
+            except (TypeError, ValueError):
+                continue
+    else:
+        params_affected = []
     return TaintSpec(
         function=function,
         file=file,
         role=role,
         taint_classes=taint_classes if isinstance(taint_classes, list) else [],
-        params_affected=params_affected if isinstance(params_affected, list) else [],
+        params_affected=params_affected,
         return_tainted=data.get("return_tainted", False),
         confidence=_safe_confidence(data.get("confidence", 0.5)),
     )
@@ -337,6 +346,19 @@ def _sink_predicate(specs: list[TaintSpec]) -> str:
     return " or\n".join(parts)
 
 
+def _propagator_predicate(specs: list[TaintSpec]) -> str:
+    """Build a disjunction of additional taint steps through propagator calls."""
+    parts = []
+    for s in specs:
+        safe = _escape_codeql(s.function)
+        parts.append(
+            f'    exists(DataFlow::CallNode c | '
+            f'c.getTarget().hasName("{safe}") '
+            f"and pred = c.getAnArgument() and succ = c)"
+        )
+    return " or\n".join(parts)
+
+
 def compile_codeql_config(specs: list[TaintSpec], *, language: str = "cpp") -> str:
     """Generate a runnable CodeQL taint-tracking query from specs.
 
@@ -392,15 +414,7 @@ def compile_codeql_config(specs: list[TaintSpec], *, language: str = "cpp") -> s
             lines.append("")
             lines.append("  predicate isAdditionalTaintStep"
                          "(DataFlow::Node pred, DataFlow::Node succ) {")
-            prop_parts = []
-            for s in propagators:
-                safe = _escape_codeql(s.function)
-                prop_parts.append(
-                    f'    exists(DataFlow::CallNode c | '
-                    f'c.getTarget().hasName("{safe}") '
-                    f"and pred = c.getAnArgument() and succ = c)"
-                )
-            lines.append(" or\n".join(prop_parts))
+            lines.append(_propagator_predicate(propagators))
             lines.append("  }")
         lines.append("}")
         lines.append("")
@@ -494,7 +508,12 @@ def _specs_from_list(items: list[dict[str, Any]]) -> list[TaintSpec]:
         elif isinstance(pa, str) and pa.isdigit():
             params_affected = [int(pa)]
         elif isinstance(pa, list):
-            params_affected = pa
+            params_affected = []
+            for x in pa:
+                try:
+                    params_affected.append(int(x))
+                except (TypeError, ValueError):
+                    continue
         else:
             params_affected = []
         specs.append(TaintSpec(

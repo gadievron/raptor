@@ -10,8 +10,25 @@ import pytest
 
 from core.git.clone import clone_repository, fetch_commit, ls_remote
 
-
 _VALID_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+
+def _strip_pins(cmd: list) -> list:
+    """Drop the ``-c key=val`` hardening pairs between ``git`` and the
+    subcommand so positional assertions target the semantic argv."""
+    assert cmd[0] == "git"
+    out = ["git"]
+    i = 1
+    while i < len(cmd):
+        if cmd[i] == "-c":
+            i += 2
+            continue
+        if cmd[i] == "--no-pager":
+            i += 1
+            continue
+        out.append(cmd[i])
+        i += 1
+    return out
 
 
 def _completed(rc: int, stderr: str = "",
@@ -40,7 +57,7 @@ def test_successful_clone_calls_sandbox(tmp_path: Path) -> None:
         )
         assert ok is True
         assert mock_run.called
-        cmd = mock_run.call_args.args[0]
+        cmd = _strip_pins(mock_run.call_args.args[0])
         assert cmd[:4] == ["git", "clone", "--depth", "1"]
         kwargs = mock_run.call_args.kwargs
         proxy_hosts = set(kwargs.get("proxy_hosts", []))
@@ -148,8 +165,8 @@ def test_fetch_into_fresh_dir_runs_init_then_remote_then_fetch(
                            _VALID_SHA, depth=5)
         assert ok is True
 
-    local_cmds = [c.args[0] for c in mock_local.call_args_list]
-    net_cmds = [c.args[0] for c in mock_net.call_args_list]
+    local_cmds = [_strip_pins(c.args[0]) for c in mock_local.call_args_list]
+    net_cmds = [_strip_pins(c.args[0]) for c in mock_net.call_args_list]
     assert local_cmds[0][:4] == ["git", "-C", str(repo), "init"]
     assert local_cmds[1][:4] == ["git", "-C", str(repo), "remote"]
     assert local_cmds[1][4:] == ["add", "origin", "https://github.com/foo/bar"]
@@ -176,7 +193,7 @@ def test_fetch_into_existing_repo_skips_init(tmp_path: Path) -> None:
         mock_net.return_value = _completed(0)
         fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
 
-    cmds = [c.args[0] for c in mock_local.call_args_list]
+    cmds = [_strip_pins(c.args[0]) for c in mock_local.call_args_list]
     # First local call should be ``remote add``, not ``init`` —
     # the ``.git`` dir already exists.
     assert "init" not in cmds[0]
@@ -193,7 +210,7 @@ def test_fetch_existing_origin_remote_falls_back_to_set_url(
     (repo / ".git").mkdir(parents=True)
 
     def _side_effect(cmd, **kwargs):
-        if cmd[3:5] == ["remote", "add"]:
+        if _strip_pins(cmd)[3:5] == ["remote", "add"]:
             return _completed(128, stderr="error: remote origin already exists")
         return _completed(0)
 
@@ -203,7 +220,7 @@ def test_fetch_existing_origin_remote_falls_back_to_set_url(
         ok = fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
         assert ok is True
 
-    cmds = [c.args[0] for c in mock_local.call_args_list]
+    cmds = [_strip_pins(c.args[0]) for c in mock_local.call_args_list]
     add_seen = any(c[3:5] == ["remote", "add"] for c in cmds)
     set_url_seen = any(c[3:5] == ["remote", "set-url"] for c in cmds)
     assert add_seen and set_url_seen
@@ -285,9 +302,9 @@ def test_fetch_remote_add_failure_surfaces_both_errors(
     (repo / ".git").mkdir(parents=True)
 
     def _side_effect(cmd, **kwargs):
-        if cmd[3:5] == ["remote", "add"]:
+        if _strip_pins(cmd)[3:5] == ["remote", "add"]:
             return _completed(128, stderr="error: cannot create file (disk full)")
-        if cmd[3:5] == ["remote", "set-url"]:
+        if _strip_pins(cmd)[3:5] == ["remote", "set-url"]:
             return _completed(128, stderr="error: No such remote 'origin'")
         return _completed(0)
 
@@ -548,3 +565,370 @@ def test_ls_remote_uses_strict_40char_sha_regex() -> None:
             proxy_hosts=_KERNEL_HOSTS,
         )
     assert refs == []  # nothing parsed
+
+
+def test_safe_git_command_pins_signature_and_diff_programs() -> None:
+    """Ordinary target-repo git ops must never execute a program named by
+    the repo's own config: the safety overrides pin every ``gpg.*.program``
+    to the no-op ``true`` and clear ``diff.external``."""
+    from core.git.clone import safe_git_command
+    joined = " ".join(safe_git_command("log", "-1"))
+    assert "gpg.program=true" in joined
+    assert "gpg.x509.program=true" in joined
+    assert "gpg.ssh.program=true" in joined
+    assert "diff.external=" in joined
+
+
+def test_signature_probe_overrides_resolve_system_binaries() -> None:
+    """The opt-in signature probe re-enables verification through
+    PATH-resolved system binaries only — never a repo-named program — and
+    emits well-formed ``-c key=value`` pairs."""
+    import shutil
+
+    from core.git.clone import signature_probe_overrides
+    pairs = signature_probe_overrides()
+    assert len(pairs) % 2 == 0
+    keys = []
+    for flag, kv in zip(pairs[::2], pairs[1::2]):
+        assert flag == "-c"
+        key, _, value = kv.partition("=")
+        keys.append(key)
+        assert Path(value).is_absolute()
+    assert set(keys) <= {"gpg.program", "gpg.x509.program", "gpg.ssh.program"}
+    if shutil.which("gpg"):
+        assert "gpg.program" in keys
+
+
+def test_get_safe_git_env_preserve_proxy_contract(monkeypatch) -> None:
+    """Default strips operator proxy vars (same as get_git_env);
+    ``preserve_proxy=True`` keeps them for git invocations that dial a
+    remote outside the sandbox egress proxy — while still applying the
+    GIT_ENV_VARS pins (terminal-prompt / askpass) in both modes."""
+    from core.config import RaptorConfig
+    from core.git.clone import get_safe_git_env
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    env_default = get_safe_git_env()
+    env_proxy = get_safe_git_env(preserve_proxy=True)
+    assert "HTTPS_PROXY" not in env_default
+    assert env_proxy.get("HTTPS_PROXY") == "http://proxy.invalid:3128"
+    for key, value in RaptorConfig.GIT_ENV_VARS.items():
+        assert env_default.get(key) == value
+        assert env_proxy.get(key) == value
+
+
+def test_safe_git_readonly_command_layers_strict_pins_last() -> None:
+    """The strict read-only variant is the full safe_git_command posture
+    PLUS transport refusal. git honours the LAST ``-c`` occurrence per
+    key, so every strict pin must land after its base counterpart."""
+    from core.git.clone import (
+        _SAFE_GIT_OVERRIDES,
+        safe_git_command,
+        safe_git_readonly_command,
+    )
+    cmd = safe_git_readonly_command("rev-parse", "HEAD")
+    assert cmd[0] == "git"
+    assert cmd[1] == "--no-pager"
+    assert cmd[-2:] == ["rev-parse", "HEAD"]
+    # Base posture fully present (superset relation with safe_git_command).
+    base = safe_git_command()[1:]
+    assert cmd[2:2 + len(base)] == base
+    for kv in _SAFE_GIT_OVERRIDES[1::2]:
+        assert kv in cmd
+    # Strict pins present and AFTER the base pins they override.
+    assert cmd.index("protocol.allow=never") > cmd.index("protocol.file.allow=user")
+    assert cmd.index("protocol.file.allow=never") > cmd.index("protocol.file.allow=user")
+    assert cmd.index("core.sshCommand=false") > cmd.index("core.sshCommand=ssh")
+    # Well-formed: every override value is preceded by ``-c``.
+    for key in ("protocol.allow=never", "protocol.file.allow=never",
+                "core.sshCommand=false"):
+        assert cmd[cmd.index(key) - 1] == "-c"
+
+
+def test_readonly_overrides_constant_is_single_source_of_truth() -> None:
+    """Consumers (core.audit.git_oracle) and tests assert the strict
+    posture via ``_SAFE_GIT_READONLY_OVERRIDES`` — the helper must emit
+    exactly that tuple, so there is one place to extend it."""
+    from core.git.clone import (
+        _SAFE_GIT_OVERRIDES,
+        _SAFE_GIT_READONLY_OVERRIDES,
+        safe_git_readonly_command,
+    )
+    assert safe_git_readonly_command() == [
+        "git", "--no-pager", *_SAFE_GIT_READONLY_OVERRIDES,
+    ]
+    # Strict tuple embeds the base tuple unchanged (no drift).
+    assert _SAFE_GIT_READONLY_OVERRIDES[:len(_SAFE_GIT_OVERRIDES)] == \
+        _SAFE_GIT_OVERRIDES
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("git") is None, reason="git not installed",
+)
+def test_readonly_command_refuses_local_path_fetch(tmp_path: Path) -> None:
+    """Functional pin of the precedence subtlety: ``protocol.allow=never``
+    alone would NOT refuse the file protocol because the base tuple's
+    per-protocol ``protocol.file.allow=user`` takes precedence over the
+    catch-all. The strict variant re-pins ``protocol.file.allow=never``;
+    a local-path fetch must fail under it while the network-capable
+    ``safe_git_command`` posture permits it."""
+    import os
+    import shutil
+
+    from core.git.clone import safe_git_command, safe_git_readonly_command
+
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+    def run(cmd):
+        return subprocess.run(
+            cmd, capture_output=True, text=True, env=env, check=False,
+        )
+
+    src = tmp_path / "src"
+    src.mkdir()
+    assert run(["git", "init", "-q", str(src)]).returncode == 0
+    (src / "f.txt").write_text("x\n")
+    assert run([
+        "git", "-C", str(src),
+        "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "-c", "commit.gpgsign=false",
+        "add", ".",
+    ]).returncode == 0
+    assert run([
+        "git", "-C", str(src),
+        "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "-c", "commit.gpgsign=false",
+        "commit", "-q", "-m", "one",
+    ]).returncode == 0
+
+    for dest_name, argv_builder, expect_ok in (
+        ("dest-open", safe_git_command, True),
+        ("dest-strict", safe_git_readonly_command, False),
+    ):
+        dest = tmp_path / dest_name
+        dest.mkdir()
+        assert run(["git", "init", "-q", str(dest)]).returncode == 0
+        proc = run(argv_builder(
+            "-C", str(dest), "fetch", str(src), "HEAD",
+        ))
+        assert (proc.returncode == 0) is expect_ok, proc.stderr
+    shutil.rmtree(tmp_path / "src", ignore_errors=True)
+
+
+def test_signature_probe_overrides_take_precedence() -> None:
+    """git honours the LAST ``-c`` occurrence, so the probe pairs must land
+    after the neutral pins for re-enablement to take effect."""
+    from core.git.clone import safe_git_command, signature_probe_overrides
+    probe = signature_probe_overrides()
+    if not probe:
+        pytest.skip("no signature programs installed on this host")
+    cmd = safe_git_command(*probe, "log")
+    neutral = cmd.index("gpg.program=true")
+    real = [i for i, v in enumerate(cmd)
+            if v.startswith("gpg.program=") and v != "gpg.program=true"]
+    assert real and real[0] > neutral
+
+
+class TestSafeGitCommandExecutes:
+    """Execute git THROUGH the safety overrides against a real repo.
+
+    The string-level assertions above can't catch a config pin that git
+    interprets differently than intended (the empty ``diff.external=``
+    value means "run this command", not "disabled" — which is why diff
+    callers must pass --no-ext-diff and why forgetting it fails loudly).
+    These tests pin both halves of that contract with a live git.
+    """
+
+    @staticmethod
+    def _two_commit_repo(tmp_path: Path) -> Path:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def g(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True, text=True, check=True,
+            )
+
+        g("init", "-q")
+        g("config", "user.email", "t@example.com")
+        g("config", "user.name", "T")
+        (repo / "a.txt").write_text("one\n")
+        g("add", "a.txt")
+        g("commit", "-q", "-m", "c1")
+        (repo / "a.txt").write_text("two\n")
+        g("add", "a.txt")
+        g("commit", "-q", "-m", "c2")
+        return repo
+
+    def test_diff_with_no_ext_diff_succeeds(self, tmp_path: Path) -> None:
+        from core.git.clone import safe_git_command
+        repo = self._two_commit_repo(tmp_path)
+        proc = subprocess.run(
+            safe_git_command(
+                "-C", str(repo), "diff", "--no-ext-diff",
+                "HEAD~1..HEAD",
+            ),
+            capture_output=True, text=True, check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "-one" in proc.stdout and "+two" in proc.stdout
+
+    def test_diff_without_no_ext_diff_fails_loudly(
+        self, tmp_path: Path,
+    ) -> None:
+        # The deliberate trap: a diff caller that forgot --no-ext-diff
+        # must fail closed, not silently honour a repo-named driver.
+        from core.git.clone import safe_git_command
+        repo = self._two_commit_repo(tmp_path)
+        proc = subprocess.run(
+            safe_git_command("-C", str(repo), "diff", "HEAD~1..HEAD"),
+            capture_output=True, text=True, check=False,
+        )
+        assert proc.returncode != 0
+        assert "external diff" in proc.stderr or "cannot run" in proc.stderr
+
+    def test_status_probe_shape_succeeds(self, tmp_path: Path) -> None:
+        # The refresh-free provenance probe shape stays green end-to-end.
+        from core.git.clone import safe_git_command
+        repo = self._two_commit_repo(tmp_path)
+        for args in (
+            ("rev-parse", "HEAD"),
+            ("diff-index", "--no-ext-diff", "HEAD"),
+            ("ls-files", "--others", "--exclude-standard"),
+        ):
+            proc = subprocess.run(
+                safe_git_command("-C", str(repo), *args),
+                capture_output=True, text=True, check=False,
+            )
+            assert proc.returncode == 0, (args, proc.stderr)
+
+# ---------------------------------------------------------------------------
+# Config-pin posture: clone / fetch / ls-remote argv
+# ---------------------------------------------------------------------------
+
+def _pin_pairs(cmd: list) -> set:
+    """Extract the ``-c key=val`` pin values from an argv."""
+    return {cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-c"}
+
+
+def test_clone_argv_carries_safe_git_pins(tmp_path: Path) -> None:
+    """clone must run with the per-invocation neutralisation pins
+    (fsmonitor / hooksPath / credential.helper / ...) but NOT the
+    strict transport refusal, which would break the https clone."""
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(0)
+        clone_repository("https://github.com/foo/bar", tmp_path / "out")
+    pins = _pin_pairs(mock_run.call_args.args[0])
+    assert "core.fsmonitor=" in pins
+    assert "core.hooksPath=/dev/null" in pins
+    assert "credential.helper=" in pins
+    assert "protocol.allow=never" not in pins
+
+
+def test_fetch_local_steps_carry_strict_pins(tmp_path: Path) -> None:
+    """init / remote add never touch a transport, so they get the
+    strict read-only posture — including protocol.allow=never — to
+    neutralise a pre-existing untrusted .git/config."""
+    repo = tmp_path / "repo"
+    with patch("core.sandbox.run_untrusted") as mock_local, \
+         patch("core.sandbox.run_untrusted_networked") as mock_net:
+        mock_local.return_value = _completed(0)
+        mock_net.return_value = _completed(0)
+        fetch_commit(repo, "https://github.com/foo/bar", _VALID_SHA)
+
+    for call in mock_local.call_args_list:
+        pins = _pin_pairs(call.args[0])
+        assert "core.fsmonitor=" in pins
+        assert "protocol.allow=never" in pins
+
+    # The network fetch keeps the base posture only.
+    net_pins = _pin_pairs(mock_net.call_args.args[0])
+    assert "core.fsmonitor=" in net_pins
+    assert "protocol.allow=never" not in net_pins
+
+
+def test_ls_remote_argv_carries_safe_git_pins() -> None:
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(
+            0, stdout=f"{_VALID_SHA}\trefs/heads/main\n")
+        ls_remote("https://github.com/foo/bar",
+                  proxy_hosts=["github.com"])
+    pins = _pin_pairs(mock_run.call_args.args[0])
+    assert "core.fsmonitor=" in pins
+    assert "core.hooksPath=/dev/null" in pins
+    assert "protocol.allow=never" not in pins
+
+
+# ---------------------------------------------------------------------------
+# ls_remote: ref patterns + bearer-token env mechanism
+# ---------------------------------------------------------------------------
+
+
+def test_ls_remote_patterns_follow_end_of_options_separator() -> None:
+    """Ref patterns land after ``--`` so neither the URL nor a pattern
+    can ever be parsed as a git option."""
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(0, stdout="")
+        ls_remote(
+            "https://github.com/foo/bar.git",
+            proxy_hosts=["github.com"],
+            patterns=("v4", "refs/tags/v4", "refs/heads/v4"),
+        )
+    cmd = _strip_pins(mock_run.call_args.args[0])
+    i = cmd.index("--")
+    assert cmd[i + 1] == "https://github.com/foo/bar.git"
+    assert cmd[i + 2:] == ["v4", "refs/tags/v4", "refs/heads/v4"]
+
+
+@pytest.mark.parametrize("bad_pattern", ["-v4", "--upload-pack=x", ""])
+def test_ls_remote_rejects_dash_or_empty_patterns(bad_pattern: str) -> None:
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        with pytest.raises(ValueError, match="pattern"):
+            ls_remote(
+                "https://github.com/foo/bar.git",
+                proxy_hosts=["github.com"],
+                patterns=(bad_pattern,),
+            )
+        mock_run.assert_not_called()
+
+
+def test_ls_remote_bearer_token_env_not_argv() -> None:
+    """The bearer credential must ride the ``GIT_CONFIG_*`` env
+    mechanism — NEVER argv (argv is same-uid world-readable via
+    /proc/<pid>/cmdline)."""
+    token = "ghp_SECRETSECRETSECRETSECRET"  # noqa: S105 — test fixture
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(0, stdout="")
+        ls_remote(
+            "https://github.com/foo/bar.git",
+            proxy_hosts=["github.com"],
+            bearer_token=token,
+        )
+    cmd = mock_run.call_args.args[0]
+    assert all(token not in arg for arg in cmd), (
+        f"bearer token leaked onto argv: {cmd}"
+    )
+    assert all("extraheader" not in arg for arg in cmd)
+    env = mock_run.call_args.kwargs["env"]
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "http.extraheader"
+    assert env["GIT_CONFIG_VALUE_0"] == f"Authorization: bearer {token}"
+
+
+def test_ls_remote_no_token_leaves_env_unaugmented() -> None:
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(0, stdout="")
+        ls_remote(
+            "https://github.com/foo/bar.git",
+            proxy_hosts=["github.com"],
+        )
+    env = mock_run.call_args.kwargs["env"]
+    assert "GIT_CONFIG_COUNT" not in env
+    assert "GIT_CONFIG_KEY_0" not in env

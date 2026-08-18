@@ -28,9 +28,11 @@ What the adapter does:
 Scope:
 
 * **Python intra-procedural** — full end-to-end.
-* **C / C++ / Java / other** — return ``ResolutionFailure`` with
-  ``reason="language=…  not yet supported"``. Phase 9 adds C/C++
-  intra-proc CFG; Phase 11 wires it through here.
+* **C / C++ intra-procedural** — full end-to-end via Phase 9's
+  :func:`build_cpp_intraproc_cfg`, wired through here in Phase 11.
+* **Java / other** — return ``ResolutionFailure`` with
+  ``reason="language=… not yet supported"``; they await future
+  arcs.
 
 The resolver is pure: no IO except reading the source file
 mentioned in the finding; no logging side-effects (the audit
@@ -139,9 +141,7 @@ class _ParsedFinding:
     cwe: str
     language: str
     source_lineno: int
-    source_col: Optional[int]
     sink_lineno: int
-    sink_col: Optional[int]
     sink_arg_hint: Optional[str] = None
 
 
@@ -231,9 +231,7 @@ def _parse_sarif(finding: Mapping[str, Any]) -> Union[_ParsedFinding, Resolution
         cwe=cwe,
         language=_detect_language(file),
         source_lineno=src_line,
-        source_col=src_region.get("startColumn"),
         sink_lineno=sink_line,
-        sink_col=sink_region.get("startColumn"),
     )
 
 
@@ -271,12 +269,12 @@ def _parse_semgrep(
     trace = extra.get("dataflow_trace") or {}
     src_line = _semgrep_extract_line(trace.get("taint_source"))
     if src_line is None:
-        src_line = (finding.get("start") or {}).get("line", 0)
+        src_line = (finding.get("start") or {}).get("line") or None
     sink_line = _semgrep_extract_line(trace.get("taint_sink"))
     if sink_line is None:
-        sink_line = (finding.get("end") or {}).get("line", 0) or (
+        sink_line = (finding.get("end") or {}).get("line") or (
             finding.get("start") or {}
-        ).get("line", 0)
+        ).get("line") or None
 
     if src_line is None or sink_line is None:
         return ResolutionFailure(
@@ -288,9 +286,7 @@ def _parse_semgrep(
         cwe=cwe,
         language=_detect_language(file),
         source_lineno=src_line,
-        source_col=None,
         sink_lineno=sink_line,
-        sink_col=None,
     )
 
 
@@ -324,9 +320,7 @@ def _parse_raptor_native(
         cwe=finding["cwe"],
         language=finding.get("language") or _detect_language(file),
         source_lineno=finding["source_line"],
-        source_col=finding.get("source_col"),
         sink_lineno=finding["sink_line"],
-        sink_col=finding.get("sink_col"),
         sink_arg_hint=finding.get("sink_arg"),
     )
 
@@ -353,6 +347,32 @@ def _detect_language(file_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _read_finding_source(file: str) -> Union[str, ResolutionFailure]:
+    """Containment-checked read of the source file named by a finding.
+
+    The path comes verbatim from externally-produced analyser output
+    (SARIF ``artifactLocation.uri``, Semgrep ``path``, native
+    ``file_path``), so it is untrusted: a ``..`` segment would let a
+    crafted record walk the resolver out of the scanned tree and read
+    an arbitrary file (same defense as
+    ``core.annotations.storage``). Absolute paths stay allowed —
+    RAPTOR-native findings legitimately carry absolute paths into the
+    scanned repo.
+    """
+    try:
+        parts = Path(file).parts
+    except (TypeError, ValueError):
+        return ResolutionFailure(reason=f"malformed file path: {file!r}")
+    if any(part == ".." for part in parts):
+        return ResolutionFailure(
+            reason=f"refusing file path with '..' segment: {file!r}",
+        )
+    try:
+        return Path(file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        return ResolutionFailure(reason=f"cannot read {file}: {e}")
+
+
 def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
     if parsed.language == "python":
         return _resolve_from_parsed_python(parsed)
@@ -368,11 +388,9 @@ def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
 
 
 def _resolve_from_parsed_python(parsed: _ParsedFinding) -> Resolution:
-    file_path = Path(parsed.file)
-    try:
-        source_text = file_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
-        return ResolutionFailure(reason=f"cannot read {parsed.file}: {e}")
+    source_text = _read_finding_source(parsed.file)
+    if isinstance(source_text, ResolutionFailure):
+        return source_text
     try:
         tree = ast.parse(source_text)
     except SyntaxError as e:
@@ -500,11 +518,9 @@ def _resolve_from_parsed_cpp(parsed: _ParsedFinding) -> Resolution:
     node at the requested source / sink line. The legacy lexical
     fallback at ``smt_barrier.py:746`` / ``:940`` is the safety net.
     """
-    file_path = Path(parsed.file)
-    try:
-        source_text = file_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
-        return ResolutionFailure(reason=f"cannot read {parsed.file}: {e}")
+    source_text = _read_finding_source(parsed.file)
+    if isinstance(source_text, ResolutionFailure):
+        return source_text
 
     fn_name, fn_start = _find_enclosing_function_cpp(
         source_text, parsed.language, parsed.source_lineno,

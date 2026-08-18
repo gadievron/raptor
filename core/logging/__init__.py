@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 RAPTOR Structured Logging System
 
@@ -8,13 +7,13 @@ and machine-parsable JSON audit trails.
 
 import json
 import logging
+import os
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Optional, Self
 
 from core.config import RaptorConfig
-
 
 # Reserved attribute names on `logging.LogRecord`. Any kwarg with a
 # colliding name passed via `extra=` causes
@@ -80,7 +79,7 @@ class JSONFormatter(logging.Formatter):
         # formats in the JSONL audit trail force consumers to
         # parse two date shapes.
         from datetime import datetime, timezone
-        log_obj: Dict[str, Any] = {
+        log_obj: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(
                 record.created, tz=timezone.utc,
             ).isoformat(),
@@ -111,6 +110,58 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_obj, default=str)
 
 
+# Characters that make up decorative separator banners. Several CLIs
+# print `logger.info("=" * 70)` framing for the console; persisted into
+# the JSONL audit trail they are pure noise (hundreds of records per
+# long run whose message is 70 equals-signs).
+_SEPARATOR_CHARS = set("=-─═*# ")
+
+
+def _drop_separator_records(record: logging.LogRecord) -> bool:
+    """Handler filter: False for records that are only a separator."""
+    try:
+        msg = record.getMessage().strip()
+    except Exception:  # noqa: BLE001 — malformed record: let it through
+        return True
+    return not (len(msg) >= 10 and set(msg) <= _SEPARATOR_CHARS)
+
+
+class _OwnerOnlyFileHandler(logging.FileHandler):
+    """``FileHandler`` whose audit file is created owner-only (0o600).
+
+    The JSONL audit trail persists exception bodies and prompt
+    fragments; the stdlib default 0644 let any other local user read
+    them on a shared host. Match the deliberate 0o600 on the LLM
+    response cache and ``LLMConfig.to_file``. Mode is applied at
+    creation via ``os.open`` (not a post-hoc chmod), so there is no
+    world-readable window; a stricter umask still tightens further.
+    """
+
+    def _open(self):
+        fd = os.open(
+            self.baseFilename,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        try:
+            return open(fd, self.mode, encoding=self.encoding, errors=self.errors)
+        except Exception:
+            os.close(fd)
+            raise
+
+
+def _file_log_level() -> int:
+    """Audit-trail file level: INFO unless RAPTOR_LOG_FILE_LEVEL says
+    otherwise (unknown names fall back to INFO rather than erroring
+    during logger bootstrap)."""
+    name = os.environ.get("RAPTOR_LOG_FILE_LEVEL", "").strip().upper()
+    if name:
+        level = getattr(logging, name, None)
+        if isinstance(level, int):
+            return level
+    return logging.INFO
+
+
 class RaptorLogger:
     """
     Centralized logger for RAPTOR framework.
@@ -123,7 +174,7 @@ class RaptorLogger:
     _initialized: bool = False
     _lock: threading.Lock = threading.Lock()
 
-    def __new__(cls) -> "RaptorLogger":
+    def __new__(cls) -> Self:
         """Singleton pattern to ensure one logger instance."""
         if cls._instance is None:
             with cls._lock:
@@ -166,11 +217,10 @@ class RaptorLogger:
             #
             # Same shape as `core/run/output.unique_run_suffix` (batch
             # 143): wall-clock second + pid + 4-digit monotonic-ns tail.
-            import os as _os
             ns_tail = time.monotonic_ns() % 10_000
             log_file = (
                 RaptorConfig.LOG_DIR
-                / f"raptor_{int(time.time())}_pid{_os.getpid()}_{ns_tail:04d}.jsonl"
+                / f"raptor_{int(time.time())}_pid{os.getpid()}_{ns_tail:04d}.jsonl"
             )
             # `delay=True` defers opening the file until the first emit.
             # Pre-fix every `RaptorLogger()` instantiation eagerly created
@@ -190,8 +240,19 @@ class RaptorLogger:
             # opening one. `delay=True` only opens the file when there's
             # actually a record to write — empty processes leave no
             # trace in `LOG_DIR`.
-            file_handler = logging.FileHandler(log_file, delay=True)
-            file_handler.setLevel(logging.DEBUG)
+            file_handler = _OwnerOnlyFileHandler(log_file, delay=True)
+            # Default INFO, not DEBUG. At DEBUG the audit trail
+            # persisted every per-LLM-call line (usage/cost, "Using
+            # model", "Structured generation successful") and 3-4
+            # provider-init lines per task — roughly half of a typical
+            # file was this repetition. Investigations that need the
+            # full firehose opt back in per run:
+            #   RAPTOR_LOG_FILE_LEVEL=DEBUG
+            file_handler.setLevel(_file_log_level())
+            # Decorative separator banners ("====...====", "----")
+            # belong on the console, not in a JSONL audit trail —
+            # filter them from the file only.
+            file_handler.addFilter(_drop_separator_records)
             json_formatter = JSONFormatter()
             file_handler.setFormatter(json_formatter)
             self.logger.addHandler(file_handler)
@@ -315,40 +376,58 @@ class RaptorLogger:
         exc_info, stack_info, extra = self._split_kwargs(kwargs)
         self.logger.critical(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
-    def log_job_start(self, job_id: str, tool: str, arguments: Dict[str, Any]) -> None:
-        """Log job start event."""
-        self.info(
-            f"Job started: {tool}",
-            job_id=job_id,
-            tool=tool,
-            arguments=str(arguments),
-        )
-
-    def log_job_complete(
-        self, job_id: str, tool: str, status: str, duration: float
-    ) -> None:
-        """Log job completion event."""
-        self.info(
-            f"Job completed: {tool} ({status})",
-            job_id=job_id,
-            tool=tool,
-            status=status,
-            duration=duration,
-        )
-
     def log_security_event(
         self, event_type: str, message: str, **kwargs: Any
     ) -> None:
-        """Log security-relevant event."""
-        self.warning(
-            f"SECURITY: {event_type} - {message}",
-            event_type=event_type,
-            **kwargs,
-        )
+        """Log security-relevant event.
+
+        Observability stream, not a control: emitters call this on
+        rejection / denial / fail-closed paths whose behaviour is
+        already decided. The call must therefore NEVER raise — a
+        broken sink (unwritable audit file, closed stderr, handler
+        misconfiguration) must not turn a working rejection into a
+        crash. Same rationale as ``_drop_separator_records``'s
+        malformed-record guard.
+
+        Payload hygiene contract for emitters: ``message`` and
+        ``kwargs`` carry the event type and path / URL / context
+        IDENTIFIERS only — never environment values, key material,
+        or other secrets. Callers logging URLs must redact userinfo
+        first (``core.security.redaction``).
+        """
+        try:
+            self.warning(
+                f"SECURITY: {event_type} - {message}",
+                event_type=event_type,
+                **kwargs,
+            )
+        except Exception:  # noqa: BLE001, S110 — observability must never break the emitter
+            pass
+
+
+def log_security_event(event_type: str, message: str, **kwargs: Any) -> None:
+    """Module-level convenience for :meth:`RaptorLogger.log_security_event`.
+
+    The security-event stream predates the per-module logger split:
+    when it was introduced, every emitter held the RaptorLogger
+    singleton (``get_logger()``) and called the method directly.
+    Modules have since moved to stdlib per-module loggers
+    (``logging.getLogger(__name__)``), which don't carry the method —
+    this function lets those modules emit without switching logger
+    styles.
+
+    Never raises: on top of the method's own guard, this covers
+    RaptorLogger initialisation failure (e.g. ``LOG_DIR`` cannot be
+    created during bootstrap). Emission is best-effort by design.
+    """
+    try:
+        RaptorLogger().log_security_event(event_type, message, **kwargs)
+    except Exception:  # noqa: BLE001, S110 — observability must never break the emitter
+        pass
 
 
 # Global logger instance
-def get_logger(name: Optional[str] = None) -> "logging.Logger":
+def get_logger(name: str | None = None) -> "logging.Logger":
     """Get a RAPTOR logger.
 
     With no `name` (default): returns the singleton RaptorLogger
@@ -399,7 +478,7 @@ def set_console_log_level(level: int, *, include_root: bool = False) -> None:
     root_logger.setLevel(level)
 
 
-def configure_run_logging(log_level: Optional[str], verbose: bool) -> None:
+def configure_run_logging(log_level: str | None, verbose: bool) -> None:
     """Apply run-level console logging flags."""
     if log_level:
         set_console_log_level(getattr(logging, log_level.upper()), include_root=True)

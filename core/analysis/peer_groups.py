@@ -13,7 +13,9 @@ Layer hierarchy:
   L3  Domain model groups        — study-run concepts (high)
 
   L4  Type cohort groups         — shared type parameter (medium-high)
-  L5  Verb-prefix + sig shape    — naming heuristic per-directory (medium)
+  L5  Decorator / verb-prefix    — shared-decorator groups first, then
+                                    verb-prefix + sig shape on what
+                                    remains, per-directory (medium)
   L6  Paired operations          — stem + verb match, global (medium)
 
 L0–L3 claim exclusively (a function in a higher layer is removed from
@@ -25,7 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.audit.sibling_analysis import (
@@ -64,6 +66,13 @@ def resolve_peer_groups(
     """
     groups: list[SiblingGroup] = []
     claimed: set[tuple[str, str]] = set()  # (file, function) pairs
+    # Per-layer summary: "ran → N groups" vs "skipped (no input)". The
+    # previous single "claimed by L0-L3" counter couldn't distinguish
+    # the two, and its "L0" vocabulary collided with the unrelated
+    # mechanical "Layer 0" pattern sweep — a run whose exclusive
+    # layers all lacked inputs printed "0 functions claimed by L0-L3"
+    # next to "Layer 0: N findings", reading as a contradiction.
+    layer_report: list[str] = []
 
     def _remaining():
         return [
@@ -81,42 +90,351 @@ def resolve_peer_groups(
         l0 = _joern_co_callee_groups(joern_server, _remaining())
         _claim(l0)
         groups.extend(l0)
+        layer_report.append(f"joern co-callee {len(l0)}")
+    else:
+        layer_report.append("joern co-callee skipped (no server)")
 
     # L1: r2 binary co-callee (exclusive)
     if binary_edge_index is not None:
         l1 = _binary_co_callee_groups(binary_edge_index, _remaining())
         _claim(l1)
         groups.extend(l1)
+        layer_report.append(f"binary co-callee {len(l1)}")
+    else:
+        layer_report.append("binary co-callee skipped (no edge index)")
 
     # L2: Dispatch-site (exclusive)
     if dispatch_tables:
         l2 = _dispatch_site_groups(dispatch_tables, _remaining())
         _claim(l2)
         groups.extend(l2)
+        layer_report.append(f"dispatch-site {len(l2)}")
+    else:
+        layer_report.append("dispatch-site skipped (no tables)")
 
     # L3: Domain model (exclusive)
     if domain_model:
         l3 = _domain_model_groups(domain_model, _remaining())
         _claim(l3)
         groups.extend(l3)
+        layer_report.append(f"domain-model {len(l3)}")
+    else:
+        layer_report.append("domain-model skipped (no model)")
 
     # L4–L6: independent (no claim removal between them)
-    groups.extend(_type_cohort_groups(type_ref_index, functions))
-    groups.extend(_verb_prefix_groups(functions, checklist=checklist))
-    groups.extend(_paired_operation_groups(functions))
+    if type_ref_index:
+        l4 = _type_cohort_groups(type_ref_index, functions)
+        groups.extend(l4)
+        layer_report.append(f"type-cohort {len(l4)}")
+    else:
+        layer_report.append("type-cohort skipped (no index)")
+    l5 = _verb_prefix_groups(functions, checklist=checklist)
+    groups.extend(l5)
+    layer_report.append(f"verb-prefix {len(l5)}")
+    l6 = _paired_operation_groups(functions)
+    groups.extend(l6)
+    layer_report.append(f"paired-op {len(l6)}")
 
     logger.info(
-        "peer group resolver: %d groups (%d functions claimed by L0-L3, "
-        "%d total functions)",
-        len(groups), len(claimed), len(functions),
+        "peer group resolver: %d groups from %d functions, %d claimed "
+        "by exclusive layers — %s",
+        len(groups), len(functions), len(claimed),
+        "; ".join(layer_report),
     )
     return groups
+
+
+# ── Input producers (orchestrator prep phase) ────────────────────────
+#
+# The resolver takes its optional layer inputs pre-built.  The
+# producers below build them from the data the audit prep phase
+# already has — the enriched inventory.  Each returns ``None`` when
+# its input is absent, and the resolver then behaves exactly as if
+# the layer did not exist (equivalence pin).
+
+
+def binary_edge_index_from_inventory(
+    inventory: dict[str, Any] | None,
+    *,
+    no_binary_oracle: bool = False,
+) -> Any | None:
+    """L1 producer: cached r2 call edges for the run's declared binaries.
+
+    Cache-only — never invokes r2 (audit prep must stay fast).  Consumes
+    the per-build-id edge cache persisted by ``/agentic`` / ``/codeql``
+    ``--binary-edges`` runs (Inc 2b) or a binary graph store left by
+    ``/understand --map``.
+
+    Chokepoint safeguards (all inherited or enforced here):
+
+    * **Provenance** — only binaries recorded in
+      ``inventory['binary_oracle']['binaries']`` are considered.  That
+      list is produced upstream by ``resolve_binary_paths`` (git-
+      untracked filter, operator-explicit ``--binary`` bypass) plus the
+      source-coverage floor, so a planted or repo-committed binary
+      never reaches this producer.
+    * **Tier gating** — binaries that fell back to symbol-only or
+      unknown tier are skipped: name-keyed joins from a stripped
+      binary are not trustworthy enough for a layer that claims
+      functions exclusively.
+    * **Operator opt-out** — ``no_binary_oracle=True`` returns ``None``
+      (mirrors ``--no-binary-oracle``).
+
+    Returns a merged ``BinaryEdgeIndex`` across all eligible binaries,
+    or ``None`` when nothing is available — the L1 layer then stays
+    empty and resolver behaviour is unchanged.
+    """
+    if no_binary_oracle or not isinstance(inventory, dict):
+        return None
+    bo = inventory.get("binary_oracle")
+    if not isinstance(bo, dict):
+        return None
+    binaries = bo.get("binaries")
+    if not isinstance(binaries, list) or not binaries:
+        return None
+
+    try:
+        from core.analysis.binary_oracle_edges import (
+            BinaryEdgeIndex,
+            load_cached_edge_index,
+        )
+    except ImportError:
+        return None
+
+    merged: Any = None
+    n_loaded = 0
+    for entry in binaries:
+        if not isinstance(entry, dict):
+            continue
+        tier = entry.get("tier")
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        if tier != "full":
+            logger.debug(
+                "peer groups L1: skipping %s (tier=%s, need full-DWARF)",
+                path, tier,
+            )
+            continue
+        idx = load_cached_edge_index(Path(path))
+        if idx is None or not idx.edges:
+            continue
+        if merged is None:
+            merged = BinaryEdgeIndex(binary_path=path)
+        merged.edges.extend(idx.edges)
+        merged.callees.update(idx.callees)
+        n_loaded += 1
+
+    if merged is None:
+        return None
+    logger.info(
+        "peer groups L1: %d cached binary edges from %d binar%s",
+        len(merged.edges), n_loaded, "y" if n_loaded == 1 else "ies",
+    )
+    return merged
+
+
+# Types too ubiquitous to define a peer cohort.  Merged across
+# languages — a lowercase match in ANY language's primitive set
+# disqualifies the token (cross-language collisions like ``string``
+# are never distinctive anyway).
+_NON_DISTINCTIVE_TYPES = frozenset({
+    # C / C++
+    "void", "int", "char", "long", "short", "float", "double", "bool",
+    "unsigned", "signed", "const", "volatile", "struct", "enum",
+    "union", "auto", "register", "static", "extern", "inline",
+    "size_t", "ssize_t", "wchar_t", "ptrdiff_t", "intptr_t",
+    "uintptr_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t",
+    "uint16_t", "uint32_t", "uint64_t", "uint", "uchar", "ulong",
+    "ushort", "byte", "off_t", "time_t", "pid_t", "uid_t", "gid_t",
+    "mode_t", "dev_t", "ino_t", "socklen_t", "va_list", "file",
+    "std", "string", "vector", "map", "set", "pair", "shared_ptr",
+    "unique_ptr", "weak_ptr", "optional", "variant", "function",
+    "string_view", "array", "deque", "list", "tuple", "nullptr_t",
+    # Python
+    "str", "bytes", "bytearray", "dict", "frozenset", "none",
+    "nonetype", "any", "object", "callable", "iterable", "iterator",
+    "sequence", "mapping", "generator", "coroutine", "awaitable",
+    "union", "type", "self", "cls", "path", "pathlike",
+    # Java / C#
+    "integer", "boolean", "character", "number", "arraylist",
+    "hashmap", "hashset", "linkedlist", "exception",
+    "runnable", "thread", "task", "action", "func", "ienumerable",
+    "ilist", "idictionary", "stringbuilder", "charsequence",
+    # JS / TS
+    "promise", "record", "partial", "readonly", "undefined", "null",
+    "symbol", "bigint", "date", "regexp", "error",
+    # Go
+    "rune", "uintptr", "interface", "chan", "context", "error",
+    # Rust
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32",
+    "u64", "u128", "usize", "f32", "f64", "vec", "box", "rc", "arc",
+    "option", "result", "cow", "cell", "refcell", "mutex", "rwlock",
+    "btreemap", "btreeset", "osstring", "pathbuf",
+})
+
+_TYPE_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# C signature fallback: languages whose extractor records no parameter
+# metadata but does record the raw signature — mine ``foo_t`` /
+# ``struct foo`` tokens out of it (same trick the study-prep type
+# index uses).
+_SIG_FALLBACK_LANGUAGES = frozenset({"c", "cpp"})
+_SIG_TYPE_RE = re.compile(r"\b(?:struct\s+(\w+)|(\w+_t))\b")
+
+
+def _distinctive_type_tokens(type_str: str) -> set[str]:
+    """Extract distinctive type-name tokens from one type annotation.
+
+    Tokenises so decorated forms (``const request_ctx_t *``,
+    ``Optional[AuthContext]``, ``std::vector<Packet>``) all yield their
+    distinctive core; primitives / ubiquitous stdlib names are dropped.
+    """
+    tokens: set[str] = set()
+    for tok in _TYPE_TOKEN_RE.findall(type_str):
+        if len(tok) < 3:
+            continue
+        if tok.lower() in _NON_DISTINCTIVE_TYPES:
+            continue
+        tokens.add(tok)
+    return tokens
+
+
+def _param_type_strs(meta: dict[str, Any]) -> list[str]:
+    """Parameter type annotations from inventory metadata.
+
+    Handles both serialised shapes: ``[[name, type], ...]`` (checklist
+    JSON round-trip) and ``[{"name": ..., "type": ...}, ...]``.
+    """
+    out: list[str] = []
+    for p in meta.get("parameters") or []:
+        t = None
+        if isinstance(p, dict):
+            t = p.get("type")
+        elif isinstance(p, (list, tuple)) and len(p) > 1:
+            t = p[1]
+        if isinstance(t, str) and t:
+            out.append(t)
+    return out
+
+
+def type_ref_index_from_inventory(
+    inventory: dict[str, Any] | None,
+    *,
+    max_cohort_size: int = 24,
+    max_types: int = 200,
+) -> dict[str, list[tuple[str, str]]] | None:
+    """L4 producer: type-cohort index from inventory type metadata.
+
+    Walks the checklist inventory and maps each distinctive type name
+    to the functions whose parameters or return type mention it — the
+    ``type_ref_index`` shape ``_type_cohort_groups`` consumes
+    (``{type_name: [(function, usage_class), ...]}``, usage class is
+    ``"param"`` / ``"return"`` / ``"signature"``).
+
+    Language-aware where the inventory supports it: typed extractors
+    (Python AST, Java, tree-sitter C/C++) feed ``metadata.parameters``
+    / ``metadata.return_type``; for C/C++ items without parameter
+    metadata the raw signature is mined for ``foo_t`` / ``struct foo``
+    tokens.  Bounded: cohorts larger than *max_cohort_size* are
+    dropped (a type half the codebase touches is not distinctive), and
+    at most *max_types* cohorts are returned (smallest — most
+    distinctive — first).
+
+    Returns ``None`` when the inventory records no usable type
+    information, so the L4 layer stays empty and resolver behaviour is
+    unchanged.
+    """
+    if not isinstance(inventory, dict):
+        return None
+
+    index: dict[str, dict[str, str]] = {}
+
+    def _record(type_str: str, fn_name: str, usage: str) -> None:
+        for tok in _distinctive_type_tokens(type_str):
+            index.setdefault(tok, {}).setdefault(fn_name, usage)
+
+    for f in inventory.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        lang = (f.get("language") or "").lower()
+        for item in f.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind", "function") != "function":
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            meta = item.get("metadata")
+            meta = meta if isinstance(meta, dict) else {}
+            param_types = _param_type_strs(meta)
+            for t in param_types:
+                _record(t, name, "param")
+            ret = meta.get("return_type")
+            if isinstance(ret, str) and ret:
+                _record(ret, name, "return")
+            if not param_types and lang in _SIG_FALLBACK_LANGUAGES:
+                sig = item.get("signature")
+                if isinstance(sig, str) and sig:
+                    for m in _SIG_TYPE_RE.finditer(sig):
+                        _record(m.group(1) or m.group(2), name,
+                                "signature")
+
+    cohorts = {
+        t: members for t, members in index.items()
+        if 2 <= len(members) <= max_cohort_size
+    }
+    if not cohorts:
+        return None
+
+    result: dict[str, list[tuple[str, str]]] = {}
+    for t in sorted(cohorts, key=lambda k: (len(cohorts[k]), k))[:max_types]:
+        result[t] = sorted(cohorts[t].items())
+    logger.info(
+        "peer groups L4: type-cohort index with %d distinctive types",
+        len(result),
+    )
+    return result
 
 
 # ── L0: Joern co-callee groups ────────────────────────────────────────
 
 
 _JOERN_PEERS_RE = re.compile(r"^JOERN_PEERS:([^|]+)\|([^|]*)\|(.+)$")
+
+
+def _name_index(functions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Bare-name → record index for the grouping layers.
+
+    Function identity in the resolver is the (file, name) pair — that
+    is what the claim set tracks — but group membership arrives as
+    bare names (Joern callees, binary edges, dispatch handler values,
+    domain-model members, type refs, operation stems). When several
+    still-unclaimed records share a name, the bare name is ambiguous:
+    a last-wins dict would bind the sibling (and the subsequent
+    claim) to an arbitrary record and permanently shadow the others.
+    Ambiguous names are excluded from grouping instead.
+    """
+    by_name: dict[str, dict[str, Any]] = {}
+    ambiguous: set[str] = set()
+    for f in functions:
+        name = f.get("name", "")
+        if not name:
+            continue
+        if name in by_name:
+            ambiguous.add(name)
+        else:
+            by_name[name] = f
+    for name in ambiguous:
+        del by_name[name]
+    if ambiguous:
+        logger.debug(
+            "peer groups: %d name(s) ambiguous across files, excluded "
+            "from name-keyed grouping: %s",
+            len(ambiguous), sorted(ambiguous)[:8],
+        )
+    return by_name
 
 
 def _parse_joern_peers(raw_output: str) -> list[tuple[str, str, list[str]]]:
@@ -177,8 +495,8 @@ def _joern_co_callee_groups(
         return []
 
     raw_groups = _parse_joern_peers(result.raw_output or "")
-    func_names = {f.get("name", "") for f in functions}
-    func_by_name = {f.get("name", ""): f for f in functions if f.get("name")}
+    func_by_name = _name_index(functions)
+    func_names = set(func_by_name)
 
     groups: list[SiblingGroup] = []
     for caller, caller_file, callees in raw_groups:
@@ -224,8 +542,8 @@ def _binary_co_callee_groups(
     if not edges:
         return []
 
-    func_names = {f.get("name", "") for f in functions}
-    func_by_name = {f.get("name", ""): f for f in functions if f.get("name")}
+    func_by_name = _name_index(functions)
+    func_names = set(func_by_name)
 
     caller_to_callees: dict[str, list[str]] = defaultdict(list)
     for edge in edges:
@@ -273,8 +591,8 @@ def _dispatch_site_groups(
     if not tables or not functions:
         return []
 
-    func_names = {f.get("name", "") for f in functions}
-    func_by_name = {f.get("name", ""): f for f in functions if f.get("name")}
+    func_by_name = _name_index(functions)
+    func_names = set(func_by_name)
 
     groups: list[SiblingGroup] = []
     for table in tables:
@@ -320,8 +638,8 @@ def _domain_model_groups(
     if not model or not functions:
         return []
 
-    func_names = {f.get("name", "") for f in functions}
-    func_by_name = {f.get("name", ""): f for f in functions if f.get("name")}
+    func_by_name = _name_index(functions)
+    func_names = set(func_by_name)
 
     concepts = model.get("concepts", [])
     if not concepts:
@@ -375,7 +693,7 @@ def _type_cohort_groups(
     if not type_ref_index or not functions:
         return []
 
-    func_by_name = {f.get("name", ""): f for f in functions if f.get("name")}
+    func_by_name = _name_index(functions)
     func_names = set(func_by_name)
 
     groups: list[SiblingGroup] = []
@@ -448,8 +766,13 @@ def _signatures_compatible(
             return False
 
         if params_a and params_b:
-            type_a = params_a[0][1] if len(params_a[0]) > 1 else None
-            type_b = params_b[0][1] if len(params_b[0]) > 1 else None
+            p0a, p0b = params_a[0], params_b[0]
+            type_a = (p0a.get("type") if isinstance(p0a, dict)
+                      else p0a[1] if isinstance(p0a, (list, tuple)) and len(p0a) > 1
+                      else None)
+            type_b = (p0b.get("type") if isinstance(p0b, dict)
+                      else p0b[1] if isinstance(p0b, (list, tuple)) and len(p0b) > 1
+                      else None)
             if type_a and type_b and type_a != type_b:
                 return False
 
@@ -477,7 +800,14 @@ def _verb_prefix_groups(
     functions: list[dict[str, Any]],
     checklist: dict[str, Any] | None = None,
 ) -> list[SiblingGroup]:
-    """L5: verb-prefix groups scoped per-directory with signature filtering."""
+    """L5: two per-directory passes folded into one result list.
+
+    First a decorator pass: functions sharing a decorator (checklist
+    ``metadata.attributes``) form a group per (directory, decorator),
+    with no verb match or signature filtering. Then a verb-prefix
+    pass with signature-shape filtering over the functions the
+    decorator pass did not claim.
+    """
     if not functions:
         return []
 
@@ -570,6 +900,7 @@ def _verb_prefix_groups(
                 sibling_type=SiblingType.PEER_FUNCTIONS,
                 description=f"{verb}_* functions in {directory or '.'}",
                 siblings=siblings,
+                shared_context=f"Shared verb prefix: {verb}_*",
             ))
 
     all_groups = decorator_groups + verb_groups
@@ -648,7 +979,7 @@ def _paired_operation_groups(
     if not functions:
         return []
 
-    func_by_name = {f.get("name", ""): f for f in functions if f.get("name")}
+    func_by_name = _name_index(functions)
     names = set(func_by_name)
     groups: list[SiblingGroup] = []
     paired: set[str] = set()
@@ -675,11 +1006,13 @@ def _paired_operation_groups(
             ],
         ))
 
-    # Prefix-swap pairs
+    # Prefix-swap pairs. Iterate sorted so stem-collision winners and
+    # first-claimed pairs are deterministic across runs (set iteration
+    # order varies with hash randomization); mirrors the suffix loop.
     for fwd_pat, rev_pat in _PAIR_PATTERNS:
         forward: dict[str, str] = {}
         reverse: dict[str, str] = {}
-        for name in names:
+        for name in sorted(names):
             m = fwd_pat.match(name)
             if m:
                 stem = m.group(2) or ""

@@ -11,9 +11,6 @@
 // or a manual SIZE_MAX / b guard.
 //
 // Known limitations:
-// - malloc(sizeof(T) * CONSTANT) matches even though compile-time
-//   constant products cannot overflow at runtime. Coccinelle cannot
-//   distinguish compile-time constants from variables in expressions.
 // - Division-based guards (SIZE_MAX / b) are only matched in a few
 //   common forms; unusual guard idioms may not be recognised.
 //
@@ -106,9 +103,89 @@ statement S;
   krealloc@p(...)
 )
 
+// --- Exclude compile-time constant products (literal * literal) ---
+
+@const_product@
+constant C1, C2;
+position alloc_mul.p;
+@@
+
+(
+  malloc@p(C1 * C2)
+|
+  kmalloc@p(C1 * C2, ...)
+|
+  kzalloc@p(C1 * C2, ...)
+|
+  vmalloc@p(C1 * C2)
+|
+  realloc@p(..., C1 * C2)
+|
+  krealloc@p(..., C1 * C2, ...)
+)
+
+// --- Exclude sizeof * constant (compile-time, no overflow) ---
+
+@sizeof_const_product@
+type T;
+expression SZ;
+constant K;
+position alloc_mul.p;
+@@
+
+(
+  malloc@p(sizeof(T) * K)
+|
+  malloc@p(sizeof(SZ) * K)
+|
+  malloc@p(K * sizeof(T))
+|
+  malloc@p(K * sizeof(SZ))
+|
+  kmalloc@p(sizeof(T) * K, ...)
+|
+  kmalloc@p(sizeof(SZ) * K, ...)
+|
+  kmalloc@p(K * sizeof(T), ...)
+|
+  kmalloc@p(K * sizeof(SZ), ...)
+|
+  kzalloc@p(sizeof(T) * K, ...)
+|
+  kzalloc@p(sizeof(SZ) * K, ...)
+|
+  kzalloc@p(K * sizeof(T), ...)
+|
+  kzalloc@p(K * sizeof(SZ), ...)
+|
+  vmalloc@p(sizeof(T) * K)
+|
+  vmalloc@p(sizeof(SZ) * K)
+|
+  vmalloc@p(K * sizeof(T))
+|
+  vmalloc@p(K * sizeof(SZ))
+|
+  realloc@p(..., sizeof(T) * K)
+|
+  realloc@p(..., sizeof(SZ) * K)
+|
+  realloc@p(..., K * sizeof(T))
+|
+  realloc@p(..., K * sizeof(SZ))
+|
+  krealloc@p(..., sizeof(T) * K, ...)
+|
+  krealloc@p(..., sizeof(SZ) * K, ...)
+|
+  krealloc@p(..., K * sizeof(T), ...)
+|
+  krealloc@p(..., K * sizeof(SZ), ...)
+)
+
 // --- Report unguarded multiplicative allocations ---
 
-@script:python depends on alloc_mul && !guarded && !div_guarded@
+@script:python depends on alloc_mul && !guarded && !div_guarded && !const_product && !sizeof_const_product@
 p << alloc_mul.p;
 E1 << alloc_mul.E1;
 E2 << alloc_mul.E2;

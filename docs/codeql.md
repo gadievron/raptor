@@ -32,7 +32,9 @@ autonomous analysis pipeline.
 |------|---------|-------------|
 | `--repo <path>` | required | Repository path to analyse |
 | `--languages <list>` | auto-detect | Comma-separated languages (aliases accepted: `c`, `js`, `ts`, `c#`, `kt`, `py`) |
-| `--build-command <cmd>` | auto-detect | Custom build command (requires exactly one `--languages` entry) |
+| `--build-command <cmd>` | auto-detect | Custom build command (requires exactly one `--languages` entry; implies a traced build for that language) |
+| `--traced-build` | off | Opt into traced-build C/C++ extraction (executes the repo's build system — asserts trust in the repo). Default is buildless |
+| `--no-traced-build` | off | Force buildless extraction for this run, overriding both `--traced-build` and the project's `build` trust marker |
 | `--out <dir>` | auto | Output directory |
 | `--force` | off | Delete and recreate the CodeQL database from scratch |
 | `--extended` | off | Use `security-extended` suites instead of `security-and-quality` |
@@ -45,14 +47,16 @@ autonomous analysis pipeline.
 | `--max-findings <n>` | 20 | Maximum findings to analyse (with `--analyze`) |
 | `--no-visualizations` | off | Disable HTML/Mermaid/ASCII/DOT dataflow visualisations |
 | `--trust-repo` | off | Trust the target repo's config files and skip safety checks |
+| `--no-trust-repo` | off | Keep the strict trust checks for this run, overriding both `--trust-repo` and the project's `config` trust marker |
 | `--phase-timeout <sec>` | config | Wall-clock timeout for the database creation phase (0 = unlimited) |
 | `--binary <path>` | none | Explicit debug binary for reachability oracle (repeatable) |
 | `--binary-auto` | off | Auto-detect locally-built debug binaries |
 | `--binary-edges` | off | Extract direct call edges and vtable resolution via r2 |
 | `--no-binary-oracle` | off | Disable binary-oracle filtering entirely |
 | `--sanitizer-cut <mode>` | off | Sanitiser-cut value-bound suppression mode (`off` / `on` / `strict` / `shadow`) |
+| `--sanitizer-cut-parity-log <path>` | auto | Parity-log path for `--sanitizer-cut shadow` (default: `<run_dir>/sanitizer_cut_parity.jsonl`) |
 | `--no-iris-tier1` | off | Skip IRIS Tier 1 in-repo LocalFlowSource pack analysis |
-| `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`debug` / `full` / `network-only` / `none`) |
+| `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`full` / `strict` / `debug` / `target_run` / `frida` / `network-only` / `none`) |
 | `--no-sandbox` | off | Alias for `--sandbox none` |
 | `--audit` | off | Engage [sandbox](sandbox.md) audit mode |
 | `--audit-verbose` | off | Log every traced syscall (requires `--audit`) |
@@ -116,13 +120,51 @@ tool is installed, try `synthesise_build_command` (generates a Python
 shim to compile individual files; C++ and Java only), then fall back to
 no-build mode (interpreted languages or when nothing else works).
 
-SAGE build-recall context is threaded into the detection when
-available, providing hints from previous successful builds of the
+[SAGE](sage.md) build-recall context is threaded into the detection
+when available, providing hints from previous successful builds of the
 same repository.
 
 ### Phase 3 -- Database Creation
 
 Implemented in `packages/codeql/database_manager.py`.
+
+**Buildless C/C++ (default).** C/C++ databases are created with
+`--build-mode=none`: the extractor parses source without invoking any
+build system, so no repo-controlled code executes during
+`database create`. This is the untrusted-repo posture — a build
+system is repo code, and there is no mechanical signal that running
+it is safe. Requires CodeQL CLI >= 2.16; older CLIs get a clear skip,
+never a silent fallback to a traced build.
+
+The trade-off is accuracy: buildless extraction cannot see
+build-generated headers (`config.h`, yacc/protobuf output), so TUs
+that include them parse partially and dataflow through those regions
+is lost, and macro configurations are inferred rather than recorded
+from real compiler invocations. After every buildless creation the
+run log carries one line summarising the damage — a WARNING with the
+count of unresolved-include extractor diagnostics when any exist, an
+INFO notice otherwise — so reduced coverage never silently reads as
+full coverage.
+
+**Traced build (opt-in).** `--traced-build` (or an explicit
+`--build-command`) restores full-fidelity extraction by executing the
+repo's build under the sandbox. This is an explicit operator
+assertion of trust in the target — appropriate for first-party code
+and well-known upstreams you would build anyway. It is deliberately
+independent of `--trust-repo`, which gates the CodeQL pack-config
+surface (custom extractors / build hooks declared in
+`codeql-pack.yml`): that check is an anomaly alarm — legitimate
+projects essentially never carry custom extractors, and the alarm
+matters most on repos you otherwise trust, where a poisoned analysis
+would be believed. A traced-build run that hits unsafe pack config
+therefore still refuses and prints the findings; escalate with
+`--trust-repo` only after auditing them. Build detection (Phase 2)
+still runs for traced builds and for the non-C/C++ languages whose
+extractors need it. For targets you audit repeatedly, the assertion
+can be persisted per project — `raptor project trust build` makes
+every subsequent `/codeql` and `/agentic` run on that project behave
+as if `--traced-build` was passed (per-run `--no-traced-build`
+overrides; the `config` marker for `--trust-repo` stays independent).
 
 Databases are created via `codeql database create` and cached by a
 content hash:
@@ -167,9 +209,10 @@ three retries and exponential backoff.
 in-repo query packs (`packages/llm_analysis/codeql_packs/`) that
 extend source coverage to CLI arguments, environment variables, stdin,
 file reads, and database inputs. IRIS packs exist for Python, Java,
-JavaScript, and Go (28 queries across 8 CWEs). C++ is excluded because
+JavaScript, and Go (29 queries across 8 CWEs). C++ is excluded because
 the upstream stdlib already covers local flow sources. Disable with
-`--no-iris-tier1`.
+`--no-iris-tier1` (the master kill-switch is
+`RaptorConfig.IRIS_TIER1_ENABLED`).
 
 Per-language SARIF files are written to the output directory. IRIS
 findings produce a separate `codeql_<lang>_iris.sarif` file.
@@ -281,7 +324,7 @@ Two-tier architecture:
 2. **Full analysis** -- the finding, source context, dataflow path,
    and any SMT-derived input values are sent to the primary analysis
    model with a Mark Dowd security researcher persona. The prompt
-   requests the 11-field `VULNERABILITY_ANALYSIS_SCHEMA` covering
+   requests the 10-field `VULNERABILITY_ANALYSIS_SCHEMA` covering
    true-positive determination, exploitability score, severity,
    reasoning, attack scenario, prerequisites, impact, CVSS estimate,
    and mitigation.
@@ -361,8 +404,8 @@ CodeQL suite coverage across both suite tiers:
 | C/C++ | yes | yes | |
 | C# | yes | yes | |
 | Ruby | yes | yes | |
-| Swift | yes | -- | Extended suite not defined upstream |
-| Kotlin | yes | -- | Reuses Java suite |
+| Swift | yes | yes | |
+| Kotlin | yes | yes | Reuses Java suite |
 | Rust | yes | yes | |
 
 Language auto-detection covers 10 languages (all except Rust, which

@@ -54,9 +54,6 @@ work across the transition.
 
 from __future__ import annotations
 
-from typing import Dict
-
-
 # String-valued for direct JSON serialisation. No Enum() — keeps
 # the dict shape grep-able and avoids the standard-library enum
 # import burden on every consumer.
@@ -94,7 +91,7 @@ _SKIPPED_STATUSES = frozenset({
 })
 
 
-def derive_status(finding: Dict) -> str:
+def derive_status(finding: dict) -> str:
     """Infer status from a finding's existing fields.
 
     Used as the fallback when the finding doesn't carry an explicit
@@ -119,8 +116,8 @@ def derive_status(finding: Dict) -> str:
     return ANALYSED
 
 
-def set_status(finding: Dict, status: str,
-               *, skip_reason: str = None) -> None:
+def set_status(finding: dict, status: str,
+               *, skip_reason: str | None = None) -> None:
     """Stamp ``status`` (and optionally ``skip_reason``) on the
     finding dict. Validates against ``ALL_STATUSES`` to catch
     typos — an unknown status string would silently propagate
@@ -139,7 +136,7 @@ def set_status(finding: Dict, status: str,
         finding["skip_reason"] = skip_reason
 
 
-def get_status(finding: Dict) -> str:
+def get_status(finding: dict) -> str:
     """Return the finding's status — prefer the explicit ``status``
     field; fall back to ``derive_status`` for pre-#19 emit paths."""
     explicit = finding.get("status")
@@ -148,28 +145,28 @@ def get_status(finding: Dict) -> str:
     return derive_status(finding)
 
 
-def is_actionable(finding: Dict) -> bool:
+def is_actionable(finding: dict) -> bool:
     """True when the finding was successfully analysed and its
     verdict is trustworthy. Headline ''Exploitable / FP'' counts
     derive from this set."""
     return get_status(finding) == ANALYSED
 
 
-def needs_review(finding: Dict) -> bool:
+def needs_review(finding: dict) -> bool:
     """True when the LLM produced internally-contradictory
     reasoning and no judge resolved it — operator-facing
     ''Inconsistent (review needed)'' bucket."""
     return get_status(finding) == ANALYSIS_INCONSISTENT
 
 
-def is_skipped(finding: Dict) -> bool:
+def is_skipped(finding: dict) -> bool:
     """True for any ``skipped_*`` status (regardless of reason).
     Used by reporting to separate ''we looked at this'' from
     ''we didn't get to this''."""
     return get_status(finding) in _SKIPPED_STATUSES
 
 
-def is_errored(finding: Dict) -> bool:
+def is_errored(finding: dict) -> bool:
     """True when the analysis attempt crashed. Distinct from
     ``is_skipped`` because the operator may want to retry errored
     findings (transient infra issues) vs investigate skipped
@@ -177,23 +174,38 @@ def is_errored(finding: Dict) -> bool:
     return get_status(finding) == ERROR
 
 
-def is_terminal(finding: Dict) -> bool:
+def is_terminal(finding: dict) -> bool:
     """True for any final status (analysed / inconsistent /
     skipped / errored). False only for the in-flight case where no
-    status has been derived yet."""
-    return get_status(finding) in ALL_STATUSES
+    status has been derived yet.
+
+    Deliberately checks the EXPLICIT ``status`` field, not
+    ``get_status``: derive_status always lands in ALL_STATUSES, so
+    routing through get_status made this predicate unconditionally
+    True and the documented in-flight False case unreachable."""
+    return finding.get("status") in ALL_STATUSES
 
 
 __all__ = [
-    # status values
-    "ANALYSED", "ANALYSIS_INCONSISTENT",
-    "SKIPPED_OVER_BUDGET", "SKIPPED_DUPLICATE", "SKIPPED_DEAD_CODE",
-    "SKIPPED_FILTERED", "SKIPPED_TOOL_ABSENT", "SKIPPED",
-    "ERROR",
     "ALL_STATUSES",
+    # status values
+    "ANALYSED",
+    "ANALYSIS_INCONSISTENT",
+    "ERROR",
+    "SKIPPED",
+    "SKIPPED_DEAD_CODE",
+    "SKIPPED_DUPLICATE",
+    "SKIPPED_FILTERED",
+    "SKIPPED_OVER_BUDGET",
+    "SKIPPED_TOOL_ABSENT",
     # operations
-    "derive_status", "set_status", "get_status",
+    "derive_status",
+    "get_status",
     # predicates
-    "is_actionable", "needs_review", "is_skipped", "is_errored",
+    "is_actionable",
+    "is_errored",
+    "is_skipped",
     "is_terminal",
+    "needs_review",
+    "set_status",
 ]

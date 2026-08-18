@@ -145,7 +145,22 @@ class TestCollectorSubmitAndFlush:
 
 
 class TestCollectorJournalDualWrite:
-    """Verify journal entries are written alongside checked_by."""
+    """Verify each submit lands in the journal (the sole review store)."""
+
+    def test_append_journal_without_checked_by(self, tmp_path: Path) -> None:
+        """checked_by is vestigial — callers may omit it entirely."""
+        from core.audit.collector import append_journal_for_outcome
+        from core.coverage.journal import load_entries
+        append_journal_for_outcome(
+            out_dir=tmp_path,
+            target_path=tmp_path,
+            run_id="r1",
+            outcome=_FakeOutcome(),
+            gap=_make_gap(),
+        )
+        entries = load_entries(tmp_path)
+        assert len(entries) == 1
+        assert entries[0].model == "test-model"
 
     def test_submit_creates_journal_entry(self, tmp_path: Path) -> None:
         from core.coverage.journal import load_entries

@@ -347,7 +347,9 @@ class WebCrawler:
             # Discover API endpoints from JavaScript
             for script in soup.find_all("script"):
                 if script.string:
-                    self._extract_api_endpoints_from_js(script.string)
+                    self._extract_api_endpoints_from_js(
+                        script.string, depth=depth, _queue=_queue,
+                    )
 
         except Exception as e:
             logger.warning(
@@ -402,8 +404,18 @@ class WebCrawler:
             logger.debug("Error parsing form: %s", type(e).__name__)
             return None
 
-    def _extract_api_endpoints_from_js(self, js_code: str) -> None:
-        """Extract API endpoints from JavaScript code."""
+    def _extract_api_endpoints_from_js(self, js_code: str, *,
+                                       depth: int = 0,
+                                       _queue=None) -> None:
+        """Extract API endpoints from JavaScript code.
+
+        Discovered endpoints are recorded as API candidates AND
+        enqueued for the crawl — they used to land only in
+        ``discovered_urls``, so a JS-only endpoint was never fetched,
+        never classified as an API, and never contributed parameters:
+        a coverage gap for exactly the URLs reachable only through
+        script analysis.
+        """
         # Cap the JS-code size before per-pattern findall. Pre-fix
         # `re.findall` ran 4 times over the FULL js_code body; for
         # a multi-MB minified bundle (modern frontend SPAs ship
@@ -447,6 +459,21 @@ class WebCrawler:
                     # (scheme, hostname, port) triple.
                     if self.client._is_in_scope(absolute_url):
                         self.discovered_urls.add(absolute_url)
+                        # Classify as an API candidate now (static
+                        # discovery — no response shape yet; crawling
+                        # the URL refines it via
+                        # _process_json_response).
+                        if not any(a.get("url") == absolute_url
+                                   for a in self.discovered_apis):
+                            self.discovered_apis.append({
+                                "url": absolute_url,
+                                "method": "GET",
+                                "response_keys": [],
+                                "source": "js-static",
+                            })
+                        if (_queue is not None
+                                and absolute_url not in self.visited_urls):
+                            _queue.append((absolute_url, depth + 1))
                         logger.debug(
                             f"Found API endpoint in JS: {self._crawl_log_label(absolute_url)}"
                         )

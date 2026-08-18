@@ -17,8 +17,7 @@ import sys
 
 import pytest
 
-from core.sandbox import SandboxSetupError, check_unshare_engages, sandbox
-from core.sandbox import state
+from core.sandbox import SandboxSetupError, check_unshare_engages, sandbox, state
 
 _linux_only = pytest.mark.skipif(
     sys.platform != "linux", reason="unshare engagement is Linux-only",
@@ -35,16 +34,16 @@ class TestEngagementGateRaises:
     def test_block_network_engagement_failure_raises(self):
         # The gate probes --user --pid --fork --ipc --net when block_network.
         _poison(["--user", "--pid", "--fork", "--ipc", "--net"])
-        with sandbox(block_network=True) as run:
-            with pytest.raises(SandboxSetupError) as ei:
-                run(["echo", "hi"], capture_output=True, text=True)
+        with sandbox(block_network=True) as run, \
+                pytest.raises(SandboxSetupError) as ei:
+            run(["echo", "hi"], capture_output=True, text=True)
         assert "Operation not permitted" in str(ei.value)
 
     def test_error_names_the_escape_hatch(self):
         _poison(["--user", "--pid", "--fork", "--ipc", "--net"])
-        with sandbox(block_network=True) as run:
-            with pytest.raises(SandboxSetupError) as ei:
-                run(["echo", "hi"], capture_output=True, text=True)
+        with sandbox(block_network=True) as run, \
+                pytest.raises(SandboxSetupError) as ei:
+            run(["echo", "hi"], capture_output=True, text=True)
         msg = str(ei.value)
         # Actionable, explicit-downgrade-only guidance. For a NAMESPACE
         # engagement failure, network-only ALSO needs the namespace, so the
@@ -138,6 +137,7 @@ class TestSubprocessBoundaryTranslation:
     def test_run_codeql_translates_engage_exit_code(self, monkeypatch, tmp_path):
         import importlib.util as iu
         from pathlib import Path as _P
+
         from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE
         # Absolute, __file__-anchored — cwd-independent (a sibling suite may
         # have left the process in a different cwd).
@@ -184,9 +184,11 @@ class TestLayerFunctionalSelfTests:
     dying mid-spawn with empty output."""
 
     def test_seccomp_selftest_consistent_with_probe(self):
-        from core.sandbox.seccomp import (
-            _seccomp_functional_selftest, check_seccomp_available)
         from core.sandbox import state
+        from core.sandbox.seccomp import (
+            _seccomp_functional_selftest,
+            check_seccomp_available,
+        )
         avail = check_seccomp_available()  # populates the cache
         assert isinstance(avail, bool)
         if avail:
@@ -213,22 +215,22 @@ class TestExecStatusPipe:
             "U", "Operation not permitted")
         assert _parse_setup_status(b"X:exec: file not found")[0] == "X"
 
-    def test_mount_failure_degrades_to_landlock_and_runs(self):
+    def test_mount_failure_degrades_to_landlock_and_runs(self, tmp_path):
         # Force the mount-ns spawn path. On a mount-capable host it engages;
         # on an AppArmor/nested host mount() is denied → status 'M' → degrade
         # to Landlock-only. EITHER way the command must actually RUN (real
         # output), never return a silent rc-126 empty result.
-        import os
-        import tempfile
         ok, _ = check_unshare_engages(["--user", "--pid", "--fork", "--ipc"])
         if not ok:
             pytest.skip("host cannot engage namespaces at all")
         state._mount_available_cache = True
         state._mount_ns_available_cache = True
-        tgt = tempfile.mkdtemp()
-        out = tempfile.mkdtemp()
-        with open(os.path.join(tgt, "f.txt"), "w") as f:
-            f.write("hi")
+        tgt = tmp_path / "tgt"
+        out = tmp_path / "out"
+        tgt.mkdir()
+        out.mkdir()
+        (tgt / "f.txt").write_text("hi")
+        tgt, out = str(tgt), str(out)
         with sandbox(block_network=True, target=tgt, output=out) as run:
             r = run(["/bin/echo", "ran-OK"], capture_output=True, text=True)
         if r.returncode == -9:
@@ -239,10 +241,11 @@ class TestExecStatusPipe:
         assert r.returncode == 0
         assert "ran-OK" in (r.stdout or "")
 
-    def test_core_layer_apply_failure_fails_loud(self, monkeypatch):
+    def test_core_layer_apply_failure_fails_loud(self, monkeypatch, tmp_path):
         # If the spawn child reports a Landlock/seccomp/unshare APPLY failure
         # (probe passed but apply failed), context must fail loud, not degrade.
         import subprocess as _sp
+
         from core.sandbox import _spawn as _spawn_mod
         ok, _ = check_unshare_engages(["--user", "--pid", "--fork", "--ipc"])
         if not ok:
@@ -257,12 +260,14 @@ class TestExecStatusPipe:
         monkeypatch.setattr(_spawn_mod, "run_sandboxed", _fake_spawn)
         state._mount_available_cache = True
         state._mount_ns_available_cache = True
-        import tempfile
-        tgt = tempfile.mkdtemp()
-        out = tempfile.mkdtemp()
-        with pytest.raises(SandboxSetupError) as ei:
-            with sandbox(block_network=True, target=tgt, output=out) as run:
-                run(["/bin/echo", "x"], capture_output=True, text=True)
+        tgt = tmp_path / "tgt"
+        out = tmp_path / "out"
+        tgt.mkdir()
+        out.mkdir()
+        tgt, out = str(tgt), str(out)
+        with pytest.raises(SandboxSetupError) as ei, \
+                sandbox(block_network=True, target=tgt, output=out) as run:
+            run(["/bin/echo", "x"], capture_output=True, text=True)
         assert "Landlock" in str(ei.value)
 
     def test_status_pipe_unspoofable_invariant(self):

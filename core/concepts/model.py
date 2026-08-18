@@ -31,13 +31,16 @@ class Evidence:
     line: int | None = None
     item: str | None = None
     hash: str | None = None
+    # Verbatim source quote supporting the observation (receipt raw
+    # material; verified by core.concepts.receipts.verify_receipt).
+    quote: str | None = None
 
 
 # ------------------------------------------------------------------
 # Concept
 # ------------------------------------------------------------------
 
-CONFIDENCE_GRADES = ("inferred", "traced", "corroborated", "documented", "tested")
+CONFIDENCE_GRADES = ("inferred", "observed", "traced", "corroborated", "documented", "tested")
 
 LIFECYCLE_STATES = (
     "discovered",
@@ -60,6 +63,11 @@ class Concept:
     derived_version: str | None = None
     qualified_by: list[str] = field(default_factory=list)
     derived_from: list[dict[str, Any]] = field(default_factory=list)
+    # Provenance tier (core.concepts.receipts): verbatim | mechanical
+    # | llm_summarized | llm_prior. Empty = pre-tier legacy entry —
+    # treated as non-actionable by tier-gated consumers.
+    provenance: str = ""
+    receipt: dict[str, Any] | None = None
 
 
 # ------------------------------------------------------------------
@@ -78,6 +86,8 @@ class Invariant:
     confidence: str = "inferred"
     mechanical_rule: str | None = None
     relevant_cwes: list[str] = field(default_factory=list)
+    provenance: str = ""
+    receipt: dict[str, Any] | None = None
 
 
 # ------------------------------------------------------------------
@@ -95,6 +105,8 @@ class Contract:
     implication: str = ""
     security_note: str = ""
     hash: str | None = None
+    provenance: str = ""
+    receipt: dict[str, Any] | None = None
 
 
 # ------------------------------------------------------------------
@@ -137,6 +149,9 @@ class StudyItem:
     validation_bounds: list[str] = field(default_factory=list)
     relevance_tier: int | None = None
     usage_class: str | None = None  # writer | reader | passthru
+    # Mechanically detected doc/code disagreement (code wins) — see
+    # core.concepts.receipts.detect_stale_doc.
+    stale_doc: str = ""
 
 
 # ------------------------------------------------------------------
@@ -175,6 +190,36 @@ class DomainModel:
     bug_patterns: list[BugPattern] = field(default_factory=list)
     security_context: SecurityContext | None = None
     key_files: list[dict[str, str]] = field(default_factory=list)
+    # API vocabulary elicited from study answers, name-verified against
+    # the mechanically extracted study items and stamped with a
+    # provenance tier (core.concepts.receipts convention). Consumed by
+    # DomainVocabulary.from_domain_model (core.audit.condition_smt).
+    # Entry shapes:
+    #   paired_operations: {acquire, release, kind[, note, provenance]}
+    #   nullable_returns:  {name[, when, provenance]} or bare string
+    #   auth_predicates:   {name[, kind, provenance]} or bare string
+    #   security_fields:   {name[, why, provenance]} or bare string
+    #   fallibility_contracts: {name, can_fail[, convention, when,
+    #       provenance]} — per-function fallibility (design §2.2.2
+    #       structured field; convention: null | negative | errno |
+    #       zero_ok | boolean | exception). Consumed by
+    #       core.audit.return_contracts as a return-check contract
+    #       witness (mechanical tier ⇒ registry-grade).
+    #   resource_limits:   {field_or_macro, applies_to[, provenance]}
+    #   state_fields:      {field[, struct, authority, monotonic,
+    #                        invariant_refs, provenance, receipt]}
+    # resource_limits / state_fields are parsed channel-locally
+    # (resource_bounds / protocol_state) — deliberately NOT surfaced
+    # through DomainVocabulary.
+    paired_operations: list[dict[str, Any]] = field(default_factory=list)
+    nullable_returns: list[Any] = field(default_factory=list)
+    auth_predicates: list[Any] = field(default_factory=list)
+    security_fields: list[Any] = field(default_factory=list)
+    fallibility_contracts: list[dict[str, Any]] = field(
+        default_factory=list,
+    )
+    resource_limits: list[Any] = field(default_factory=list)
+    state_fields: list[Any] = field(default_factory=list)
 
     # ----- persistence -------------------------------------------
 
@@ -219,6 +264,12 @@ class DomainModel:
             BugPattern(**_filter_fields(BugPattern, bp))
             for bp in raw.get("bug_patterns", [])
         ]
+        def _vocab_list(key: str) -> list:
+            value = raw.get(key, [])
+            if not isinstance(value, list):
+                return []
+            return [v for v in value if isinstance(v, (dict, str))]
+
         return cls(
             version=raw.get("version", "1"),
             target=raw.get("target", ""),
@@ -229,6 +280,25 @@ class DomainModel:
             bug_patterns=bug_patterns,
             security_context=security_context,
             key_files=raw.get("key_files", []),
+            paired_operations=[
+                p for p in _vocab_list("paired_operations")
+                if isinstance(p, dict)
+            ],
+            nullable_returns=_vocab_list("nullable_returns"),
+            auth_predicates=_vocab_list("auth_predicates"),
+            security_fields=_vocab_list("security_fields"),
+            fallibility_contracts=[
+                p for p in _vocab_list("fallibility_contracts")
+                if isinstance(p, dict)
+            ],
+            resource_limits=[
+                r for r in _vocab_list("resource_limits")
+                if isinstance(r, dict)
+            ],
+            state_fields=[
+                s for s in _vocab_list("state_fields")
+                if isinstance(s, dict)
+            ],
         )
 
     # ----- query helpers -----------------------------------------

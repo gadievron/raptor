@@ -25,6 +25,8 @@ def _normalize_condition(cond: str) -> str:
     """
     s = cond.strip().lower()
     s = re.sub(r"\s+", " ", s)
+    # Flip Yoda-style comparisons (e.g. "null != x" → "x != null")
+    s = re.sub(r"\b(null|0)\s*(!=|==)\s*(\S+)", r"\3 \2 \1", s)
     s = re.sub(r"\s*!=\s*null\b", "", s)
     s = re.sub(r"\s*!=\s*0\b", "", s)
     s = re.sub(r"\s*==\s*null\b", " == null", s)
@@ -42,6 +44,7 @@ def _guard_covers(read_guard: Guard, write_guard: Guard) -> bool:
     return (
         _normalize_condition(read_guard.condition)
         == _normalize_condition(write_guard.condition)
+        and read_guard.polarity == write_guard.polarity
     )
 
 

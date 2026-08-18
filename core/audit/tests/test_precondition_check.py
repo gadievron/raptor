@@ -65,6 +65,11 @@ def target_dir(tmp_path):
 # ── Unit tests for check functions ──────────────────────────────────
 
 class TestCheckNullTermination:
+    """Bare call tokens (strncpy/strdup anywhere in the function) are weak
+    whole-function evidence and cap at 'inconclusive' under expect_absent,
+    matching _check_bounds/_check_sanitization. Only an explicit terminator
+    store — parameter-bound when a parameter is named — contradicts."""
+
     def test_finds_explicit_null_termination(self):
         source = "req->method[method_len] = '\\0';\nreq->path[path_len] = '\\0';"
         result = _check_null_termination(source, "f.c", "fn", "", expect_absent=True)
@@ -75,15 +80,79 @@ class TestCheckNullTermination:
         result = _check_null_termination(source, "f.c", "fn", "", expect_absent=True)
         assert result.verdict == "supported"
 
-    def test_strncpy_counts(self):
+    def test_bare_strncpy_is_inconclusive(self):
         source = "strncpy(dst, src, n);"
-        result = _check_null_termination(source, "f.c", "fn", "", expect_absent=True)
+        result = _check_null_termination(
+            source, "f.c", "fn", "", expect_absent=True,
+        )
+        assert result.verdict == "inconclusive"
+        assert "cannot confirm" in result.evidence
+
+    def test_bare_strdup_is_inconclusive(self):
+        source = "char *copy = strdup(input);"
+        result = _check_null_termination(
+            source, "f.c", "fn", "", expect_absent=True,
+        )
+        assert result.verdict == "inconclusive"
+
+    def test_bare_snprintf_is_inconclusive(self):
+        source = "snprintf(tmp, sizeof(tmp), \"%d\", x);"
+        result = _check_null_termination(
+            source, "f.c", "fn", "", expect_absent=True,
+        )
+        assert result.verdict == "inconclusive"
+
+    def test_token_with_parameter_named_is_inconclusive(self):
+        # strncpy present, parameter named but never explicitly
+        # terminated — the token alone must not contradict.
+        source = "strncpy(other, src, n);"
+        result = _check_null_termination(
+            source, "f.c", "fn", "buf", expect_absent=True,
+        )
+        assert result.verdict == "inconclusive"
+
+    def test_param_bound_store_contradicts(self):
+        source = "memcpy(buf, src, n);\nbuf[n] = '\\0';"
+        result = _check_null_termination(
+            source, "f.c", "fn", "buf", expect_absent=True,
+        )
+        assert result.verdict == "contradicted"
+        assert "buf" in result.evidence
+
+    def test_store_on_other_buffer_does_not_bind_parameter(self):
+        source = "scratch[i] = '\\0';"
+        result = _check_null_termination(
+            source, "f.c", "fn", "buf", expect_absent=True,
+        )
+        assert result.verdict == "inconclusive"
+
+    def test_unqualified_claim_store_contradicts(self):
+        # No parameter named: an explicit terminator store directly
+        # contradicts a generic "does not null-terminate" claim.
+        source = "out[len] = '\\0';"
+        result = _check_null_termination(
+            source, "f.c", "fn", "", expect_absent=True,
+        )
         assert result.verdict == "contradicted"
 
     def test_expect_present_and_found(self):
         source = "buf[len] = '\\0';"
         result = _check_null_termination(source, "f.c", "fn", "", expect_absent=False)
         assert result.verdict == "supported"
+
+    def test_expect_present_token_still_supports(self):
+        source = "strncpy(dst, src, n);"
+        result = _check_null_termination(
+            source, "f.c", "fn", "", expect_absent=False,
+        )
+        assert result.verdict == "supported"
+
+    def test_expect_present_nothing_found_inconclusive(self):
+        source = "memcpy(buf, src, len);"
+        result = _check_null_termination(
+            source, "f.c", "fn", "", expect_absent=False,
+        )
+        assert result.verdict == "inconclusive"
 
 
 class TestCheckBounds:

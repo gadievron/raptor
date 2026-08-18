@@ -3,7 +3,11 @@
 // Runs once at CPG build time. For each function whose parameter flows
 // to a dangerous callee argument, emits a JOERN_FLOW: JSON line.
 //
-// Template slots: none (sink list is hardcoded from DANGEROUS_TARGETS).
+// Template slots:
+//   __SINK_NAMES__ — sink-name list body, rendered by the caller from
+//                    packages/joern/lang_config.py STANDARD_SWEEP_SINKS
+//                    (the single authority; this file used to hardcode
+//                    a drifting copy of it)
 
 import io.joern.dataflowengineoss.queryengine._
 import io.joern.dataflowengineoss.language._
@@ -13,22 +17,7 @@ import scala.util.Try
 
 implicit val engineContext: EngineContext = EngineContext()
 
-val dangerousSinks = List(
-  // Command execution
-  "system", "popen", "exec", "execve", "execvp", "execl", "execlp",
-  "execle", "fexecve", "posix_spawn", "posix_spawnp",
-  // Memory operations
-  "memcpy", "memmove", "memset", "strcpy", "strncpy", "strcat",
-  "strncat", "sprintf", "snprintf", "vsprintf", "vsnprintf",
-  // Format strings
-  "printf", "fprintf", "syslog",
-  // File operations
-  "fopen", "freopen", "open",
-  // SQL / injection surfaces
-  "query", "execute", "raw",
-  // Deserialization
-  "loads", "load", "unserialize", "pickle"
-)
+val dangerousSinks = List(__SINK_NAMES__)
 
 println("JOERN_FLOWS_START")
 

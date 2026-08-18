@@ -23,9 +23,11 @@ Strategy ladder:
 2. **Fence** — locate the first markdown code fence (```````
    or ``~~~``, optionally with a language marker), extract the payload,
    parse.
-3. **Brace-span** — regex-locate the largest balanced-brace ``{...}``
-   span anywhere in the text. Handles prose-before, prose-after, and
-   the "model wrote a paragraph before the JSON" shape.
+3. **Brace-span** — single linear scan locating the LAST top-level
+   balanced-brace ``{...}`` span in the text (see
+   :func:`_extract_brace_span` for why last-wins beats largest-wins).
+   Handles prose-before, prose-after, and the "model wrote a paragraph
+   before the JSON" shape.
 4. **Quasi-JSON fixup** — after brace-span extraction, apply common
    post-hoc fixups: strip trailing commas, single-quote → double-quote,
    Python literals (``None`` / ``True`` / ``False``) → JSON. Each fixup
@@ -73,8 +75,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
-
+from typing import Any
 
 #: Hard cap on input size. LLM structured-output responses are typically
 #: <100 KB; this cap protects against a hostile model / prompt-injection
@@ -89,34 +90,19 @@ _MAX_INPUT_LEN = 1_048_576
 _MISSING: Any = object()
 
 
-# Fence patterns tried in order. Anchored to line starts (``^``) with
-# ``re.MULTILINE`` so a triple-backtick inside a string field (e.g. a
-# code-snippet-in-a-reason) doesn't accidentally win. LLM outputs almost
-# always put the fence at the start of a line.
+# Opening fence line: optional indent, ``` or ~~~, optional language
+# marker, optional trailing whitespace — the whole line, nothing else.
+# Whole-line anchoring means a triple-backtick inside a string field
+# (e.g. a code-snippet-in-a-reason) doesn't accidentally win. LLM
+# outputs almost always put the fence at the start of a line.
 #
-# The close fence marker MUST match the open (``\`\`\``` opens, ``\`\`\``` closes;
-# ``~~~`` opens, ``~~~`` closes) via named-group backreference — an
-# earlier permissive pattern accepted mixed open/close pairs, which is
-# never emitted by real models and only served to widen the attack
-# surface for adversarial prompt-injection payloads.
-#
-# The close fence line accepts trailing non-newline garbage (``.*$``
-# rather than ``\s*$``). Some model outputs put a stray char after the
-# closing fence (a stray period, an unclosed reasoning bracket). The
-# strict ``\s*$`` variant fell through to ``_FENCE_OPEN_RE`` which
-# swallowed the close fence into the body, breaking strict parse.
-_FENCE_RE = re.compile(
-    r"^\s*(?P<delim>```|~~~)\s*(?P<lang>[a-zA-Z0-9_+-]*)\s*\n"
-    r"(?P<body>[\s\S]*?)"
-    r"\n\s*(?P=delim)[^\n]*$",
-    re.MULTILINE,
-)
-
-# For the "no closing fence" case (model truncated), match the opening
-# fence and take everything after it. Fallback within strategy 2.
-_FENCE_OPEN_RE = re.compile(
-    r"^\s*(?:```|~~~)\s*(?P<lang>[a-zA-Z0-9_+-]*)\s*\n(?P<body>[\s\S]*)$",
-    re.MULTILINE,
+# Applied per-line by the linear scan in :func:`_extract_fence`. An
+# earlier implementation used one MULTILINE regex over the whole text
+# with a lazy ``[\s\S]*?`` body — quadratic on fence-open-without-
+# close inputs (seconds of CPU on a 200 KB hostile payload, even
+# under the input cap).
+_FENCE_LINE_RE = re.compile(
+    r"^\s*(?P<delim>```|~~~)\s*(?P<lang>[a-zA-Z0-9_+-]*)\s*$"
 )
 
 
@@ -143,8 +129,11 @@ class ExtractionDiagnostic:
     #: whatever the model wrote otherwise.
     fence_language: str = ""
 
-    #: Populated when ``strategy == 'brace_span'``. Byte length of the
-    #: prose before / after the JSON payload — useful for observability
+    #: Populated when ``strategy`` is ``'brace_span'`` or
+    #: ``'quasi_json_fixup'`` (the fixup path builds on the brace-span
+    #: extraction). Length of the prose before / after the JSON payload,
+    #: counted in Unicode code points (``len(str)`` arithmetic — not
+    #: UTF-8 bytes, despite the field names) — useful for observability
     #: (a rising trend suggests prompt drift).
     prose_before_bytes: int = 0
     prose_after_bytes: int = 0
@@ -153,11 +142,11 @@ class ExtractionDiagnostic:
     #: fixup names that were applied, in order. Empty tuple when the
     #: strategy succeeded without any fixup (i.e. brace-span extraction
     #: yielded strict JSON).
-    quasi_fixups_applied: Tuple[str, ...] = ()
+    quasi_fixups_applied: tuple[str, ...] = ()
 
     #: Populated when ``strategy == 'failed'``. Stringified exception
     #: from the last recovery attempt. ``None`` on success.
-    final_error: Optional[str] = None
+    final_error: str | None = None
 
     #: Populated when ``strategy == 'failed'`` and the ladder saw at
     #: least some structured content before giving up (e.g. the fence
@@ -171,14 +160,14 @@ class ExtractionDiagnostic:
     #: callers MUST NOT act on partial data based on this signal
     #: alone. The whole PAYLOAD is either parsed (success strategies)
     #: or dropped (failed).
-    partial_keys_seen: Tuple[str, ...] = ()
+    partial_keys_seen: tuple[str, ...] = ()
 
 
 def parse_llm_json(
     text: str,
     *,
     require_object: bool = True,
-) -> Tuple[Optional[dict], ExtractionDiagnostic]:
+) -> tuple[dict | None, ExtractionDiagnostic]:
     """Parse ``text`` as JSON, tolerating common LLM output shapes.
 
     :param text: The raw model output.
@@ -213,9 +202,7 @@ def parse_llm_json(
         """The result gate applied at every strategy exit."""
         if parsed is _MISSING:
             return False
-        if require_object and not isinstance(parsed, dict):
-            return False
-        return True
+        return not require_object or isinstance(parsed, dict)
 
     # Strategy 1 — strict.
     parsed, strict_err = _try_strict(text)
@@ -271,7 +258,7 @@ def parse_llm_json(
     )
 
 
-def _try_strict(text: str) -> Tuple[Any, Optional[str]]:
+def _try_strict(text: str) -> tuple[Any, str | None]:
     """Attempt strict ``json.loads``.
 
     Returns ``(parsed, err)`` where:
@@ -294,27 +281,58 @@ def _try_strict(text: str) -> Tuple[Any, Optional[str]]:
         return _MISSING, str(e)
 
 
-def _extract_fence(text: str) -> Tuple[Optional[str], Optional[str]]:
+def _extract_fence(text: str) -> tuple[str | None, str | None]:
     """Look for a markdown code fence; return ``(language, body)`` or ``(None, None)``.
 
-    Prefers matched open+close fences with matching delimiters. Falls
-    back to open-only (truncated output) if no close fence exists.
-    When multiple fences are present, picks the first one — LLM
-    structured output usually wraps its whole response in one block.
-    """
-    m = _FENCE_RE.search(text)
-    if m is not None:
-        return m.group("lang"), m.group("body")
+    Linear line-based scan. Prefers matched open+close fences with
+    matching delimiters (a backtick fence only closes with backticks;
+    a ``~~~`` fence only with ``~~~``) — mixed open/close pairs are
+    never emitted by real models and accepting them only widened the
+    attack surface for adversarial prompt-injection payloads. Falls back to open-only
+    (truncated output) if no fence closes. When multiple fences are
+    present, picks the first complete one — LLM structured output
+    usually wraps its whole response in one block.
 
-    # Truncated output — take everything after the opening fence.
-    m = _FENCE_OPEN_RE.search(text)
-    if m is not None:
-        return m.group("lang"), m.group("body")
+    The close fence line accepts trailing non-newline garbage (any
+    line whose stripped content STARTS with the delimiter closes the
+    fence). Some model outputs put a stray char after the closing
+    fence (a stray period, an unclosed reasoning bracket); a stricter
+    check fell through to the open-only fallback, which swallowed the
+    close fence into the body and broke strict parse.
+
+    Complexity: an opener whose delimiter never reappears costs one
+    forward scan, and at most one such opener exists per delimiter
+    kind (a later same-delim opener line would have closed it) — so
+    the whole scan is O(len(text)).
+    """
+    lines = text.split("\n")
+    n = len(lines)
+    first_open: tuple[int, str] | None = None  # (line_idx, lang)
+
+    for i in range(n - 1):  # an open fence needs a following line
+        m = _FENCE_LINE_RE.match(lines[i])
+        if m is None:
+            continue
+        delim = m.group("delim")
+        if first_open is None:
+            first_open = (i, m.group("lang"))
+        # Close scan starts at i + 2: the body sits strictly BETWEEN
+        # the fence lines, so an immediately-adjacent close leaves no
+        # body line and the pair doesn't count as a complete fence
+        # (the open-only fallback handles it, as before).
+        for j in range(i + 2, n):
+            if lines[j].lstrip().startswith(delim):
+                return m.group("lang"), "\n".join(lines[i + 1 : j])
+
+    if first_open is not None:
+        # Truncated output — take everything after the opening fence.
+        open_idx, lang = first_open
+        return lang, "\n".join(lines[open_idx + 1 :])
 
     return None, None
 
 
-def _extract_brace_span(text: str) -> Tuple[Optional[str], int, int]:
+def _extract_brace_span(text: str) -> tuple[str | None, int, int]:
     """Find the LAST top-level balanced-brace ``{...}`` span in ``text``.
 
     Returns ``(span, prose_before_bytes, prose_after_bytes)``. Span is
@@ -567,7 +585,7 @@ _QUASI_FIXUPS = (
 )
 
 
-def _try_quasi_json_fixups(text: str) -> Tuple[Any, Tuple[str, ...]]:
+def _try_quasi_json_fixups(text: str) -> tuple[Any, tuple[str, ...]]:
     """Apply each quasi-JSON fixup individually, then in combination.
 
     Returns ``(parsed, applied_names)`` — ``parsed`` is the parsed
@@ -600,7 +618,7 @@ def _try_quasi_json_fixups(text: str) -> Tuple[Any, Tuple[str, ...]]:
     return _MISSING, ()
 
 
-def _extract_partial_keys(text: Optional[str]) -> Tuple[str, ...]:
+def _extract_partial_keys(text: str | None) -> tuple[str, ...]:
     """Best-effort extract JSON object keys from a possibly-broken payload.
 
     Regex matches ``"key":`` patterns outside of ``\\``-escaped string

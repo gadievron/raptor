@@ -270,8 +270,8 @@ class HackerProgressBar:
 
     Side-channel last-stage tracking
     -------------------------------
-    On every ``stage()`` call the bar updates a module-level
-    ``_LAST_STAGE_NAME`` so out-of-band exception handlers can
+    On every ``stage()`` call the bar updates the thread-local
+    ``_stage_local.name`` so out-of-band exception handlers can
     surface "which phase was running when this died" without
     threading the bar through every call site. The CLI's outer
     ``except`` reads it via :func:`last_stage_name` to print

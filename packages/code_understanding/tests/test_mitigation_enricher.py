@@ -27,15 +27,16 @@ Adversarial cases:
   with the fields present.
 """
 
+import json
 from unittest.mock import patch
 
 from packages.code_understanding.mitigation_enricher import (
     SCHEMA_VERSION,
-    build_mitigation_context,
-    enrich_context_map,
     _availability_for_cwe,
     _priority_hint,
     _sink_cwe,
+    build_mitigation_context,
+    enrich_context_map,
 )
 
 
@@ -291,3 +292,61 @@ class TestEnrichContextMap:
             out = enrich_context_map(cm, binary_path=binary)
         # Not mutated.
         assert out["sink_details"] == {"not": "a-list"}
+
+
+class TestLibexecScriptWrite:
+    """The libexec shim's non-dry-run write path.
+
+    Regression: the script imported ``atomic_write_text`` from
+    ``core.atomic_fs`` — a symbol that does not exist (the module
+    exports ``write_text_atomically``) — so every real (non-dry-run)
+    invocation died with ImportError before writing.
+    """
+
+    def _run_script(self, tmp_path, monkeypatch, extra_argv=()):
+        import runpy
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        script = (
+            _Path(__file__).resolve().parents[3]
+            / "libexec" / "raptor-enrich-context-map-mitigation"
+        )
+        cm_path = tmp_path / "context-map.json"
+        cm_path.write_text(
+            json.dumps({"sinks": [{"id": "s1"}]}), encoding="utf-8")
+        binary = tmp_path / "bin"
+        binary.write_bytes(b"\x7fELF")
+
+        import packages.code_understanding.mitigation_enricher as me
+
+        def fake_enrich(cm, *, binary_path, build_flags=None,
+                        generated_at=""):
+            for s in cm.get("sinks", []):
+                s["mitigation_context"] = {"source": "test"}
+            return len(cm.get("sinks", []))
+
+        monkeypatch.setattr(me, "enrich_context_map", fake_enrich)
+        monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+        monkeypatch.setattr(_sys, "argv", [
+            str(script), str(tmp_path), "--binary", str(binary),
+            *extra_argv,
+        ])
+        try:
+            runpy.run_path(str(script), run_name="__main__")
+        except SystemExit as e:
+            return (e.code or 0), cm_path
+        return 0, cm_path
+
+    def test_write_path_persists_enrichment(self, tmp_path, monkeypatch):
+        code, cm_path = self._run_script(tmp_path, monkeypatch)
+        assert code == 0
+        data = json.loads(cm_path.read_text(encoding="utf-8"))
+        assert data["sinks"][0]["mitigation_context"] == {"source": "test"}
+
+    def test_dry_run_leaves_file_untouched(self, tmp_path, monkeypatch, capfd):
+        code, cm_path = self._run_script(
+            tmp_path, monkeypatch, extra_argv=("--dry-run",))
+        assert code == 0
+        data = json.loads(cm_path.read_text(encoding="utf-8"))
+        assert "mitigation_context" not in data["sinks"][0]

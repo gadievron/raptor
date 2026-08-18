@@ -128,7 +128,7 @@ class TestConcept:
 
     def test_confidence_grades_ordered(self) -> None:
         assert CONFIDENCE_GRADES.index("inferred") < CONFIDENCE_GRADES.index("tested")
-        assert len(CONFIDENCE_GRADES) == 5
+        assert len(CONFIDENCE_GRADES) == 6
 
     def test_lifecycle_states_complete(self) -> None:
         assert "discovered" in LIFECYCLE_STATES

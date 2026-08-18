@@ -5,8 +5,8 @@ Reachability]`` where ``dep_key`` is ``Dependency.key()``. The pipeline
 threads this map into ``findings.build_vuln_findings`` so each
 ``VulnFinding`` carries a verdict + evidence lines.
 
-Python (AST-based), npm (regex sweep), Cargo, Go, RubyGems, NuGet,
-Composer all covered. Ecosystems without a handler return
+Python (AST-based), npm (regex sweep), Cargo, Go, Maven, RubyGems,
+NuGet, Composer all covered. Ecosystems without a handler return
 ``not_evaluated`` so the reporter can be honest about the gap.
 
 **Tier-3 escalation (PyPI only):** when the caller passes ``http``
@@ -148,7 +148,9 @@ def scan(
             continue
         eco_scans[eco] = scan_result
         # Dedup by dep name within ecosystem so multiple version rows
-        # for the same dep share one resolve call.
+        # for the same dep share one resolve call — except the
+        # Go-with-advisory-symbols branch below, which keys by
+        # ``d.key()`` because ``advisory_symbols`` is per-version.
         seen: dict[str, Reachability] = {}
         # Pre-build advisory symbol map for Go function-level reachability.
         go_symbols = _build_go_symbol_map(osv_results) if eco == "Go" else {}
@@ -200,6 +202,8 @@ def scan(
     # Inventory is built ONCE per run when at least one ecosystem
     # tier has work to do; subsequent tiers reuse it via the
     # ``inventory`` kwarg.
+    _inventory_build_failed.discard(str(target))
+
     if osv_results:
         shared_inventory = None
 
@@ -318,7 +322,7 @@ def scan(
     return out
 
 
-_inventory_build_failed: bool = False
+_inventory_build_failed: set[str] = set()
 
 
 def _shared_inventory(target: Path, current: Any | None) -> Any:
@@ -341,8 +345,8 @@ def _shared_inventory(target: Path, current: Any | None) -> Any:
     inventory subdir; ``checklist.json`` regenerates from scratch
     on a missing file).
     """
-    global _inventory_build_failed
-    if _inventory_build_failed:
+    target_key = str(target)
+    if target_key in _inventory_build_failed:
         return None
     if current is not None:
         return current
@@ -357,7 +361,7 @@ def _shared_inventory(target: Path, current: Any | None) -> Any:
             "function-level tiers will skip",
             exc_info=True,
         )
-        _inventory_build_failed = True
+        _inventory_build_failed.add(target_key)
         return None
 
 

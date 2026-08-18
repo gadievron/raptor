@@ -196,3 +196,43 @@ def test_raises_too_many_redirects_after_limit_is_exhausted():
             client.get("/loop")
 
         assert len(handler.hits) == 11
+
+
+def test_dns_pinning_prevents_rebind_toctou():
+    """Verify that the resolved IP from validation is pinned for the request.
+
+    Simulates a DNS rebinding attack: getaddrinfo is monkeypatched so
+    that the first call (validation) returns the real server IP, but a
+    second call would return 127.0.0.99 (a different loopback). Without
+    pinning, requests' internal resolution would hit the rebinded address
+    and either connect to the wrong host or fail. With pinning, the
+    request uses the validated IP from the first resolution.
+    """
+    import socket as _socket
+    with _server() as (target, handler):
+        host, port = target.server_address
+        client = WebClient(f"http://{host}:{port}", block_private_ips=False)
+
+        _real_gai = _socket.getaddrinfo
+        call_count = [0]
+
+        def _rebinding_gai(h, p, *args, **kwargs):
+            result = _real_gai(h, p, *args, **kwargs)
+            call_count[0] += 1
+            if call_count[0] > 1 and h == host:
+                # Simulate rebind: return a different IP on subsequent
+                # resolutions. With pinning this never reaches urllib3.
+                return [
+                    (fam, typ, proto, canon, ("127.0.0.99", sockaddr[1]))
+                    for fam, typ, proto, canon, sockaddr in result
+                ]
+            return result
+
+        _socket.getaddrinfo = _rebinding_gai
+        try:
+            resp = client.get("/pinned")
+        finally:
+            _socket.getaddrinfo = _real_gai
+
+        assert resp.status_code == 200
+        assert handler.hits[-1]["path"] == "/pinned"

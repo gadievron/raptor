@@ -1,6 +1,6 @@
 ---
 description: Map attack surface, trace data flows, hunt vulnerability variants
-dispatch: libexec/raptor-understand [args]
+dispatch: skill
 ---
 
 # /understand - RAPTOR Code Understanding
@@ -8,6 +8,16 @@ dispatch: libexec/raptor-understand [args]
 You cannot find bugs if you don't have a deep, adversarial code understanding and comprehension for said codebase. This helps map the attack surface, trace data flows, hunt for vulnerability variants and so much more.....
 
 It is a work in progress, remember that. 
+
+## Dispatch routing
+
+This command is mode-routed — there is no single CLI to call blindly:
+
+| Case | Route |
+|------|-------|
+| `<target>` is a compiled artefact (ELF/Mach-O/PE/JAR/APK/...) with `--map` | `libexec/raptor-understand --map --target <t> --out "$OUTPUT_DIR"` (mechanical, no LLM) |
+| `--model` passed with `--hunt` or `--trace` | `libexec/raptor-understand` (multi-model substrate) |
+| Everything else — source-tree `--map`, `--trace`, `--hunt`, `--teach`, `--study` | **In-session workflow below** (you are the LLM); `libexec/raptor-understand` rejects source-tree `--map` by design |
 
 ## Usage
 
@@ -172,7 +182,7 @@ libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
 
 Modes combine and run in order: map → trace → hunt → teach. This matches the natural attack progression, so build context first, then trace a specific flow, then hunt for variants. Running `--map --trace EP-001` first maps, then traces the specified entry point.
 
-`--study` runs independently — it is a separate pipeline (study-prep → LLM extraction → synthesis) that produces `domain-model.json`. Its output feeds into `--teach` via SAGE or local file lookup. Do not combine `--study` with other modes in a single invocation.
+`--study` runs independently — it is a separate pipeline (study-prep → LLM extraction → synthesis) that produces `domain-model.json`. Its output feeds into `--teach` via SAGE or local file lookup. Do not combine `--study` with other modes in a single invocation. Study is multi-language: C/C++ resolve through the study-prep corpus; Python, Go, Java, JavaScript/TypeScript, and Rust identifiers resolve in-process (unresolvable identifiers are returned as unresolved with a reason, never guessed).
 
 ## Examples
 

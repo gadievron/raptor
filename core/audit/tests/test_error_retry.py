@@ -46,8 +46,15 @@ class TestClassifyError:
         exc = RuntimeError("rate limit exceeded, retry after 30s")
         assert _classify_error(exc) == "api_error"
 
-    def test_timeout(self):
+    def test_timeout_is_distinct_class(self):
+        # Timeouts classify as their own class (single reduced-context
+        # retry inline; excluded from the end-of-run retry pass) —
+        # see test_timeout_recovery.py.
         exc = TimeoutError("connection timeout after 30s")
+        assert _classify_error(exc) == "timeout"
+
+    def test_connection_error_stays_api_error(self):
+        exc = ConnectionError("connection reset by peer")
         assert _classify_error(exc) == "api_error"
 
     def test_server_error(self):

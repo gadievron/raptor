@@ -46,7 +46,7 @@ When a `/command` fires:
 /exploit /patch - Generate PoCs and fixes (beta) — `python3 raptor.py agentic`
 /zkpox - ZKPoX disclosure bundles + proofs (beta) — `libexec/raptor-zkpox <subcommand> [args]`
 /validate - Exploitability validation pipeline — `dispatch: skill`, see below
-/understand - Code understanding — `libexec/raptor-understand [args]`
+/understand - Code understanding — `dispatch: skill` (mode-routed: binary --map and multi-model --hunt/--trace go to `libexec/raptor-understand`; source-tree modes run in-session)
 /diagram - Mermaid visual maps — `libexec/raptor-render-diagrams <out-dir> [args]`
 /audit - Hypothesis-driven code audit — `dispatch: skill`, see below
 /review - Navigate audit results — `libexec/raptor-review $ARGUMENTS`
@@ -87,9 +87,19 @@ Projects are opt-in named workspaces that corral analysis runs into a shared dir
 /project binary list           # list persisted binaries on the active project
 /project binary remove <path>  # remove one
 /project binary clear          # clear all
+/project trust                 # list trust assertions (markers + binaries count)
+/project trust <marker>        # set a trust marker: config | build | dynamic
+/project untrust <marker>      # remove a trust marker
+/project set                   # list settings
+/project set <key> <value>     # registry-validated setting (description, notes,
+                               #   threat-model, target-kind, build-command[.<lang>])
+/project unset <key>           # remove a setting
+/project get <key>             # bare value on stdout; exit 1 if unset
 /project clean --keep 3        # delete old runs
 /project none                  # clear active project
 ```
+
+**Trust markers** are operator assertions persisted on the project (never auto-set, never read from the scanned repo): `config` = the `--trust-repo` umbrella (cc_trust + codeql_trust), `build` = traced-build CodeQL extraction (`--traced-build`), `dynamic` = dynamic validation (`config.dynamic_validation`). `/agentic` and `/codeql` consume them at start alongside the persisted binaries; the audit pipeline consumes `dynamic`. Per-run flags always win in both directions (`--no-trust-repo` / `--no-traced-build` / `--no-dynamic` > positive flag > marker > off), a banner line prints whenever a marker affects a run, and `build` does NOT imply `config`.
 
 See `/project help` for full command list.
 
@@ -137,7 +147,7 @@ Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage l
 
 ### Coverage tracking
 
-The coverage tracking plugin (`plugins/coverage/`) tracks which source files the LLM reads during analysis via a PostToolUse hook. Loaded automatically by the launcher. Logs file paths to a manifest in the active run directory, converted to `coverage-record.json` when the run completes. Zero overhead when no run is active.
+The coverage tracking plugin (`plugins/coverage/`) tracks which source files the LLM reads during analysis via a PostToolUse hook. Loaded automatically by the launcher. Logs file paths to a `.reads-manifest` in the active run directory, converted to a `coverage-read.json` record when the run completes. Zero overhead when no run is active.
 
 ---
 
@@ -193,7 +203,6 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 **Usage:** `/oss-forensics <prompt> [--max-followups 3] [--max-retries 3]`
 
 **Agents:**
-- `oss-forensics-agent` - Main orchestrator
 - `oss-investigator-gh-archive-agent` - Queries GH Archive via BigQuery
 - `oss-investigator-github-agent` - Queries live GitHub API
 - `oss-investigator-wayback-agent` - Recovers deleted content (Wayback/commits)
@@ -205,6 +214,7 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 - `oss-report-generator-agent` - Produces final forensic report
 
 **Skills** (in `.claude/skills/oss-forensics/`):
+- `orchestration` - Main orchestrator (coordinates the investigator agents)
 - `github-archive` - GH Archive BigQuery queries
 - `github-evidence-kit` - Evidence collection, storage, verification
 - `github-commit-recovery` - Recover deleted commits
@@ -229,7 +239,7 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 - `SKILL.md` - Shared context, gates, execution rules
 - `stage-0-inventory.md` through `stage-1-outputs.md` - Stage instructions
 
-**Output:** `out/exploitability-validation-<timestamp>/validation-report.md`
+**Output:** `validation-report.md` in the run output directory (project dir or `out/validate_<timestamp>/`)
 
 **Pipeline handoff:** For `/understand` → `/validate` workflows, use the same `--out` directory so `context-map.json`, `checklist.json`, and `flow-trace-*.json` are shared automatically.
 
@@ -251,13 +261,14 @@ See `docs/audit.md` for the full pipeline, gates, strategies, and tool menu. `/r
 
 The `/understand` command provides deep, adversarial code comprehension for security research.
 
-**Usage:** `/understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>] [--out <dir>]`
+**Usage:** `/understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>] [--study <scope>] [--out <dir>]`
 
 **Modes:**
 - `--map` — Build context: entry points, trust boundaries, sinks → `context-map.json`
 - `--trace <entry>` — Follow one data flow source → sink with full call chain → `flow-trace-<id>.json`
 - `--hunt <pattern>` — Find all variants of a pattern across the codebase → `variants.json`
 - `--teach <subject>` — Explain a framework, library, or pattern in depth (inline)
+- `--study <scope>` — Extract semantic concepts (ownership, lifetime, contracts) → `domain-model.json`
 
 **Skills** (in `.claude/skills/code-understanding/`):
 - `SKILL.md` — Gates, config, output format
@@ -265,6 +276,7 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 - `trace.md` — Step-by-step data flow tracing with branch coverage
 - `hunt.md` — Structural, semantic, and root-cause variant analysis
 - `teach.md` — Framework/pattern explanation with security conclusion
+- `study.md` — Semantic concept extraction (separate study pipeline)
 
 **Output:** Resolved by `libexec/raptor-run-lifecycle start understand` (project dir or `out/understand_<timestamp>/`)
 
@@ -300,7 +312,9 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 
 **Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
 
-**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `error`.
+
+**Provenance:** every add/edit stamps the invocation context (`tty=<which std fds were TTYs>`, `provenance=interactive-tty|non-tty`); `source` defaults to `human` when any std fd is a TTY, else `agent`. Readers grant human-grade weight (Reflexion veto, operator-tier FP primers, durable coverage evidence, IRIS spec promotion) only to `source=human` notes with an interactive-TTY stamp (or legacy pre-stamp notes). Never pass `--source human` from non-interactive calls — the non-tty stamp contradicts it and readers demote such notes to hint tier.
 
 **Staleness:** Annotations stamped with `--lines N-M` carry a `metadata.hash` short prefix of the function's source. `/annotate stale` re-computes and lists annotations whose source has drifted.
 
@@ -325,7 +339,7 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 **When developing exploits:** Load `tiers/exploit-guidance.md` (constraints, techniques)
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
-**When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, or `teach.md`
+**When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, `teach.md`, or `study.md`
 **When running /zkpox:** Load `.claude/skills/zkpox/SKILL.md` (workflow, trust model) plus the relevant entry from `.claude/skills/zkpox/violation-gadgets/`. For advisory drafting, load `tiers/personas/disclosure_engineer.md`.
 
 ---
@@ -401,7 +415,7 @@ Two places Z3 is used — both degrade gracefully when absent:
    whether a one-gadget's register/memory constraints are satisfiable given a crash
    state. Result in `exploitation_paths[vuln].one_gadget_info.smt_feasibility`.
 
-2. **CodeQL dataflow** (`packages/codeql/smt_path_validator.py`): checks whether the
+2. **CodeQL dataflow** (`core/smt_solver/path_feasibility.py`, invoked from `packages/codeql/dataflow_validator.py`): checks whether the
    branch conditions along a dataflow path are jointly satisfiable. `unsat` → false
    positive, skip LLM. `sat` → concrete input values fed into the LLM prompt and
    `DataflowValidation.prerequisites`. Best coverage: CWE-190, CWE-120/122,
@@ -433,16 +447,16 @@ The verdict flows through the existing reachability chokepoint: /codeql + /agent
 - `/project binary list` / `remove` / `clear` — manage the persisted list.
 
 **Audit trail**:
-- `suppressions.jsonl` is written to the run's output directory whenever the chokepoint hard-suppresses a finding. One JSON record per suppression with `finding_id`, `rule_id`, `file_path`, `line`, `function`, `verdict`, `reason`. Query with `jq -c . suppressions.jsonl`. Both /agentic and /codeql write to the same file shape.
+- `suppressions.jsonl` is written to the run's output directory whenever the chokepoint hard-suppresses a finding. One JSON record per suppression with `finding_id`, `rule_id`, `file_path`, `line`, `function`, `verdict`, `reason`, `dropped` (`false` marks records for findings that survived to the LLM; consumers must tolerate extra keys). Query with `jq -c . suppressions.jsonl`. /agentic, /codeql, and /audit (oracle-earned triage skips) write the same file shape.
 - The classifier's per-finding analysis record also carries `analysis.reachability_suppression: true` + `analysis.reachability_verdict: <verdict>` for per-finding inspection.
 
 **Defenses against hostile / wrong-binary scenarios**:
 - Provenance gate on auto-detect: binaries tracked by git (committed to the source tree) are dropped — only locally-built artifacts (untracked files under build/, target/release/, etc.) feed the oracle. Defends against attacker-planted binaries and stale committed pre-builds that would silently steer `absent` verdicts toward suppressing real findings. Operator can bypass via explicit `--binary <path>` when they know a tracked binary is trustworthy.
 - Source-coverage floor (≥5% of project source names matched, min 3 matched, kicks in at ≥8 project names) — a planted ELF unrelated to source gets dropped with a loud warning rather than driving every source function to `absent`.
-- Sandbox isolation: r2 runs under `core.sandbox.run` (namespace + Landlock + network deny); binutils tools (readelf, nm, objdump, c++filt) under `core.sandbox.run_trusted`.
+- Sandbox isolation: r2 runs under `core.sandbox.run` (namespace + Landlock + network deny); the oracle's binutils invocations (readelf, nm, objdump, c++filt) run under the full sandbox as well.
 
 **E2E + precision verification**:
-- `libexec/raptor-binary-oracle-e2e` — single-invocation audit that builds a real C target and walks 15 consumer surfaces (54 assertions). No LLM calls. Run via `bin/raptor` or `CLAUDECODE=1 libexec/...`.
+- `libexec/raptor-binary-oracle-e2e` — single-invocation audit that builds a real C target and walks 14 consumer surfaces (~50 assertions). No LLM calls. Run via `bin/raptor` or `CLAUDECODE=1 libexec/...`.
 - `libexec/raptor-binary-oracle-precision --corpus <name>` — re-measure absent-precision on any corpus driver (synthetic/zlib/libsodium/snappy/leveldb/regex-rust/zstd_holdout). Report includes per-corpus cross-tab (classifier × gcov live/dead), aggregate with rule-of-three UB, n-concentration dominator detection, and the toolchain block (cc/gcov/llvm-cov versions) so the precision number is reproducible.
 
 **Skill location**: `core/analysis/binary_oracle.py` (classifier), `core/analysis/binary_oracle_autodetect.py` (auto-detect), `core/analysis/binary_oracle_precision.py` (measurement harness — `libexec/raptor-binary-oracle-precision` CLI shim runs it). Design + validation writeup: `~/design/binary-oracle-reachability.md` §9-11.

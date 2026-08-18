@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -45,9 +46,13 @@ class TaintSpec:
     return_tainted: bool = False
     confidence: float = 0.5
     evidence_tier: EvidenceTier = EvidenceTier.HEURISTIC
+    # Provenance label ("heuristic", "operator_confirmed", ...).
+    # Mirrors core.iris.specs.TaintSpec so the two spec shapes stay
+    # interchangeable across the refine loop / store merge seam.
+    source: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "function": self.function,
             "file": self.file,
             "role": self.role,
@@ -57,6 +62,9 @@ class TaintSpec:
             "confidence": self.confidence,
             "evidence_tier": self.evidence_tier.value,
         }
+        if self.source:
+            d["source"] = self.source
+        return d
 
 
 @dataclass
@@ -303,12 +311,19 @@ def compile_codeql_config(specs: List[TaintSpec]) -> str:
 
 def _escape_codeql(name: str) -> str:
     """Escape a function name for use in a CodeQL string literal."""
+    name = name.replace("\n", "").replace("\r", "").replace("\0", "")
     return name.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _escape_scala(name: str) -> str:
-    """Escape a function name for use in a Scala regex pattern."""
-    return name.replace(".", "\\.").replace("$", "\\$")
+    """Escape a function name for use in a Joern/Java regex pattern.
+
+    The result is embedded in a Scala double-quoted string literal,
+    so we must escape both regex metacharacters AND Scala string
+    characters (backslash and double-quote).
+    """
+    escaped = re.escape(name)
+    return escaped.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def specs_to_json(specs: List[TaintSpec]) -> str:
@@ -321,6 +336,8 @@ def specs_from_json(raw: str) -> List[TaintSpec]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
         return []
     specs = []
     for item in data:
@@ -337,5 +354,6 @@ def specs_from_json(raw: str) -> List[TaintSpec]:
             return_tainted=item.get("return_tainted", False),
             confidence=item.get("confidence", 0.5),
             evidence_tier=tier,
+            source=item.get("source", ""),
         ))
     return specs

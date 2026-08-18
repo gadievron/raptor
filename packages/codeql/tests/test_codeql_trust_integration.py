@@ -24,16 +24,14 @@ try:
 except IndexError:                                      # pragma: no cover
     pass
 
-from core.security.codeql_trust import _scan_cached, set_trust_override
+from core.security.codeql_trust import set_trust_override
 from packages.codeql.database_manager import DatabaseManager
 
 
 @pytest.fixture(autouse=True)
 def _clear_trust_state():
-    _scan_cached.cache_clear()
     set_trust_override(False)
     yield
-    _scan_cached.cache_clear()
     set_trust_override(False)
 
 

@@ -5,7 +5,7 @@
 #
 # Run with --help (or any subcommand --help) for usage.
 
-set -e
+set -euo pipefail
 
 # ─── trust-marker check (do not source; inline by design) ───
 if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
@@ -16,8 +16,35 @@ if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
 fi
 # ─── end trust-marker check ─────────────────────────────────
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Resolve symlinks so REPO_ROOT is correct even when this wrapper is
+# symlinked into ~/bin or similar (matches bin/raptor's behaviour).
+# Hop bound — see raptor-cc-trust-check for the symlink-cycle rationale.
+SCRIPT="$0"
+_symhops=0
+while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-llm-scorecard: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+unset _symhops
+REPO_ROOT="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+if [ ! -f "$REPO_ROOT/core/llm/scorecard/cli.py" ]; then
+    echo "raptor-llm-scorecard: cannot find scorecard CLI under $REPO_ROOT" >&2
+    exit 1
+fi
+
+# Strip env vars that could inject code into the Python process
+# (loader hijack, PYTHONSTARTUP, etc.) — same shared list the
+# launchers use. This script is also invoked directly by operators
+# (_RAPTOR_TRUSTED=1), so it cannot rely on bin/raptor having
+# stripped the environment already.
+. "$REPO_ROOT/core/security/_dangerous_env_strip.sh"
 
 cd "$REPO_ROOT"
 exec python3 -m core.llm.scorecard.cli "$@"

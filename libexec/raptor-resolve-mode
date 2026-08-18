@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Resolve execution mode: orchestrator (external LLM) vs in-session (Claude Code).
 
 Usage:
@@ -14,16 +16,11 @@ Resolution order:
   (neither)         → check models.json / env vars; orchestrator if found,
                       in-session if not
 """
-import faulthandler
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -33,6 +30,7 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -71,6 +69,27 @@ def main() -> int:
     model = _get_default_primary_model()
     if model is not None:
         model_id = f"{model.provider}/{model.model_name}"
+        if model.provider.startswith("claudecode"):
+            # The claudecode fallback fires whenever `claude` is on
+            # PATH — but PATH-presence says nothing about whether a
+            # dispatch will actually complete (backend auth, proxy
+            # route, model mapping). Probe once (cached) for liveness
+            # AND the real session model; a failed probe means every
+            # orchestrator LLM call would hang, so fall back to
+            # in-session instead of committing to a broken transport.
+            from core.llm.cc_probe import probe_cc_session_model
+            resolved = probe_cc_session_model()
+            if resolved is None:
+                sys.stderr.write(
+                    "raptor-resolve-mode: claude CLI pre-flight probe "
+                    "failed (no completion / no model in envelope) — "
+                    "claudecode transport unusable; using in-session "
+                    "mode. Fix the CLI backend or configure "
+                    "~/.config/raptor/models.json for direct API.\n"
+                )
+                print("in-session")
+                return 0
+            model_id = f"{model.provider}/{resolved}"
         print(f"orchestrator {model_id}")
         return 0
 

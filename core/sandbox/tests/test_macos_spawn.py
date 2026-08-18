@@ -38,6 +38,7 @@ def test_run_sandboxed_signature_matches_linux_spawn():
     Linux kwarg (extra Linux-only kwargs are accepted-and-ignored,
     which the explicit `noqa: ARG001` annotations document)."""
     import inspect
+
     from core.sandbox import _spawn as linux_spawn
     linux_params = set(
         inspect.signature(linux_spawn.run_sandboxed).parameters.keys()
@@ -210,7 +211,8 @@ def test_audit_mode_writes_jsonl(tmp_path):
     # instead: usually returns in <500ms, gives slow CI runners
     # more headroom, and the worst-case wall-clock matches the old
     # ``sleep(2.0) + assert`` shape.
-    jsonl_path = audit_dir / ".sandbox-denials.jsonl"
+    from core.sandbox.evidence import evidence_write_path
+    jsonl_path = evidence_write_path(audit_dir, ".sandbox-denials.jsonl")
     _poll_deadline = time.monotonic() + 5.0
     while time.monotonic() < _poll_deadline:
         if jsonl_path.exists() and jsonl_path.stat().st_size > 0:
@@ -316,7 +318,8 @@ def test_audit_verbose_records_extended_categories(tmp_path):
     # Allow kernel→log→stream pipeline to flush. See the
     # ``test_audit_mode_produces_denials_jsonl`` test for the
     # full rationale on the poll-loop pattern vs. flat sleep.
-    jsonl_path = audit_dir / ".sandbox-denials.jsonl"
+    from core.sandbox.evidence import evidence_write_path
+    jsonl_path = evidence_write_path(audit_dir, ".sandbox-denials.jsonl")
     _poll_deadline = time.monotonic() + 5.0
     while time.monotonic() < _poll_deadline:
         if jsonl_path.exists() and jsonl_path.stat().st_size > 0:
@@ -362,7 +365,8 @@ def test_audit_summary_record_emitted(tmp_path):
     # other tests in this file. 3s budget (this assertion needs
     # less than the kernel→log path because the audit summary
     # is written from in-process at sandbox shutdown).
-    jsonl_path = audit_dir / ".sandbox-denials.jsonl"
+    from core.sandbox.evidence import evidence_write_path
+    jsonl_path = evidence_write_path(audit_dir, ".sandbox-denials.jsonl")
     _poll_deadline = time.monotonic() + 3.0
     while time.monotonic() < _poll_deadline:
         if jsonl_path.exists() and jsonl_path.stat().st_size > 0:
@@ -422,9 +426,14 @@ def test_audit_budget_drops_when_cap_hit(tmp_path):
         if decision == audit_budget.KEEP:
             streamer._append_record(record)
     streamer.stop()
+    # The streamer appends through the held evidence fd, which lives
+    # at <run_dir>/.audit/<name> (core.sandbox.evidence placement) —
+    # read it back from there, like the other audit tests above, not
+    # from the legacy top-level spot.
+    from core.sandbox.evidence import evidence_write_path
+    jsonl_path = evidence_write_path(audit_dir, seatbelt_audit.DENIALS_FILE)
     records = [json.loads(line) for line in
-                (audit_dir / seatbelt_audit.DENIALS_FILE)
-                .read_text().splitlines() if line.strip()]
+                jsonl_path.read_text().splitlines() if line.strip()]
     markers = [r for r in records
                 if r.get("type") in ("category_budget_exceeded",
                                      "category_budget_exceeded_sampling")]
@@ -519,14 +528,17 @@ def test_orphan_teardown_on_orchestrator_kill():
 
     def sleepers():
         out = subprocess.run(["pgrep", "-f", f"sleep {marker}"],
-                             capture_output=True, text=True).stdout
+                             capture_output=True, text=True,
+                             check=False).stdout
         return [ln for ln in out.split() if ln.strip()]
 
+    orch_code = (
+        "from core.sandbox import sandbox\n"
+        "with sandbox(block_network=True) as run:\n"
+        f"    run(['/bin/sleep','{marker}'], capture_output=True)\n"
+    )
     orch = subprocess.Popen(
-        [sys.executable, "-c",
-         "from core.sandbox import sandbox\n"
-         "with sandbox(block_network=True) as run:\n"
-         f"    run(['/bin/sleep','{marker}'], capture_output=True)\n"],
+        [sys.executable, "-c", orch_code],
         env=dict(os.environ, _RAPTOR_TRUSTED="1"),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -549,4 +561,4 @@ def test_orphan_teardown_on_orchestrator_kill():
             orch.kill()
             orch.wait()
         subprocess.run(["pkill", "-9", "-f", f"sleep {marker}"],
-                       capture_output=True)
+                       capture_output=True, check=False)

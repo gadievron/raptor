@@ -37,8 +37,8 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 _REPO = Path(__file__).resolve().parents[2]  # raptor-sca repo root
 sys.path.insert(0, str(_REPO))
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 # Cross-tool launch helpers
 # ---------------------------------------------------------------------------
 
-def _find_sca_agent() -> Optional[Path]:
+def _find_sca_agent() -> Path | None:
     """Discover the SCA agent entry point.
 
     Post-merge, SCA lives in-tree — this file IS the agent. So the
@@ -113,7 +113,7 @@ def run_sca_subprocess(
     output_dir: Path,
     *,
     sandbox_args: Sequence[str] = (),
-    env: Optional[dict] = None,
+    env: dict | None = None,
     timeout: int = 600,
 ) -> tuple:
     """Run the SCA agent as a sandboxed subprocess.
@@ -201,8 +201,8 @@ def _compose_proxy_hosts(target: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def main(argv=None) -> int:
+    from core.sandbox import PROFILES as _SANDBOX_PROFILES
     from packages.sca.api import analyse
-
     ap = argparse.ArgumentParser(description="RAPTOR SCA agent")
     ap.add_argument("--repo", required=True, help="Target project root")
     ap.add_argument("--out", required=True, help="Output directory")
@@ -210,7 +210,11 @@ def main(argv=None) -> int:
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--sarif-dirs", nargs="*",
                     help="Sibling SARIF directories for cross-tool linking")
-    ap.add_argument("--sandbox", choices=["full", "network-only", "none"],
+    # Dynamic choices from the profile registry — a hardcoded subset
+    # silently excluded 'strict', the profile the threat model
+    # recommends for exactly this workload (LLM analysis over hostile
+    # dependency manifests).
+    ap.add_argument("--sandbox", choices=sorted(_SANDBOX_PROFILES),
                     default=None,
                     help="Sandbox profile (default: use egress proxy only)")
     ap.add_argument("--no-sandbox", action="store_true",

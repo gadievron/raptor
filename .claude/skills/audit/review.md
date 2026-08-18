@@ -81,12 +81,13 @@ libexec/raptor-run-sandboxed gcc -o test test.c && libexec/raptor-run-sandboxed 
 ### Step 4: Evaluate
 
 - **Tool confirms (match/sat/crash):** Emit a finding with the tool output as evidence. Record status `finding`.
-- **Tool refutes (no match/unsat/clean):** Discard hypothesis. Note in annotation what was tested and ruled out.
+- **Tool refutes (no match/unsat/clean):** Discard hypothesis. Note in the journal entry what was tested and ruled out.
 - **Tool errors:** Note the error. The hypothesis remains open — status `suspicious` if the reasoning is strong, `clean` if weak.
 
-### Step 5: Annotate
+### Step 5: Record the verdict
 
-Write an annotation that records:
+Write a journal entry (via `raptor-audit record` — never `/annotate`,
+annotations are human-only) that records:
 1. What hypotheses were formed
 2. What tools were run (name + rule/query)
 3. What each tool returned

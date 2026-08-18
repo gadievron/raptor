@@ -36,7 +36,60 @@ INDEX_SCHEMA_VERSION = 1
 
 VALID_VERDICTS = frozenset({
     "clean", "suspicious", "finding", "error", "dormant",
+    # Gate-resolution bucket: tool-blind, needs concrete verification.
+    # Journaled when the end-of-run resolution passes re-journal final
+    # statuses (entries were committed mid-loop, pre-resolution).
+    "dark",
 })
+
+
+# ── file:function key encoding ───────────────────────────────────────
+#
+# In-memory keys join the file path and function name with ':'. The
+# raw join is not injective: file "a.c:evil" + function "f" collides
+# with file "a.c" + function "evil:f". Producers and consumers must
+# therefore percent-encode the FILE component before joining.
+#
+# The encoding is deliberately minimal — only ':' and '%' (the escape
+# character itself) are encoded, so every path without those two
+# characters keeps its historical key byte-for-byte. A full
+# ``urllib.parse.quote`` would also rewrite spaces and non-ASCII
+# paths, silently desyncing the many raw ``f"{file}:{name}"`` joins
+# elsewhere in the tree that this chokepoint must stay consistent
+# with.
+#
+# On-disk compatibility: journal entries persist ``file`` and
+# ``function`` as separate JSON fields — keys are always recomputed
+# from those fields at read time, never parsed from disk. The
+# project index's dict keys (``index_key``) are opaque identity
+# handles: old-format keys keep loading (entries reconstruct from
+# fields), and a re-merge of a colon-bearing file simply adds a row
+# under the new key, which ``load_index`` collapses to
+# latest-by-timestamp.
+
+def encode_key_file(file: str) -> str:
+    """Percent-encode ':' and '%' in a key's file component."""
+    if ":" not in file and "%" not in file:
+        return file
+    return file.replace("%", "%25").replace(":", "%3A")
+
+
+def make_function_key(file: str, function: str) -> str:
+    """Injective ``file:function`` key (file component encoded)."""
+    return f"{encode_key_file(file)}:{function}"
+
+
+def split_function_key(key: str) -> tuple[str, str]:
+    """Split a key back into (file, function).
+
+    Splits on the LAST ':' — the historical convention — so
+    old-format (unencoded) keys still parse, then decodes the file
+    component. Decode order matters: '%3A' first (encoded ':' — a
+    literal '%' is always followed by '25' after encoding), then
+    '%25'.
+    """
+    file, _, function = key.rpartition(":")
+    return file.replace("%3A", ":").replace("%25", "%"), function
 
 
 # Journal entry schema version.
@@ -76,6 +129,10 @@ class ReviewJournalEntry:
     hypotheses: list[dict[str, str]] = field(default_factory=list)
     body: str = ""
     reading_list_items: list[str] = field(default_factory=list)
+    # Receipts of study answers whose re-review produced this verdict
+    # (question, tier, file, line, sha256, verified) — makes a bad
+    # study answer's blast radius traceable from the journal.
+    study_receipts: list[dict] = field(default_factory=list)
     model: str | None = None
     evidence_tools: list[str] = field(default_factory=list)
     token_budget: int | None = None
@@ -92,6 +149,18 @@ class ReviewJournalEntry:
     # the drift instead of hiding it behind an inherited
     # ``source_hash``.
     source_drifted: bool | None = None
+    # ``context_reduced``: verdict produced by the reduced-context
+    # timeout retry (heaviest context blocks stripped). Recorded so
+    # cross-run verdict reuse can refuse to import a lower-confidence
+    # verdict as durable coverage.
+    context_reduced: bool | None = None
+    # ``reused`` / ``reused_from_run``: this entry was imported from a
+    # prior run's verdict (source hash unchanged) rather than produced
+    # by a live review. ``reused_from_run`` always names the ORIGINAL
+    # producing run, so chains of reuse keep pointing at the run that
+    # actually did the review.
+    reused: bool | None = None
+    reused_from_run: str | None = None
     # ``producer``: which tool produced this entry — ``audit`` or
     # ``agentic``. Enables reliable ``import_journal`` tool-label
     # mapping without inferring from ``run_id`` string patterns.
@@ -100,7 +169,7 @@ class ReviewJournalEntry:
 
     @property
     def key(self) -> str:
-        return f"{self.file}:{self.function}"
+        return make_function_key(self.file, self.function)
 
     @property
     def index_key(self) -> str:
@@ -113,13 +182,39 @@ class ReviewJournalEntry:
         """
         strategy_hash = _canonical_strategy_hash(self.strategies)
         model = self.model or ""
-        return f"{self.file}:{self.function}:{model}:{strategy_hash}"
+        return (
+            f"{encode_key_file(self.file)}:{self.function}"
+            f":{model}:{strategy_hash}"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         d = {k: v for k, v in asdict(self).items() if v is not None}
         # ``schema_version`` is required; keep even when default.
         d["schema_version"] = self.schema_version
         return d
+
+
+def is_mechanical_echo(entry: Any) -> bool:
+    """True for post-loop mechanical echo rows.
+
+    Pattern-scan findings are journalled after the review loop for
+    cross-layer visibility — one ``[mechanical]`` row per finding,
+    zero cost, no rationale, ``post-loop-mechanical`` strategy tag.
+    They are NOT LLM reviews: naive verdict counts that include them
+    inflate by one suspicious row per pattern-scan finding. Accepts a
+    :class:`ReviewJournalEntry` or a raw journal dict — the single
+    counting rule for every summary consumer.
+    """
+    if isinstance(entry, dict):
+        strategies = entry.get("strategies")
+        body = entry.get("body")
+    else:
+        strategies = getattr(entry, "strategies", None)
+        body = getattr(entry, "body", None)
+    return (
+        "post-loop-mechanical" in (strategies or [])
+        or (body or "").startswith("[mechanical]")
+    )
 
 
 def _canonical_strategy_hash(strategies: list[str]) -> str:
@@ -251,6 +346,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         hypotheses=raw.get("hypotheses", []),
         body=raw.get("body", ""),
         reading_list_items=raw.get("reading_list_items", []),
+        study_receipts=raw.get("study_receipts", []),
         model=raw.get("model"),
         evidence_tools=raw.get("evidence_tools", []),
         token_budget=raw.get("token_budget"),
@@ -261,6 +357,9 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         validate_verdict=raw.get("validate_verdict"),
         validate_reason=raw.get("validate_reason"),
         source_drifted=raw.get("source_drifted"),
+        context_reduced=raw.get("context_reduced"),
+        reused=raw.get("reused"),
+        reused_from_run=raw.get("reused_from_run"),
         producer=raw.get("producer"),
         schema_version=version,
     )

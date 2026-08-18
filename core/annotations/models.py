@@ -4,8 +4,8 @@ storage rationale."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -31,12 +31,21 @@ class Annotation:
       * ``status``: ``clean`` / ``suspicious`` / ``finding`` /
         ``error`` (matches the audit coverage status enum)
       * ``cwe``: e.g. ``CWE-78``
-      * ``source``: ``human`` / ``llm`` — who wrote the annotation.
+      * ``source``: ``human`` / ``agent`` / ``llm`` — who claims to
+        have written the annotation (caller-asserted; readers grade
+        it against the provenance stamp). The CLI defaults to
+        ``human`` for interactive invocations and ``agent`` for
+        non-interactive ones; ``llm`` marks legacy pre-migration
+        LLM annotations.
         ``write_annotation(..., overwrite="respect-manual")`` skips
-        writes whose existing record has ``source=human`` so LLM
-        passes never clobber operator notes. Operator-driven CLI
-        commands set ``source=human``; LLM-driven callers set
-        ``source=llm``.
+        writes whose existing record has ``source=human`` so
+        scripted passes never clobber operator notes.
+      * ``tty`` / ``provenance``: the invocation-context stamp the
+        CLI records on every add/edit — which std fds were TTYs,
+        and the derived ``interactive-tty`` / ``non-tty`` tag (see
+        :mod:`core.annotations.provenance`). Annotations without
+        the stamp are legacy (pre-stamp); readers give
+        ``source=human`` ones benefit-of-doubt.
       * ``hash``: short sha256 prefix of the function's source lines,
         captured at annotation time so callers can detect a stale
         annotation when the source edits later. Use

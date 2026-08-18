@@ -34,6 +34,10 @@ Per-language detection currently handled:
   * Go: ``func init() { panic(...) }`` where the panic is at the
     init body's top scope (not inside a conditional / loop).
   * Rust: ``compile_error!(...)`` at module scope.
+  * PHP: file-scope ``throw new <Class>`` / ``die`` / ``exit`` at
+    brace-depth zero, statement-initial (conditional forms skipped).
+  * Ruby: unconditional column-0 ``raise`` / ``abort`` / ``exit`` /
+    ``fail`` at nesting depth zero (modifier forms skipped).
 
 Other languages return ``None`` (no detection wired) — same
 graceful-degradation pattern as the call-graph extractors. The
@@ -68,9 +72,11 @@ class ModuleLoadAbort:
 def detect_module_load_abort(
     language: str, content: str,
 ) -> Optional[ModuleLoadAbort]:
-    """Per-language dispatch. Returns the first detected unconditional
-    abort, or ``None`` when no abort is detected (or the language
-    has no detector wired).
+    """Per-language dispatch. Returns a detected unconditional abort,
+    or ``None`` when no abort is detected (or the language has no
+    detector wired). Detectors are best-effort and may examine only
+    the first candidate site (see :func:`_detect_rust`), so ``None``
+    never means "file is guaranteed loadable".
 
     Best-effort: any parse failure inside a per-language detector
     returns ``None``; the caller treats absence as "no signal".
@@ -280,7 +286,65 @@ _GO_INIT_HEADER = re.compile(r"\bfunc\s+init\s*\(\s*\)\s*\{")
 _GO_PANIC_CALL = re.compile(r"\bpanic\s*\(")
 
 
+def _go_strip_comments_and_strings(content: str) -> str:
+    """Blank Go comments and string/rune literal INTERIORS, preserving
+    newlines (line-number arithmetic) and the quote characters
+    themselves (so the downstream brace walkers still see terminated,
+    now-empty literals). Without this a ``panic(``, ``func init() {``
+    or brace inside a comment or string in the untrusted target file
+    reads as real code and can fabricate the whole-file abort gate —
+    the false-positive direction the module docstring forbids."""
+    out = list(content)
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c == "/" and i + 1 < n and out[i + 1] == "/":
+            while i < n and out[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and out[i + 1] == "*":
+            out[i] = " "
+            out[i + 1] = " "
+            i += 2
+            while i < n:
+                if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
+                    out[i] = " "
+                    out[i + 1] = " "
+                    i += 2
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if c in "\"'`":
+            quote = c
+            i += 1
+            while i < n:
+                ch = out[i]
+                if ch == "\\" and quote != "`" and i + 1 < n:
+                    out[i] = " "
+                    if out[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if ch == quote:
+                    i += 1
+                    break
+                if ch != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
 def _detect_go(content: str) -> Optional[ModuleLoadAbort]:
+    # Sanitize once up front: comments and string/rune interiors are
+    # blanked so neither the init-header search, the panic search, nor
+    # the depth walkers below can be steered by comment/string content.
+    content = _go_strip_comments_and_strings(content)
     init_match = _GO_INIT_HEADER.search(content)
     if not init_match:
         return None
@@ -364,11 +428,24 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
     """The panic is unconditional iff brace depth at its location
     (relative to the init body) is zero — i.e. it's a statement
     directly in the function body, not nested inside any conditional
-    block (if / for / switch / select)."""
+    block (if / for / switch / select). Comments and string literals
+    are skipped exactly as in :func:`_go_find_matching_brace` — a
+    ``}`` inside a comment before the panic would otherwise drop the
+    depth and misread a conditional panic as unconditional."""
     depth = 0
     i = 0
+    n = len(body)
     while i < panic_offset:
         c = body[i]
+        if c == "/" and i + 1 < n:
+            if body[i + 1] == "/":
+                nl = body.find("\n", i + 2)
+                i = nl + 1 if nl != -1 else n
+                continue
+            if body[i + 1] == "*":
+                end = body.find("*/", i + 2)
+                i = end + 2 if end != -1 else n
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -380,7 +457,9 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
             i = j
             continue
         i += 1
-    return depth == 0
+    # A skip that jumped PAST the panic means the "panic" itself sits
+    # inside a comment / string literal — not a real abort.
+    return i == panic_offset and depth == 0
 
 
 # ---------------------------------------------------------------------------
@@ -399,11 +478,14 @@ _RUST_COMPILE_ERROR = re.compile(
 
 
 def _detect_rust(content: str) -> Optional[ModuleLoadAbort]:
-    # Naive but effective: compile_error! at line start (after any
-    # leading whitespace) with no preceding ``#[cfg`` attribute on
-    # the same logical statement. The substrate doesn't model cfg
-    # gates; we conservatively flag any unconditional compile_error
-    # and treat cfg-gated ones as out of scope (false-negative bias).
+    # Naive but effective: examine only the FIRST compile_error! at
+    # line start (after any leading whitespace). If that occurrence
+    # is attribute-gated, report nothing — later occurrences are not
+    # scanned, so an unconditional compile_error following a
+    # cfg-gated one is missed. The substrate doesn't model cfg
+    # gates; treating those sites as out of scope is the module-wide
+    # false-negative bias (miss a deferral, never suppress live
+    # code).
     m = _RUST_COMPILE_ERROR.search(content)
     if not m:
         return None
@@ -502,7 +584,10 @@ _RB_END = re.compile(r"^end\b")
 # same line — net zero nesting. Detected by a trailing ``end`` word so it
 # doesn't leave depth stuck at 1 (which would hide a top-level abort below).
 _RB_ONELINER = re.compile(r"\bend\s*$")
-_RB_ABORT = re.compile(r"^(raise\s+\S|abort\b|exit\b|exit!|fail\s+\S|Kernel\.(abort|exit))")
+# ``exit!`` must precede ``exit\b`` — leftmost-alternative semantics
+# would otherwise always take the ``exit\b`` prefix match, leaving the
+# ``exit!`` alternative dead.
+_RB_ABORT = re.compile(r"^(raise\s+\S|abort\b|exit!|exit\b|fail\s+\S|Kernel\.(abort|exit))")
 _RB_MODIFIER = re.compile(r"\b(if|unless|while|until)\b")
 
 

@@ -30,18 +30,20 @@ import logging
 import re
 import sys
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from .update import (
     UpgradeChange,
-    _PlanEntry,
     _change_to_dict,
     _emit_git_patch,
     _materialise_changes,
     _plan_targets,
+    _PlanEntry,
     _rewrite_one,
 )
+from .versions import VersionError
 from .versions import compare as version_compare
 
 logger = logging.getLogger(__name__)
@@ -115,7 +117,7 @@ def main(argv: Sequence[str]) -> int:
         return 3
 
     try:
-        findings_rows: List[Dict[str, Any]] = json.loads(
+        findings_rows: list[dict[str, Any]] = json.loads(
             result.findings_path.read_text(encoding="utf-8"),
         )
     except (json.JSONDecodeError, OSError) as exc:
@@ -130,7 +132,7 @@ def main(argv: Sequence[str]) -> int:
     )
 
     # Detect CVE fixes blocked by major-version boundary.
-    major_blocked: Dict[Tuple[str, str, str], _PlanEntry] = {}
+    major_blocked: dict[tuple[str, str, str], _PlanEntry] = {}
     if not args.allow_major:
         all_vuln = _plan_targets(
             findings_rows, advisory_filter=None, allow_major=True,
@@ -152,13 +154,16 @@ def main(argv: Sequence[str]) -> int:
 
     if (not vuln_plans and not hygiene_plans and not major_blocked
             and not do_hash_pin):
-        print("raptor-sca fix: nothing to do — all deps are pinned and "
-              "CVE-free.", file=sys.stderr)
+        print("raptor-sca fix: nothing to do — no CVE-driven upgrades, "
+              "hygiene bumps, or hash-pins pending. (Unpinned-dependency "
+              "hygiene findings, if any, are reported by the scan; fix "
+              "only plans remediations it can safely apply.)",
+              file=sys.stderr)
         return 0
 
     # ---- Phase 3b: LLM impact analysis for major-blocked CVEs -----------
     llm_approved: set = set()
-    llm_verdicts: Dict[Tuple[str, str, str], Any] = {}
+    llm_verdicts: dict[tuple[str, str, str], Any] = {}
     if major_blocked and not args.no_llm:
         llm_approved, llm_verdicts = _analyze_major_bumps(
             major_blocked, vuln_plans, target,
@@ -294,9 +299,9 @@ _HYGIENE_PIN_KINDS = frozenset({"unpinned_dependency", "loose_pin"})
 
 
 def _plan_hygiene_pins(
-    rows: List[Dict[str, Any]],
-    vuln_plans: Dict[Tuple[str, str, str], _PlanEntry],
-) -> Dict[Tuple[str, str, str], _PlanEntry]:
+    rows: list[dict[str, Any]],
+    vuln_plans: dict[tuple[str, str, str], _PlanEntry],
+) -> dict[tuple[str, str, str], _PlanEntry]:
     """Plan exact-pin rewrites for deps with hygiene findings.
 
     Skips deps that already have a CVE-fix plan (those are handled by
@@ -315,13 +320,13 @@ def _plan_hygiene_pins(
         operators would see the finding repeatedly without an
         automated path to clear it.
     """
-    plans: Dict[Tuple[str, str, str], _PlanEntry] = {}
+    plans: dict[tuple[str, str, str], _PlanEntry] = {}
 
     # Pre-pass: build a (ecosystem, name) → [(manifest, version), …]
     # index across ALL findings. Cross-manifest reconciliation needs
     # this to enumerate every place the dep appears, not just the
     # one manifest the cross_manifest_inconsistency finding points at.
-    all_dep_locations: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    all_dep_locations: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -407,11 +412,17 @@ def _plan_hygiene_pins(
     # another manifest, adopt it here too.  This handles the case
     # where offline/cache misses cause the vuln finding to appear for
     # one copy of the dep but not another.
-    vuln_by_dep: Dict[Tuple[str, str, str], _PlanEntry] = {}
+    vuln_by_dep: dict[tuple[str, str, str], _PlanEntry] = {}
     for plan in vuln_plans.values():
         dep_key = (plan.ecosystem, plan.name, plan.installed)
         existing = vuln_by_dep.get(dep_key)
-        if existing is None or version_compare(plan.ecosystem, plan.target, existing.target) > 0:
+        try:
+            is_higher = existing is None or version_compare(
+                plan.ecosystem, plan.target, existing.target,
+            ) > 0
+        except VersionError:
+            is_higher = existing is None
+        if is_higher:
             vuln_by_dep[dep_key] = plan
 
     for key, plan in plans.items():
@@ -426,7 +437,7 @@ def _plan_hygiene_pins(
 
 def _run_hash_pin(
     target: Path, out_dir: Path, *, write: bool,
-) -> Optional[str]:
+) -> str | None:
     """Rewrite ``.github/workflows/*.yml`` ``uses:`` refs to commit
     SHAs. Writes a ``hash-pin.json`` artefact alongside the run's
     other outputs. Returns a one-line human-readable summary, or
@@ -468,7 +479,7 @@ def _run_hash_pin(
     return msg
 
 
-def _highest_version(versions) -> Optional[str]:
+def _highest_version(versions) -> str | None:
     """Return the highest version string by PEP 440 ordering when
     available, falling back to lexicographic.
 
@@ -480,7 +491,7 @@ def _highest_version(versions) -> Optional[str]:
     if not versions:
         return None
     try:
-        from packaging.version import Version, InvalidVersion
+        from packaging.version import InvalidVersion, Version
         try:
             parsed = sorted(versions, key=Version)
             return parsed[-1]
@@ -488,7 +499,7 @@ def _highest_version(versions) -> Optional[str]:
             pass
     except ImportError:
         pass
-    return sorted(versions)[-1]
+    return max(versions)
 
 
 # ---------------------------------------------------------------------------
@@ -496,10 +507,10 @@ def _highest_version(versions) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def _materialise_pin_changes(
-    plans: Dict[Tuple[str, str, str], _PlanEntry],
+    plans: dict[tuple[str, str, str], _PlanEntry],
     proposed_root: Path,
-    target: Optional[Path] = None,
-) -> List[UpgradeChange]:
+    target: Path | None = None,
+) -> list[UpgradeChange]:
     """Materialise pin-tightening changes.
 
     Unlike CVE-fix materialisation (which replaces old→new version),
@@ -512,9 +523,9 @@ def _materialise_pin_changes(
     ecosystems, but miss bare names.  This function tries the standard
     rewriter first, then falls back to ecosystem-specific pin insertion.
     """
-    out: List[UpgradeChange] = []
+    out: list[UpgradeChange] = []
 
-    by_manifest: Dict[Path, List[_PlanEntry]] = defaultdict(list)
+    by_manifest: dict[Path, list[_PlanEntry]] = defaultdict(list)
     for plan in plans.values():
         by_manifest[plan.manifest].append(plan)
 
@@ -527,8 +538,10 @@ def _materialise_pin_changes(
         except ValueError:
             rel = Path(manifest.name)
 
+        proposed_copy = proposed_root / rel
+        read_from = proposed_copy if proposed_copy.exists() else manifest
         try:
-            original = manifest.read_text(encoding="utf-8")
+            original = read_from.read_text(encoding="utf-8")
         except OSError as e:
             for plan in plan_list:
                 out.append(UpgradeChange(
@@ -582,7 +595,7 @@ def _normalise_pypi_name(name: str) -> str:
 
 def _pin_bare_name(
     manifest: Path, text: str, plan: _PlanEntry,
-) -> Tuple[str, bool, Optional[str]]:
+) -> tuple[str, bool, str | None]:
     """Insert an exact version pin for a bare (unversioned) dep name."""
     name = manifest.name
 
@@ -598,10 +611,10 @@ def _pin_bare_name(
 
 def _pin_bare_requirements(
     text: str, plan: _PlanEntry,
-) -> Tuple[str, bool, Optional[str]]:
+) -> tuple[str, bool, str | None]:
     """Pin ``name`` (bare, no version) → ``name==target``."""
     norm = _normalise_pypi_name(plan.name)
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     rewrote = False
     for raw in text.splitlines(keepends=True):
         stripped = raw.strip()
@@ -627,7 +640,7 @@ def _pin_bare_requirements(
 
 def _pin_bare_package_json(
     text: str, plan: _PlanEntry,
-) -> Tuple[str, bool, Optional[str]]:
+) -> tuple[str, bool, str | None]:
     """Pin ``"name": "*"`` or ``"name": ""`` → ``"name": "target"``."""
     pat = re.compile(
         r'("' + re.escape(plan.name) + r'"\s*:\s*")'
@@ -652,13 +665,13 @@ def _pin_bare_package_json(
 
 def _pin_bare_pyproject(
     text: str, plan: _PlanEntry,
-) -> Tuple[str, bool, Optional[str]]:
+) -> tuple[str, bool, str | None]:
     """Pin a bare dep name in pyproject.toml (PEP 621 or Poetry)."""
     norm = _normalise_pypi_name(plan.name)
 
     # PEP 621 list form: "name" or 'name' as a bare string in
     # [project.dependencies] or [project.optional-dependencies.*]
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     rewrote = False
     for raw in text.splitlines(keepends=True):
         stripped = raw.strip()
@@ -685,10 +698,10 @@ def _pin_bare_pyproject(
 # ---------------------------------------------------------------------------
 
 def _analyze_major_bumps(
-    major_blocked: Dict[Tuple[str, str, str], _PlanEntry],
-    vuln_plans: Dict[Tuple[str, str, str], _PlanEntry],
+    major_blocked: dict[tuple[str, str, str], _PlanEntry],
+    vuln_plans: dict[tuple[str, str, str], _PlanEntry],
     target: Path,
-) -> Tuple[set, Dict]:
+) -> tuple[set, dict]:
     """Run LLM impact analysis on major-blocked CVE fixes.
 
     For each blocked dep, asks the LLM whether the major bump is safe
@@ -716,7 +729,7 @@ def _analyze_major_bumps(
           file=sys.stderr)
 
     approved: set = set()
-    verdicts: Dict[Tuple[str, str, str], Any] = {}
+    verdicts: dict[tuple[str, str, str], Any] = {}
 
     for key, plan in list(major_blocked.items()):
         dep = Dependency(
@@ -733,7 +746,7 @@ def _analyze_major_bumps(
         )
         try:
             verdict = assess_upgrade_impact(client, dep, plan.target, target)
-        except Exception:                       # noqa: BLE001
+        except Exception:
             logger.exception(
                 "raptor-sca fix: LLM impact analysis failed for %s:%s "
                 "→ %s; treating as needs-review",
@@ -764,22 +777,22 @@ def _analyze_major_bumps(
 # ---------------------------------------------------------------------------
 
 def _print_dry_run(
-    vuln_plans: Dict[Tuple[str, str, str], _PlanEntry],
-    hygiene_plans: Dict[Tuple[str, str, str], _PlanEntry],
-    major_blocked: Optional[Dict[Tuple[str, str, str], _PlanEntry]] = None,
+    vuln_plans: dict[tuple[str, str, str], _PlanEntry],
+    hygiene_plans: dict[tuple[str, str, str], _PlanEntry],
+    major_blocked: dict[tuple[str, str, str], _PlanEntry] | None = None,
     *,
-    llm_approved: Optional[set] = None,
-    llm_verdicts: Optional[Dict] = None,
+    llm_approved: set | None = None,
+    llm_verdicts: dict | None = None,
 ) -> None:
     """Print what fix *would* do, grouped by manifest file."""
     all_plans = list(vuln_plans.values()) + list(hygiene_plans.values())
     vuln_keys = set(vuln_plans)
 
-    by_manifest: Dict[Path, List[_PlanEntry]] = defaultdict(list)
+    by_manifest: dict[Path, list[_PlanEntry]] = defaultdict(list)
     for plan in all_plans:
         by_manifest[plan.manifest].append(plan)
 
-    name_count: Dict[str, int] = defaultdict(int)
+    name_count: dict[str, int] = defaultdict(int)
     for m in by_manifest:
         name_count[m.name] += 1
 
@@ -951,7 +964,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _resolve_out_dir(explicit: Optional[str]) -> Path:
+def _resolve_out_dir(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).resolve()
     from datetime import datetime, timezone

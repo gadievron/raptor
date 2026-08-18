@@ -10,7 +10,7 @@ Categories covered (drawn from public anti-analysis literature like
 Joe Sandbox / Cuckoo / Pafish / al-khaser):
 
   - Hostname / domainname sentinel checks
-  - DMI vendor/product blacklist
+  - DMI vendor/product blocklist
   - CPU identity triple lookup ((family, model, stepping) anomalies)
   - machine-id well-known-bad list
   - CPU count anomaly (==1 → sandbox heuristic)
@@ -46,9 +46,7 @@ def _mount_ns_usable() -> bool:
     if not shutil.which("newuidmap") or not shutil.which("newgidmap"):
         return False
     sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-    if sysctl.exists() and sysctl.read_text().strip() == "1":
-        return False
-    return True
+    return not (sysctl.exists() and sysctl.read_text().strip() == "1")
 
 
 class TestAdversarialFingerprint(unittest.TestCase):
@@ -101,7 +99,7 @@ class TestAdversarialFingerprint(unittest.TestCase):
 
     # === Hostname checks (Pafish/al-khaser pattern) ===
 
-    def test_hostname_not_in_sandbox_blacklist(self):
+    def test_hostname_not_in_sandbox_blocklist(self):
         script = textwrap.dedent("""
             HN=$(hostname)
             for bad in sandbox cuckoo malware analyst sample raptor; do
@@ -112,9 +110,9 @@ class TestAdversarialFingerprint(unittest.TestCase):
             done
             exit 0
         """)
-        self._assert_undetected(script, "hostname blacklist")
+        self._assert_undetected(script, "hostname blocklist")
 
-    # === DMI vendor blacklist (most common anti-analysis check) ===
+    # === DMI vendor blocklist (most common anti-analysis check) ===
 
     def test_dmi_vendor_not_virtualbox_or_vmware(self):
         script = textwrap.dedent("""
@@ -128,7 +126,7 @@ class TestAdversarialFingerprint(unittest.TestCase):
             done
             exit 0
         """)
-        self._assert_undetected(script, "DMI vendor blacklist")
+        self._assert_undetected(script, "DMI vendor blocklist")
 
     # === CPU identity triple sanity ===
 

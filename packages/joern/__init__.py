@@ -88,14 +88,20 @@ def joern_session(
 
     cpg = None
     try:
+        # Pin the joern-parse frontend from the curated per-language
+        # profiles rather than trusting parse-side auto-detection.
+        from .lang_config import parse_languages_for
+        parse_langs = parse_languages_for(str(target_path))
         if cache_dir is not None:
             cpg = build_cpg_cached(
                 target_path, cache_dir,
+                languages=parse_langs,
                 timeout=tunables.cpg_timeout_s,
             )
         else:
             cpg = build_cpg(
                 target_path,
+                languages=parse_langs,
                 timeout=tunables.cpg_timeout_s,
             )
         if cpg.exists():

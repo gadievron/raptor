@@ -84,6 +84,22 @@ class TypeConfusionFinding:
     overridden_method: str
     confidence: str = "medium"
 
+    def describe(self) -> str:
+        """Operator/LLM-facing one-liner for the mechanical finding.
+
+        Names the deserialisation origin explicitly: in the transitive
+        case the virtual-dispatch site (``function``) is a different
+        function from the deserialising one (``deser_function``), so
+        without it the taint origin cannot be located from the record.
+        """
+        subtypes_str = ", ".join(self.overriding_subtypes[:3])
+        return (
+            f"object deserialised in {self.deser_function}() via "
+            f"{self.deser_source} reaches virtual dispatch of "
+            f"{self.overridden_method}() — subtypes [{subtypes_str}] "
+            f"override this method"
+        )
+
 
 def _build_type_index(
     call_graphs: dict[str, Any],
@@ -225,7 +241,9 @@ def _find_virtual_dispatch_sites(
                     if method_name in type_index.class_methods.get(st, set())
                 )
                 if overriders:
-                    key = (filepath, caller, line)
+                    # Keyed per receiver type: two calls on one line
+                    # with different receivers are distinct findings.
+                    key = (filepath, caller, line, recv_type)
                     if key not in seen:
                         seen.add(key)
                         results.append((
@@ -247,7 +265,10 @@ def _find_virtual_dispatch_sites(
                         if method_name in type_index.class_methods.get(st, set())
                     )
                     if overriders:
-                        key = (filepath, caller, line)
+                        # Keyed per enclosing class: two same-named
+                        # methods in one file are distinct dispatch
+                        # findings at the same call site.
+                        key = (filepath, caller, line, enclosing)
                         if key not in seen:
                             seen.add(key)
                             results.append((
@@ -391,13 +412,13 @@ def detect_type_confusion(
         dispatch_by_func[vfunc].append((vfile, vline, vbase, vmethod, voverrides))
 
     findings: list[TypeConfusionFinding] = []
-    seen: set[tuple[str, str, int]] = set()
+    seen: set[tuple[str, str, int, str]] = set()
 
     for dfunc, dlocations in deser_funcs.items():
         if dfunc in dispatch_by_func:
             for dfile, dapi, _dline in dlocations:
                 for vfile, vline, vbase, vmethod, voverrides in dispatch_by_func[dfunc]:
-                    key = (vfile, dfunc, vline)
+                    key = (vfile, dfunc, vline, vbase)
                     if key in seen:
                         continue
                     seen.add(key)
@@ -417,7 +438,7 @@ def detect_type_confusion(
             if reached_func in dispatch_by_func:
                 for dfile, dapi, _dline in dlocations:
                     for vfile, vline, vbase, vmethod, voverrides in dispatch_by_func[reached_func]:
-                        key = (vfile, reached_func, vline)
+                        key = (vfile, reached_func, vline, vbase)
                         if key in seen:
                             continue
                         seen.add(key)

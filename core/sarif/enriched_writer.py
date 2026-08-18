@@ -10,10 +10,12 @@ Consumers: ``/agentic --sarif-out``, ``/project export --sarif``,
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.logging import get_logger
 
 logger = get_logger()
@@ -22,7 +24,7 @@ _SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 _VALID_LEVELS = frozenset({"none", "note", "warning", "error"})
 
 
-def _verdict_from_analysis(finding: Dict[str, Any]) -> str:
+def _verdict_from_analysis(finding: dict[str, Any]) -> str:
     analysis = finding.get("analysis") or {}
     if analysis.get("reachability_suppression"):
         return "suppressed"
@@ -36,7 +38,7 @@ def _verdict_from_analysis(finding: Dict[str, Any]) -> str:
     return "not_analyzed"
 
 
-def _reachability_from_analysis(finding: Dict[str, Any]) -> str:
+def _reachability_from_analysis(finding: dict[str, Any]) -> str:
     analysis = finding.get("analysis") or {}
     verdict = analysis.get("reachability_verdict")
     if verdict:
@@ -46,9 +48,9 @@ def _reachability_from_analysis(finding: Dict[str, Any]) -> str:
     return "not_evaluated"
 
 
-def _build_raptor_properties(finding: Dict[str, Any]) -> Dict[str, Any]:
+def _build_raptor_properties(finding: dict[str, Any]) -> dict[str, Any]:
     verdict = _verdict_from_analysis(finding)
-    props: Dict[str, Any] = {
+    props: dict[str, Any] = {
         "verdict": verdict,
         "reachability": _reachability_from_analysis(finding),
     }
@@ -80,7 +82,7 @@ def _build_raptor_properties(finding: Dict[str, Any]) -> Dict[str, Any]:
     return verdict, props
 
 
-def _build_result(finding: Dict[str, Any]) -> Dict[str, Any]:
+def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
     file_path = finding.get("file_path") or finding.get("file") or ""
 
     start_line = finding.get("start_line")
@@ -103,7 +105,7 @@ def _build_result(finding: Dict[str, Any]) -> Dict[str, Any]:
     if level not in _VALID_LEVELS:
         level = "warning"
 
-    region: Dict[str, Any] = {
+    region: dict[str, Any] = {
         "startLine": start_line,
         "endLine": end_line,
     }
@@ -119,7 +121,7 @@ def _build_result(finding: Dict[str, Any]) -> Dict[str, Any]:
 
     verdict, raptor_props = _build_raptor_properties(finding)
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "ruleId": rule_id,
         "level": level,
         "message": {"text": message},
@@ -152,11 +154,11 @@ def _build_result(finding: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_enriched_sarif(
-    findings: Sequence[Dict[str, Any]],
+    findings: Sequence[dict[str, Any]],
     *,
     tool_name: str = "RAPTOR",
-    tool_version: Optional[str] = None,
-) -> Dict[str, Any]:
+    tool_version: str | None = None,
+) -> dict[str, Any]:
     """Build a SARIF 2.1.0 document from analysed findings.
 
     Groups findings by their original tool (``finding["tool"]``),
@@ -167,11 +169,11 @@ def build_enriched_sarif(
         try:
             from core.config import RaptorConfig
             tool_version = RaptorConfig.effective_version()
-        except Exception:
+        except Exception:  # noqa: BLE001
             tool_version = "unknown"
 
-    runs_by_tool: Dict[str, List[Dict[str, Any]]] = {}
-    rules_by_tool: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    runs_by_tool: dict[str, list[dict[str, Any]]] = {}
+    rules_by_tool: dict[str, dict[str, dict[str, Any]]] = {}
 
     for f in findings:
         tool = f.get("tool") or tool_name
@@ -183,7 +185,7 @@ def build_enriched_sarif(
 
         rid = f.get("rule_id") or "unknown"
         if rid not in rules_by_tool[tool]:
-            rule_entry: Dict[str, Any] = {"id": rid}
+            rule_entry: dict[str, Any] = {"id": rid}
             cwe = f.get("cwe_id")
             if cwe:
                 rule_entry["properties"] = {"cwe": [cwe]}
@@ -218,20 +220,20 @@ def build_enriched_sarif(
 
 
 def write_enriched_sarif(
-    findings: Sequence[Dict[str, Any]],
+    findings: Sequence[dict[str, Any]],
     output_path: Path,
     *,
     tool_name: str = "RAPTOR",
-    tool_version: Optional[str] = None,
+    tool_version: str | None = None,
 ) -> int:
     """Write enriched SARIF to *output_path*. Returns finding count."""
     doc = build_enriched_sarif(
         findings, tool_name=tool_name, tool_version=tool_version,
     )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output_path.with_suffix(output_path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2)
-    tmp.replace(output_path)
+    # Atomic write via the shared primitive: random-suffix tempfile
+    # opened with O_EXCL | O_NOFOLLOW. An earlier implementation wrote
+    # to a predictable "<name>.sarif.tmp" sibling via open() — a
+    # symlink squatted at that path would have been followed silently.
+    write_text_atomically(output_path, json.dumps(doc, indent=2))
     logger.info("Wrote enriched SARIF: %s (%d findings)", output_path, len(findings))
     return len(findings)

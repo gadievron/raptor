@@ -8,6 +8,8 @@ subtracts the denylist + reviewed-legit so the delta de-noises.
 from __future__ import annotations
 
 import json
+import typing
+from pathlib import Path
 
 from packages.sca.supply_chain import typosquat_audit as A
 from packages.sca.supply_chain.typosquat_audit import (
@@ -18,6 +20,8 @@ from packages.sca.supply_chain.typosquat_audit import (
     pending_candidates,
     render_markdown,
     render_text,
+    run_llm_triage,
+    run_reaudit,
 )
 
 _FILL = [f"pkg{i}" for i in range(60)]   # pad past the default min_pos=50
@@ -212,3 +216,26 @@ def test_render_reaudit_llm():
     out = A._render_reaudit_llm(enriched)
     assert "evil" in out and "typosquat" in out and "DENYLIST" in out
     assert A._render_reaudit_llm({}) == "No reviewed-legit entries flagged.\n"
+
+
+# ---------------------------------------------------------------------------
+# signature guards — reviewed_legit_path is annotated as Path everywhere
+# ---------------------------------------------------------------------------
+
+def test_run_llm_triage_annotates_reviewed_legit_path():
+    hints = typing.get_type_hints(run_llm_triage)
+    assert hints["reviewed_legit_path"] is Path
+
+
+def test_run_reaudit_annotates_reviewed_legit_path():
+    hints = typing.get_type_hints(run_reaudit)
+    assert hints["reviewed_legit_path"] is Path
+
+
+def test_matches_sibling_annotation():
+    """pending_candidates annotates the same-named parameter as Path;
+    the triage entry points must carry the identical annotation."""
+    sibling = typing.get_type_hints(pending_candidates)
+    assert sibling["reviewed_legit_path"] is Path
+    assert (typing.get_type_hints(run_llm_triage)["reviewed_legit_path"]
+            is sibling["reviewed_legit_path"])

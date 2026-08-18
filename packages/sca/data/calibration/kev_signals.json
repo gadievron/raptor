@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-11T06:46:44Z",
+    "fetched_at": "2026-08-18T06:24:32Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -1467,7 +1467,7 @@
       "date_added": "2022-03-28",
       "kev": true,
       "product": "Internet Explorer",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2016-0752": {
@@ -2559,7 +2559,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "Office",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2018-0824": {
@@ -3126,7 +3126,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "Win32k",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2019-0808": {
@@ -3679,7 +3679,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "FortiOS",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Fortinet"
     },
     "CVE-2019-5786": {
@@ -3896,7 +3896,7 @@
       "date_added": "2024-09-18",
       "kev": true,
       "product": "SQL Server",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2020-0638": {
@@ -3966,7 +3966,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "Internet Explorer",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2020-0986": {
@@ -4477,7 +4477,7 @@
       "date_added": "2025-02-06",
       "kev": true,
       "product": "CyberoamOS",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Sophos"
     },
     "CVE-2020-29583": {
@@ -6164,7 +6164,7 @@
       "date_added": "2022-06-27",
       "kev": true,
       "product": "Polkit",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Red Hat"
     },
     "CVE-2021-40407": {
@@ -6528,7 +6528,7 @@
       "date_added": "2022-02-04",
       "kev": true,
       "product": "Win32k",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2022-21919": {
@@ -10693,7 +10693,7 @@
       "date_added": "2026-04-13",
       "kev": true,
       "product": "Windows",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2025-61757": {
@@ -10758,6 +10758,13 @@
       "product": "Windows",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2025-62593": {
+      "date_added": "2026-08-17",
+      "kev": true,
+      "product": "Ray",
+      "ransomware_use": false,
+      "vendor": "Ray-Project"
     },
     "CVE-2025-64328": {
       "date_added": "2026-02-03",
@@ -11085,6 +11092,13 @@
       "date_added": "2026-07-29",
       "kev": true,
       "product": "Secure Firewall Management Center (FMC)",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
+    "CVE-2026-20349": {
+      "date_added": "2026-08-11",
+      "kev": true,
+      "product": "Secure Firewall Adaptive Security Appliance (ASA) and Secure Firewall Threat Defense (FTD) ",
       "ransomware_use": false,
       "vendor": "Cisco"
     },
@@ -11599,12 +11613,26 @@
       "ransomware_use": false,
       "vendor": "JetBrains"
     },
+    "CVE-2026-68820": {
+      "date_added": "2026-08-11",
+      "kev": true,
+      "product": "Windows Ancillary Function Driver for WinSock ",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-6973": {
       "date_added": "2026-05-07",
       "kev": true,
       "product": "Endpoint Manager Mobile (EPMM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-72898": {
+      "date_added": "2026-08-11",
+      "kev": true,
+      "product": "Metabase",
+      "ransomware_use": false,
+      "vendor": "Metabase"
     },
     "CVE-2026-7473": {
       "date_added": "2026-06-09",

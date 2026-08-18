@@ -10,16 +10,24 @@ Categorise each (project_pair, wheel) outcome:
   * ``libc_too_new`` — wheel for the right arch exists but
     requires a newer libc than the project's base image
     supplies (the canonical z3-solver==4.16.0.0 case)
+  * ``macos_too_new`` — same shape for macOS: every same-arch
+    macOS wheel requires a newer macOS than the project's
+    declared runner version
   * ``sdist_only`` — no platform-specific wheel, only ``any``
     or sdist; needs build environment in the install path
+  * ``variant_mismatch`` — same-arch wheels exist but none
+    matches the pair (e.g. cross-libc-family) and no sdist
   * ``uninstallable`` — no wheel AND no sdist
 
-The verdict ladder for emitting findings:
-  ok           → no finding
-  sdist_only   → info-tier hygiene note
-  libc_too_new → high-tier hygiene finding (the canonical bite)
-  arch_gap     → medium-tier hygiene finding
-  uninstallable→ high-tier hygiene finding
+The verdict ladder for emitting findings (``_FINDING_TIER`` in
+``scan.py``; verdicts not listed there default to low):
+  ok               → no finding
+  sdist_only       → low-tier hygiene note
+  libc_too_new     → high-tier hygiene finding (the canonical bite)
+  arch_gap         → medium-tier hygiene finding
+  uninstallable    → high-tier hygiene finding
+  macos_too_new    → low-tier (default)
+  variant_mismatch → low-tier (default)
 """
 
 from __future__ import annotations
@@ -335,7 +343,12 @@ def check_compat(
 # text that varies between matrix builds but doesn't affect the
 # recommendation).
 _RECOMMENDATION_CACHE: Dict[
-    Tuple[str, FrozenSet[Tuple[str, Optional["LibcVersion"]]]],
+    Tuple[
+        str,
+        FrozenSet[
+            Tuple[str, Optional["LibcVersion"], Optional[Tuple[int, int]]]
+        ],
+    ],
     Optional[str],
 ] = {}
 
@@ -436,7 +449,7 @@ def find_compatible_version(
 
 
 _STABLE_VERSION_RE = __import__("re").compile(
-    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?$"
+    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:\.post\d+)?$"
 )
 
 

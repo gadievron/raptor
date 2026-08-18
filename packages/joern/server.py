@@ -13,18 +13,24 @@ Usage::
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import os
 import re
+import secrets
+import shutil
+import signal
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 try:
     import httpx as _httpx
@@ -49,23 +55,31 @@ _QUERY_TIMEOUT_S = 300
 _HEALTH_QUERY = "1+1"
 _SHUTDOWN_GRACE_S = 5
 _REPL_BRIDGE_NAME = "repl-bridge"
+_AUTH_USERNAME = "raptor"
 
-# Version-adaptive rewrites for Joern API changes.
-# Each entry is (old_str, new_str) applied when a query fails compilation.
-# Written for v4 (current); rewrites downgrade to v3 patterns.
-_V4_TO_V3_REWRITES: list[tuple[str, str]] = [
-    # v4 wraps EngineConfig in EngineContext; v3 passes EngineConfig directly
-    ("EngineContext(config = tier1Config)", "tier1Config"),
-    ("EngineContext(config = tier2Config)", "tier2Config"),
-    # v4 moved Path from queryengine to language
-    (
-        "io.joern.dataflowengineoss.language.Path",
-        "io.joern.dataflowengineoss.queryengine.Path",
-    ),
-]
+# Per-binary cache for the --server-auth-* capability probe: the probe
+# boots a JVM (a few seconds), so pay it once per process per binary.
+_AUTH_SUPPORT_CACHE: dict[str, bool] = {}
+
+# The Joern server only ever listens on 127.0.0.1.  Loopback traffic
+# must never route through an HTTP proxy — hosts with HTTP_PROXY set
+# (and no localhost NO_PROXY entry) would silently send every query to
+# the proxy instead of the server.
+_NO_PROXY_OPENER = build_opener(ProxyHandler({}))
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _SCALA_ERROR_MARKERS = ("-- [E", "error:", "Error:")
+
+_RESTARTING_ERROR = (
+    "server restarting after stuck query — failing fast "
+    "(no Joern evidence for this claim)"
+)
+
+# Bounded relaunch-on-death window (see ``ensure_alive``): at most one
+# relaunch attempt per this many seconds. A relaunch costs a JVM boot
+# + CPG reload (~1-2 min) — retrying faster than this would spend the
+# run's wall clock on a server that keeps dying.
+_RELAUNCH_COOLDOWN_S = 300.0
 
 
 def _strip_ansi(text: str) -> str:
@@ -77,10 +91,15 @@ def _has_scala_error(stdout: str) -> bool:
 
     The Joern REPL returns success=True even when the Scala compiler
     emits errors. The error text appears in stdout with ANSI codes.
+
+    Scans the FULL output: the REPL echoes the submitted script before
+    the compiler diagnostics, so a long batch script pushed the
+    ``-- [E`` marker past a fixed 2000-byte prefix window and the
+    failed query read as a successful zero-flow ("no taint") result.
     """
     if not stdout:
         return False
-    plain = _strip_ansi(stdout[:2000])
+    plain = _strip_ansi(stdout)
     return any(marker in plain for marker in _SCALA_ERROR_MARKERS)
 
 
@@ -88,6 +107,32 @@ def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _jvm_gc_flags() -> list[str]:
+    """GC tuning flags adapted to the host JDK and Joern launcher.
+
+    Newer joern-cli launchers (>= ~4.0.6xx) hardcode ``-XX:+UseG1GC``
+    ahead of caller flags, so selecting ZGC alone dies with "Multiple
+    garbage collectors selected" — explicitly disable G1 first (later
+    ``-XX`` flags win).  ``ZGenerational`` exists only on JDK 21-23:
+    JDK 24 removed the flag (ZGC is generational-only there).
+    """
+    from .prereqs import _java_version
+
+    flags = ["-J-XX:-UseG1GC", "-J-XX:+UseZGC"]
+    jdk = _java_version()
+    if jdk is not None and 21 <= jdk < 24:
+        flags.append("-J-XX:+ZGenerational")
+    if jdk is not None and jdk >= 25:
+        # JEP 519 (product in 25): 4-byte object headers. CPGs are
+        # node/edge-dense — per-object savings compound on exactly
+        # this workload. Verified compatible with the joern launcher
+        # on this JDK; the flag-set retry below is the safety net
+        # for JVMs that reject it.
+        flags.append("-J-XX:+UseCompactObjectHeaders")
+    flags.append("-J-XX:+UseStringDeduplication")
+    return flags
 
 
 def _repl_bridge_path() -> str | None:
@@ -101,11 +146,44 @@ def _repl_bridge_path() -> str | None:
     if joern is None:
         return None
     joern_dir = Path(joern).resolve().parent
-    bridge = joern_dir / _REPL_BRIDGE_NAME
-    if bridge.exists():
-        return str(bridge)
+    # Location moved across joern releases: next to the joern wrapper
+    # in older builds, under bin/ in 4.x.
+    for bridge in (joern_dir / _REPL_BRIDGE_NAME,
+                   joern_dir / "bin" / _REPL_BRIDGE_NAME):
+        if bridge.exists():
+            return str(bridge)
     import shutil
     return shutil.which(_REPL_BRIDGE_NAME)
+
+
+def _server_auth_supported(binary: str) -> bool:
+    """Probe whether the launcher accepts ``--server-auth-*`` flags.
+
+    Checks the ``--help`` output rather than trial-booting a server.
+    Every joern release RAPTOR supports carries the flags, but an
+    unexpected install must fail closed — the caller refuses to start
+    an unauthenticated server when this returns False.
+    """
+    cached = _AUTH_SUPPORT_CACHE.get(binary)
+    if cached is not None:
+        return cached
+    from core.config import RaptorConfig
+    try:
+        proc = subprocess.run(
+            [binary, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=RaptorConfig.get_safe_env(),
+            check=False,
+        )
+        supported = "--server-auth-username" in (
+            (proc.stdout or "") + (proc.stderr or "")
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        supported = False
+    _AUTH_SUPPORT_CACHE[binary] = supported
+    return supported
 
 
 class JoernServer:
@@ -119,7 +197,15 @@ class JoernServer:
     (``joern-parse``) that processes untrusted target code runs
     sandboxed via ``core.sandbox.run``.  The server only receives
     RAPTOR-authored CPGQL queries validated by ``_validate_query``,
-    not raw target input.
+    not raw target input.  ``POST /query-sync`` executes arbitrary
+    Scala, so listening on loopback alone is not enough: every boot
+    generates a random HTTP Basic credential (passed via
+    ``--server-auth-username`` / ``--server-auth-password``) and every
+    client request carries the matching Authorization header — other
+    local processes cannot drive the server.  If the installed joern
+    does not support the auth flags, ``start()`` raises rather than
+    exposing an unauthenticated server; callers fall back to the
+    subprocess-per-query runner.
     """
 
     def __init__(
@@ -137,10 +223,23 @@ class JoernServer:
         self._base_url: str | None = None
         self._cpg_loaded = False
         self._cpg_path: Path | None = None
-        self._http_client: Any | None = None
-        self._version_downgrade: bool = False
         self._last_post_error: str = ""
         self._restart_lock = threading.Lock()
+        # Set while a restart is in progress so concurrent queries
+        # fail fast instead of posting into a dead/booting server
+        # (each such post would block for its full timeout).
+        self._restarting = threading.Event()
+        # Monotonic timestamp of the last relaunch-on-death attempt
+        # (``ensure_alive``); None = never attempted. NOT 0.0: on
+        # Linux ``time.monotonic()`` is seconds since boot, so on a
+        # freshly booted host (CI runners, just-rebooted operator
+        # boxes) ``now - 0.0 < cooldown`` held for the first five
+        # minutes of uptime and the FIRST relaunch attempt was
+        # silently refused.
+        self._relaunch_last_attempt: float | None = None
+        self._workdir: str | None = None
+        self._auth_user: str | None = None
+        self._auth_password: str | None = None
 
     def start(self) -> None:
         """Boot the Joern server and wait for readiness."""
@@ -148,36 +247,96 @@ class JoernServer:
             return
 
         binary = _repl_bridge_path() or _joern_path() or "joern"
-        self._port = _find_free_port()
-        self._base_url = f"http://127.0.0.1:{self._port}"
 
-        cmd = [binary]
+        # Fail closed on launchers without --server-auth-* support:
+        # an unauthenticated /query-sync executes arbitrary Scala for
+        # any local process.  Raising here routes callers onto the
+        # subprocess-per-query fallback instead.
+        if not _server_auth_supported(binary):
+            logger.error(
+                "installed joern (%s) does not support "
+                "--server-auth-username/--server-auth-password; refusing "
+                "to start an unauthenticated server — callers fall back "
+                "to the subprocess-per-query runner", binary,
+            )
+            raise RuntimeError(
+                "joern launcher lacks --server-auth-* support; "
+                "unauthenticated server mode is disabled"
+            )
+
+        # Fresh, empty working directory per boot. Joern treats
+        # ``$CWD/workspace/`` as its project store and loads EVERY
+        # entry at startup — inheriting the caller's cwd (the RAPTOR
+        # repo) meant one corrupt entry left by a killed run (a
+        # ``cpg.binN/`` with overlays but no project.json) wedged the
+        # REPL bridge before it ever bound the port: every subsequent
+        # server boot on the machine failed with "failed to start
+        # within 120s". The workspace is incidental state (imports use
+        # absolute CPG paths), so give each server a disposable one.
+        self._workdir = tempfile.mkdtemp(prefix="raptor-joern-ws-")
+
+        heap_flags: list[str] = []
         if self._heap_mb is not None:
-            cmd.append(f"-J-Xms{self._heap_mb}m")
-            cmd.append(f"-J-Xmx{self._heap_mb}m")
-        cmd.extend([
-            "-J-XX:+UseZGC",
-            "-J-XX:+ZGenerational",
-            "-J-XX:+UseStringDeduplication",
-            "-J-Djava.util.concurrent.ForkJoinPool.common.parallelism=6",
-            "--server",
-            "--server-host", "127.0.0.1",
-            "--server-port", str(self._port),
-        ])
+            # Ceiling only — no -Xms pin (measured: no benefit at any
+            # scale, boot-fragile at very large heaps).
+            heap_flags.append(f"-J-Xmx{self._heap_mb}m")
 
-        logger.info("starting Joern server on 127.0.0.1:%d", self._port)
+        # Attempt tuned GC flags first; if the JVM rejects them (flag
+        # sets drift across JDK releases and joern launcher versions),
+        # the process dies within seconds — retry once with launcher
+        # defaults rather than failing the whole run.
+        parallelism = "-J-Djava.util.concurrent.ForkJoinPool.common.parallelism=6"
+        flag_sets = [_jvm_gc_flags() + [parallelism], [parallelism]]
 
         from core.config import RaptorConfig
-        self._proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=RaptorConfig.get_safe_env(),
-        )
+        for attempt, tuning_flags in enumerate(flag_sets):
+            self._port = _find_free_port()
+            self._base_url = f"http://127.0.0.1:{self._port}"
 
-        if not self._wait_for_ready():
+            # Per-boot-attempt state: stop() after a failed attempt
+            # clears the credential and removes the workdir.
+            self._auth_user = _AUTH_USERNAME
+            self._auth_password = secrets.token_urlsafe(32)
+            if self._workdir is None:
+                self._workdir = tempfile.mkdtemp(prefix="raptor-joern-ws-")
+
+            cmd = [binary] + heap_flags + tuning_flags + [
+                # RAPTOR strips ANSI from every response anyway
+                # (_strip_ansi); emitting it just bloats payloads.
+                "--nocolors",
+                "--server",
+                "--server-host", "127.0.0.1",
+                "--server-port", str(self._port),
+                "--server-auth-username", self._auth_user,
+                "--server-auth-password", self._auth_password,
+            ]
+
+            logger.info("starting Joern server on 127.0.0.1:%d", self._port)
+
+            # New session so stop() can signal the whole process group:
+            # the joern launcher may be a shell wrapper that spawns the
+            # JVM without exec — terminating just the wrapper orphans it.
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=RaptorConfig.get_safe_env(),
+                start_new_session=True,
+                cwd=self._workdir,
+            )
+
+            if self._wait_for_ready():
+                break
+
+            died_during_boot = self._proc.poll() is not None
             self.stop()
+            if died_during_boot and attempt + 1 < len(flag_sets):
+                logger.warning(
+                    "Joern server died with tuned JVM flags; "
+                    "retrying with launcher defaults"
+                )
+                continue
             raise RuntimeError(
                 f"Joern server failed to start within {self._boot_timeout_s}s"
             )
@@ -195,12 +354,13 @@ class JoernServer:
                 logger.error("Joern server exited during boot: %s",
                              stderr[:500])
                 return False
-            try:
-                resp = self._post_sync(_HEALTH_QUERY, timeout=5)
-                if resp is not None:
-                    return True
-            except Exception:
-                pass
+            # _post_sync returns None on every transport failure
+            # (both httpx and urllib paths catch their own errors),
+            # so a not-ready server just polls again — no suppression
+            # needed, and a wiring bug here should surface.
+            resp = self._post_sync(_HEALTH_QUERY, timeout=5)
+            if resp is not None:
+                return True
             time.sleep(_BOOT_POLL_INTERVAL_S)
         return False
 
@@ -220,7 +380,7 @@ class JoernServer:
         )
         try:
             self._post_sync(warmup, timeout=30)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — warmup is best-effort
             logger.debug("Joern warmup imports failed: %s", e)
 
     def _warmup_dataflow(self) -> None:
@@ -241,7 +401,7 @@ class JoernServer:
         )
         try:
             self._post_sync(warmup, timeout=30)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — warmup is best-effort
             logger.debug("Joern dataflow warmup failed: %s", e)
 
     def stop(self) -> None:
@@ -252,25 +412,58 @@ class JoernServer:
         pid = self._proc.pid
         logger.info("stopping Joern server (pid %d)", pid)
 
+        def _signal_group(sig: int) -> None:
+            # The launcher may be a shell wrapper whose JVM child would
+            # survive a plain terminate() — signal the whole group.  Only
+            # killpg when pid is the leader of its own group: Popen used
+            # start_new_session=True, so anything else means the pid was
+            # reused (or mocked) and the group is not ours to signal.
+            try:
+                if os.getpgid(pid) != pid:
+                    raise ProcessLookupError
+                os.killpg(pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                if sig == signal.SIGTERM:
+                    self._proc.terminate()
+                else:
+                    self._proc.kill()
+
         try:
-            self._proc.terminate()
+            _signal_group(signal.SIGTERM)
             self._proc.wait(timeout=_SHUTDOWN_GRACE_S)
         except subprocess.TimeoutExpired:
-            self._proc.kill()
-            self._proc.wait(timeout=5)
+            _signal_group(signal.SIGKILL)
+            try:
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # SIGKILL is delivered but a huge-heap JVM's kernel-side
+                # teardown can outlive this grace. The process cannot
+                # execute further — proceed to cleanup regardless.
+                # Pre-fix this second TimeoutExpired escaped stop():
+                # ``_proc`` stayed set on a dead process, the workdir
+                # leaked, and a restart() that hit it aborted mid-way,
+                # leaving the server permanently in the
+                # "server process exited" fail-fast state for the rest
+                # of the run.
+                logger.warning(
+                    "Joern server (pid %d) did not reap within 5s of "
+                    "SIGKILL — proceeding with cleanup",
+                    pid,
+                )
         except OSError:
             pass
 
-        if self._http_client is not None:
-            try:
-                self._http_client.close()
-            except Exception:
-                pass
-            self._http_client = None
         self._proc = None
         self._port = None
         self._base_url = None
         self._cpg_loaded = False
+        # Per-boot credential — a fresh one is generated on start().
+        self._auth_user = None
+        self._auth_password = None
+
+        if self._workdir is not None:
+            shutil.rmtree(self._workdir, ignore_errors=True)
+            self._workdir = None
 
     def is_alive(self) -> bool:
         if self._proc is None or self._proc.poll() is not None:
@@ -278,8 +471,112 @@ class JoernServer:
         try:
             resp = self._post_sync(_HEALTH_QUERY, timeout=5)
             return resp is not None
-        except Exception:
+        except Exception:  # noqa: BLE001 — any failure means not alive
             return False
+
+    @property
+    def restarting(self) -> bool:
+        """True while a restart (stop → boot → CPG reload) is running."""
+        return self._restarting.is_set()
+
+    def health_check(self, *, timeout: float = 5.0) -> bool:
+        """Cheap endpoint-liveness probe (``1+1`` via /query-sync).
+
+        The authoritative check for handles that don't own their
+        process (lifecycle reuse): ``poll()`` has nothing to say
+        there. Mirrors ``lifecycle._health_check``. False on any
+        transport/parse failure, and when the handle has no endpoint.
+        """
+        if not self._base_url:
+            return False
+        from urllib.error import URLError
+        from urllib.request import Request
+
+        url = f"{self._base_url}/query-sync"
+        payload = json.dumps({"query": "1+1"}).encode("utf-8")
+        req = Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json",
+                     **self._auth_headers()},
+            method="POST",
+        )
+        try:
+            with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
+                data = json.loads(resp.read(1024 * 1024).decode("utf-8"))
+                return data.get("success", False) is not False
+        except (URLError, OSError, json.JSONDecodeError,
+                TimeoutError, ValueError):
+            return False
+
+    def ensure_alive(
+        self, *, cooldown_s: float = _RELAUNCH_COOLDOWN_S,
+    ) -> bool:
+        """Process-liveness probe with bounded relaunch-on-death.
+
+        The review loop calls this at dispatch time (the orchestrator's
+        joern tick). ``restart()`` is otherwise reachable only from
+        query-TIMEOUT branches — but a dead server process fails fast
+        BEFORE any HTTP post can time out, so death used to be
+        terminal: every subsequent query returned
+        ``["server process exited"]`` for the rest of the run and the
+        taint tier silently stayed down.
+
+        Bounded: at most one relaunch attempt per ``cooldown_s``
+        window, loudly logged both ways. Between attempts — and when
+        the relaunch itself fails — the tier stays down and queries
+        keep failing fast; the degradation is reported, not silent.
+
+        Returns True when the server is alive (or just came back).
+        """
+        if self._restarting.is_set():
+            return False
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            return True
+        if proc is None:
+            # This object doesn't own a process (lifecycle-reused
+            # handle) or a previous relaunch died inside start().
+            # poll() can't answer liveness for a reused handle —
+            # probe the HTTP endpoint instead. Pre-fix a healthy
+            # shared server was judged dead here on the first
+            # orchestrator tick after import_cpg, and the relaunch
+            # spawned a DUPLICATE multi-GB JVM beside it (with a pid
+            # the lifecycle state file never learned about).
+            if self.health_check():
+                return True
+            # Endpoint dead too. Only revive handles that actually
+            # served a CPG — a never-started client has nothing to
+            # relaunch.
+            if self._cpg_path is None:
+                return False
+        now = time.monotonic()
+        if (
+            self._relaunch_last_attempt is not None
+            and now - self._relaunch_last_attempt < cooldown_s
+        ):
+            return False
+        self._relaunch_last_attempt = now
+        logger.warning(
+            "Joern server process is dead — attempting relaunch "
+            "(bounded: at most one attempt per %.0fs)",
+            cooldown_s,
+        )
+        ok = False
+        try:
+            ok = self.restart()
+        except Exception:  # noqa: BLE001 — probe must not kill the loop
+            logger.warning("Joern relaunch raised", exc_info=True)
+        if ok:
+            logger.warning(
+                "Joern server relaunched — taint tier restored",
+            )
+        else:
+            logger.warning(
+                "Joern relaunch failed — taint tier remains DOWN "
+                "(queries fail fast; next relaunch attempt in %.0fs)",
+                cooldown_s,
+            )
+        return ok
 
     def restart(self) -> bool:
         """Stop, restart, and reload the CPG.
@@ -289,16 +586,25 @@ class JoernServer:
         query indefinitely.  Returns True if the server came back and
         the CPG was reloaded successfully.
 
-        Thread-safe: concurrent callers serialise on ``_restart_lock``
-        so only one restart proceeds; the others return True (the
-        server is already fresh).
+        Bounded: exactly ONE restarter proceeds. Concurrent callers
+        fail fast (return False) instead of queueing behind the
+        restart — pre-fix they blocked on ``_restart_lock`` for the
+        full boot + CPG reload (minutes), serialising every worker
+        that had a query time out during the recovery window. Their
+        queries return an error result; the run degrades to
+        "no Joern evidence for this claim" instead of stalling.
         """
         if not self._restart_lock.acquire(blocking=False):
-            # Another thread is already restarting — wait for it.
-            with self._restart_lock:
-                return self._proc is not None and self._cpg_loaded
+            logger.warning(
+                "Joern restart already in progress — failing fast "
+                "instead of queueing behind it",
+            )
+            return False
+        self._restarting.set()
         try:
             cpg_path = self._cpg_path
+            old_pid = self._proc.pid if self._proc is not None else None
+            old_port = self._port
             logger.info("restarting Joern server (stuck query recovery)")
             self.stop()
             try:
@@ -306,10 +612,35 @@ class JoernServer:
             except RuntimeError:
                 logger.error("Joern server failed to restart")
                 return False
-            if cpg_path is not None and cpg_path.exists():
+            # The restarted JVM has a new pid/port/credential — record
+            # it in the lifecycle state file (when this server is the
+            # one it tracks) so joern_release can still stop it.
+            try:
+                from .lifecycle import note_server_replaced
+                note_server_replaced(
+                    old_pid=old_pid, old_port=old_port, srv=self,
+                )
+            except Exception:  # noqa: BLE001 — bookkeeping must not fail restart
+                logger.debug(
+                    "lifecycle state update after restart failed",
+                    exc_info=True,
+                )
+            if cpg_path is not None:
+                if not cpg_path.exists():
+                    # Pre-fix this returned True with _cpg_loaded
+                    # False: ensure_alive kept reporting healthy while
+                    # every query failed "no CPG loaded" — a
+                    # fabricated-healthy wedge.
+                    logger.error(
+                        "CPG vanished during restart: %s — reporting "
+                        "restart failure (queries would have no CPG)",
+                        cpg_path,
+                    )
+                    return False
                 return self.import_cpg(cpg_path)
             return True
         finally:
+            self._restarting.clear()
             self._restart_lock.release()
 
     def import_cpg(self, cpg_path: Path, *, timeout: int = 120) -> bool:
@@ -340,7 +671,11 @@ class JoernServer:
                          resp.get("stderr", "")[:500])
             return False
 
-        logger.info("CPG loaded in %.1fs", elapsed)
+        # "imported into the server", not "loaded": this is the REPL
+        # importCpg round-trip for an already-built CPG file — a fast
+        # line here does NOT contradict an earlier cache-stale/rebuild
+        # message from a CPG *build* cache.
+        logger.info("CPG imported into Joern server in %.1fs", elapsed)
         self._cpg_loaded = True
         self._cpg_path = cpg_path
 
@@ -392,6 +727,16 @@ class JoernServer:
         """Execute a CPGQL query and return parsed results."""
         if timeout is None:
             timeout = self._query_timeout_s
+
+        # Fail fast while a restart is in progress: posting into the
+        # dead/booting server would block for the full query timeout
+        # and every waiter would then queue on the single-threaded
+        # REPL behind the reloading CPG.
+        if self._restarting.is_set():
+            return JoernResult(
+                query=cpgql,
+                errors=[_RESTARTING_ERROR],
+            )
 
         # Fast check: if the server process is dead, fail immediately
         # rather than blocking on a stale HTTP connection.
@@ -458,13 +803,16 @@ class JoernServer:
         script_path: Path,
         *,
         timeout: int | None = None,
-        cancel_check: "Callable[[], bool] | None" = None,
+        cancel_check: Callable[[], bool] | None = None,
+        substitutions: dict[str, str] | None = None,
     ) -> JoernResult:
         """Execute a .sc script file via the server.
 
         Reads the script content and submits it as an inline query.
         When *cancel_check* is provided, uses the async submit+poll
-        path so the caller can abort mid-query.
+        path so the caller can abort mid-query.  *substitutions* maps
+        template-slot markers (e.g. ``__SINK_NAMES__``) to replacement
+        text, applied to the script body before submission.
         """
         script_path = Path(script_path)
         if not script_path.exists():
@@ -474,12 +822,28 @@ class JoernServer:
             )
 
         content = script_path.read_text(encoding="utf-8")
+        for marker, replacement in (substitutions or {}).items():
+            content = content.replace(marker, replacement)
         if cancel_check is not None:
             return self.query_cancellable(
                 content, timeout=timeout, cancel_check=cancel_check,
                 validate=True, check_length=False,
             )
         return self.query(content, timeout=timeout, validate=True, check_length=False)
+
+    def _auth_headers(self) -> dict[str, str]:
+        """HTTP Basic Authorization header for the per-boot credential.
+
+        Empty when no credential is set (e.g. a unit test poking a
+        bare instance) — the server rejects such requests with 401
+        rather than executing them.
+        """
+        if not self._auth_user or not self._auth_password:
+            return {}
+        token = base64.b64encode(
+            f"{self._auth_user}:{self._auth_password}".encode()
+        ).decode("ascii")
+        return {"Authorization": f"Basic {token}"}
 
     def _post_sync(
         self,
@@ -515,11 +879,12 @@ class JoernServer:
         # ~50ms TCP setup overhead is negligible vs query execution time.
         client = _httpx.Client(
             timeout=_httpx.Timeout(timeout, connect=5.0),
+            trust_env=False,
         )
         try:
-            resp = client.post(url, json=payload)
+            resp = client.post(url, json=payload, headers=self._auth_headers())
             return resp.json()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — classified below by message
             if "timed out" in str(e).lower() or "timeout" in type(e).__name__.lower():
                 self._last_post_error = f"query timed out after {timeout}s"
             elif "connect" in str(e).lower() or "refused" in str(e).lower():
@@ -541,11 +906,12 @@ class JoernServer:
         req = Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json",
+                     **self._auth_headers()},
             method="POST",
         )
         try:
-            with urlopen(req, timeout=timeout) as resp:
+            with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except (URLError, OSError, json.JSONDecodeError, TimeoutError) as e:
             if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
@@ -566,18 +932,15 @@ class JoernServer:
         url = f"{self._base_url}/query"
         payload = {"query": query_str}
         try:
-            if _httpx is not None and self._http_client is not None:
-                resp = self._http_client.post(url, json=payload, timeout=10)
-                data = resp.json()
-            else:
-                body = json.dumps(payload).encode("utf-8")
-                req = Request(url, data=body,
-                              headers={"Content-Type": "application/json"},
-                              method="POST")
-                with urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
+            body = json.dumps(payload).encode("utf-8")
+            req = Request(url, data=body,
+                          headers={"Content-Type": "application/json",
+                                   **self._auth_headers()},
+                          method="POST")
+            with _NO_PROXY_OPENER.open(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
             return data.get("uuid") or data.get("id")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — submit is best-effort
             logger.debug("async query submit failed: %s", e)
             return None
 
@@ -587,17 +950,14 @@ class JoernServer:
             return None
         url = f"{self._base_url}/result/{uuid}"
         try:
-            if _httpx is not None and self._http_client is not None:
-                resp = self._http_client.get(url, timeout=5)
-                data = resp.json()
-            else:
-                req = Request(url, method="GET")
-                with urlopen(req, timeout=5) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
+            req = Request(url, method="GET",
+                          headers=self._auth_headers())
+            with _NO_PROXY_OPENER.open(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
             if data.get("success") is not None:
                 return data
             return None
-        except Exception:
+        except Exception:  # noqa: BLE001 — poll is best-effort
             return None
 
     def query_cancellable(
@@ -605,7 +965,7 @@ class JoernServer:
         cpgql: str,
         *,
         timeout: int | None = None,
-        cancel_check: "Callable[[], bool] | None" = None,
+        cancel_check: Callable[[], bool] | None = None,
         poll_interval: float = 2.0,
         validate: bool = True,
         check_length: bool = True,
@@ -619,6 +979,13 @@ class JoernServer:
         """
         if timeout is None:
             timeout = self._query_timeout_s
+
+        # Same fail-fast as ``query()`` — see comment there.
+        if self._restarting.is_set():
+            return JoernResult(
+                query=cpgql,
+                errors=[_RESTARTING_ERROR],
+            )
 
         if self._proc is not None and self._proc.poll() is not None:
             return JoernResult(
@@ -810,8 +1177,10 @@ class JoernServer:
             "import io.shiftleft.codepropertygraph.generated.nodes.CfgNode",
             "import scala.util.Try",
             f"val batchConfig = EngineConfig(maxCallDepth = {max_call_depth})",
-            "implicit val batchContext: EngineContext = "
-            "EngineContext(config = batchConfig)",
+            (
+                "implicit val batchContext: EngineContext = "
+                "EngineContext(config = batchConfig)"
+            ),
         ]
 
         for i, (src, sink) in enumerate(valid_pairs):
@@ -844,37 +1213,12 @@ class JoernServer:
             logger.warning("batch taint query errors: %s", result.errors)
         return result.flows
 
-    def _apply_version_rewrites(self, content: str) -> str:
-        """Apply cached version rewrites from prior adaptation."""
-        if self._version_downgrade:
-            for old, new in _V4_TO_V3_REWRITES:
-                content = content.replace(old, new)
-        return content
-
-    def _try_version_fallback(self, content: str) -> str | None:
-        """Apply v4→v3 rewrites and test compilation.
-
-        Returns the rewritten content if it compiles, None otherwise.
-        Caches the result so future queries skip the probe.
-        """
-        candidate = content
-        for old, new in _V4_TO_V3_REWRITES:
-            candidate = candidate.replace(old, new)
-        if candidate == content:
-            return None
-        result = self._submit_query(candidate, timeout=30)
-        if not result.errors:
-            self._version_downgrade = True
-            logger.info("joern version adaptation: applied v3 API rewrites")
-            return candidate
-        return None
-
     def _submit_query(
         self,
         content: str,
         *,
         timeout: int = 300,
-        cancel_check: "Callable[[], bool] | None" = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> JoernResult:
         if cancel_check is not None:
             return self.query_cancellable(
@@ -890,7 +1234,7 @@ class JoernServer:
         *,
         timeout: int | None = None,
         lang_profile: Any | None = None,
-        cancel_check: "Callable[[], bool] | None" = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> JoernResult:
         """Run the tiered taint sweep with per-language tuning.
 
@@ -898,11 +1242,6 @@ class JoernServer:
         lang_profile (or defaults to Python profile), and submits.
         When *cancel_check* is provided, uses the async submit+poll
         path so the caller can abort mid-query.
-
-        Version-adaptive: if the query fails with a Scala compilation
-        error, known import substitutions are tried automatically
-        (e.g. Path moved between packages across Joern versions).
-        Successful substitutions are cached for the session.
         """
         if timeout is None:
             timeout = self._query_timeout_s
@@ -932,27 +1271,16 @@ class JoernServer:
             "__MAX_OUTPUT_ARGS__", str(lang_profile.max_output_args_expansion),
         )
 
-        content = self._apply_version_rewrites(content)
-
-        result = self._submit_query(
+        return self._submit_query(
             content, timeout=timeout, cancel_check=cancel_check,
         )
-
-        if result.errors and any("query failed:" in e for e in result.errors):
-            adapted = self._try_version_fallback(content)
-            if adapted is not None:
-                result = self._submit_query(
-                    adapted, timeout=timeout, cancel_check=cancel_check,
-                )
-
-        return result
 
     def run_summary_batch(
         self,
         method_names: list[str],
         *,
         timeout: int | None = None,
-        cancel_check: "Callable[[], bool] | None" = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, JoernMethodSummary]:
         """Run taint-rule, precondition, and return summaries for multiple methods.
 
@@ -1009,7 +1337,7 @@ class JoernServer:
     def pid(self) -> int | None:
         return self._proc.pid if self._proc else None
 
-    def __enter__(self) -> JoernServer:
+    def __enter__(self) -> Self:
         self.start()
         return self
 

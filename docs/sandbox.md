@@ -36,15 +36,17 @@ result = run_untrusted(
 
 What this gets you:
 
-- Network blocked at the namespace level (no interfaces inside).
+- Network blocked at the namespace level (fresh namespace with only an
+  isolated loopback interface — no route out).
 - Filesystem restricted to `target` (read-only), `output` (writable),
   `/tmp` (fresh tmpfs), and a curated system-directory read allowlist.
 - `$HOME` redirected to an empty per-sandbox directory.
 - Dangerous syscalls blocked: `io_uring`, `kcmp`, `pidfd_getfd`,
-  `handle_at`, `TIOCSTI`/`TIOCCONS`, SysV IPC, `ptrace` (in `full`),
+  `handle_at`, `TIOCSTI`/`TIOCCONS`, `ptrace` (in `full`),
   `keyctl`, `bpf`, `userfaultfd`, `perf_event_open`, plus `socket()`
   for `AF_UNIX` / `AF_PACKET` / `AF_NETLINK` / `SOCK_RAW` (docker.sock
-  escape, raw-packet sniffing).
+  escape, raw-packet sniffing). SysV IPC is isolated by the IPC
+  namespace rather than seccomp.
 - `RLIMIT_CORE = 0` (no core-dump exfiltration), memory/CPU caps, and
   a `prlimit --nproc=<limit>` wrapper inside the `unshare` chain so
   `RLIMIT_NPROC` counts against the namespace-local UID -- bounds fork
@@ -86,10 +88,15 @@ def run_untrusted(
 ) -> subprocess.CompletedProcess
 ```
 
-Always engages `profile='full'`: network blocked by namespace, Landlock
-filesystem restriction (via `target`/`output`), resource rlimits. At
-least one of `target` or `output` must be truthy so Landlock actually
-engages. `block_network` and `allowed_tcp_ports` are deliberately not
+Engages `profile='full'` by default: network blocked by namespace,
+Landlock filesystem restriction (via `target`/`output`), resource
+rlimits. At least one of `target` or `output` must be truthy so
+Landlock actually engages. `profile=` is accepted as a ratchet only:
+`'full'` (the default) or the fail-closed `'strict'`; anything weaker
+(`none`, `network-only`, `debug`, `target_run`, `frida`) raises
+`TypeError` because it would relax the untrusted-execution contract.
+The `--sandbox` CLI flag remains authoritative over the value.
+`block_network` and `allowed_tcp_ports` are deliberately not
 accepted -- this function forces namespace-level network block. Callers
 wanting a network allowlist must use `sandbox()` directly.
 
@@ -121,8 +128,9 @@ egress instead of full network block. Enforces:
 
 - `restrict_reads=True` -- kernel-level read allowlist; `$HOME` is denied.
 - `use_egress_proxy=True` + `proxy_hosts=[...]` -- egress proxy with
-  hostname allowlist.
-- `allowed_tcp_ports=[443]` -- only HTTPS to the proxy.
+  hostname allowlist. The proxy machinery pins connectivity to the
+  proxy itself (empty netns bridge on the default tier, or a Landlock
+  pin to the proxy's ephemeral port).
 - `block_network=False` -- the proxy must be reachable from inside
   the sandbox.
 - `strict_env=True` -- strips dangerous env vars.
@@ -193,8 +201,9 @@ process.
 
 1. **User namespace** (`unshare --user`) -- unprivileged root-mapping
    foundation.
-2. **Network namespace** (`--net`) -- sandboxed process sees no
-   interfaces. Active under `full`, `strict`, `debug`, `target_run`
+2. **Network namespace** (`--net`) -- sandboxed process sees only an
+   isolated loopback interface (brought up inside the fresh netns; no
+   route out). Active under `full`, `strict`, `debug`, `target_run`
    (when paired with the [netns coordinator](#netns-coordinator)),
    `network-only` profiles.
 3. **PID namespace** (`--pid --fork`) -- hides host PIDs; target runs as
@@ -233,8 +242,8 @@ All seven are defined in `core/sandbox/profiles.py` as immutable
 
 | Profile | Network | Landlock | Seccomp | Notes |
 |---|---|---|---|---|
-| `full` | blocked | yes | full | Default for `run_untrusted()` and `sandbox()`. Warns and degrades if a host layer is missing. |
-| `strict` | blocked | yes | full | Fail-closed version of `full`. For autonomous work where weaker isolation is not acceptable. Also requires mount namespaces when target/output isolation is requested. |
+| `full` | blocked | yes | full | Default for `run_untrusted()` and `sandbox()`. Warns and degrades if a host layer is missing — except that on Linux hosts without unprivileged user namespaces, `run_untrusted()` / `run_untrusted_networked()` refuse outright unless `RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1` explicitly accepts Landlock/seccomp-only containment (see [environment.md](environment.md)). |
+| `strict` | blocked | yes | full | Fail-closed version of `full`. For autonomous work where weaker isolation is not acceptable. Also requires mount namespaces when target/output isolation is requested, defaults `restrict_reads=True`, and implies `fake_home=True` when `output=` is set. |
 | `target_run` | **open** | yes | full | For harness-spawned target binaries that need a local listener (loopback TCP, Unix domain sockets). Same Landlock + seccomp as `full` but `block_network=False` so the listener is reachable. Pair with the [netns coordinator](#netns-coordinator) for loopback-only isolation. |
 | `debug` | blocked | yes | debug (permits ptrace) | For [crash analysis](crash-analysis.md) with gdb/rr. Target and debugger run in the same sandbox. Composes with `--audit`. |
 | `frida` | **open** | yes | frida (AF_UNIX allowed) | For [Frida](frida.md) helper IPC. `AF_UNIX` sockets are allowed for Frida's internal IPC with the target process. `AF_NETLINK`/`AF_PACKET`/`SOCK_RAW` stay blocked. |
@@ -246,7 +255,24 @@ CLI: `--sandbox <profile>` on any RAPTOR command that honours it.
 Use `--sandbox strict` when a run should stop rather than quietly carry
 on with less isolation. On Linux, strict mode also requires mount
 namespaces when target/output isolation is requested. On macOS, the
-Seatbelt backend is the strict isolation layer.
+Seatbelt backend is the strict isolation layer, and the strict profile
+adds three probe-validated SBPL denies on top of `full`: `(deny signal
+(target others))`, `(deny nvram*)`, and a mach-lookup deny scoped by a
+curated service allowlist (`MACOS_STRICT_MACH_SERVICES`). Under
+`--audit` these report instead of denying.
+
+Read-denial recovery: `--sandbox-readable-path PATH` (repeatable;
+file or directory) extends the read allowlist of every read-restricting
+sandbox in the run, and `--sandbox-tool-path DIR` (repeatable) makes an
+operator-installed tool directory visible (read allowlist plus a
+read-only bind in mount-namespace mode — pip `--user`, pyenv,
+`~/.cargo/bin`, `/usr/local` installs). The loop: run with `--audit` to
+see what enforcement would deny, read `suggested_fix` in
+`sandbox-summary.json`, then re-run with the named path. Both flags
+loosen isolation — grant the narrowest path that fixes the denial,
+never `$HOME` itself. Paths are validated at parse time; the flags are
+rejected alongside `--sandbox none`/`--no-sandbox` (no allowlist to
+extend).
 
 ---
 
@@ -259,7 +285,7 @@ All kwargs accepted by `sandbox()` and `run()` (and most by
 |---|---|---|
 | `target` | `None` | Path to attacker-derived content. Read-only inside sandbox; engages Landlock. |
 | `output` | `None` | Scratch area. Writable inside sandbox; engages Landlock. |
-| `block_network` | `False` | Unshare network namespace -- no interfaces inside. |
+| `block_network` | `False` in `sandbox()`, `True` in top-level `run()` | Unshare network namespace -- isolated loopback only, no route out. |
 | `allowed_tcp_ports` | `None` | Landlock TCP-connect allowlist (ABI v4+, kernel 6.7+). Mutually exclusive with `block_network=True`. |
 | `limits` | built-in defaults | Resource caps: `memory_mb`, `max_file_mb`, `cpu_seconds`. |
 | `profile` | `None` | Named profile (see table above). Overrides individual layer flags. |
@@ -281,9 +307,17 @@ All kwargs accepted by `sandbox()` and `run()` (and most by
 | `sanitise_host_fingerprint` | `False` | Engage host fingerprint sanitisation. See [Host fingerprint sanitisation](#host-fingerprint-sanitisation). |
 | `cpu_count` | `None` | Number of CPUs to present to the sandboxed child (via affinity masking and `/proc/cpuinfo` overlay). Use `HOST_CPU_COUNT` sentinel to preserve the host's real count. |
 | `require_sanitisation` | `False` | Fail-closed if fingerprint sanitisation cannot engage (e.g. no mount-ns). |
-| `etc_overlay` | `None` | Dict mapping in-sandbox `/etc` paths to host source files for bind-mount overlay. Context-level (set once, reused across `run()` calls). |
+| `etc_overlay` | `None` | Dict mapping in-sandbox `/etc` paths to host source files. Bind-mounted when every target exists on the host; if any target is missing, `/etc` becomes a tmpfs shallow-copy of host `/etc` (plus stubs), remounted read-only. Context-level (set once, reused across `run()` calls). |
 | `strict_env` | `False` | Strip `DANGEROUS_ENV_VARS` from any caller-supplied `env=` dict. Automatically `True` in `run_untrusted()` / `run_untrusted_networked()`. |
+| `strip_trust_markers` | `False` | Remove the libexec trust markers (`CLAUDECODE`, `_RAPTOR_TRUSTED`) from the target-bound child env so a target-spawned process cannot invoke `libexec/` scripts as a trusted caller. Automatically `True` in `run_untrusted()` / `run_untrusted_networked()`. The pid1-shim path keeps the marker for the shim itself, which strips it before the target exec. |
 | `env_caller_filtered` | `False` | Caller assertion that the `env=` dict was already filtered. Suppresses the operational-hygiene warning without stripping vars. |
+| `degraded_net_deny` | `True` | When `block_network=True` cannot get a namespace backend, deny ALL TCP connects via Landlock (ABI 4+) instead of degrading silently. See [Degraded network deny](#degraded-network-deny). |
+
+Three further kwargs are accepted per-`run()`-call (on the context's
+`run()` callable and the top-level `run()`), not by `sandbox()` itself:
+
+| Kwarg | Default | Meaning |
+|---|---|---|
 | `skip_pid_ns` | `False` | Skip PID namespace isolation. Internal use by the netns coordinator. |
 | `skip_mount_ns` | `False` | Skip mount namespace isolation. Internal use. |
 | `inherit_netns` | `False` | Inherit the parent's network namespace instead of creating a new one. Used by the netns coordinator for shared-netns pairing. |
@@ -342,9 +376,9 @@ Under `run_untrusted()`, both default to `True`. This is the primary
 defence against credential exfiltration:
 
 - `restrict_reads=True` -- Landlock blocks reads outside the
-  system-directory allowlist (`/usr`, `/lib`, `/lib64`, `/etc`,
-  `/proc`, `/sys`, `target`, `output`, `/tmp`, and curated `/dev`
-  files). `$HOME` is **not** on the allowlist.
+  system-directory allowlist (`/usr`, `/lib`, `/lib64`, `/bin`,
+  `/sbin`, `/etc`, `/proc`, `/sys`, `target`, `output`, `/tmp`, and
+  curated `/dev` files). `$HOME` is **not** on the allowlist.
   - `/dev` is narrowed: `/dev/null`, `/dev/tty` (writable), plus
     `/dev/zero`, `/dev/full`, `/dev/random`, `/dev/urandom`, `/dev/tty`
     (readable). Does not include `/dev/shm`.
@@ -374,9 +408,14 @@ before calling:
 import shutil, os
 
 os.makedirs(f"{out}/.home", exist_ok=True)
-shutil.copy(os.path.expanduser("~/.gitconfig"), f"{out}/.home/.gitconfig")
-run_untrusted(["git", "...args..."], target=repo, output=out)
+shutil.copy(os.path.expanduser("~/.npmrc"), f"{out}/.home/.npmrc")
+run_untrusted(["npm", "...args..."], target=repo, output=out)
 ```
+
+Note this does not work for git config: `get_safe_env()` isolates git
+unconditionally (`GIT_CONFIG_GLOBAL=/dev/null`,
+`GIT_CONFIG_SYSTEM=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), so git ignores
+global/system config files no matter what is placed in the fake home.
 
 Or extend the read allowlist:
 
@@ -413,10 +452,16 @@ How it works:
 - A daemon thread runs an asyncio HTTP-CONNECT proxy on a loopback port.
 - Child env gets `HTTPS_PROXY` and `http_proxy` set to that port; most
   tools (curl, pip, Java/CodeQL) honour these.
-- Landlock restricts TCP `connect()` to the proxy's port, so the child
-  cannot bypass it.
-- Seccomp blocks `AF_INET`/`AF_INET6` `SOCK_DGRAM`, closing the
-  DNS-exfiltration path.
+- Enforcement is tiered (strongest available wins). **Tier 1 (default
+  whenever netns capability exists, any Landlock ABI):** the child runs
+  in an EMPTY network namespace and reaches the proxy only through a
+  loopback-TCP-to-Unix-socket forwarder — containment is topological
+  (no interfaces, no route out), so the seccomp UDP block is not needed
+  and loopback-UDP tools (gradle) keep working. **Tier 2 (no netns,
+  ABI >= 4):** Landlock restricts TCP `connect()` to the proxy's port
+  and seccomp blocks `AF_INET`/`AF_INET6` `SOCK_DGRAM`, closing the
+  DNS-exfiltration path. **Tier 3 (no netns, ABI < 4):** advisory only
+  (env vars).
 - The proxy rejects any `CONNECT` to a hostname not on the allowlist.
 - Resolved IPs are screened -- loopback, private, link-local, multicast,
   reserved, and unspecified addresses are rejected even if the hostname
@@ -430,17 +475,29 @@ every event generated during that subprocess into the token's own
 buffer. Concurrent sandboxes each get the full event stream for their
 lifetime.
 
-### Netns proxy enforcement fallback
+### Netns proxy bridge (tier 1)
 
-On kernels with Landlock ABI < 4 (pre-6.7), the Landlock TCP-connect
-allowlist is unavailable. The sandbox falls back to a TCP-to-Unix-socket
-relay (`core/sandbox/_proxy_bridge.py`): a small forwarder process runs
+The default enforcement tier is a TCP-to-Unix-socket relay
+(`core/sandbox/_proxy_bridge.py`): a small forwarder process runs
 inside the sandboxed child's empty network namespace, listening on
 `127.0.0.1:<port>` (TCP) and relaying connections to the egress proxy's
 Unix socket in the parent namespace (visible via bind-mount). This
 ensures the child can only reach the proxy regardless of Landlock ABI
-version. The forwarder uses only fork-safe, async-signal-safe
+version — it engages whenever the netns capability exists (it is
+strictly stronger than the Landlock port pin, which is scoped to a port
+on ANY host). The forwarder uses only fork-safe, async-signal-safe
 primitives (no Python logging, no threading, no C-extension init).
+
+### Degraded network deny
+
+When `block_network=True` cannot get a namespace backend (no
+unprivileged user-ns), the sandbox no longer degrades silently: on
+Landlock ABI >= 4 hosts it installs a deny-ALL TCP-connect ruleset, so
+every `connect()` — including loopback — fails with `EACCES`
+(`degraded_net_deny=True`, the default; the run's `sandbox_info`
+carries `degraded_net_deny`). Build tools that insist on a local
+daemon get nudged toward daemonless mode (`GRADLE_OPTS`, Nx daemon
+disabled) so they keep working.
 
 ### Upstream proxy support
 
@@ -448,6 +505,16 @@ If `HTTPS_PROXY` is set in the parent environment (e.g. corporate
 proxy), the RAPTOR proxy forwards its `CONNECT` tunnels through that
 upstream. `NO_PROXY` / `no_proxy` are honoured for the upstream
 decision. This is transparent to callers.
+
+The upstream leg (TCP connect + CONNECT negotiation) has its own
+budget, default 10 s. Slow, authenticated, or loaded corporate
+proxies that legitimately need more can be accommodated with
+`RAPTOR_PROXY_UPSTREAM_HANDSHAKE_TIMEOUT_S` (seconds, read once at
+proxy construction). Only the handshake budget widens — the per-IO
+read budget keeps failing fast on dead targets. The signal that you
+need it: `upstream_failed` events in `proxy-events.jsonl` whose
+reason names the upstream connect or CONNECT handshake, on a proxy
+that is otherwise working.
 
 ### Proxy events
 
@@ -614,7 +681,9 @@ cost.
 **Degradation when ptrace is unavailable** (Yama scope 3, container
 `--cap-drop SYS_PTRACE`): network audit still works; syscall +
 filesystem audit silently degrade to enforcement. A one-time WARNING
-surfaces the degradation.
+surfaces the degradation. On architectures the tracer does not support
+it bails with exit code 2, and the syscall/filesystem layers degrade
+the same way.
 
 ### Observe mode
 
@@ -622,13 +691,21 @@ surfaces the degradation.
 to the standard audit layers, observe mode adds stat-family syscall
 tracing (`stat`, `fstat`, `lstat`, `statx`, `newfstatat`) which are
 excluded from normal audit to reduce noise. Each observe run carries a
-per-run nonce written into the JSONL records, providing spoof-resistant
-integrity -- a hostile target that manages to append to the JSONL cannot
-produce records with the correct nonce.
+per-run nonce written into the JSONL records: the parser pins to this
+run's nonce, rejecting stale or cross-run records. (The nonce is not
+proof against in-run forgery -- the JSONL lives in the writable run
+dir, so a target that can append can also read the nonce from earlier
+records.)
 
-Observe JSONL is written to `<run_dir>/.sandbox-observe.jsonl`
-(distinct from the audit JSONL). The resulting records can be parsed
-into an `ObserveProfile` dataclass via `parse_observe_log()`:
+Observe JSONL is written to `<run_dir>/.audit/.sandbox-observe.jsonl`
+(distinct from the audit JSONL). The `.audit/` evidence directory is
+excluded from the sandboxed child's writable view (mount-ns shadows it
+with a read-only tmpfs; the macOS seatbelt profile denies writes
+beneath it), the file is created `O_EXCL` by the parent which holds
+the fd for all appends, and the inode is verified at finalisation.
+`parse_observe_log()` reads the new location and falls back to the
+legacy `<run_dir>/.sandbox-observe.jsonl` spot for old runs. The
+records can be parsed into an `ObserveProfile` dataclass:
 
 ```python
 from core.sandbox import parse_observe_log, ObserveProfile
@@ -776,7 +853,8 @@ Defence against malicious binary updates lives upstream (signed
 installers, package-hash verification). The cache itself is mode-0600
 with SHA-256 self-integrity check.
 
-CLI: `raptor sandbox calibrate -- <binary> [args...]` (via
+CLI: `libexec/raptor-sandbox-calibrate --bin <binary>
+[--json | --show | --force | --clear | --clear-all]` (via
 `core/sandbox/calibrate_cli.py`).
 
 ---
@@ -823,6 +901,15 @@ execs the coordinator script with `RAPTOR_COORD_FROM_LAUNCHER=1` set.
 The coordinator then proceeds as if it had done the unshare itself.
 AppArmor and SELinux policy files are provided alongside the launcher
 source.
+
+The launcher enforces an argument contract before the unshare: the
+script must resolve to this checkout's `netns_coordinator.py`, and
+both interpreter and script must pass a trusted-path ownership check
+(root- or operator-owned, not writable by others — with a deliberate
+allowance for user-private-group checkouts; see "Deliberate Posture
+Decisions" in [security.md](security.md)). The gid-map helper
+enforces the parallel contract: the target namespace must be owned by
+the invoker and mapped gids confined to the invoker's own groups.
 
 If both paths fail, the coordinator writes a structured error to stdout
 and exits non-zero. The caller surfaces the message to the operator.
@@ -951,7 +1038,7 @@ requested profile cannot engage. The operator resolves it explicitly
 The sandbox's `get_safe_env()` keeps a tight allowlist and deliberately
 strips language-specific vars like `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT`,
 `RUSTUP_HOME`. Instead, each build-system entry in
-`packages/codeql/build_detector.BUILD_SYSTEMS` declares an `env_detect`
+`core/build/build_detector.BUILD_SYSTEMS` declares an `env_detect`
 list, and `core/build/toolchain.py` auto-resolves those vars from
 filesystem layout at build time.
 
@@ -1071,8 +1158,11 @@ them. In practice, the pid-ns hierarchy ensures cleanup within seconds.
 - **ABI v4 (kernel 6.7+)** required for `allowed_tcp_ports` (TCP
   connect allowlist). Earlier kernels emit a WARNING and the parameter
   is silently ignored -- use the [egress proxy](#egress-proxy) instead.
-- **ABI v3 (kernel 6.2+)** required for `TRUNCATE` support. Without
-  it, writes to `/dev/null` via truncation may hit EACCES.
+- **ABI v3 (kernel 6.2+)** required for `TRUNCATE` restriction
+  coverage. Without it, truncation is unrestricted by Landlock --
+  existing files outside the writable paths can still be truncated
+  via `O_TRUNC` (a coverage gap, logged with a warning; not an
+  EACCES source).
 
 ### Audit coverage gaps
 
@@ -1130,7 +1220,12 @@ Without both, the sandbox falls back to Landlock-only. Landlock alone
 already covers the main threat model (no writes outside `output`, no
 reads of credentials under `restrict_reads`); mount-ns adds per-sandbox
 `/tmp`, invisible host paths outside the bind-mounts, and stronger
-`/dev/shm` isolation.
+`/dev/shm` isolation. Exception: when the user-namespace tier is
+unavailable entirely, the untrusted entry points (`run_untrusted()` /
+`run_untrusted_networked()`) refuse to fall back — set
+`RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1` to explicitly accept
+Landlock/seccomp-only containment for untrusted code
+(see [environment.md](environment.md)).
 
 ### A target binary fails with EACCES reading `/home/<user>/...`
 
@@ -1144,9 +1239,10 @@ hit the Landlock read-restriction even under `fake_home=True`. Either:
 
 ### Shell scripts fail on `>/dev/null 2>&1`
 
-`/dev/null` writes are permitted by a narrow Landlock rule. If you see
-EACCES on `/dev/null`, you are likely running on a kernel without
-Landlock ABI v3 (TRUNCATE). Upgrade to 6.2+.
+`/dev/null` writes (including truncation, on Landlock ABI v3+ kernels)
+are permitted by a narrow Landlock rule. If you see EACCES on
+`/dev/null`, check for a custom `readable_paths`/`writable_paths`
+override that displaced the curated `/dev` grants.
 
 ### Rust `cargo build` fails at the linker stage
 
@@ -1187,6 +1283,7 @@ core/sandbox/
 +-- _macos_spawn.py            # macOS: sandbox-exec wrapper
 +-- _proxy_bridge.py           # TCP-to-Unix-socket relay for netns proxy enforcement
 +-- _fork_safe_warn.py         # fork-safe degraded-mode warning helper
++-- _daemon.py                 # persistent-sandbox RPC daemon (runs inside the sandbox)
 +-- mount_ns.py                # Linux: ctypes mount() / pivot_root() for _spawn
 +-- mount.py                   # Linux: legacy shell-script mount builder
 +-- landlock.py                # Linux: Landlock ABI + rule construction
@@ -1199,21 +1296,31 @@ core/sandbox/
 +-- observe_profile.py         # observe-mode profile extraction from tracer JSONL
 +-- observe_context_merge.py   # merge ObserveProfile into /understand context-map
 +-- state.py                   # cross-platform: singletons + cached state
++-- evidence.py                # tamper-resistant placement for enforcement evidence
 +-- summary.py                 # per-run denial recording + sandbox-summary.json
 +-- tracer.py                  # Linux: ptrace-based syscall tracer for audit/observe
 +-- audit_budget.py            # cross-platform: token-bucket rate limiter for audit
 +-- calibrate.py               # binary calibration: auto-derive sandbox allowlists
-+-- calibrate_cli.py           # CLI: raptor sandbox calibrate
++-- calibrate_cli.py           # CLI: libexec/raptor-sandbox-calibrate
 +-- fingerprint.py             # host-fingerprint sanitisation overlays
++-- host.py                    # persistent-sandbox host (parent-side handle)
 +-- netns_coordinator.py       # paired-process isolation in shared netns
 +-- ptrace_probe.py            # detect ptrace availability
 +-- python_paths.py            # discover Python runtime paths for tool_paths
 +-- seatbelt.py                # macOS: SBPL profile generator
 +-- seatbelt_audit.py          # macOS: log stream capture + JSONL append
++-- shims/                     # build-on-demand LD_PRELOAD stubs (setgroups)
 +-- helpers/                   # privileged helper binaries
-|   +-- raptor-coord-launcher.c          # netns coordinator launcher (C, setuid)
-|   +-- raptor-coord-launcher.apparmor   # AppArmor policy
+|   +-- raptor-coord-launcher.c          # netns coordinator launcher (C, setcap
+|   |                                    #   file caps or AppArmor/SELinux grant)
+|   +-- raptor-coord-launcher.apparmor.template  # AppArmor policy (render
+|   |                                    #   via `make apparmor-profile` —
+|   |                                    #   attachment is the checkout's
+|   |                                    #   absolute path, never a glob)
 |   +-- raptor-coord-launcher.selinux.te # SELinux policy
+|   +-- raptor-gidmap-allow.c            # gid-map helper (C, setcap cap_setgid)
+|   +-- helpers_validate.h               # shared argument-contract validation
+|   +-- helpers_test.c                   # unprivileged validation test harness
 |   +-- Makefile                         # build instructions
 +-- tests/                     # unit and integration tests
 ```
@@ -1221,15 +1328,6 @@ core/sandbox/
 See the module docstring in `core/sandbox/__init__.py` for the current
 threat-model statement -- what the sandbox does and does not protect
 against.
-
----
-
-## Spike scripts
-
-Phase 0 design spikes are in `scripts/macos_sandbox_spike{1,2,3,4}.py`
--- each validates one assumption used by `seatbelt.py` /
-`seatbelt_audit.py`. Re-run them on a new macOS major version to confirm
-the SBPL idioms have not drifted.
 
 ---
 

@@ -90,6 +90,23 @@ Script.bindWeak(Script, function () {
   }
   Stalker.flush();
 
+  // Sanitise module paths before embedding them in the text header.
+  // m.path comes from the instrumented process; a path containing
+  // control characters (\n in particular) would forge extra module-
+  // table rows. Percent-encode anything below 0x20 plus 0x7f.
+  function sanitizePath(p) {
+    var out = '';
+    for (var j = 0; j < p.length; j++) {
+      var code = p.charCodeAt(j);
+      if (code < 0x20 || code === 0x7f) {
+        out += '%' + ('0' + code.toString(16)).slice(-2);
+      } else {
+        out += p.charAt(j);
+      }
+    }
+    return out;
+  }
+
   // Build drcov header.
   var header = 'DRCOV VERSION: 2\n';
   header += 'DRCOV FLAVOR: frida-stalker\n';
@@ -97,7 +114,7 @@ Script.bindWeak(Script, function () {
   header += 'Columns: id, base, end, entry, checksum, timestamp, path\n';
   for (var i = 0; i < modTable.length; i++) {
     var m = modTable[i];
-    header += m.id + ', ' + m.base + ', ' + m.end + ', 0x0, 0x0, 0x0, ' + m.path + '\n';
+    header += m.id + ', ' + m.base + ', ' + m.end + ', 0x0, 0x0, 0x0, ' + sanitizePath(m.path) + '\n';
   }
   var keys = Object.keys(bbSet);
   var bbCount = keys.length;

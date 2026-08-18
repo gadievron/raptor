@@ -3,17 +3,12 @@
 Uses mock dispatch_fn — real LLM dispatch is PR2b's responsibility.
 """
 
-from dataclasses import dataclass
 
 import pytest
 
+# FakeModel (ModelHandle stand-in) comes from core.testing.
+from core.testing import FakeModel
 from packages.code_understanding import trace
-
-
-@dataclass
-class FakeModel:
-    model_name: str
-
 
 # ---------------------------------------------------------------------------
 # Basic dispatch

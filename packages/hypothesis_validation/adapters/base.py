@@ -148,9 +148,13 @@ def make_sandbox_runner(
     input). Suitable to pass as `subprocess_runner=` to
     packages/coccinelle and packages/semgrep run_rule.
 
-    Falls back to subprocess.run when core.sandbox is unavailable
-    (non-Linux/macOS hosts) — the underlying runners still get the safe
-    env from the adapter's run() method, so this is degrade-not-fail.
+    Fail-closed when core.sandbox is unavailable: raises
+    ``core.run.sandbox_policy.SandboxUnavailableError`` naming the
+    remedy. Hosts that genuinely lack sandbox support can explicitly
+    opt into a bare-subprocess fallback with
+    ``RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1`` (loud warning + security
+    event); the underlying runners still get the safe env from the
+    adapter's run() method in that degraded mode.
 
     Args:
         target: Scan target path. Used by the sandbox to set Landlock
@@ -169,9 +173,17 @@ def make_sandbox_runner(
 
     try:
         from core.sandbox import run as sandbox_run  # type: ignore
-    except Exception:
-        # Sandbox unavailable on this platform / install. Fall back to
-        # subprocess.run; the safe env from the adapter still applies.
+    except Exception as exc:  # noqa: BLE001 — any import failure means no isolation
+        # Fail-closed: no silent bare-subprocess fallback. The tools
+        # this runner feeds (semgrep / coccinelle / codeql on
+        # LLM-generated rules over untrusted targets) are exactly the
+        # ones that must not run unisolated. Explicit dev-host opt-in
+        # via RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1 (loud warning +
+        # security event) is the only degraded path.
+        from core.run.sandbox_policy import require_sandbox_or_optout
+        require_sandbox_or_optout(
+            f"{caller_label} (make_sandbox_runner)", exc,
+        )
         return subprocess.run
 
     def _runner(cmd, **kwargs):

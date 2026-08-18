@@ -18,10 +18,11 @@ Resolution layers (priority high → low):
   3. Provider env vars — ``CLAUDE_CODE_USE_BEDROCK`` / ``USE_VERTEX``
      / ``USE_FOUNDRY``: each declares an alternative LLM-provider
      topology that needs different hostnames than the Anthropic API.
-  4. Default — ``["api.anthropic.com"]`` for the standard Anthropic
-     API; default readable-paths set covering the documented
-     Claude Code install layout (``~/.local/bin``, ``~/.claude``,
-     etc.).
+  4. Default — ``_DEFAULT_ANTHROPIC_HOSTS`` (``api.anthropic.com``
+     plus the MCP-proxy and downloads hosts Claude Code now needs)
+     for the standard Anthropic API; default readable-paths set
+     covering the documented Claude Code install layout
+     (``~/.local/bin``, ``~/.claude``, etc.).
 
 The egress proxy itself enforces ``deny by default`` regardless of
 what this module returns. If a future Claude Code version adds an
@@ -50,9 +51,7 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
-
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +65,11 @@ _OVERRIDE_CONFIG_PATH = Path.home() / ".config" / "raptor" / "cc-dispatch-proxy-
 # without ``CLAUDE_CODE_USE_BEDROCK`` produces distinct profiles.
 _PROVIDER_ENV_KEYS: tuple[str, ...] = (
     "CLAUDE_CODE_USE_BEDROCK",
+    # Mantle vs runtime are different endpoints on different domains
+    # (``bedrock-mantle.<region>.api.aws`` vs ``bedrock-runtime.
+    # <region>.amazonaws.com``) — flipping the flag must change both
+    # the static hosts and the calibration cache key.
+    "CLAUDE_CODE_USE_MANTLE",
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
     "ANTHROPIC_BASE_URL",
@@ -92,8 +96,9 @@ def _default_readable_paths() -> list[str]:
     ]
 
 
-# Opt-in env var: when set to "1" AND an Anthropic API key is
-# available, calibration uses a real ``claude -p`` probe that
+# Opt-in env var: when set to "1" AND provider auth is available
+# (an Anthropic API key, or a Bedrock / Vertex / Foundry provider
+# var), calibration uses a real ``claude -p`` probe that
 # networks. The default ``--version`` probe captures filesystem
 # reach but produces empty proxy_hosts — operators who want the
 # calibrated proxy_hosts to actually populate (and catch new
@@ -110,7 +115,8 @@ _NETWORK_PROBE_OPT_IN_ENV = "RAPTOR_CC_CALIBRATE_NETWORK_PROBE"
 
 def _network_probe_enabled() -> bool:
     """True when the operator opted in to the network-engaging
-    probe AND an Anthropic API key is set.
+    probe AND provider auth is available — an Anthropic API key, or
+    one of the Bedrock / Vertex / Foundry provider env vars.
 
     Without an API key the network probe would just hit the proxy
     once and fail auth — the proxy_hosts capture still works
@@ -130,9 +136,7 @@ def _network_probe_enabled() -> bool:
         return True
     if os.environ.get("CLAUDE_CODE_USE_VERTEX"):
         return True
-    if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
-        return True
-    return False
+    return bool(os.environ.get("CLAUDE_CODE_USE_FOUNDRY"))
 
 
 def _cc_probe_args() -> tuple[str, ...]:
@@ -153,7 +157,7 @@ def _cc_probe_args() -> tuple[str, ...]:
     return ("--version",)
 
 
-def _load_override_config() -> Optional[list[str]]:
+def _load_override_config() -> list[str] | None:
     """Load the operator's override list, or None if not configured.
 
     Schema:
@@ -181,17 +185,75 @@ def _load_override_config() -> Optional[list[str]]:
     return result or None
 
 
+def _profile_config_region() -> str | None:
+    """Region from the profile's shared-config entry.
+
+    botocore when available (full chain semantics: profile
+    inheritance, credential-file merging); otherwise a minimal stdlib
+    configparser read of the same file — the AWS shared config is INI,
+    and the common ``[profile X] / region = ...`` shape needs no SDK.
+    botocore is optional (parent-only), so proxy-policy hosts must not
+    silently lose profile-region resolution without it.
+    """
+    profile = os.environ.get("AWS_PROFILE")
+    try:
+        import botocore.session
+        return botocore.session.Session(
+            profile=profile,
+        ).get_config_variable("region")
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 — unreadable/malformed config
+        return None
+    import configparser
+    path = os.environ.get("AWS_CONFIG_FILE") or os.path.expanduser(
+        "~/.aws/config",
+    )
+    section = (
+        f"profile {profile}" if profile and profile != "default"
+        else "default"
+    )
+    try:
+        cp = configparser.ConfigParser()
+        cp.read(path)  # missing file → empty parser, not an error
+        return cp.get(section, "region", fallback=None)
+    except (configparser.Error, OSError):
+        return None
+
+
 def _bedrock_hosts() -> list[str]:
     region = (
         os.environ.get("AWS_REGION")
         or os.environ.get("AWS_DEFAULT_REGION")
-        or "us-east-1"
     )
+    if not region:
+        # Claude Code resolves its region through the full AWS chain
+        # (env, then the profile's shared-config entry). Try the
+        # profile's config-file region; fall back to us-east-1 with a
+        # loud log rather than silently — a wrong guess here surfaces
+        # as an opaque proxy denial inside the CC child.
+        region = _profile_config_region()
+        if not region:
+            region = "us-east-1"
+            logger.warning(
+                "cc_proxy_hosts: no AWS region resolvable (env or "
+                "profile config) — defaulting Bedrock proxy hosts to "
+                "us-east-1; set AWS_REGION if Claude Code targets "
+                "another region",
+            )
+    # Mantle and runtime are distinct endpoints on distinct domains;
+    # emit the surface Claude Code is configured for.
+    if os.environ.get("CLAUDE_CODE_USE_MANTLE"):
+        llm_host = f"bedrock-mantle.{region}.api.aws"
+    else:
+        llm_host = f"bedrock-runtime.{region}.amazonaws.com"
     return [
-        # LLM endpoint, region-pinned
-        f"bedrock-runtime.{region}.amazonaws.com",
-        # AWS STS for credential refresh; required by AWS SDK auth flow
+        llm_host,
+        # AWS STS for credential refresh; required by AWS SDK auth
+        # flow.  botocore defaults to the REGIONAL STS endpoint, so
+        # allow both the global and regional hosts.
         "sts.amazonaws.com",
+        f"sts.{region}.amazonaws.com",
     ]
 
 
@@ -211,7 +273,7 @@ def _vertex_hosts() -> list[str]:
     ]
 
 
-def _foundry_hosts() -> Optional[list[str]]:
+def _foundry_hosts() -> list[str] | None:
     """Azure OpenAI / Foundry hosts. Endpoint is per-deployment so we
     derive it from the operator-supplied URL env var. Returns None
     when the URL is missing or unparseable — caller should treat as
@@ -242,12 +304,12 @@ def _foundry_hosts() -> Optional[list[str]]:
 # the dict (mostly used in tests). Production callers don't need
 # to invalidate during normal operation — sha256 verification on
 # load handles binary self-update.
-_CALIBRATED_CACHE: dict[str, "object"] = {}
+_CALIBRATED_CACHE: dict[str, object] = {}
 _CALIBRATED_CACHE_LOCK = threading.Lock()
 _MISSING = object()  # sentinel distinct from None (a valid cached result)
 
 
-def _resolve_claude_bin() -> Optional[str]:
+def _resolve_claude_bin() -> str | None:
     """Locate the Claude Code binary on PATH. Returns None when
     not found (calibration disabled for that run; static fallback
     layers still apply).
@@ -255,7 +317,7 @@ def _resolve_claude_bin() -> Optional[str]:
     return shutil.which("claude")
 
 
-def _calibrated_profile(claude_bin: Optional[str] = None):
+def _calibrated_profile(claude_bin: str | None = None):
     """Load (or trigger calibration of) a SandboxProfile for the
     target Claude Code binary + provider env. Returns None when
     calibration is unavailable (binary missing, observe-mode
@@ -335,8 +397,8 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
 
 
 def _calibrated_proxy_hosts(
-    claude_bin: Optional[str] = None,
-) -> Optional[list[str]]:
+    claude_bin: str | None = None,
+) -> list[str] | None:
     """Calibrated layer of proxy_hosts_for_cc_dispatch's resolution
     chain. Returns None when no calibrated profile exists OR the
     profile carries an empty proxy_hosts list (the default
@@ -349,8 +411,8 @@ def _calibrated_proxy_hosts(
 
 
 def _calibrated_readable_paths(
-    claude_bin: Optional[str] = None,
-) -> Optional[list[str]]:
+    claude_bin: str | None = None,
+) -> list[str] | None:
     """Calibrated layer of readable_paths_for_cc_dispatch's
     resolution chain. Returns the union of paths_read + paths_stat
     (probes that *check for* a file via stat() before deciding to
@@ -368,8 +430,19 @@ def _calibrated_readable_paths(
     return union
 
 
+# Allowlist for credential-proxy dispatches: the child needs ONLY the
+# loopback dispatcher (reached direct via the sandbox bridge / NO_PROXY,
+# never through the CONNECT proxy — which rejects loopback targets by
+# design). Handing the proxy a loopback-only allowlist therefore makes
+# it a deny-all chokepoint for every remote host while satisfying the
+# sandbox's non-empty-allowlist invariant.
+_LOOPBACK_ONLY_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost")
+
+
 def proxy_hosts_for_cc_dispatch(
-    claude_bin: Optional[str] = None,
+    claude_bin: str | None = None,
+    *,
+    credential_mode: str = "env",
 ) -> list[str]:
     """Return the egress proxy hostname allowlist for a cc_dispatch
     invocation, given the current process env + operator config.
@@ -379,10 +452,18 @@ def proxy_hosts_for_cc_dispatch(
             calibration fingerprints exactly that binary; when None,
             falls back to PATH lookup. cc_dispatch sites should
             pass the same value they'll spawn so the policy matches.
+        credential_mode: ``"proxy"`` returns the loopback-only
+            allowlist — a credential-proxy child talks solely to the
+            local LLM dispatcher, so every remote host (including the
+            provider endpoints an env-mode child would need) is
+            denied at the chokepoint.
 
     Priority: override > calibrated profile > provider env vars >
     default Anthropic.
     """
+    if credential_mode == "proxy":
+        return list(_LOOPBACK_ONLY_HOSTS)
+
     override = _load_override_config()
     if override is not None:
         return override
@@ -434,8 +515,31 @@ _DEFAULT_ANTHROPIC_HOSTS: tuple[str, ...] = (
 )
 
 
+def _binary_readable_paths(claude_bin: str | None = None) -> list[str]:
+    """Paths needed to *exec* the Claude Code binary itself.
+
+    Landlock blocks execve on files outside the readable set, and
+    the launcher in ``~/.local/bin`` is typically a symlink into a
+    versioned install dir — both the link's directory and the
+    resolved target's directory must be readable or the sandboxed
+    child dies with exit 126 before producing any stderr.
+    """
+    bin_path = claude_bin or shutil.which("claude")
+    if not bin_path:
+        return []
+    link = Path(bin_path)
+    paths = [str(link.parent)]
+    try:
+        real = link.resolve()
+    except OSError:
+        return paths
+    if real.parent != link.parent:
+        paths.append(str(real.parent))
+    return paths
+
+
 def readable_paths_for_cc_dispatch(
-    claude_bin: Optional[str] = None,
+    claude_bin: str | None = None,
 ) -> list[str]:
     """Return the Landlock readable-paths set for a cc_dispatch
     invocation.
@@ -445,16 +549,35 @@ def readable_paths_for_cc_dispatch(
             ``proxy_hosts_for_cc_dispatch``. Calibration runs against
             this exact binary; static fallback engages on miss.
 
-    Priority: calibrated profile > default install layout. Every
-    path-using cc_dispatch site (cc_dispatch.invoke_cc_simple +
-    agentic_passes' /understand prepass + /validate postpass)
-    routes through this so per-binary calibration takes effect
-    everywhere the policy matters.
+    The result is the union of the static floor (default install
+    layout + the binary's own exec paths + the Python interpreter
+    runtime) and the calibrated profile. The calibrated layer
+    EXTENDS the floor rather than replacing it: calibration observes
+    ``open()``/``stat()`` syscalls, so it structurally cannot record
+    the ``execve`` of the binary itself — a calibrated-only policy
+    can't even exec the CLI (observed as `/validate` post-pass exit
+    126 with empty stderr). Every path-using cc_dispatch site
+    (cc_dispatch.invoke_cc_simple + agentic_passes' /understand
+    prepass + /validate postpass) routes through this so per-binary
+    calibration takes effect everywhere the policy matters.
+
+    The Python runtime paths cover the CLI child's Bash tools running
+    RAPTOR's ``#!/usr/bin/env python3`` libexec scripts: when RAPTOR
+    itself runs from a virtualenv, PATH's ``python3`` is the venv
+    interpreter, whose boot reads ``<venv>/pyvenv.cfg`` — without the
+    venv in the read allowlist every such child died at interpreter
+    startup (observed as `/validate` post-pass exit 1 with
+    ``PermissionError: .../pyvenv.cfg``).
     """
-    calibrated = _calibrated_readable_paths(claude_bin)
-    if calibrated is not None:
-        return calibrated
-    return _default_readable_paths()
+    from core.sandbox.python_paths import python_runtime_tool_paths
+
+    floor = (
+        _default_readable_paths()
+        + _binary_readable_paths(claude_bin)
+        + python_runtime_tool_paths()
+    )
+    calibrated = _calibrated_readable_paths(claude_bin) or []
+    return list(dict.fromkeys(floor + calibrated))
 
 
 def _reset_calibrate_cache_for_tests() -> None:

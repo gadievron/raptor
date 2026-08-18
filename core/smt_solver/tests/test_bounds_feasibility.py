@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,19 +15,81 @@ from core.smt_solver.bounds_feasibility import (
     check_bounds_infeasible,
 )
 
+# Generous wall-clock budget: the current pattern finishes in well under
+# 10ms on every adversarial input below; the previous pattern (three
+# sequential [^)]* segments) backtracked super-linearly (cubic) and
+# needed ~27s on the 8KB case.
+_TIME_BUDGET_S = 2.0
+
+
+def _assert_scans_fast(source: str) -> None:
+    start = time.perf_counter()
+    matches = list(_BOUNDS_CONDITION_RE.finditer(source))
+    elapsed = time.perf_counter() - start
+    assert elapsed < _TIME_BUDGET_S, f"regex took {elapsed:.2f}s on {len(source)}B input"
+    assert matches == []
+
 
 class TestBoundsConditionRegex:
     def test_matches_len_guard(self):
-        src = "if (len >= MAX_LEN) return -1;"
-        assert _BOUNDS_CONDITION_RE.search(src) is not None
+        m = _BOUNDS_CONDITION_RE.search("if (len >= MAX_LEN) return -1;")
+        assert m is not None
+        assert m.group(1).strip() == "len >= MAX_LEN"
 
     def test_matches_size_comparison(self):
-        src = "if (input_size > MAX_SIZE) return -1;"
-        assert _BOUNDS_CONDITION_RE.search(src) is not None
+        m = _BOUNDS_CONDITION_RE.search("if (input_size > MAX_SIZE) return -1;")
+        assert m is not None
+        assert m.group(1).strip() == "input_size > MAX_SIZE"
+
+    def test_matches_without_space_after_if(self):
+        m = _BOUNDS_CONDITION_RE.search("if(count!=0) {}")
+        assert m is not None
+        assert m.group(1).strip() == "count!=0"
+
+    def test_matches_case_insensitively(self):
+        m = _BOUNDS_CONDITION_RE.search("if (LEN > Max) x;")
+        assert m is not None
+        assert m.group(1).strip() == "LEN > Max"
+
+    def test_sizeof_capture_cut_at_first_close_paren(self):
+        # Pre-existing behaviour: the capture stops at the first ')'.
+        m = _BOUNDS_CONDITION_RE.search("if (len >= sizeof(buf)) return -1;")
+        assert m is not None
+        assert m.group(1).strip() == "len >= sizeof(buf"
 
     def test_no_match_on_unrelated_if(self):
-        src = "if (x > 0) return x;"
-        assert _BOUNDS_CONDITION_RE.search(src) is None
+        assert _BOUNDS_CONDITION_RE.search("if (x > 0) return x;") is None
+
+    def test_no_match_on_keyword_without_comparator(self):
+        assert _BOUNDS_CONDITION_RE.search("if (size) {}") is None
+
+    def test_no_match_on_while_guard(self):
+        assert _BOUNDS_CONDITION_RE.search("while (len < max) {}") is None
+
+    def test_finds_all_conditions_across_source(self):
+        src = "if (a && b) {}\nif (len < n) {}\nif (count >= LIMIT) {}\n"
+        found = [m.group(1).strip() for m in _BOUNDS_CONDITION_RE.finditer(src)]
+        assert found == ["len < n", "count >= LIMIT"]
+
+
+class TestBoundsConditionRegexLinear:
+    """The pattern must stay linear on unclosed-paren adversarial input."""
+
+    def test_unclosed_paren_repeating_keyword_comparator(self):
+        # Empirical worst case: 8KB of 'len< ' after an unclosed 'if ('.
+        _assert_scans_fast("if (" + "len< " * 1600)
+
+    def test_unclosed_paren_repeating_keyword_only(self):
+        _assert_scans_fast("if (" + "len " * 2000)
+
+    def test_many_unclosed_ifs(self):
+        _assert_scans_fast("if (len< " * 3200)
+
+    def test_whitespace_flood_before_keyword(self):
+        _assert_scans_fast("if (" + " " * 8000 + "len<")
+
+    def test_comparator_run_flood(self):
+        _assert_scans_fast("if (len" + "<" * 8000)
 
 
 class TestCheckBoundsInfeasible:
@@ -46,3 +109,32 @@ class TestCheckBoundsInfeasible:
             src = "if (len >= sizeof(buf)) return -1;"
             result = check_bounds_infeasible(src, "CWE-120")
             assert result is None or result in (True, False)
+
+    def test_pathological_source_returns_none_quickly(self):
+        source = "if (" + "len< " * 1600
+        start = time.perf_counter()
+        result = check_bounds_infeasible(source, "CWE-120")
+        elapsed = time.perf_counter() - start
+        assert result is None
+        assert elapsed < _TIME_BUDGET_S
+
+    def test_extracted_condition_reaches_solver_stripped(self):
+        captured = {}
+
+        def fake_check(conditions, timeout_ms):
+            captured["texts"] = [c.text for c in conditions]
+
+            class _Result:
+                feasible = False
+
+            return _Result()
+
+        with patch(
+            "core.smt_solver.path_feasibility.check_path_feasibility",
+            side_effect=fake_check,
+        ):
+            result = check_bounds_infeasible(
+                "if (len >= MAX_LEN) return -1;", "CWE-122"
+            )
+        assert result is True
+        assert captured["texts"] == ["len >= MAX_LEN"]

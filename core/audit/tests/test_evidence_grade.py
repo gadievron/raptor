@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.audit.evidence_grade import (
     VALID_EVIDENCE_TOOLS,
@@ -128,20 +128,20 @@ class FakeEvidenceRecord:
     file: str = "a.c"
     function: str = "f"
     sink_unreachable: bool = False
-    taint_approx: Optional[Any] = None
-    taint_summary: Optional[Any] = None
-    joern_flows: List[Any] = field(default_factory=list)
-    imported_joern_flows: List[Any] = field(default_factory=list)
-    joern_unguarded_sinks: List[Any] = field(default_factory=list)
-    codeql_alerts: List[Any] = field(default_factory=list)
-    semgrep_hits: List[Any] = field(default_factory=list)
-    negative_space: List[Any] = field(default_factory=list)
-    binary_sink_edges: List[Any] = field(default_factory=list)
+    taint_approx: Any | None = None
+    taint_summary: Any | None = None
+    joern_flows: list[Any] = field(default_factory=list)
+    imported_joern_flows: list[Any] = field(default_factory=list)
+    joern_unguarded_sinks: list[Any] = field(default_factory=list)
+    codeql_alerts: list[Any] = field(default_factory=list)
+    semgrep_hits: list[Any] = field(default_factory=list)
+    negative_space: list[Any] = field(default_factory=list)
+    binary_sink_edges: list[Any] = field(default_factory=list)
 
 
 @dataclass
 class FakeTaintApprox:
-    dangerous_flows: Dict[int, list] = field(default_factory=dict)
+    dangerous_flows: dict[int, list] = field(default_factory=dict)
     has_opaque_flow: bool = False
     params: list = field(default_factory=list)
 
@@ -346,13 +346,21 @@ class TestIsToolEvidence:
         assert is_tool_evidence("dynamic:sanitizer")
         assert is_tool_evidence("frida:runtime")
         assert is_tool_evidence("dark_verify:confirmed")
-        assert is_tool_evidence("triage:classifier")
 
     def test_llm_hallucinations_rejected(self):
         assert not is_tool_evidence("Semgrep")
         assert not is_tool_evidence("CodeQL")
         assert not is_tool_evidence("llm")
         assert not is_tool_evidence("llm-claimed:codeql")
+
+    def test_triage_stamps_are_provenance_not_tool_evidence(self):
+        # A 500-token batch glance (or the skip classifier) records
+        # which shortcut produced the verdict — it never ran a tool.
+        # Blessing it used to short-circuit refutation gates, the G2
+        # finding gate, and the promotion alarm.
+        assert not is_tool_evidence("triage:batch")
+        assert not is_tool_evidence("triage:classifier")
+        assert not is_tool_evidence("semgrep+triage:batch")
 
     def test_plus_joined_multi_tool_accepted(self):
         assert is_tool_evidence("semgrep+joern")
@@ -366,6 +374,69 @@ class TestIsToolEvidence:
     def test_empty_and_none_rejected(self):
         assert not is_tool_evidence("")
         assert not is_tool_evidence("none")
+
+
+class TestDetectionVariantFirewall:
+    """Detection-grade rule-id variants are corroboration, never full
+    tool evidence — for EVERY channel, as classified by the channel's
+    own is_detection_rule_id."""
+
+    def test_naming_variants_are_not_tool_evidence(self):
+        # fail_open / ptr_lifecycle / lock_region previously slipped
+        # the firewall: a lone -naming stamp passed as full evidence.
+        for stamp in (
+            "fail_open:handler-outcome-naming",
+            "fail_open:ignored-return-naming",
+            "ptr_lifecycle:stale-alias-naming",
+            "lock_region:callback-under-lock-naming",
+            "resource_bounds:unbounded-accumulation-naming",
+            "release_order:release-before-verify-naming",
+        ):
+            assert not is_tool_evidence(stamp), stamp
+
+    def test_majority_and_unreceipted_variants_rejected(self):
+        for stamp in (
+            "consistency:return-check-majority",
+            "protocol_state:invariant-violated-unreceipted",
+            "protocol_state:dead-state-field",
+            "protocol_state:unvalidated-peer-write",
+        ):
+            assert not is_tool_evidence(stamp), stamp
+
+    def test_full_grade_channel_stamps_still_qualify(self):
+        for stamp in (
+            "fail_open:handler-outcome",
+            "ptr_lifecycle:stale-alias",
+            "lock_region:callback-under-lock",
+            "consistency:return-check",
+            "release_order:release-before-verify",
+            "protocol_state:invariant-violated",
+        ):
+            assert is_tool_evidence(stamp), stamp
+
+    def test_variant_riding_a_receipt_composite_qualifies(self):
+        assert is_tool_evidence("smt+ptr_lifecycle:stale-alias-naming")
+        assert is_tool_evidence("fail_open:handler-outcome-naming+coccinelle")
+
+    def test_matches_each_channel_classifier(self):
+        """The firewall must agree with every channel's own contract."""
+        import importlib
+
+        from core.audit.evidence_grade import _is_detection_variant
+        for namespace, mod_name in (
+            ("consistency", "core.audit.peer_evidence"),
+            ("fail_open", "core.audit.fail_open_verify"),
+            ("lock_region", "core.audit.lock_region"),
+            ("ptr_lifecycle", "core.audit.ptr_lifecycle"),
+            ("release_order", "core.audit.release_order"),
+            ("resource_bounds", "core.audit.resource_bounds"),
+            ("protocol_state", "core.audit.protocol_state"),
+        ):
+            mod = importlib.import_module(mod_name)
+            suffix = mod.DETECTION_VARIANT_SUFFIX
+            variant = f"{namespace}:x{suffix}"
+            assert _is_detection_variant(variant) == \
+                mod.is_detection_rule_id(variant), variant
 
 
 class TestSanitizeLlmEvidenceTool:

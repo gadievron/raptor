@@ -129,10 +129,11 @@ binary analyser uses radare2 for:
 For Mach-O universal binaries, radare2 selects a slice automatically;
 use `--slice-arch` to pin a specific architecture.
 
-r2 runs under `core.sandbox.run` (namespace + Landlock + network deny);
-binutils tools (readelf, nm, objdump, c++filt) run under
-`core.sandbox.run_trusted`. See [sandbox](sandbox.md) for the
-isolation model.
+r2 runs under `core.sandbox.run` (namespace + Landlock + network deny).
+The binary oracle's binutils invocations (readelf, nm, objdump,
+c++filt) run under the full sandbox as well — a malformed ELF planted
+in `build/` must not be parsed by a process with the user's filesystem
+and network. See [sandbox](sandbox.md) for the isolation model.
 
 ### Evidence Tiers
 
@@ -363,7 +364,7 @@ The classifier's per-finding analysis record also carries
 Two verification tools are provided:
 
 - `libexec/raptor-binary-oracle-e2e` -- end-to-end audit: builds a real
-  C target and walks 15 consumer surfaces (54 assertions). No LLM calls.
+  C target and walks 14 consumer surfaces (~50 assertions). No LLM calls.
   Run via `bin/raptor` or `CLAUDECODE=1 libexec/...`.
 - `libexec/raptor-binary-oracle-precision --corpus <name>` -- re-measure
   absent-precision on any corpus driver (synthetic, zlib, libsodium,
@@ -459,7 +460,8 @@ two capabilities:
    satisfiable given a crash state. Result appears in
    `exploitation_paths[vuln].one_gadget_info.smt_feasibility`.
 
-2. **CodeQL dataflow path validation** (`packages/codeql/smt_path_validator.py`):
+2. **CodeQL dataflow path validation** (`core/smt_solver/path_feasibility.py`,
+   invoked from `packages/codeql/dataflow_validator.py`):
    Checks whether branch conditions along a dataflow path are jointly
    satisfiable. `unsat` means false positive (skip LLM); `sat` produces
    concrete input values fed into the LLM prompt. Best coverage:

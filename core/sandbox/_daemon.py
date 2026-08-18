@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
-"""Persistent sandbox host — RPC daemon (FIFO rendezvous).
+"""Persistent sandbox host — RPC daemon (inherited-fd transport).
 
-Runs INSIDE the sandbox as the argv sandbox_run sees. Opens two
-FIFOs at ``<work_dir>/rpc_in.fifo`` (parent→daemon) and
-``<work_dir>/rpc_out.fifo`` (daemon→parent) that the parent
-mknod's BEFORE launching the daemon. Both sides see the same
-underlying inodes via the mount-ns bind of the target directory.
+Runs INSIDE the sandbox as the argv sandbox_run sees. The RPC
+endpoints are two pipe fds the parent created and passed across the
+sandbox spawn (``pass_fds``); their numbers arrive on argv
+(``--rpc-in-fd N`` parent→daemon, ``--rpc-out-fd M`` daemon→parent).
+The daemon opens nothing by path — no rendezvous name exists in any
+filesystem for a hostile target to squat, replace, or open.
 
-FIFOs instead of AF_UNIX sockets because seccomp:full (which
+Pipes instead of AF_UNIX sockets because seccomp:full (which
 matches parse_result's target posture for env parity) blocks
-``socket()``. FIFOs need only ``open()``/``read()``/``write()``,
-which pass the filter. FIFOs instead of stdin/stdout pipes
-because ``core.sandbox.run`` blocks the caller and doesn't
-expose caller-provided stdout=fd.
+``socket()``. The seccomp filter is a blocklist that leaves
+``pipe``/``pipe2`` alone, and at daemon runtime the channel needs
+only ``read()``/``write()``/``close()``, which pass the filter.
+Pipes instead of the daemon's own stdin/stdout because
+``core.sandbox.run`` blocks the caller, captures stdout itself,
+and doesn't expose a caller-provided stdout fd.
+
+Immediately after argv parsing the daemon re-arms FD_CLOEXEC on
+both RPC fds: CLOEXEC was cleared only so they survive the daemon's
+own exec chain. Targets the daemon later spawns must never inherit
+the channel — a target holding the write end could forge verdict
+frames, and one holding the read end could steal parent requests.
+(The subprocess module's default ``close_fds=True`` already keeps
+them out of spawned targets; the CLOEXEC re-arm covers any exec
+that bypasses subprocess.)
 
 Protocol — length-prefixed JSON, big-endian u32 length header:
 
@@ -25,6 +37,12 @@ Protocol — length-prefixed JSON, big-endian u32 length header:
      "per_recv_timeout": 3.0,
      "total_wait_seconds": 5.0,
      "flag_string": "WIN_NO_FLAG_FILE"}
+    {"cmd": "conversation",
+     "target_argv": [...],
+     "sends": [...],
+     "per_recv_timeout": 2.0,
+     "total_wait_seconds": 3.0,
+     "close_after": true}
     {"cmd": "close"}
 
   daemon → parent:
@@ -37,9 +55,9 @@ Design notes:
 * Step-driver logic copied from tools.py::interactive_probe. Two
   copies will converge into core/sandbox when the A/B measurement
   proves the persistent-sandbox pattern.
-* Socket path is passed as argv (``--sock <path>``) not stdout so
-  parent controls it. Path lives in the bind-mounted ``target``
-  directory so both sides can reach the same inode.
+* The RPC fd numbers are passed as argv (``--rpc-in-fd``/
+  ``--rpc-out-fd``) not discovered — the parent controls them, and
+  ``pass_fds`` keeps the numbers stable across the spawn.
 """
 from __future__ import annotations
 
@@ -53,7 +71,7 @@ import struct
 import subprocess
 import sys
 import time
-from typing import Any, Optional
+from typing import Any
 
 
 def _log(msg: str) -> None:
@@ -61,7 +79,7 @@ def _log(msg: str) -> None:
     sys.stderr.flush()
 
 
-def _read_frame(fd: int) -> Optional[dict]:
+def _read_frame(fd: int) -> dict | None:
     hdr = b""
     while len(hdr) < 4:
         chunk = os.read(fd, 4 - len(hdr))
@@ -92,11 +110,19 @@ def _write_frame(fd: int, payload: dict) -> None:
 # --------------------------------------------------------------------
 
 
+# Allowlisted AST nodes for compute expressions. The compute language
+# is arithmetic/bit-ops over recv-derived bindings (ints or raw bytes)
+# plus the packing helpers in _SAFE_EVAL_CALLABLES — called by bare
+# name only. Subscript/Slice/Index stay: slicing raw recv bytes (e.g.
+# ``u64(leak[8:16])``) is part of the language. Attribute is
+# deliberately ABSENT: nothing in the language needs dotted access,
+# and admitting it opens ``p64.__globals__['os']``-shaped escape
+# chains through an otherwise allowlisted expression.
 _SAFE_EVAL_NODES = {
     "Expression", "BinOp", "UnaryOp", "Constant", "Name", "Load",
     "Add", "Sub", "Mult", "FloorDiv", "Mod", "BitAnd", "BitOr",
     "BitXor", "LShift", "RShift", "USub", "Invert",
-    "Subscript", "Slice", "Index", "Attribute", "Call",
+    "Subscript", "Slice", "Index", "Call",
 }
 _SAFE_EVAL_CALLABLES = {"p64", "p32", "p16", "u64", "u32", "u16", "int"}
 
@@ -132,7 +158,7 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
                 {"__builtins__": {}}, ns)
 
 
-def _parse_bytes_to_int(raw: bytes) -> Optional[int]:
+def _parse_bytes_to_int(raw: bytes) -> int | None:
     text = raw.decode("utf-8", errors="replace")
     m = re.search(r"0x([0-9a-fA-F]+)", text)
     if m:
@@ -213,8 +239,7 @@ def _render_compose(chunks, recvs):
                 )
             raw = recvs[idx].decode("utf-8", errors="replace").strip()
             tok = raw.split()[0] if raw.split() else ""
-            if tok.startswith("0x"):
-                tok = tok[2:]
+            tok = tok.removeprefix("0x")
             if not tok:
                 raise ValueError(
                     f"recv_le64: recvs[{idx}] is empty after tokenization"
@@ -231,14 +256,23 @@ def _recv_until(proc, terminator, per_recv_timeout: float) -> bytes:
     buf = b""
     fd = proc.stdout.fileno()
 
-    def _read_bounded(max_bytes: int) -> Optional[bytes]:
+    def _read_bounded(max_bytes: int) -> bytes | None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None
         r, _, _ = select.select([fd], [], [], remaining)
         if not r:
             return None
-        return proc.stdout.read1(max_bytes)
+        # Read the raw fd directly. Popen's default-buffered
+        # ``proc.stdout.read1`` pulls a full buffer (8 KiB) from the
+        # kernel and returns at most ``max_bytes`` — the remainder sits
+        # in the Python-level buffer where select() on the raw fd
+        # cannot see it, so the next bounded read stalls a full
+        # ``per_recv_timeout`` (or attributes the bytes to the wrong
+        # step). Nothing else reads through ``proc.stdout`` until the
+        # final ``proc.communicate``, so its buffer stays empty and
+        # mixing fd-level reads here is safe.
+        return os.read(fd, max_bytes)
 
     if isinstance(terminator, int):
         want = terminator
@@ -288,6 +322,7 @@ def _handle_spawn(payload: dict) -> dict:
     try:
         result = subprocess.run(
             argv, input=stdin_bytes, capture_output=True, timeout=timeout,
+            check=False,
         )
         return {
             "ok": True,
@@ -356,7 +391,7 @@ def _handle_probe(payload: dict) -> dict:
                 steps_completed += 1
                 continue
 
-            send_bytes: Optional[bytes] = None
+            send_bytes: bytes | None = None
             if "send_hex" in step:
                 send_bytes = bytes.fromhex(step["send_hex"].replace(" ", ""))
                 if len(send_bytes) > _MAX_SEND_BYTES:
@@ -369,8 +404,13 @@ def _handle_probe(payload: dict) -> dict:
                 try:
                     send_bytes = raw.encode("utf-8").decode(
                         "unicode_escape").encode("latin-1")
-                except Exception:
+                except Exception:  # noqa: BLE001
                     send_bytes = raw.encode("utf-8")
+                if len(send_bytes) > _MAX_SEND_BYTES:
+                    return {"ok": False,
+                            "error": (f"step {i} send_template "
+                                      f"{len(send_bytes)} > {_MAX_SEND_BYTES}"),
+                            "steps_completed": steps_completed}
             elif "send_p64" in step:
                 try:
                     v = _safe_eval(step["send_p64"], bindings)
@@ -388,6 +428,11 @@ def _handle_probe(payload: dict) -> dict:
                     return {"ok": False,
                             "error": (f"step {i} build_fmtstr_write: "
                                       f"{type(e).__name__}: {e}"),
+                            "steps_completed": steps_completed}
+                if len(send_bytes) > _MAX_SEND_BYTES:
+                    return {"ok": False,
+                            "error": (f"step {i} build_fmtstr_write "
+                                      f"{len(send_bytes)} > {_MAX_SEND_BYTES}"),
                             "steps_completed": steps_completed}
 
             if send_bytes is not None:
@@ -639,6 +684,10 @@ _MAX_STDIN_BYTES = 8 * 1024 * 1024   # 8 MiB per spawn stdin
 
 def _cap(name: str, value, ceiling, fn=float):
     v = fn(value)
+    if v <= 0:
+        raise ValueError(
+            f"{name}={v} must be positive"
+        )
     if v > ceiling:
         raise ValueError(
             f"{name}={v} exceeds cap {ceiling} — reject to bound "
@@ -665,7 +714,11 @@ def _run_one_shot() -> int:
 
     Used as the fallback substrate when the persistent SandboxHost
     can't start (missing landlock/seccomp, cc unavailable, etc.),
-    so the per-call and persistent paths share ONE implementation.
+    so the per-call and persistent paths share the same DISPATCH
+    handlers. One divergence: the persistent loop special-cases
+    "close" before dispatch (graceful ok:true exit); "close" is
+    meaningless in one-shot mode and falls through to the
+    unknown-cmd error (exit 1) here.
     """
     in_fd = sys.stdin.fileno()
     out_fd = sys.stdout.fileno()
@@ -697,14 +750,16 @@ def _run_one_shot() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="raptor-sandbox-host-daemon")
-    ap.add_argument("--fifo-in",
-                    help="FIFO path daemon reads RPC frames FROM "
-                         "(parent → daemon). Parent mknod's this "
-                         "before launching us. Persistent mode.")
-    ap.add_argument("--fifo-out",
-                    help="FIFO path daemon writes RPC frames TO "
-                         "(daemon → parent). Parent mknod's this "
-                         "before launching us. Persistent mode.")
+    ap.add_argument("--rpc-in-fd", type=int,
+                    help="Inherited pipe fd the daemon reads RPC "
+                         "frames FROM (parent → daemon). Parent "
+                         "creates the pipe and passes this end via "
+                         "pass_fds. Persistent mode.")
+    ap.add_argument("--rpc-out-fd", type=int,
+                    help="Inherited pipe fd the daemon writes RPC "
+                         "frames TO (daemon → parent). Parent "
+                         "creates the pipe and passes this end via "
+                         "pass_fds. Persistent mode.")
     ap.add_argument("--one-shot", action="store_true",
                     help="Read one RPC frame from stdin, execute, "
                          "write response to stdout, exit. Used by "
@@ -714,19 +769,25 @@ def main() -> int:
     if args.one_shot:
         return _run_one_shot()
 
-    if not (args.fifo_in and args.fifo_out):
-        ap.error("--fifo-in and --fifo-out required in persistent mode")
+    if args.rpc_in_fd is None or args.rpc_out_fd is None:
+        ap.error("--rpc-in-fd and --rpc-out-fd required in "
+                 "persistent mode")
 
-    _log(f"opening fifos pid={os.getpid()}")
-    # Open order matters — FIFO open() blocks until the other end
-    # opens too. Parent opens BOTH before we do; here we open
-    # symmetrically: read FIFO (blocks until parent opens for
-    # write), then write FIFO (parent has already opened for
-    # read). Both must be open simultaneously to avoid a deadlock
-    # where parent+daemon each wait for the other to appear.
-    in_fd = os.open(args.fifo_in, os.O_RDONLY)
-    out_fd = os.open(args.fifo_out, os.O_WRONLY)
-    _log(f"fifos open: in_fd={in_fd} out_fd={out_fd}")
+    in_fd = args.rpc_in_fd
+    out_fd = args.rpc_out_fd
+    # Re-arm FD_CLOEXEC on the inherited RPC fds before ANY handler
+    # can spawn a target. CLOEXEC was cleared at spawn time only so
+    # the fds survive our own exec chain; a target that inherited
+    # them could forge daemon→parent frames or read parent requests.
+    # Also serves as validation that the fds are actually open.
+    for fd in (in_fd, out_fd):
+        try:
+            os.set_inheritable(fd, False)
+        except OSError as e:
+            _log(f"rpc fd {fd} is not usable: {e}")
+            return 1
+    _log(f"rpc fds inherited pid={os.getpid()} "
+         f"in_fd={in_fd} out_fd={out_fd}")
 
     try:
         while True:
@@ -736,7 +797,7 @@ def main() -> int:
                 _log(f"read_frame failed: {type(e).__name__}: {e}")
                 return 1
             if frame is None:
-                _log("in FIFO EOF — exiting")
+                _log("rpc-in EOF — exiting")
                 return 0
             cmd = frame.get("cmd")
             if cmd == "close":

@@ -71,6 +71,43 @@ class TestWriteTextAtomically:
         # Restore for the fixture teardown.
         monkeypatch.setattr(os, "fsync", real_fsync)
 
+    def test_fd_closed_when_fchmod_window_raises_baseexception(
+        self, tmp_path, monkeypatch,
+    ):
+        """A BaseException between ``os.open`` and the write must still
+        close the fd — every path out of the primitive closes the fd,
+        including the fchmod window before the first byte is written."""
+        import os
+        target = tmp_path / "note.md"
+        target.write_text("prior\n")
+
+        opened_fds: list[int] = []
+        real_open = os.open
+
+        def capturing_open(*args, **kwargs):
+            fd = real_open(*args, **kwargs)
+            opened_fds.append(fd)
+            return fd
+
+        def interrupt(fd, mode):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(os, "open", capturing_open)
+        monkeypatch.setattr(os, "fchmod", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            write_text_atomically(target, "new\n")
+
+        # The tempfile fd (the only os.open in the window) is closed.
+        assert len(opened_fds) == 1
+        with pytest.raises(OSError):
+            os.fstat(opened_fds[0])
+        # Prior content survives and the tempfile was unlinked.
+        assert target.read_text() == "prior\n"
+        assert [
+            p for p in tmp_path.iterdir()
+            if p.name.startswith(".atomic-")
+        ] == []
+
     def test_custom_tmp_prefix(self, tmp_path):
         """Callers can pass a distinct ``tmp_prefix`` so operators
         grepping for dangling temporaries can tell what module

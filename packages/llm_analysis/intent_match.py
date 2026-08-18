@@ -15,8 +15,10 @@ informed by:
      errors mention the finding's file?
 
 When 3 or 4 heuristics fire → ``matches`` without LLM. When 0 fire
-→ ``off_target`` without LLM. When 1-2 fire → uncertain ambiguity;
-escalate to a 2-step LLM tiebreak (describe-then-judge).
+→ ``off_target`` without LLM. When every evaluated heuristic fired
+(≥ 2 evaluated, the strong-partial case) → ``matches`` at reduced
+confidence, also without LLM. Any other 1-2-fired mix → uncertain
+ambiguity; escalate to a 2-step LLM tiebreak (describe-then-judge).
 
 v1 is a **weak signal**, not authoritative. No ground-truth
 calibration exists. Downstream consumers should treat the verdict
@@ -310,7 +312,9 @@ def _cwe_shape(cwe_id: Optional[str], exploit_code: str) -> Optional[bool]:
 # Out of 4 heuristics, how many must agree for which verdict.
 _THRESHOLD_MATCHES_NO_LLM = 3  # ≥ 3 → matches without LLM
 _THRESHOLD_OFF_TARGET_NO_LLM = 0  # 0 → off_target without LLM
-# Anything in (0, threshold_matches) → uncertain → LLM tiebreak.
+# Anything in (0, threshold_matches) → uncertain → LLM tiebreak —
+# except the strong-partial case (every evaluated heuristic fired,
+# ≥ 2 evaluated), which is matches at reduced confidence, no LLM.
 
 
 def _count_signals(signals: dict[str, Optional[bool]]) -> tuple[int, int]:
@@ -342,8 +346,10 @@ def _initial_verdict(
 
     # Use absolute-count thresholds for the partial-evaluated case:
     # matched ≥ _THRESHOLD_MATCHES_NO_LLM → matches, == 0 →
-    # off_target, else → tiebreak. (Earlier draft computed a ratio
-    # but the count is what the constants compare against.)
+    # off_target, else → tiebreak — except the strong-partial branch
+    # below, where every evaluated heuristic fired. (Earlier draft
+    # computed a ratio but the count is what the constants compare
+    # against.)
     fired = [k for k, v in signals.items() if v is True]
     not_fired = [k for k, v in signals.items() if v is False]
 

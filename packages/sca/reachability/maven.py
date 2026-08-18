@@ -46,16 +46,18 @@ behaviour.
 
 When operators see a CVE for a dep that they KNOW is imported
 but the report shows ``not_evaluated``, add the
-groupId:artifactId → package-prefix to ``_PACKAGE_OVERRIDES`` with
-a brief comment citing the artifact's actual import statements.
+groupId:artifactId → package-prefix to
+``packages/sca/data/maven_package_map.json`` (cite the artifact's
+actual import statements in the commit message).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Reachability
 
@@ -74,51 +76,52 @@ _IMPORT_RE = re.compile(
 
 
 # Curated artifact -> import-prefix overrides for the common
-# groupId-doesn't-match-package cases. Each entry is a single
-# package prefix; multi-package artifacts list the most common
-# top-level prefix (sub-modules covered by prefix-matching).
+# groupId-doesn't-match-package cases (Jackson, Guava, Commons-*,
+# SLF4J, Logback, HttpClient, spring-jcl).
 #
-# Sources are the artifact's actual ``META-INF/MANIFEST.MF`` /
-# ``pom.xml`` declared packages. When in doubt verify with
-# ``jar tf <artifact>.jar | head``.
-_PACKAGE_OVERRIDES: Dict[str, str] = {
-    # Jackson family — groupIds are ``com.fasterxml.jackson.<sub>`` but
-    # imports use ``com.fasterxml.jackson.<artifact-suffix>``.
-    "com.fasterxml.jackson.core:jackson-databind":
-        "com.fasterxml.jackson.databind",
-    "com.fasterxml.jackson.core:jackson-core":
-        "com.fasterxml.jackson.core",
-    "com.fasterxml.jackson.core:jackson-annotations":
-        "com.fasterxml.jackson.annotation",
-    # Guava
-    "com.google.guava:guava": "com.google.common",
-    # Commons-* — groupId/artifactId both ``commons-X`` but
-    # imports go through Apache.
-    "commons-io:commons-io": "org.apache.commons.io",
-    "commons-codec:commons-codec": "org.apache.commons.codec",
-    "commons-cli:commons-cli": "org.apache.commons.cli",
-    "commons-logging:commons-logging": "org.apache.commons.logging",
-    # SLF4J
-    "org.slf4j:slf4j-api": "org.slf4j",
-    # Logback
-    "ch.qos.logback:logback-classic": "ch.qos.logback.classic",
-    "ch.qos.logback:logback-core": "ch.qos.logback.core",
-    # Apache HttpClient
-    "org.apache.httpcomponents:httpclient": "org.apache.http",
-    "org.apache.httpcomponents.client5:httpclient5":
-        "org.apache.hc.client5",
-    # Spring (groupId IS prefix for most, but a few sub-projects
-    # collapse the group differently)
-    "org.springframework:spring-jcl": "org.apache.commons.logging",
-}
+# Loaded at import time from ``packages/sca/data/maven_package_map.json``
+# — ecosystem metadata lives as a data file, like python_module_map.json,
+# so the bundled list can grow without code diffs. A missing or
+# malformed file falls back to an empty map; the groupId heuristics in
+# ``_candidate_prefixes`` still fire and most coordinates resolve fine
+# without the curated tier.
+_PACKAGE_MAP_FILE = (
+    Path(__file__).resolve().parents[1] / "data" / "maven_package_map.json"
+)
+
+
+def _load_package_overrides() -> dict[str, str]:
+    try:
+        raw = json.loads(_PACKAGE_MAP_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "sca.reachability.maven: cannot load %s (%s); "
+            "falling back to groupId heuristics only",
+            _PACKAGE_MAP_FILE, e,
+        )
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning(
+            "sca.reachability.maven: %s is not a JSON object; ignoring",
+            _PACKAGE_MAP_FILE,
+        )
+        return {}
+    return {
+        k: v for k, v in raw.items()
+        if isinstance(k, str) and isinstance(v, str)
+        and not k.startswith("_")
+    }
+
+
+_PACKAGE_OVERRIDES: dict[str, str] = _load_package_overrides()
 
 
 def scan_imports(
     target: Path, *, max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
+) -> dict[str, list[tuple[Path, int, bool]]]:
     """Return ``{import_path: [(file, line, is_test), ...]}``."""
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     for java_file in _walk_java_sources(target, max_depth=max_depth):
         is_test = _is_test_file(java_file, target)
         try:
@@ -135,9 +138,9 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
+    target: Path | None = None,
 ) -> Reachability:
     """Look up Maven ``groupId:artifactId`` in the scan.
 
@@ -159,7 +162,7 @@ def resolve_dep(
             evidence=[],
         )
 
-    matches: List[Tuple[Path, int, bool]] = []
+    matches: list[tuple[Path, int, bool]] = []
     for import_path, hits in scan.items():
         for prefix in prefixes:
             if (
@@ -233,7 +236,7 @@ def _candidate_prefixes(dep_name: str) -> Iterable[str]:
         yield f"{group_id}.{cleaned_artifact}"
 
 
-def _imports_in(text: str) -> Iterable[Tuple[str, int]]:
+def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     """Yield ``(import_path, line_number)`` for each ``import`` line."""
     for m in _IMPORT_RE.finditer(text):
         path = m.group(1)
@@ -257,7 +260,7 @@ def _walk_java_sources(
     )
 
 
-def _is_test_file(path: Path, scan_root: Optional[Path] = None) -> bool:
+def _is_test_file(path: Path, scan_root: Path | None = None) -> bool:
     """Heuristic test-file detection. Conservative — false positives
     only mark as test (lower confidence), never miss a real source.
 
@@ -279,4 +282,4 @@ def _is_test_file(path: Path, scan_root: Optional[Path] = None) -> bool:
     return name.endswith("Test") or name.startswith("Test")
 
 
-__all__ = ["scan_imports", "resolve_dep"]
+__all__ = ["resolve_dep", "scan_imports"]

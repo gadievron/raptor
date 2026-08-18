@@ -166,7 +166,6 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
 
     if not args.bin:
         parser.error("--bin is required (except with --clear-all)")
-        return _USAGE_EX
 
     bin_path = Path(args.bin).expanduser()
     if not bin_path.exists():

@@ -1,7 +1,9 @@
 """Fuzzing orchestrator -- the public entry point for /fuzz.
 
 Detects the target type, checks the host's capabilities, picks the right
-fuzzer, generates a harness if needed, and runs the campaign. Designed
+fuzzer, flags when a harness must be built first (source targets plan
+with a blocker telling the operator to build one — nothing here
+generates it), and runs the campaign. Designed
 to fail loudly and helpfully when the target cannot be fuzzed on the
 current host rather than crashing six commands deep into AFL++.
 """
@@ -12,12 +14,14 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from core.sandbox import run_trusted as _run_trusted
 from core.logging import get_logger
-from packages.fuzzing.capability import CapabilityReport, probe as probe_capabilities
-from packages.fuzzing.target_detector import TargetInfo, detect as detect_target
+from core.sandbox import run_trusted as _run_trusted
+from packages.fuzzing.capability import CapabilityReport
+from packages.fuzzing.capability import probe as probe_capabilities
+from packages.fuzzing.target_detector import TargetInfo
+from packages.fuzzing.target_detector import detect as detect_target
 
 _BINARY_UNDERSTAND_KINDS = frozenset({"elf-linux", "elf-kmod", "macho", "pe-exe", "pe-dll", "pe-sys"})
 
@@ -32,12 +36,11 @@ class CampaignPlan:
 
     target: TargetInfo
     capabilities: CapabilityReport
-    fuzzer: Optional[str] = None
+    fuzzer: str | None = None
     needs_harness: bool = False
     can_run: bool = False
-    blockers: List[str] = field(default_factory=list)
-    hints: List[str] = field(default_factory=list)
-    cmd_preview: List[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+    hints: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         lines = [
@@ -111,9 +114,7 @@ class FuzzingOrchestrator:
         kind = target.kind
         caps = self.capabilities
 
-        if kind == "elf-linux":
-            plan.fuzzer = self._pick_for_unix_binary(caps, target.path)
-        elif kind == "macho":
+        if kind == "elf-linux" or kind == "macho":
             plan.fuzzer = self._pick_for_unix_binary(caps, target.path)
         elif kind in ("pe-exe", "pe-dll"):
             plan.fuzzer = "winafl" if caps.platform == "Windows" else None
@@ -202,7 +203,7 @@ class FuzzingOrchestrator:
 
         return plan
 
-    def _pick_for_unix_binary(self, caps: CapabilityReport, target_path: Optional[Path] = None) -> Optional[str]:
+    def _pick_for_unix_binary(self, caps: CapabilityReport, target_path: Path | None = None) -> str | None:
         """Pick AFL++ or libFuzzer for a Unix binary target.
 
         If the binary itself is libFuzzer-instrumented (has the
@@ -248,7 +249,7 @@ class FuzzingOrchestrator:
                 )
                 if (result.stdout or "") and "LLVMFuzzerTestOneInput" in result.stdout:
                     return True
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 — probe is best-effort
                 continue
         return False
 
@@ -258,12 +259,12 @@ class FuzzingOrchestrator:
         *,
         out_dir: Path,
         duration_seconds: int = 600,
-        corpus_dir: Optional[Path] = None,
-        dict_path: Optional[Path] = None,
+        corpus_dir: Path | None = None,
+        dict_path: Path | None = None,
         binary_understand: bool = True,
-        source_context_dir: Optional[Path] = None,
+        source_context_dir: Path | None = None,
         seed_profile: str = "default",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a planned campaign. Raises if plan.can_run is False.
 
         binary_understand: when True (default) and the target is a binary
@@ -335,7 +336,7 @@ class FuzzingOrchestrator:
                         f"{len(binary_result.context_map.get('sink_details', []))} sinks, "
                         f"{len(binary_result.context_map.get('candidate_flows', []))} candidate flows"
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — non-fatal
                     logger.warning("Binary understand failed (non-fatal): %s", e)
 
         if plan.fuzzer == "afl":
@@ -360,8 +361,37 @@ class FuzzingOrchestrator:
                         "binary graph updated with fuzz evidence: "
                         f"{len(bundle.crashes)} crash witnesses"
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — non-fatal
                 logger.warning("Binary fuzz evidence append failed (non-fatal): %s", e)
+
+        # Fuzz → audit coverage bridge: when the target carries gcov
+        # instrumentation, replay the corpus and emit per-function
+        # coverage-fuzz.json for /audit's priority scorer and review
+        # context. Degrades silently on uninstrumented targets.
+        try:
+            from packages.fuzzing.coverage_bridge import emit_fuzz_coverage
+
+            stats = result.get("stats") or {}
+            iterations = 0
+            for k in ("execs_done", "total_execs", "executions"):
+                try:
+                    iterations = int(stats.get(k) or 0)
+                except (TypeError, ValueError):
+                    iterations = 0
+                if iterations:
+                    break
+            cov_path = emit_fuzz_coverage(
+                out_dir,
+                binary=plan.target.path,
+                source_root=source_context_dir,
+                input_mode=result.get("input_mode", "file"),
+                iterations=iterations,
+                crashes=int(result.get("crashes") or 0),
+            )
+            if cov_path is not None:
+                result["fuzz_coverage"] = str(cov_path)
+        except Exception as e:  # noqa: BLE001 — bridge is best-effort
+            logger.warning("Fuzz coverage bridge failed (non-fatal): %s", e)
         return result
 
     def _prepare_corpus(
@@ -369,10 +399,10 @@ class FuzzingOrchestrator:
         plan: CampaignPlan,
         *,
         out_dir: Path,
-        corpus_dir: Optional[Path],
-        source_context_dir: Optional[Path],
+        corpus_dir: Path | None,
+        source_context_dir: Path | None,
         seed_profile: str = "default",
-    ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
+    ) -> tuple[Path | None, dict[str, Any] | None]:
         """Generate or materialise a seed corpus when the caller did not provide one."""
         if corpus_dir is not None:
             return corpus_dir, None
@@ -385,13 +415,13 @@ class FuzzingOrchestrator:
                 plan.target.path,
                 source_dir=context_dir,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — falls back to builtin
             logger.warning("Autonomous corpus generator unavailable: %s", e)
             return self._prepare_builtin_corpus(out_dir, seed_profile)
 
         try:
             seeds = generator.generate_autonomous_corpus(generated_dir, max_seeds=64)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — falls back to builtin
             logger.warning("Autonomous corpus generation failed: %s", e)
             return self._prepare_builtin_corpus(out_dir, seed_profile)
         if seeds <= 0:
@@ -413,7 +443,7 @@ class FuzzingOrchestrator:
         self,
         out_dir: Path,
         seed_profile: str = "default",
-    ) -> tuple[Path, Dict[str, Any]]:
+    ) -> tuple[Path, dict[str, Any]]:
         """Materialise RAPTOR's checked-in baseline corpus for this campaign."""
         from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
 
@@ -438,9 +468,9 @@ class FuzzingOrchestrator:
         plan: CampaignPlan,
         out_dir: Path,
         duration_seconds: int,
-        corpus_dir: Optional[Path],
-        dict_path: Optional[Path],
-    ) -> Dict[str, Any]:
+        corpus_dir: Path | None,
+        dict_path: Path | None,
+    ) -> dict[str, Any]:
         from packages.fuzzing.afl_runner import AFLRunner
         from packages.fuzzing.telemetry import FuzzingTelemetry
 
@@ -468,6 +498,7 @@ class FuzzingOrchestrator:
             "crashes": crashes,
             "crashes_dir": str(crashes_dir),
             "stats": runner.get_stats(),
+            "input_mode": getattr(runner, "input_mode", "file"),
             "telemetry": str(out_dir / "fuzz-summary.json"),
             "events": str(out_dir / "fuzz-events.jsonl"),
         }
@@ -477,9 +508,9 @@ class FuzzingOrchestrator:
         plan: CampaignPlan,
         out_dir: Path,
         duration_seconds: int,
-        corpus_dir: Optional[Path],
-        dict_path: Optional[Path],
-    ) -> Dict[str, Any]:
+        corpus_dir: Path | None,
+        dict_path: Path | None,
+    ) -> dict[str, Any]:
         from packages.fuzzing.libfuzzer_runner import LibFuzzerRunner
         from packages.fuzzing.telemetry import FuzzingTelemetry
 

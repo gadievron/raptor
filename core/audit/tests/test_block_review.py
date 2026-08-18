@@ -857,6 +857,21 @@ class TestFormatBlockContext:
         assert "Block-level analysis" in text
         assert "CC=12" in text
 
+    def test_header_includes_cfg_size(self):
+        plan = BlockReviewPlan(
+            function="f", file="a.c",
+            profile=ComplexityProfile(
+                cyclomatic_complexity=12,
+                taint_relevant_branches=3,
+                path_to_sink_count=1,
+                total_nodes=42,
+                branch_nodes=7,
+            ),
+            blocks=[],
+        )
+        text = format_block_context(plan)
+        assert "42 CFG nodes / 7 branches" in text
+
 
 # ---- try_build_cfg ----
 

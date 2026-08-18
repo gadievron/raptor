@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from core.evidence import EvidenceTier, TIER_RANK
+from core.evidence import TIER_RANK, EvidenceTier
 
 from .specs import TaintSpec
 from .store import load_specs, load_store_metadata, save_specs
@@ -89,17 +89,38 @@ def get_project_sinks(
     return frozenset(s.function for s in specs)
 
 
+# Suppression-direction evidence gate: recognising a function as a
+# sanitiser can only ever *weaken* scrutiny (guard adequacy treats a
+# recognised sanitiser as adequate, downgrading the finding), so a
+# spec must be tool-corroborated before it may flow in that direction.
+# XREF_BACKED is the floor: reached only via tool confirmation in the
+# refine loop (_promote_confirmed) or an interactive operator
+# annotation (promote_spec_on_annotation, human_grade). Heuristic /
+# hint-tier specs (LLM-synthesised, machine-attributed annotations)
+# stay prompt-direction only — they are still returned by
+# ``load_project_specs`` for unverified-context injection, but never
+# by the suppression-direction readers below.
+SUPPRESSION_MIN_TIER = EvidenceTier.XREF_BACKED
+
+
 def get_project_sanitisers(
     out_dir: Path | None = None,
     target_path: Path | None = None,
 ) -> frozenset[str]:
-    """Return IRIS-confirmed sanitiser function names.
+    """Return tool-corroborated sanitiser function names.
 
     Used by guard quality analysis and condition_adequacy to recognise
     project-specific sanitisation that the static set wouldn't know.
+
+    Suppression-direction reader: only specs at or above
+    ``SUPPRESSION_MIN_TIER`` (tool-corroborated / operator-confirmed)
+    are returned. An LLM-refined sanitiser at heuristic tier must not
+    be able to mark a guard adequate — that would let a hallucinated
+    sanitiser suppress a real finding.
     """
     specs = load_project_specs(
         out_dir=out_dir, target_path=target_path, roles={"sanitiser"},
+        min_tier=SUPPRESSION_MIN_TIER,
     )
     return frozenset(s.function for s in specs)
 
@@ -154,15 +175,15 @@ def get_bypass_findings(
 ) -> list:
     """Load bypass findings written by the orchestrator.
 
-    Bypass findings are written to ``bypass-findings.json`` in the
-    run output directory by the compositional analysis phase.
+    Bypass findings are written to ``iris-bypass-findings.json`` in
+    the run output directory by the compositional analysis phase.
     Returns a list of ``BypassFinding`` objects.
     """
     from .assumptions import BypassFinding
 
     if out_dir is None:
         return []
-    path = Path(out_dir) / "bypass-findings.json"
+    path = Path(out_dir) / "iris-bypass-findings.json"
     if not path.is_file():
         return []
     try:
@@ -187,30 +208,49 @@ def promote_spec_on_annotation(
     status: str,
     *,
     out_dir: Path | None = None,
-) -> bool:
-    """Promote an IRIS spec when an operator confirms via /annotate.
+    human_grade: bool = True,
+) -> EvidenceTier | None:
+    """Promote an IRIS spec when an annotation confirms it.
 
-    When an operator marks a function with status ``sink``,
-    ``entry_point``, or ``finding`` (and ``source=human``), any
-    matching IRIS spec is promoted to XREF_BACKED — the highest
-    automatically assignable tier.
+    When a function is annotated with status ``sink``,
+    ``entry_point``, or ``finding``, any matching IRIS spec is
+    promoted:
 
-    Returns True if a spec was promoted and the store was updated.
+      * ``human_grade=True`` (operator note: ``source=human`` with an
+        interactive-TTY provenance stamp, or a legacy pre-stamp note)
+        → XREF_BACKED, the highest automatically assignable tier,
+        with ``source="operator_confirmed"``.
+      * ``human_grade=False`` (agent/llm-sourced, or a human claim
+        stamped non-interactive) → HEADER_BACKED, the hint tier,
+        with ``source="annotation_asserted"``. Useful signal, but
+        never operator authority.
+
+    Promotion only raises a spec's tier; a spec already at or above
+    the target keeps its tier (so a non-human-grade note can never
+    touch an XREF_BACKED spec).
+
+    Returns the tier applied when at least one spec was promoted and
+    the store updated, else ``None``.
     """
     role = _ANNOTATION_STATUS_TO_ROLE.get(status)
     if role is None:
-        return False
+        return None
 
     resolved = _resolve_out_dir(out_dir)
     if resolved is None:
-        return False
+        return None
 
     specs = load_specs(resolved)
     if not specs:
-        return False
+        return None
 
     promoted = False
-    target_tier = EvidenceTier.XREF_BACKED
+    if human_grade:
+        target_tier = EvidenceTier.XREF_BACKED
+        spec_source = "operator_confirmed"
+    else:
+        target_tier = EvidenceTier.HEADER_BACKED
+        spec_source = "annotation_asserted"
     target_rank = TIER_RANK.get(target_tier, 0)
 
     for spec in specs:
@@ -226,7 +266,7 @@ def promote_spec_on_annotation(
         if TIER_RANK.get(spec.evidence_tier, 0) >= target_rank:
             continue
         spec.evidence_tier = target_tier
-        spec.source = "operator_confirmed"
+        spec.source = spec_source
         promoted = True
 
     if promoted:
@@ -245,10 +285,12 @@ def promote_spec_on_annotation(
             target_path=Path(stored_target) if stored_target else None,
         )
         logger.info(
-            "IRIS: promoted %s:%s to %s via operator annotation",
+            "IRIS: promoted %s:%s to %s via %s annotation",
             source_file, function, target_tier.value,
+            "operator" if human_grade else "machine-attributed",
         )
-    return promoted
+        return target_tier
+    return None
 
 
 def _resolve_out_dir(out_dir: Path | None) -> Path | None:

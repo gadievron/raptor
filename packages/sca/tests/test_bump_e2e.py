@@ -13,10 +13,15 @@ under ``packages/sca/bump/tests/``; this tier validates that:
   * ``--json`` emits structurally-valid JSON
   * ``--pr-comment`` emits structurally-valid markdown
 
-Network calls (OSV / KEV / EPSS / upstream-latest) are blocked at
-the HttpClient layer via egress allowlist — the bumper handles
-network failure gracefully (warnings + ``Unknown`` verdicts). The
-test asserts shape not verdicts.
+Network is disabled via ``--offline`` (the no-op HttpClient): every
+OSV / KEV / EPSS / upstream-latest lookup fails fast and the bumper
+degrades gracefully (warnings + ``Unknown`` verdicts). The test
+asserts shape not verdicts. Do NOT drop the flag: github.com and
+the feed hosts are ON the SCA egress allowlist, so without it these
+tests really fetch — and on a host where the fetches fail slowly
+(unreachable proxy, rate-limited API), each candidate burns the
+HTTP retry-backoff schedule and every test dies at its subprocess
+timeout instead.
 
 Eight bump surfaces:
 
@@ -40,7 +45,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from typing import List
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -101,20 +105,23 @@ def _build_bump_fixture(repo: Path) -> None:
 
 
 def _run_bump(
-    args: List[str], *,
-    extra_env: dict = None,
+    args: list[str], *,
+    extra_env: dict | None = None,
     timeout: int = 90,
 ) -> subprocess.CompletedProcess:
     """Invoke ``raptor-sca bump`` via the package's ``__main__``
     style entry. Run from REPO_ROOT so ``packages.sca.cli`` is
-    importable; pass the fixture path as a positional argument."""
-    cmd = [sys.executable, "-m", "packages.sca.cli", "bump"] + args
+    importable; pass the fixture path as a positional argument.
+
+    ``--offline`` is always appended — see the module docstring for
+    why hermeticity depends on it."""
+    cmd = [sys.executable, "-m", "packages.sca.cli", "bump"] + args + ["--offline"]
     env = {**os.environ}
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
         cmd, capture_output=True, text=True,
-        cwd=str(REPO_ROOT), env=env, timeout=timeout,
+        cwd=str(REPO_ROOT), env=env, timeout=timeout, check=False,
     )
 
 

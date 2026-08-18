@@ -62,13 +62,18 @@ overview:
 | [Fuzzing](fuzzing.md) | AFL++ and libFuzzer |
 | [Crash Analysis](crash-analysis.md) | Autonomous crash root-cause analysis |
 | [Audit](audit.md) | Systematic code review: hypotheses, tools, strategies, gates |
+| [Long Runs](long-runs.md) | External supervisors: shell caps, self-bounding, SIGTERM, `raptor-audit resume` |
 | [Validation](validation.md) | Exploitability validation pipeline (stages 0--1) |
 | [Binary Analysis](binary-analysis.md) | Binary oracle, `/binary`, exploit feasibility |
 | [SCA](sca.md) | Software composition analysis |
 | [Frida](frida.md) | Dynamic instrumentation |
 | [Sandbox](sandbox.md) | Process isolation and sandboxing |
 | [LLM Providers](llm.md) | Provider configuration, Bedrock, multi-model workflows, cost management |
+| [SAGE](sage.md) | Persistent memory: setup, HMAC key, CPU/GPU, use cases, upgrades |
 | [Security](security.md) | RAPTOR's own security model |
 | [Threat Model](threat-model.md) | Per-project threat model feature |
+| [Configuration](configuration.md) | tuning.json, sandbox calibration |
+| [Environment Variables](environment.md) | Operator knobs, credentials, routing family, proxy behavior, internal plumbing |
 | [Dependencies](dependencies.md) | Tool requirements and licensing |
+| [Troubleshooting](troubleshooting.md) | Common failures and fixes by subsystem |
 | [Python CLI](python-cli.md) | Direct `raptor.py` usage for CI and scripting |

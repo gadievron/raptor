@@ -19,11 +19,18 @@ set -euo pipefail
 
 # Resolve symlinks to find the real script location
 SCRIPT="$0"
+_symhops=0
 while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-sca: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
     DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
+unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -f "$RAPTOR_DIR/libexec/raptor-sca-run" ]; then
@@ -32,19 +39,17 @@ if [ ! -f "$RAPTOR_DIR/libexec/raptor-sca-run" ]; then
 fi
 
 # Strip env vars that could inject code into the Python process.
-# Covers loader hijack (LD_*, DYLD_*), Python interpreter hooks
-# (PYTHON*), and TLS/SSL behaviour overrides.
-for _var in \
-    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
-    DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH \
-    GCONV_PATH \
-    OPENSSL_CONF SSLKEYLOGFILE \
-    BASH_ENV ENV ; do
-    unset "$_var"
-done
+# Sourced from core/security/_dangerous_env_strip.sh — single
+# maintained list shared by all launchers (bin/raptor, bin/cve-diff,
+# + core/security/env_sanitisation.strip_env_vars). Pre-fix this
+# launcher had its own shorter strip list that drifted out of
+# date: the batch-581 additions (LD_DEBUG / LD_PROFILE*, MALLOC_*,
+# NODE_*, DYLD_FALLBACK_LIBRARY_PATH) never propagated here.
+. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
 # Strip the entire PYTHON* family — PYTHONWARNINGS / PYTHONFAULTHANDLER /
 # PYTHONIOENCODING etc. all influence interpreter behaviour and several
-# accept module-import forms that are exploitable.
+# accept module-import forms that are exploitable. (Superset of the
+# named PYTHON* entries in the shared fragment.)
 for _var in $(env | sed -n 's/^\(PYTHON[A-Z0-9_]*\)=.*/\1/p'); do
     unset "$_var"
 done

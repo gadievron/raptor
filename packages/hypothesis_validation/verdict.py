@@ -4,8 +4,8 @@ Two functions:
 
   verdict_from(evidence, llm_claim) -> Verdict
       The mechanical downgrade ladder. Same behaviour as the runner has
-      today; `runner._evaluate` calls into here instead of inlining the
-      same three rules twice.
+      today; `runner._evaluate_with_refinement` calls into here instead
+      of inlining the rules at each evaluation path.
 
   aggregate(evidence_list, llm_claim) -> Verdict
       Combine multi-adapter evidence into one verdict. Used only by

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 LLM Provider Implementations — OpenAI SDK + Anthropic SDK + Gemini SDK + Instructor
 
@@ -16,15 +15,18 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
-from inspect import isclass
-from typing import Dict, Optional, Any, Tuple, Type, Union, TYPE_CHECKING
 from dataclasses import dataclass
+from inspect import isclass
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
 from core.logging import get_logger
+
+from .cc_adapter import strip_json_fences
 from .config import ModelConfig
+
 # Wire-shape types for tool-use turn primitive. These live in
 # ``core.llm.tool_use.types`` (zero dependencies on this module);
 # importing them here doesn't create a cycle.
@@ -40,6 +42,10 @@ from .tool_use.types import (
     TurnResponse,
 )
 
+# Shared default for ``turn()``-family signatures (B008): CacheControl
+# is a frozen dataclass, so one instance is safe to share.
+_DEFAULT_CACHE_CONTROL = CacheControl()
+
 logger = get_logger()
 
 _ZERO_PRICE_WARNED: set[str] = set()
@@ -50,8 +56,33 @@ _ZERO_PRICE_WARNED: set[str] = set()
 # won't kill Instructor for the rest of the session.
 _INSTRUCTOR_MAX_CONSEC_FAILURES = 3
 
+
+def _instructor_refusal_stop(exc: Exception) -> str | None:
+    """Stop reason when an instructor failure is really a model refusal.
+
+    A hard refusal on the tool-use leg surfaces as tool args missing
+    every field: the API ends the turn with ``stop_reason="refusal"``
+    and no tool call, instructor parses ``{}``, and the resulting
+    exception reads like a schema-validation flake — so instructor
+    burns its re-asks against a model boundary an identical retry
+    cannot move (observed live: 4 attempts per call, all ``{}``, then
+    the JSON fallback got the explicit refusal on the same content).
+    The raw completions ride on ``InstructorRetryException``
+    (``last_completion`` + ``failed_attempts[*].completion``); any of
+    them carrying a refusal stop reason makes the whole call a model
+    boundary, not a shape failure. ``getattr``-probed so non-instructor
+    exceptions fall through untouched.
+    """
+    completions = [getattr(exc, "last_completion", None)]
+    for attempt in getattr(exc, "failed_attempts", None) or ():
+        completions.append(getattr(attempt, "completion", None))
+    for completion in completions:
+        if getattr(completion, "stop_reason", None) == "refusal":
+            return "refusal"
+    return None
+
 _TEMPERATURE_DEPRECATED_FROM = (4, 7)
-_CLAUDE_VERSION_RE = re.compile(r"claude-[a-z]+-(\d+)-(\d+)")
+_CLAUDE_VERSION_RE = re.compile(r"claude-[a-z]+-(\d+)(?:-(\d+))?")
 
 
 def supports_temperature(model_name: str) -> bool:
@@ -64,16 +95,21 @@ def supports_temperature(model_name: str) -> bool:
     deprecated opus, and omitting ``temperature`` is harmless (the model falls
     back to its default) whereas sending it to a deprecated model is a hard 400,
     so we err toward omitting for >=4.7 (over-omitting a future tier that still
-    accepts it costs nothing). The regex matches the ``claude-<tier>-<major>-
-    <minor>`` core anywhere in the identifier, so Bedrock region prefixes
-    (``us.anthropic.claude-opus-4-7``) and dated snapshots
+    accepts it costs nothing). The regex matches the ``claude-<tier>-<major>``
+    core (with an optional ``-<minor>``; absent = 0, so the 5-family's
+    single-number versions gate as (5, 0) — verified live: they 400 on
+    ``temperature`` too) anywhere in the identifier, so Bedrock region
+    prefixes (``us.anthropic.claude-opus-4-7``), bare Bedrock ids
+    (``anthropic.claude-sonnet-5``) and dated snapshots
     (``claude-opus-4-7-20260301``) are handled. Non-claude / unparseable names
     keep ``temperature``.
     """
     m = _CLAUDE_VERSION_RE.search(model_name or "")
     if not m:
         return True
-    return (int(m.group(1)), int(m.group(2))) < _TEMPERATURE_DEPRECATED_FROM
+    major = int(m.group(1))
+    minor = int(m.group(2)) if m.group(2) is not None else 0
+    return (major, minor) < _TEMPERATURE_DEPRECATED_FROM
 
 
 def _safe_float(value: Any, *, default: float) -> float:
@@ -114,8 +150,59 @@ def _safe_int(value: Any, *, default: int) -> int:
     return to_int_safe(value, default=default, on_error=_log)
 
 
-# SDK availability flags (canonical source is detection.py)
-from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE  # noqa: E402
+def _endpoint_display(api_base: str | None) -> str:
+    """Loggable form of a provider ``api_base``.
+
+    Loopback endpoints print verbatim (diagnostic, not sensitive);
+    anything remote collapses to a placeholder so operator-private
+    inference endpoints (e.g. a remote Ollama server selected via
+    OLLAMA_HOST) never reach logs — the project invariant is that a
+    remote endpoint location is never disclosed in code, comments,
+    or logs.
+    """
+    if not api_base:
+        return "default"
+    from core.llm.egress import url_is_loopback
+    return api_base if url_is_loopback(api_base) else "[REMOTE-ENDPOINT]"
+
+
+def _redact_endpoint(text: str, api_base: str | None) -> str:
+    """Strip a remote ``api_base``'s host from *text* before logging.
+
+    SDK / httpx exception bodies routinely embed the request URL.
+    For a loopback base that is harmless; for a remote base it would
+    write the endpoint location into WARNING-level logs and
+    ``error_message`` fields that flow into shareable reports (same
+    invariant as :func:`_endpoint_display`). Replaces the netloc
+    (host:port) first, then the bare hostname, so partial forms are
+    caught too.
+    """
+    if not text or not api_base:
+        return text
+    from urllib.parse import urlsplit
+
+    from core.llm.egress import url_is_loopback
+    if url_is_loopback(api_base):
+        return text
+    try:
+        parts = urlsplit(api_base if "://" in api_base else f"//{api_base}")
+    except ValueError:
+        return text
+    for token in (parts.netloc, parts.hostname):
+        if token:
+            text = text.replace(token, "[REMOTE-ENDPOINT]")
+    return text
+
+
+# SDK availability flags (canonical source is detection.py).  Placed
+# after the helpers above rather than in the top import block; the
+# conditional SDK re-imports below depend on these flags at module
+# scope.
+from .detection import (  # noqa: E402 — deliberate placement, see comment above
+    ANTHROPIC_SDK_AVAILABLE,
+    GENAI_SDK_AVAILABLE,
+    OPENAI_SDK_AVAILABLE,
+)
 
 # Re-import the actual modules where available (config.py only sets flags)
 if OPENAI_SDK_AVAILABLE:
@@ -151,7 +238,7 @@ class LLMResponse:
     # the SDK response when it exposes one (e.g. alias "gemini-2.5-pro" →
     # "gemini-2.5-pro-002"). None when the provider doesn't surface it — the
     # provenance manifest then records the alias only, never a guess.
-    resolved_model: Optional[str] = None
+    resolved_model: str | None = None
 
 
 @dataclass
@@ -160,7 +247,7 @@ class StructuredResponse:
 
     Iterable for backwards compatibility: result, raw = response
     """
-    result: Dict[str, Any]
+    result: dict[str, Any]
     raw: str
     cost: float = 0.0
     tokens_used: int = 0
@@ -168,15 +255,31 @@ class StructuredResponse:
     provider: str = ""
     duration: float = 0.0
     cached: bool = False
+    # Token split + prompt-cache counters. Populated by the provider
+    # from the SDK response's per-call usage when available; the
+    # LLMClient falls back to aggregate provider-counter deltas ONLY
+    # when a provider returns no per-call figures (bare-tuple legacy
+    # paths) — counter deltas are racy under parallel workers, so
+    # they are best-effort: 0 when the provider surfaces no usage.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     # Concrete model snapshot the provider served (see LLMResponse.resolved_model).
-    resolved_model: Optional[str] = None
+    resolved_model: str | None = None
 
     def __iter__(self):
         """Allow unpacking as 2-tuple for backwards compatibility."""
         return iter((self.result, self.raw))
 
+    def as_pair(self) -> tuple[dict[str, Any], str]:
+        """Explicit ``(result, raw)`` unwrap — the same pair the
+        2-tuple compatibility unpack yields, without relying on
+        ``__iter__`` at the call site."""
+        return (self.result, self.raw)
 
-def extract_resolved_model(raw: Any) -> Optional[str]:
+
+def extract_resolved_model(raw: Any) -> str | None:
     """Best-effort: the concrete model id from a provider SDK response object.
 
     Providers are configured with floating aliases ("gemini-2.5-pro"); the SDK
@@ -193,7 +296,7 @@ def extract_resolved_model(raw: Any) -> Optional[str]:
     for attr in ("model", "model_version"):
         try:
             value = getattr(raw, attr, None)
-        except Exception:
+        except Exception:  # noqa: BLE001 — SDK response shims may raise anything
             value = None
         if isinstance(value, str) and value:
             return value
@@ -217,14 +320,13 @@ class LLMProvider(ABC):
         self._usage_lock = threading.Lock()
 
     @abstractmethod
-    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+    def generate(self, prompt: str, system_prompt: str | None = None,
                  **kwargs) -> LLMResponse:
         """Generate completion from the model."""
-        pass
 
     @abstractmethod
-    def generate_structured(self, prompt: str, schema: Dict[str, Any],
-                           system_prompt: Optional[str] = None,
+    def generate_structured(self, prompt: str, schema: dict[str, Any],
+                           system_prompt: str | None = None,
                            **kwargs) -> "StructuredResponse":
         """Generate structured output matching the provided schema.
 
@@ -244,7 +346,6 @@ class LLMProvider(ABC):
         impls should prefer
         ``kwargs.get("temperature", self.config.temperature)``.
         """
-        pass
 
     # ------------------------------------------------------------------
     # Tool-use primitives — opt-in per provider.
@@ -274,6 +375,20 @@ class LLMProvider(ABC):
         :class:`CacheControl` when this returns True; other providers
         receive the struct but ignore it."""
         return False
+
+    def prefers_stable_system_prefix(self) -> bool:
+        """``True`` when composing run-stable material into the system
+        prompt pays off on this transport.
+
+        Distinct from :meth:`supports_prompt_caching`, which is about
+        the *request API* (can the caller place cache_control
+        breakpoints). A transport can lack that API yet still benefit
+        from byte-stable system prompts because its backend does
+        server-side prefix caching — the claudecode subprocess is the
+        canonical case. Default: same answer as
+        ``supports_prompt_caching`` (a cache-breakpoint API implies
+        stable prefixes pay off)."""
+        return self.supports_prompt_caching()
 
     def supports_parallel_tools(self) -> bool:
         """``True`` when the provider can return multiple
@@ -318,14 +433,17 @@ class LLMProvider(ABC):
         if response.cost_usd is not None:
             return response.cost_usd
         in_per_m, out_per_m = self.price_per_million()
-        if in_per_m == 0.0 and out_per_m == 0.0 and (response.input_tokens or response.output_tokens):
-            if self.config.model_name not in _ZERO_PRICE_WARNED:
-                _ZERO_PRICE_WARNED.add(self.config.model_name)
-                logger.warning(
-                    "no pricing for model %s — cost tracking disabled, "
-                    "max_cost_usd budget cap will not trigger",
-                    self.config.model_name,
-                )
+        if (
+            in_per_m == 0.0 and out_per_m == 0.0
+            and (response.input_tokens or response.output_tokens)
+            and self.config.model_name not in _ZERO_PRICE_WARNED
+        ):
+            _ZERO_PRICE_WARNED.add(self.config.model_name)
+            logger.warning(
+                "no pricing for model %s — cost tracking disabled, "
+                "max_cost_usd budget cap will not trigger",
+                self.config.model_name,
+            )
         return (
             response.input_tokens * in_per_m
             + response.output_tokens * out_per_m
@@ -336,9 +454,9 @@ class LLMProvider(ABC):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         **provider_specific: Any,
     ) -> TurnResponse:
         """Send one round-trip with tool/function-call schemas.
@@ -362,9 +480,9 @@ class LLMProvider(ABC):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         **provider_specific: Any,
     ) -> Iterator[StreamChunk]:
         """Streaming variant of :meth:`turn`.
@@ -481,7 +599,7 @@ class LLMProvider(ABC):
     # across the whole process, even when callers create fresh
     # provider instances per request (a common pattern in the agentic
     # dispatch path).
-    _warned_unknown_models: set = set()
+    _warned_unknown_models: ClassVar[set] = set()
     _warned_unknown_models_lock = threading.Lock()
 
     @classmethod
@@ -498,13 +616,160 @@ class LLMProvider(ABC):
             f"or pass cost_per_1k_tokens to the LLMConfig."
         )
 
-    def _structured_fallback(self, prompt: str, schema: Dict[str, Any],
-                             pydantic_model, system_prompt: Optional[str] = None
-                             ) -> Tuple[Dict[str, Any], str]:
+    def _init_instructor(self, make_client) -> None:
+        """Shared Instructor wiring for SDK-backed providers.
+
+        ``make_client`` builds the instructor-wrapped client when the
+        library is installed; otherwise structured output uses the
+        JSON-in-prompt fallback (warned once at construction).
+        """
+        self.instructor_client = None
+        self._instructor_consec_failures = 0
+        self._instructor_lock = threading.Lock()
+        if INSTRUCTOR_AVAILABLE:
+            self.instructor_client = make_client()
+        else:
+            logger.warning(
+                "Instructor not installed — structured output will use JSON-in-prompt fallback. "
+                "For more reliable structured output: pip install instructor"
+            )
+
+    def _note_instructor_success(self) -> None:
+        """Reset the consecutive-failure counter after a good call."""
+        with self._instructor_lock:
+            self._instructor_consec_failures = 0
+
+    def _note_instructor_failure(self, exc: Exception) -> None:
+        """Count a consecutive Instructor failure; disable at the cap.
+
+        A single transient error (dispatcher startup race, network
+        hiccup) must not kill Instructor for the session — only
+        ``_INSTRUCTOR_MAX_CONSEC_FAILURES`` in a row do. The disable
+        is permanent for this provider instance: callers fall back to
+        JSON-in-prompt for the rest of the session (there is no
+        re-enable/backoff mechanism).
+        """
+        with self._instructor_lock:
+            self._instructor_consec_failures += 1
+            consec = self._instructor_consec_failures
+        # redact_secrets + endpoint scrub, not just escape: this
+        # funnel catches bare SDK exceptions whose bodies can echo
+        # Authorization / x-api-key headers, the prompt, and the
+        # request URL — same treatment as the generate() handlers.
+        from core.security.log_sanitisation import escape_nonprintable as _esc
+        from core.security.redaction import redact_secrets as _redact
+        detail = _esc(_redact(_redact_endpoint(
+            str(exc), getattr(self.config, "api_base", None),
+        )))[:512]
+        logger.warning(
+            "Instructor structured generation failed for %s/%s (%d/%d). "
+            "Exception (%s): %s",
+            self.config.provider, self.config.model_name,
+            consec, _INSTRUCTOR_MAX_CONSEC_FAILURES,
+            type(exc).__name__, detail,
+        )
+        if consec >= _INSTRUCTOR_MAX_CONSEC_FAILURES:
+            logger.warning(
+                "Instructor disabled for %s/%s after %d consecutive failures",
+                self.config.provider, self.config.model_name,
+                consec,
+            )
+            self.instructor_client = None
+
+    @staticmethod
+    def _instructor_exception_route(exc: Exception) -> str:
+        """Route an instructor-funnel failure by the failure taxonomy.
+
+        Returns ``"fallback"`` when the JSON-in-prompt fallback is a
+        sensible next step (shape/library failures — a different
+        sampling may succeed), or a boundary label (``"blocked"``,
+        ``"auth"``, ``"quota"``) for failures where instantly
+        re-sending the SAME payload is wasteful or harmful:
+
+        - refusals / content-filter blocks: a model boundary — an
+          identical re-send cannot change the outcome and burns money
+        - auth errors (401/403): every re-send fails identically
+        - rate limits (429): the client's retry loop applies backoff;
+          an instant fallback re-send hammers the limiter with zero
+          backoff
+
+        Boundary failures re-raise to the client's retry policy and do
+        NOT count toward the instructor-disable strike counter — they
+        say nothing about instructor's reliability.
+        """
+        from core.llm.structured_call import (
+            is_auth_error_text,
+            is_content_filter_text,
+        )
+        text = str(exc)
+        if is_content_filter_text(text):
+            return "blocked"
+        type_name = type(exc).__name__
+        lowered = text.lower()
+        # Quota before auth: AUTH_KEYWORDS_RE deliberately covers
+        # billing vocabulary ("quota", "rate limit"), so the
+        # rate-limit check must win for the label to be honest.
+        if (
+            getattr(exc, "status_code", None) == 429
+            or "RateLimitError" in type_name
+            or "429" in text
+            or "rate limit" in lowered
+            or ("quota" in lowered and "exceeded" in lowered)
+        ):
+            return "quota"
+        if "AuthenticationError" in type_name or is_auth_error_text(text):
+            return "auth"
+        return "fallback"
+
+    def _book_instructor_failure_usage(
+        self, exc: Exception, duration: float,
+    ) -> None:
+        """Book the spend of a failed instructor call.
+
+        A pydantic-validation failure happens AFTER a completed (paid)
+        API generation; instructor attaches the last completion to its
+        retry exceptions. Without this, the failed attempt's spend
+        reached neither ledger — the client books nothing on failure
+        and relies on the provider ledger as the failed-attempt floor.
+        Handles both OpenAI- and Anthropic-shaped usage objects; never
+        raises.
+        """
+        try:
+            completion = getattr(exc, "last_completion", None)
+            usage = getattr(completion, "usage", None)
+            if usage is None:
+                return
+            input_tokens = getattr(usage, "prompt_tokens", None)
+            if input_tokens is None:
+                input_tokens = getattr(usage, "input_tokens", 0)
+            output_tokens = getattr(usage, "completion_tokens", None)
+            if output_tokens is None:
+                output_tokens = getattr(usage, "output_tokens", 0)
+            input_tokens = int(input_tokens or 0)
+            output_tokens = int(output_tokens or 0)
+            if input_tokens <= 0 and output_tokens <= 0:
+                return
+            cost = self._calculate_cost_split(input_tokens, output_tokens, 0)
+            self.track_usage(
+                input_tokens + output_tokens, cost,
+                input_tokens, output_tokens, duration,
+            )
+        except Exception as book_exc:  # noqa: BLE001 — best-effort booking
+            logger.debug(
+                "instructor failure usage booking skipped: %s", book_exc,
+            )
+
+    def _structured_fallback(self, prompt: str, schema: dict[str, Any],
+                             pydantic_model, system_prompt: str | None = None,
+                             timeout_s: float | None = None,
+                             ) -> StructuredResponse:
         """
         Universal fallback: ask for JSON in the prompt, validate
         with Pydantic. Works with any LLM that can produce JSON.
         Usage is tracked by self.generate() — no double counting.
+        ``timeout_s`` is the caller's per-call ceiling, forwarded to
+        ``generate`` (providers without per-request timeout support
+        ignore it there).
         """
         schema_json = json.dumps(schema, indent=2)
         schema_block = (
@@ -516,40 +781,49 @@ class LLMProvider(ABC):
         augmented_system = (
             (system_prompt or "") + schema_block
         )
-        response = self.generate(prompt, augmented_system)
+        response = self.generate(prompt, augmented_system, timeout_s=timeout_s)
         if response.finish_reason in ("max_tokens", "length"):
-            raise json.JSONDecodeError(
-                "Response truncated (output token limit reached)",
-                response.content[:200] if response.content else "",
-                0,
+            # RuntimeError, not json.JSONDecodeError: the client's
+            # retry loop treats JSON decode failures as retryable, but
+            # an identical retry at the same max_tokens re-truncates
+            # deterministically — up to max_retries paid calls for the
+            # same guaranteed failure. Non-retryable, matching the
+            # Gemini native structured truncation guard. The message
+            # keeps the "truncated (output token limit" phrasing the
+            # audit orchestrator's _classify_error keys on.
+            raise RuntimeError(
+                "Response truncated (output token limit reached, "
+                f"finish_reason={response.finish_reason})"
             )
         try:
-            content = response.content.strip()
-            # Strip markdown fences: ```json\n...\n``` or ```\n...\n```
-            if content.startswith("```") and content.endswith("```"):
-                if "\n" in content:
-                    content = content.split("\n", 1)[1]
-                else:
-                    content = content[3:]
-                    # Single-line: strip language tag (e.g. "json", "ql")
-                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
-                content = content.rsplit("```", 1)[0]
-            elif content.startswith("```"):
-                if "\n" in content:
-                    content = content.split("\n", 1)[1]
-                else:
-                    content = content[3:]
-                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
-            content = content.strip()
+            # Strip markdown fences via the shared hardened helper.
+            # It prefers the LAST fenced JSON block, defeating
+            # prepend-prefix injection where attacker-influenced
+            # prompt content coaxes the model into echoing a fake
+            # fenced block before its real answer — the inline copy
+            # this replaces kept the weaker first-block behaviour
+            # (see strip_json_fences' docstring).
+            content = strip_json_fences(response.content.strip()).strip()
             parsed = json.loads(content)
             parsed = _coerce_to_schema(parsed, _normalize_schema(schema))
             validated = pydantic_model.model_validate(parsed)
             result_dict = validated.model_dump()
-            # Carry the resolved model from the underlying generate() call so
-            # the JSON-fallback path attributes correctly too.
+            # Carry the resolved model AND the per-call usage from the
+            # underlying generate() call so the JSON-fallback path
+            # attributes correctly too (usage was tracked by
+            # self.generate() — surfacing it here adds no double
+            # counting; the client stops diffing shared aggregate
+            # counters when per-call figures are present).
             return StructuredResponse(
                 result=result_dict,
                 raw=json.dumps(result_dict, indent=2),
+                cost=response.cost,
+                tokens_used=response.tokens_used,
+                duration=response.duration,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                cache_read_tokens=response.cache_read_tokens,
+                cache_write_tokens=response.cache_write_tokens,
                 resolved_model=response.resolved_model,
             )
         except Exception as e:
@@ -598,9 +872,9 @@ class LLMProvider(ABC):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         **provider_specific: Any,
     ) -> TurnResponse:
         """Synthesise one tool-use round-trip via plain ``generate()``."""
@@ -683,7 +957,7 @@ class LLMProvider(ABC):
     @staticmethod
     def _parse_fallback_response(
         text: str, tools: Sequence[ToolDef],
-    ) -> tuple[Union[TextBlock, ToolCall], StopReason]:
+    ) -> tuple[TextBlock | ToolCall, StopReason]:
         """Extract a tool call (if any) or fall back to a text block.
 
         Uses :func:`core.llm.cc_adapter.strip_json_fences` to find a
@@ -720,7 +994,7 @@ class LLMProvider(ABC):
         return ToolCall(id=call_id, name=name, input=inp), StopReason.NEEDS_TOOL_CALL
 
 
-def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+def _coerce_to_schema(data: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
     """Coerce LLM output values to match schema types before Pydantic validation.
 
     LLMs (especially via JSON-in-prompt fallback) often return wrong types:
@@ -836,7 +1110,7 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
     return coerced
 
 
-def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Normalize simple format schema to JSON Schema format.
 
     Simple format: {"field": "type description"}
@@ -868,7 +1142,8 @@ def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         if " or null" in desc_lower:
             prop = {"type": [field_type, "null"]}
         elif desc_lower.startswith("null or "):
-            # "null or string" — extract the actual type from the second word
+            # "null or string" — the type is the token after "null or",
+            # i.e. parts[2] (parts[1] is always the literal "or")
             actual = parts[2].strip() if len(parts) > 2 else "string"
             actual = type_aliases.get(actual, actual)
             prop = {"type": [actual, "null"]}
@@ -898,7 +1173,7 @@ def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     return {"properties": properties, "required": required}
 
 
-def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
+def _schema_to_gemini(schema: dict[str, Any]) -> dict[str, Any]:
     """Convert JSON Schema to Gemini-compatible schema.
 
     The google-genai SDK rejects nullable union types like ["string", "null"].
@@ -909,7 +1184,7 @@ def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
         "boolean": "BOOLEAN", "array": "ARRAY", "object": "OBJECT", "null": "NULL",
     }
 
-    def convert_property(prop: Dict[str, Any]) -> Dict[str, Any]:
+    def convert_property(prop: dict[str, Any]) -> dict[str, Any]:
         out = {}
         prop_type = prop.get("type")
         if isinstance(prop_type, list):
@@ -941,7 +1216,7 @@ def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']], _model_name: str = 'DynamicSchema'):
+def _dict_schema_to_pydantic(schema: dict[str, Any] | type['BaseModel'], _model_name: str = 'DynamicSchema'):
     """
     Convert dict schema or Pydantic model to Pydantic model class.
 
@@ -973,7 +1248,8 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']], _
 
     # Validate it's a dict if not Pydantic
     if not isinstance(schema, dict):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 — callers catch ValueError; changing type breaks them
+
             f"Schema must be dict or Pydantic BaseModel class, "
             f"got {type(schema).__name__}"
         )
@@ -1026,14 +1302,12 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']], _
                 item_type = Literal[tuple(items_spec["enum"])]
             else:
                 item_type = type_map.get(items_spec.get("type", "string"), str)
-            from typing import List
-            python_type = List[item_type]
+            python_type = list[item_type]
         else:
             python_type = type_map.get(field_type, str)
 
         if nullable:
-            from typing import Optional as Opt
-            python_type = Opt[python_type]
+            python_type = python_type | None
 
         # Get default value if present
         default_value = field_spec.get("default", ...)
@@ -1046,8 +1320,7 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']], _
 
         # If field is not required and has no default, make it Optional
         if not is_required and default_value is ...:
-            from typing import Optional as Opt
-            python_type = Opt[python_type]
+            python_type = python_type | None
             default_value = None
 
         # Nullable + REQUIRED: keep `...` (no default) so Pydantic
@@ -1107,8 +1380,8 @@ def _is_openai_reasoning_model(model_name: str) -> bool:
 def _openai_sampling_kwargs(
     model_name: str,
     max_tokens: int,
-    temperature: Optional[float] = None,
-) -> Dict[str, Any]:
+    temperature: float | None = None,
+) -> dict[str, Any]:
     """Return the correct token-limit (+ optional temperature) kwargs for an
     OpenAI chat.completions call, branching on the reasoning-model contract.
 
@@ -1117,7 +1390,7 @@ def _openai_sampling_kwargs(
     """
     if _is_openai_reasoning_model(model_name):
         return {"max_completion_tokens": max_tokens}
-    kw: Dict[str, Any] = {"max_tokens": max_tokens}
+    kw: dict[str, Any] = {"max_tokens": max_tokens}
     if temperature is not None:
         kw["temperature"] = temperature
     return kw
@@ -1157,25 +1430,32 @@ class OpenAICompatibleProvider(LLMProvider):
             self.client = make_openai_client(timeout=config.timeout)
             logger.debug("OpenAICompatibleProvider: routing via credential-isolation dispatcher")
         else:
+            # Loopback gateways (Ollama, vLLM, LM Studio): the SDK's
+            # default httpx client honours proxy env (trust_env), so
+            # on mandatory-proxy hosts whose NO_PROXY lacks loopback,
+            # every localhost call detours through the corporate
+            # proxy and fails. Pin a trust_env=False transport for
+            # loopback bases; remote bases keep proxy-env behaviour.
+            # Both get the pooled transport (see core.llm.http_pool)
+            # so idle keepalive outlives the inter-call gap.
+            from core.llm.egress import url_is_loopback
+            from core.llm.http_pool import sdk_http_client
+            _loopback = bool(
+                config.api_base and url_is_loopback(config.api_base)
+            )
             self.client = OpenAI(
                 api_key=config.api_key or "unused",
                 base_url=config.api_base,
                 timeout=config.timeout,
+                http_client=sdk_http_client(
+                    config.timeout, trust_env=not _loopback,
+                ),
             )
             logger.debug(
                 f"OpenAICompatibleProvider: direct SDK (no dispatcher) provider={config.provider}"
             )
 
-        self.instructor_client = None
-        self._instructor_consec_failures = 0
-        self._instructor_backed = None  # stashed client during backoff
-        if INSTRUCTOR_AVAILABLE:
-            self.instructor_client = instructor.from_openai(self.client)
-        else:
-            logger.warning(
-                "Instructor not installed — structured output will use JSON-in-prompt fallback. "
-                "For more reliable structured output: pip install instructor"
-            )
+        self._init_instructor(lambda: instructor.from_openai(self.client))
 
         # Flips on first detection that this provider's bound model
         # rejects function-calling (older Ollama models, smaller
@@ -1186,9 +1466,15 @@ class OpenAICompatibleProvider(LLMProvider):
         # persisted — a fresh process re-detects on first turn.
         self._tool_use_unsupported = False
 
-        logger.debug("Initialized OpenAICompatibleProvider: %s (base_url=%s)", config.model_name, config.api_base)
+        # _endpoint_display, never the raw api_base: with OLLAMA_HOST
+        # pointed at a remote inference server, the raw value would
+        # write that server's location into the debug log.
+        logger.debug(
+            "Initialized OpenAICompatibleProvider: %s (base_url=%s)",
+            config.model_name, _endpoint_display(config.api_base),
+        )
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+    def generate(self, prompt: str, system_prompt: str | None = None,
                  **kwargs) -> LLMResponse:
         """Generate completion using the OpenAI SDK."""
         messages = []
@@ -1259,7 +1545,7 @@ class OpenAICompatibleProvider(LLMProvider):
             )
             logger.debug("[OpenAI] model=%s, tokens=%s, cost=$%.4f, duration=%.2fs%s",
                          self.config.model_name, tokens_used, cost, duration,
-                         (", thinking=%d" % thinking_tokens) if thinking_tokens else "")
+                         f", thinking={thinking_tokens}" if thinking_tokens else "")
 
             return LLMResponse(
                 content=content,
@@ -1291,15 +1577,19 @@ class OpenAICompatibleProvider(LLMProvider):
             # produces a 3-line cluster per upstream failure — see
             # the log-noise commit history. DEBUG keeps the deep-
             # debugging detail (escaped + redacted exception body)
-            # available with ``-v`` / RAPTOR_LOG_LEVEL=DEBUG without
+            # available with ``-v`` / RAPTOR_LOG_FILE_LEVEL=DEBUG without
             # spamming normal runs.
-            logger.debug("OpenAI completion failed: %s",
-                         escape_nonprintable(redact_secrets(str(e)))[:1024])
+            logger.debug(
+                "OpenAI completion failed: %s",
+                escape_nonprintable(redact_secrets(_redact_endpoint(
+                    str(e), self.config.api_base,
+                )))[:1024],
+            )
             raise
 
-    def generate_structured(self, prompt: str, schema: Dict[str, Any],
-                           system_prompt: Optional[str] = None,
-                           **kwargs) -> Tuple[Dict[str, Any], str]:
+    def generate_structured(self, prompt: str, schema: dict[str, Any],
+                           system_prompt: str | None = None,
+                           **kwargs) -> StructuredResponse:
         """Generate structured output using Instructor (or JSON fallback)."""
         pydantic_model = _dict_schema_to_pydantic(schema)
         # Honour caller-supplied temperature so DispatchTask's
@@ -1310,6 +1600,7 @@ class OpenAICompatibleProvider(LLMProvider):
         # Try Instructor first (skip for Anthropic via OpenAI-compat — response_format is ignored)
         is_anthropic_compat = self.config.provider.lower() == "anthropic"
         if self.instructor_client is not None and not is_anthropic_compat:
+            t_start = time.monotonic()
             try:
                 messages = []
                 if system_prompt:
@@ -1354,34 +1645,44 @@ class OpenAICompatibleProvider(LLMProvider):
                     cache_read_tokens=cache_read_tokens,
                 )
 
-                self._instructor_consec_failures = 0
+                self._note_instructor_success()
+                # Per-call usage rides on the response — the client's
+                # aggregate-counter before/after diff multiply-books
+                # concurrent calls' spend under parallel workers (see
+                # the Anthropic provider's identical note).
                 return StructuredResponse(
                     result=result_dict,
                     raw=full_response,
+                    cost=cost,
+                    tokens_used=tokens_used,
+                    duration=duration,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
                     resolved_model=extract_resolved_model(completion),
                 )
 
-            except Exception as e:
-                self._instructor_consec_failures += 1
-                from core.security.log_sanitisation import escape_nonprintable as _esc
-                logger.warning(
-                    "Instructor structured generation failed for %s/%s (%d/%d). "
-                    "Exception (%s): %s",
-                    self.config.provider, self.config.model_name,
-                    self._instructor_consec_failures, _INSTRUCTOR_MAX_CONSEC_FAILURES,
-                    type(e).__name__, _esc(str(e))[:512],
-                )
-                if self._instructor_consec_failures >= _INSTRUCTOR_MAX_CONSEC_FAILURES:
-                    logger.warning(
-                        "Instructor disabled for %s/%s after %d consecutive failures",
-                        self.config.provider, self.config.model_name,
-                        self._instructor_consec_failures,
+            except Exception as e:  # noqa: BLE001 — instructor/SDK failure funnel
+                # A completed-but-invalid generation still spent money.
+                self._book_instructor_failure_usage(
+                    e, time.monotonic() - t_start)
+                route = self._instructor_exception_route(e)
+                if route != "fallback":
+                    # Boundary failure (blocked/auth/quota): re-sending
+                    # the same payload via the JSON fallback is wasteful
+                    # (auth/refusal fail identically; 429 needs the
+                    # client's backoff, not an instant re-send). Not an
+                    # instructor strike either.
+                    logger.info(
+                        "Instructor failure routed to caller (%s) for "
+                        "%s/%s — skipping JSON fallback re-send",
+                        route, self.config.provider, self.config.model_name,
                     )
-                    self._instructor_backed = self.instructor_client
-                    self.instructor_client = None
+                    raise
+                self._note_instructor_failure(e)
 
         # Fallback: JSON-in-prompt
-        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt, timeout_s=kwargs.get("timeout_s"))
 
     # ------------------------------------------------------------------
     # Tool-use turn primitive — OpenAI function-calling shape.
@@ -1407,9 +1708,9 @@ class OpenAICompatibleProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         max_retries: int = 3,
         backoff_factor: float = 2.0,
         **_unused: Any,
@@ -1445,7 +1746,7 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         # ---- tools (function-calling shape) --------------------------
-        tool_schemas: list[Dict[str, Any]] = [
+        tool_schemas: list[dict[str, Any]] = [
             {
                 "type": "function",
                 "function": {
@@ -1458,14 +1759,14 @@ class OpenAICompatibleProvider(LLMProvider):
         ]
 
         # ---- messages (OpenAI flat list with role markers) ----------
-        wire_messages: list[Dict[str, Any]] = []
+        wire_messages: list[dict[str, Any]] = []
         if system:
             wire_messages.append({"role": "system", "content": system})
         for m in messages:
             wire_messages.extend(_message_to_openai_wire(m))
 
         # ---- dispatch (with retry on transient errors) ---------------
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.model_name,
             "messages": wire_messages,
             **_openai_sampling_kwargs(self.config.model_name, max_tokens),
@@ -1473,7 +1774,7 @@ class OpenAICompatibleProvider(LLMProvider):
         if tool_schemas:
             kwargs["tools"] = tool_schemas
 
-        from openai import (                                # type: ignore[import-not-found]
+        from openai import (  # type: ignore[import-not-found]
             APIConnectionError,
             APIStatusError,
         )
@@ -1492,11 +1793,23 @@ class OpenAICompatibleProvider(LLMProvider):
                     and isinstance(exc, APIStatusError)
                     and _is_tool_use_unsupported_error(exc)
                 ):
+                    # Same sanitisation as the terminal-error path
+                    # below — this WARNING also interpolates a raw
+                    # SDK exception body.
+                    from core.security.log_sanitisation import (
+                        escape_nonprintable as _esc,
+                    )
+                    from core.security.redaction import (
+                        redact_secrets as _redact,
+                    )
                     logger.warning(
-                        f"OpenAICompatibleProvider.turn: model "
-                        f"{self.config.model_name!r} rejected tools — "
-                        f"falling back to JSON-protocol synthesis for "
-                        f"this provider instance: {exc}"
+                        "OpenAICompatibleProvider.turn: model %r rejected "
+                        "tools — falling back to JSON-protocol synthesis "
+                        "for this provider instance: %s",
+                        self.config.model_name,
+                        _esc(_redact(_redact_endpoint(
+                            str(exc), self.config.api_base,
+                        )))[:512],
                     )
                     self._tool_use_unsupported = True
                     return self._tool_use_fallback(
@@ -1515,8 +1828,16 @@ class OpenAICompatibleProvider(LLMProvider):
                     # can carry ANSI / BIDI / control bytes that
                     # forge log entries on operator TTYs. Defang
                     # before the warning + the TurnResponse.error.
+                    # redact_secrets + endpoint scrub too: APIError
+                    # bodies may echo Authorization / x-api-key
+                    # headers, the prompt, and the request URL —
+                    # symmetric with the generate() handler.
                     from core.security.log_sanitisation import escape_nonprintable
-                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {escape_nonprintable(str(exc))}"
+                    from core.security.redaction import redact_secrets
+                    err_msg = (
+                        f"{kind} error after {attempt + 1} attempt(s): "
+                        f"{escape_nonprintable(redact_secrets(_redact_endpoint(str(exc), self.config.api_base)))}"
+                    )
                     logger.warning("OpenAICompatibleProvider.turn: %s", err_msg)
                     return TurnResponse(
                         content=[],
@@ -1526,9 +1847,15 @@ class OpenAICompatibleProvider(LLMProvider):
                         error_message=err_msg,
                     )
                 delay = (backoff_factor ** attempt) * (0.5 + random.random())
+                from core.security.log_sanitisation import escape_nonprintable
+                from core.security.redaction import redact_secrets
                 logger.info(
-                    f"OpenAICompatibleProvider.turn: transient error attempt "
-                    f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
+                    "OpenAICompatibleProvider.turn: transient error attempt "
+                    "%d, retrying in %.1fs: %s",
+                    attempt + 1, delay,
+                    escape_nonprintable(redact_secrets(_redact_endpoint(
+                        str(exc), self.config.api_base,
+                    )))[:512],
                 )
                 time.sleep(delay)
         # No `else:` branch — the for/else here was dead. Every
@@ -1623,9 +1950,9 @@ class OpenAICompatibleProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         max_retries: int = 3,
         **_unused: Any,
     ) -> Iterator[StreamChunk]:
@@ -1644,7 +1971,7 @@ class OpenAICompatibleProvider(LLMProvider):
             return
 
         # ---- tools (same as turn) ----------------------------------------
-        tool_schemas: list[Dict[str, Any]] = [
+        tool_schemas: list[dict[str, Any]] = [
             {
                 "type": "function",
                 "function": {
@@ -1657,14 +1984,14 @@ class OpenAICompatibleProvider(LLMProvider):
         ]
 
         # ---- messages ----------------------------------------------------
-        wire_messages: list[Dict[str, Any]] = []
+        wire_messages: list[dict[str, Any]] = []
         if system:
             wire_messages.append({"role": "system", "content": system})
         for m in messages:
             wire_messages.extend(_message_to_openai_wire(m))
 
         # ---- dispatch with stream=True -----------------------------------
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.model_name,
             "messages": wire_messages,
             "stream": True,
@@ -1673,7 +2000,7 @@ class OpenAICompatibleProvider(LLMProvider):
         if tool_schemas:
             kwargs["tools"] = tool_schemas
 
-        from openai import (                                    # type: ignore[import-not-found]
+        from openai import (  # type: ignore[import-not-found]
             APIConnectionError,
             APIStatusError,
         )
@@ -1702,12 +2029,18 @@ class OpenAICompatibleProvider(LLMProvider):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
                 if not _is_transient_openai(exc) or attempt >= max_retries:
+                    # redact_secrets + endpoint scrub, not just
+                    # escape — same SDK exception class as turn()
+                    # above (header/prompt/URL echo).
                     from core.security.log_sanitisation import (
                         escape_nonprintable,
                     )
+                    from core.security.redaction import redact_secrets
                     logger.warning(
                         "OpenAICompatibleProvider.turn_stream: %s",
-                        escape_nonprintable(str(exc)),
+                        escape_nonprintable(redact_secrets(_redact_endpoint(
+                            str(exc), self.config.api_base,
+                        )))[:512],
                     )
                     yield StreamChunk(
                         type="done", stop_reason=StopReason.ERROR,
@@ -1720,7 +2053,7 @@ class OpenAICompatibleProvider(LLMProvider):
             return
 
         # ---- consume stream ----------------------------------------------
-        tool_calls_seen: Dict[int, str] = {}
+        tool_calls_seen: dict[int, str] = {}
         input_tokens = output_tokens = 0
         stop = StopReason.ERROR
 
@@ -1815,7 +2148,10 @@ _OPENAI_FINISH_REASON_MAP = {
 def _is_transient_openai(exc: BaseException) -> bool:
     """Same shape as the Anthropic helper. 429 + 5xx retryable;
     permanent 4xx fails fast."""
-    from openai import APIConnectionError, APIStatusError    # type: ignore[import-not-found]
+    from openai import (  # type: ignore[import-not-found]
+        APIConnectionError,
+        APIStatusError,
+    )
     if isinstance(exc, APIConnectionError):
         return True
     if isinstance(exc, APIStatusError):
@@ -1841,7 +2177,7 @@ def _is_tool_use_unsupported_error(exc: BaseException) -> bool:
     never produce this error class — every current model on those
     providers supports tool-use natively.
     """
-    from openai import APIStatusError                        # type: ignore[import-not-found]
+    from openai import APIStatusError  # type: ignore[import-not-found]
     if not isinstance(exc, APIStatusError):
         return False
     status = getattr(exc, "status_code", None)
@@ -1887,7 +2223,7 @@ def _is_tool_use_unsupported_error(exc: BaseException) -> bool:
     return has_unsupported_phrase
 
 
-def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
+def _message_to_openai_wire(m: Message) -> list[dict[str, Any]]:
     """One :class:`Message` → 1+ OpenAI wire dicts.
 
     OpenAI splits user messages with multiple :class:`ToolResult`\\ s
@@ -1913,7 +2249,7 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
     """
     if m.role == "assistant":
         text_parts: list[str] = []
-        tool_calls: list[Dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
         for b in m.content:
             if isinstance(b, TextBlock):
                 text_parts.append(b.text)
@@ -1926,7 +2262,7 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
                         "arguments": json.dumps(b.input),
                     },
                 })
-        out: Dict[str, Any] = {"role": "assistant"}
+        out: dict[str, Any] = {"role": "assistant"}
         if text_parts:
             out["content"] = "".join(text_parts)
         if tool_calls:
@@ -1935,7 +2271,7 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
             out["content"] = ""
         return [out]
     # user role
-    out_msgs: list[Dict[str, Any]] = []
+    out_msgs: list[dict[str, Any]] = []
     text_parts = []
     for b in m.content:
         if isinstance(b, TextBlock):
@@ -1958,6 +2294,32 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
         # genuinely-empty case.
         out_msgs.append({"role": "user", "content": ""})
     return out_msgs
+
+
+_STREAM_TRANSPORT_ENV = "RAPTOR_LLM_STREAM_TRANSPORT"
+
+
+def _stream_transport_enabled() -> bool:
+    """Opt-in: carry non-streaming Anthropic calls over the SDK's
+    streaming transport (``messages.stream`` +
+    ``get_final_message()`` — the identical ``Message`` object a
+    plain ``create`` returns, so downstream parsing is unchanged).
+
+    Why an operator would want it: a corporate proxy that applies an
+    idle timer to relayed bytes kills tunnels that go quiet, and a
+    thinking model is silent for minutes on a non-streamed call. SSE
+    keeps bytes flowing for the whole generation, so the tunnel never
+    looks idle — the fix TCP keepalive cannot provide (probes are not
+    tunnel payload).
+
+    Off by default, deliberately: flipping transports based on
+    detected network topology would make proxied hosts silently
+    exercise different code paths than direct hosts. The operator
+    opts in per-deployment.
+    """
+    return os.environ.get(_STREAM_TRANSPORT_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 class AnthropicProvider(LLMProvider):
@@ -1986,22 +2348,20 @@ class AnthropicProvider(LLMProvider):
             self.client = make_anthropic_client(timeout=config.timeout)
             logger.debug("AnthropicProvider: routing via credential-isolation dispatcher")
         else:
+            from core.llm.http_pool import sdk_http_client
             self.client = anthropic.Anthropic(
                 api_key=config.api_key,
                 timeout=config.timeout,
+                # Pooled transport whose idle keepalive outlives the
+                # inter-call gap — the SDK default expires idle
+                # connections after 5s, forcing a reconnect (and,
+                # behind chained proxies, CONNECT negotiation per
+                # hop) on nearly every call. See core.llm.http_pool.
+                http_client=sdk_http_client(config.timeout),
             )
             logger.debug("AnthropicProvider: direct SDK (no dispatcher)")
 
-        self.instructor_client = None
-        self._instructor_consec_failures = 0
-        self._instructor_backed = None  # stashed client during backoff
-        if INSTRUCTOR_AVAILABLE:
-            self.instructor_client = instructor.from_anthropic(self.client)
-        else:
-            logger.warning(
-                "Instructor not installed — structured output will use JSON-in-prompt fallback. "
-                "For more reliable structured output: pip install instructor"
-            )
+        self._init_instructor(lambda: instructor.from_anthropic(self.client))
 
         # Per-instance flag: have we warned about silent cache-failure
         # for this model? Warns once per provider instance to avoid
@@ -2013,7 +2373,7 @@ class AnthropicProvider(LLMProvider):
 
         logger.debug("Initialized AnthropicProvider: %s", config.model_name)
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+    def generate(self, prompt: str, system_prompt: str | None = None,
                  **kwargs) -> LLMResponse:
         """Generate completion using the Anthropic SDK."""
         messages = [{"role": "user", "content": prompt}]
@@ -2023,6 +2383,19 @@ class AnthropicProvider(LLMProvider):
             "messages": messages,
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
         }
+        # Per-call timeout ceiling. Call classes plumb ``timeout_s``
+        # (REVIEW_TIMEOUT_S=480 for reviews, SHORT_CALL_TIMEOUT_S=120
+        # for summaries) — previously only the claudecode transport
+        # honoured it, so SDK calls ran at the client-level default
+        # (120s): every deep-dive review needing >120s died in
+        # 3 SDK attempts x 120s walls while its class ceiling said
+        # 480. The SDK accepts a per-request ``timeout`` override.
+        _timeout_s = kwargs.get("timeout_s")
+        if _timeout_s:
+            try:
+                create_kwargs["timeout"] = float(_timeout_s)
+            except (TypeError, ValueError):
+                pass
         # Opus 4.7+ deprecated `temperature` (400 if sent); omit it for those.
         if supports_temperature(self.config.model_name):
             create_kwargs["temperature"] = kwargs.get("temperature", self.config.temperature)
@@ -2035,14 +2408,54 @@ class AnthropicProvider(LLMProvider):
 
         try:
             t_start = time.monotonic()
-            response = self.client.messages.create(**create_kwargs)
+            if _stream_transport_enabled():
+                with self.client.messages.stream(**create_kwargs) as _stream:
+                    response = _stream.get_final_message()
+            else:
+                response = self.client.messages.create(**create_kwargs)
             duration = time.monotonic() - t_start
 
-            # Extract text from response (guard against empty/non-text content)
+            # Extract text from response (guard against empty/non-text
+            # content). Reasoning-tier models prepend thinking blocks —
+            # the text block is not necessarily first, so take the
+            # first block that HAS text rather than content[0].
             if not response.content:
-                raise RuntimeError("Anthropic returned empty content")
-            first_block = response.content[0]
-            if not hasattr(first_block, 'text'):
+                # Zero content blocks. The stop_reason says WHY, and
+                # dropping it turned a diagnosable model boundary into
+                # an opaque transport-looking failure (observed live:
+                # a whole call class dying with "returned empty
+                # content" while sibling classes succeeded on the
+                # same route — no way to tell refusal from
+                # truncation from the artifacts).
+                stop = response.stop_reason or "unknown"
+                if stop == "refusal":
+                    # Hard refusal: the API ends the turn with
+                    # stop_reason="refusal" and may return no content
+                    # at all. Phrased with "model refused" so
+                    # structured_call.classify_error_text buckets it
+                    # 'blocked' and telemetry disposition reads
+                    # "blocked" — a model boundary, not a transport
+                    # failure; an identical retry cannot change it.
+                    raise RuntimeError(
+                        "Anthropic model refused request "
+                        "(stop_reason=refusal, empty content)"
+                    )
+                if stop == "max_tokens":
+                    raise RuntimeError(
+                        "Anthropic returned empty content with "
+                        "stop_reason=max_tokens — output budget "
+                        "exhausted before the first content block "
+                        "(on reasoning-tier models thinking can "
+                        "consume the entire budget)"
+                    )
+                raise RuntimeError(
+                    f"Anthropic returned empty content "
+                    f"(stop_reason={stop})"
+                )
+            text_block = next(
+                (b for b in response.content if hasattr(b, 'text')), None,
+            )
+            if text_block is None:
                 # `getattr` with default — pre-fix `first_block.type`
                 # raised AttributeError mid-error-formatting if the
                 # block lacked BOTH `text` AND `type` (a future SDK
@@ -2050,9 +2463,16 @@ class AnthropicProvider(LLMProvider):
                 # AttributeError replaced the informative
                 # "non-text content" message with a confusing
                 # internal-state crash.
-                block_type = getattr(first_block, 'type', '<unknown>')
-                raise RuntimeError(f"Anthropic returned non-text content block: {block_type}")
-            content = first_block.text
+                block_types = ", ".join(
+                    str(getattr(b, 'type', '<unknown>'))
+                    for b in response.content
+                )
+                raise RuntimeError(
+                    f"Anthropic returned no text content block "
+                    f"(got: {block_types}; stop_reason="
+                    f"{response.stop_reason or 'unknown'})"
+                )
+            content = text_block.text
             finish_reason = response.stop_reason or "complete"
 
             input_tokens = 0
@@ -2108,9 +2528,9 @@ class AnthropicProvider(LLMProvider):
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
-    def generate_structured(self, prompt: str, schema: Dict[str, Any],
-                           system_prompt: Optional[str] = None,
-                           **kwargs) -> Tuple[Dict[str, Any], str]:
+    def generate_structured(self, prompt: str, schema: dict[str, Any],
+                           system_prompt: str | None = None,
+                           **kwargs) -> StructuredResponse:
         """Generate structured output using Instructor (or JSON fallback)."""
         pydantic_model = _dict_schema_to_pydantic(schema)
         # See OpenAI provider — caller-supplied temperature must
@@ -2120,6 +2540,7 @@ class AnthropicProvider(LLMProvider):
 
         # Try Instructor first
         if self.instructor_client is not None:
+            t_start = time.monotonic()
             try:
                 messages = [{"role": "user", "content": prompt}]
 
@@ -2129,6 +2550,18 @@ class AnthropicProvider(LLMProvider):
                     "messages": messages,
                     "max_tokens": self.config.max_tokens,
                 }
+                # Per-call timeout ceiling (see ``generate``): without
+                # it structured review calls ran at the client-level
+                # default (120s) while their class ceiling said 480s —
+                # the exact calls large enough to need instructor were
+                # the ones the wall killed. Instructor forwards unknown
+                # kwargs to the underlying SDK ``messages.create``.
+                _timeout_s = kwargs.get("timeout_s")
+                if _timeout_s:
+                    try:
+                        create_kwargs["timeout"] = float(_timeout_s)
+                    except (TypeError, ValueError):
+                        pass
                 # Opus 4.7+ deprecated `temperature` (400 if sent); omit it for those.
                 if supports_temperature(self.config.model_name):
                     create_kwargs["temperature"] = temperature
@@ -2171,34 +2604,62 @@ class AnthropicProvider(LLMProvider):
                     cache_write_tokens=cache_write_tokens,
                 )
 
-                self._instructor_consec_failures = 0
+                self._note_instructor_success()
+                # Per-call usage rides on the response. The client
+                # previously re-derived it by diffing the provider's
+                # SHARED aggregate counters before/after the call —
+                # under parallel workers that delta swallows every
+                # concurrent call's spend and multiply-books the same
+                # money (observed live: a $38 run enforced as $85+ and
+                # terminated at 25/40 reviews). The exact figures are
+                # computed right here; return them.
                 return StructuredResponse(
                     result=result_dict,
                     raw=full_response,
+                    cost=cost,
+                    tokens_used=tokens_used,
+                    duration=duration,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_write_tokens=cache_write_tokens,
                     resolved_model=extract_resolved_model(completion),
                 )
 
-            except Exception as e:
-                self._instructor_consec_failures += 1
-                from core.security.log_sanitisation import escape_nonprintable as _esc
-                logger.warning(
-                    "Instructor structured generation failed for %s/%s (%d/%d). "
-                    "Exception (%s): %s",
-                    self.config.provider, self.config.model_name,
-                    self._instructor_consec_failures, _INSTRUCTOR_MAX_CONSEC_FAILURES,
-                    type(e).__name__, _esc(str(e))[:512],
-                )
-                if self._instructor_consec_failures >= _INSTRUCTOR_MAX_CONSEC_FAILURES:
-                    logger.warning(
-                        "Instructor disabled for %s/%s after %d consecutive failures",
-                        self.config.provider, self.config.model_name,
-                        self._instructor_consec_failures,
+            except Exception as e:  # noqa: BLE001 — instructor/SDK failure funnel
+                # A completed-but-invalid generation still spent money.
+                self._book_instructor_failure_usage(
+                    e, time.monotonic() - t_start)
+                refusal = _instructor_refusal_stop(e)
+                if refusal is not None:
+                    # Hard refusal surfaced through the tool-use leg as
+                    # empty tool args. Not instructor unreliability —
+                    # don't count it toward the instructor-disable cap —
+                    # and not retryable — don't re-send the same content
+                    # via the JSON fallback. Phrased with "model
+                    # refused" so classify_error_text buckets it
+                    # 'blocked' (same contract as generate()'s
+                    # empty-content refusal path).
+                    raise RuntimeError(
+                        "Anthropic model refused request "
+                        f"(stop_reason={refusal}, instructor tool-use "
+                        "leg — tool args empty)"
+                    ) from e
+                route = self._instructor_exception_route(e)
+                if route != "fallback":
+                    # Boundary failure (blocked/auth/quota): see the
+                    # OpenAI-shape funnel — no fallback re-send, no
+                    # instructor strike.
+                    logger.info(
+                        "Instructor failure routed to caller (%s) for "
+                        "%s/%s — skipping JSON fallback re-send",
+                        route, self.config.provider, self.config.model_name,
                     )
-                    self._instructor_backed = self.instructor_client
-                    self.instructor_client = None
+                    raise
+                self._note_instructor_failure(e)
 
         # Fallback: JSON-in-prompt
-        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt, timeout_s=kwargs.get("timeout_s"))
 
     # ------------------------------------------------------------------
     # Tool-use turn primitive — Anthropic-native.
@@ -2242,11 +2703,11 @@ class AnthropicProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         anthropic_task_budget_beta: bool = False,
-        anthropic_task_budget_tokens: Optional[int] = None,
+        anthropic_task_budget_tokens: int | None = None,
         max_retries: int = 3,
         backoff_factor: float = 2.0,
         **_unused: Any,
@@ -2285,7 +2746,7 @@ class AnthropicProvider(LLMProvider):
         # Anthropic accepts a string OR a content list. Use the list
         # form when caching the system prompt so the cache_control
         # marker can attach to it; otherwise the simpler string form.
-        system_arg: Optional[Union[str, list]]
+        system_arg: str | list | None
         if system:
             if cache_control.system:
                 system_arg = [{
@@ -2299,7 +2760,7 @@ class AnthropicProvider(LLMProvider):
             system_arg = None
 
         # ---- tools ---------------------------------------------------
-        tool_schemas: list[Dict[str, Any]] = [
+        tool_schemas: list[dict[str, Any]] = [
             {
                 "name": t.name,
                 "description": t.description,
@@ -2331,7 +2792,7 @@ class AnthropicProvider(LLMProvider):
             if anthropic_task_budget_beta
             else self.client.messages.create
         )
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.model_name,
             "max_tokens": max_tokens,
             "messages": wire_messages,
@@ -2349,15 +2810,27 @@ class AnthropicProvider(LLMProvider):
             kwargs["system"] = system_arg
         send_kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
-        from anthropic import (                              # type: ignore[import-not-found]
+        from anthropic import (  # type: ignore[import-not-found]
             APIConnectionError,
             APIError,
             APIStatusError,
         )
+        # Stream-transport opt-in never applies to the task-budget
+        # beta — the beta endpoint is create-only (see turn_stream's
+        # docstring for the same constraint on real streaming).
+        use_stream_transport = (
+            _stream_transport_enabled() and not anthropic_task_budget_beta
+        )
         t_start = time.monotonic()
         for attempt in range(max_retries + 1):
             try:
-                resp = create_fn(**send_kwargs)
+                if use_stream_transport:
+                    with self.client.messages.stream(
+                        **send_kwargs,
+                    ) as _stream:
+                        resp = _stream.get_final_message()
+                else:
+                    resp = create_fn(**send_kwargs)
                 break
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if is_credit_exhausted(exc):
@@ -2367,10 +2840,16 @@ class AnthropicProvider(LLMProvider):
                     broadcast_rate_limit()
                 if not _is_transient_anthropic(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_anthropic(exc) else "permanent"
-                    # escape_nonprintable — see OpenAICompatibleProvider.turn
-                    # above for the rationale.
+                    # escape_nonprintable + redact_secrets — see
+                    # OpenAICompatibleProvider.turn above for the
+                    # rationale (APIError bodies may echo auth
+                    # headers and the prompt).
                     from core.security.log_sanitisation import escape_nonprintable
-                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {escape_nonprintable(str(exc))}"
+                    from core.security.redaction import redact_secrets
+                    err_msg = (
+                        f"{kind} error after {attempt + 1} attempt(s): "
+                        f"{escape_nonprintable(redact_secrets(_redact_endpoint(str(exc), self.config.api_base)))}"
+                    )
                     logger.warning("AnthropicProvider.turn: %s", err_msg)
                     return TurnResponse(
                         content=[],
@@ -2380,9 +2859,15 @@ class AnthropicProvider(LLMProvider):
                         error_message=err_msg,
                     )
                 delay = (backoff_factor ** attempt) * (0.5 + random.random())
+                from core.security.log_sanitisation import escape_nonprintable
+                from core.security.redaction import redact_secrets
                 logger.info(
-                    f"AnthropicProvider.turn: transient error attempt "
-                    f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
+                    "AnthropicProvider.turn: transient error attempt "
+                    "%d, retrying in %.1fs: %s",
+                    attempt + 1, delay,
+                    escape_nonprintable(redact_secrets(_redact_endpoint(
+                        str(exc), self.config.api_base,
+                    )))[:512],
                 )
                 time.sleep(delay)
         # No `else:` branch — the for/else here was dead. Every
@@ -2517,9 +3002,9 @@ class AnthropicProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         **_unused: Any,
     ) -> Iterator[StreamChunk]:
         """Streaming turn via ``client.messages.stream()``.
@@ -2536,7 +3021,7 @@ class AnthropicProvider(LLMProvider):
             )
 
         # ---- system block (same as turn) --------------------------------
-        system_arg: Optional[Union[str, list]]
+        system_arg: str | list | None
         if system:
             if cache_control.system:
                 system_arg = [{
@@ -2550,7 +3035,7 @@ class AnthropicProvider(LLMProvider):
             system_arg = None
 
         # ---- tools -------------------------------------------------------
-        tool_schemas: list[Dict[str, Any]] = [
+        tool_schemas: list[dict[str, Any]] = [
             {
                 "name": t.name,
                 "description": t.description,
@@ -2574,7 +3059,7 @@ class AnthropicProvider(LLMProvider):
             )
 
         # ---- build send_kwargs -------------------------------------------
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.config.model_name,
             "max_tokens": max_tokens,
             "messages": wire_messages,
@@ -2707,7 +3192,10 @@ def _is_transient_anthropic(exc: BaseException) -> bool:
     """``True`` when ``exc`` is a connection / 429 / 5xx error worth
     retrying. Permanent 4xx (auth, schema, not-found) are False so
     callers fail fast instead of burning budget on hopeless retries."""
-    from anthropic import APIConnectionError, APIStatusError    # type: ignore[import-not-found]
+    from anthropic import (  # type: ignore[import-not-found]
+        APIConnectionError,
+        APIStatusError,
+    )
     if isinstance(exc, APIConnectionError):
         return True
     if isinstance(exc, APIStatusError):
@@ -2758,7 +3246,7 @@ def is_credit_exhausted(exc: BaseException) -> bool:
     ))
 
 
-def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
+def _message_to_anthropic_wire(m: Message) -> dict[str, Any]:
     """Our :class:`Message` → Anthropic wire dict.
 
     Anthropic accepts mixed content lists per turn — text, tool_use,
@@ -2771,7 +3259,7 @@ def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
     are emitted as ``[{"type": "text", "text": ""}]`` so the wire
     shape stays valid if a caller resumes from a failed run.
     """
-    out_content: list[Dict[str, Any]] = []
+    out_content: list[dict[str, Any]] = []
     for block in m.content:
         if isinstance(block, TextBlock):
             out_content.append({"type": "text", "text": block.text})
@@ -2794,7 +3282,7 @@ def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
     return {"role": m.role, "content": out_content}
 
 
-def _attach_anthropic_cache_marker(message: Dict[str, Any]) -> None:
+def _attach_anthropic_cache_marker(message: dict[str, Any]) -> None:
     """Mutate ``message["content"][-1]`` in-place to carry a
     cache_control marker. Anthropic places the marker on the LAST
     block of a region to cache everything preceding it within that
@@ -2804,6 +3292,26 @@ def _attach_anthropic_cache_marker(message: Dict[str, Any]) -> None:
     last = dict(message["content"][-1])
     last["cache_control"] = {"type": "ephemeral"}
     message["content"][-1] = last
+
+
+def _pooled_gemini_http_options(timeout: float):
+    """``HttpOptions`` carrying a pooled httpx client, or ``None``
+    when this google-genai version has no ``httpx_client`` injection
+    point.
+
+    Feature-detected rather than version-pinned: ``httpx_client`` is
+    the same field the dispatcher route relies on, but the direct
+    route must keep working (with the SDK's own transport) on
+    versions that predate it.
+    """
+    try:
+        from google.genai.types import HttpOptions
+    except ImportError:
+        return None
+    if "httpx_client" not in getattr(HttpOptions, "model_fields", {}):
+        return None
+    from core.llm.http_pool import sdk_http_client
+    return HttpOptions(httpx_client=sdk_http_client(timeout))
 
 
 class GeminiProvider(LLMProvider):
@@ -2827,10 +3335,23 @@ class GeminiProvider(LLMProvider):
         import threading
         self._clients_lock = threading.Lock()
         # {thread_id: Client} — bounded by live-thread reaping.
-        self._clients: Dict[int, Any] = {}
+        self._clients: dict[int, Any] = {}
         logger.debug(
             f"Initialized GeminiProvider: {config.model_name}"
         )
+
+        # Pre-build safety settings once.  RAPTOR is a security research
+        # tool — Gemini's default safety filter for "dangerous content"
+        # blocks exploit code, ASan crash reports, and vulnerability
+        # analysis prompts.  Disable that single category so the model
+        # can reason about the same material a human analyst would read.
+        from google.genai.types import SafetySetting
+        self._safety_settings = [
+            SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold="BLOCK_NONE",
+            ),
+        ]
 
     @property
     def client(self):
@@ -2848,11 +3369,17 @@ class GeminiProvider(LLMProvider):
                 self._clients.pop(k, None)
         # Build client outside the lock (may do I/O).
         if os.environ.get("RAPTOR_LLM_SOCKET"):
+            from google.genai.types import HttpOptions
+
             from core.llm.dispatcher.client import (
                 make_gemini_base_url,
             )
-            from google.genai.types import HttpOptions
-            base_url, http_client = make_gemini_base_url()
+            # Thread the configured per-model timeout through to the
+            # worker→dispatcher httpx client — Gemini thinking calls
+            # routinely exceed the 60s httpx default it was pinned to.
+            base_url, http_client = make_gemini_base_url(
+                timeout=self.config.timeout,
+            )
             new_client = _genai_module.Client(
                 api_key="dummy-not-used",
                 http_options=HttpOptions(
@@ -2865,9 +3392,22 @@ class GeminiProvider(LLMProvider):
                 "credential-isolation dispatcher"
             )
         else:
-            new_client = _genai_module.Client(
-                api_key=self.config.api_key,
+            # Pooled transport whose idle keepalive outlives the
+            # inter-call gap (see core.llm.http_pool); falls back to
+            # the SDK's own transport when this google-genai version
+            # has no httpx_client injection point.
+            _http_options = _pooled_gemini_http_options(
+                self.config.timeout,
             )
+            if _http_options is not None:
+                new_client = _genai_module.Client(
+                    api_key=self.config.api_key,
+                    http_options=_http_options,
+                )
+            else:
+                new_client = _genai_module.Client(
+                    api_key=self.config.api_key,
+                )
             logger.debug(
                 "GeminiProvider: direct SDK (no dispatcher)"
             )
@@ -2877,7 +3417,7 @@ class GeminiProvider(LLMProvider):
             self._clients.setdefault(tid, new_client)
             return self._clients[tid]
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+    def generate(self, prompt: str, system_prompt: str | None = None,
                  **kwargs) -> LLMResponse:
         """Generate completion using the native Gemini SDK."""
         config_kwargs = {
@@ -2886,6 +3426,7 @@ class GeminiProvider(LLMProvider):
         }
 
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        config_kwargs["safetySettings"] = self._safety_settings
         generate_kwargs = {
             "model": self.config.model_name,
             "contents": contents,
@@ -2900,7 +3441,17 @@ class GeminiProvider(LLMProvider):
             duration = time.monotonic() - t_start
 
             if not response.text and not response.candidates:
-                raise RuntimeError("Gemini returned empty response")
+                # Surface prompt_feedback when available — it explains
+                # why Gemini returned nothing (safety block, etc.).
+                pf = getattr(response, 'prompt_feedback', None)
+                pf_reason = ""
+                if pf:
+                    br = getattr(pf, 'block_reason', None)
+                    if br:
+                        pf_reason = f" (blocked: {br})"
+                raise RuntimeError(
+                    f"Gemini returned empty response{pf_reason}"
+                )
 
             content = response.text or ""
             finish_reason = "complete"
@@ -2956,9 +3507,9 @@ class GeminiProvider(LLMProvider):
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
-    def generate_structured(self, prompt: str, schema: Dict[str, Any],
-                           system_prompt: Optional[str] = None,
-                           **kwargs) -> Tuple[Dict[str, Any], str]:
+    def generate_structured(self, prompt: str, schema: dict[str, Any],
+                           system_prompt: str | None = None,
+                           **kwargs) -> StructuredResponse:
         """Generate structured output using Gemini's native JSON mode."""
         # Normalize simple schema to JSON Schema format so both pydantic and
         # Gemini schema conversion see the same structure
@@ -2989,6 +3540,7 @@ class GeminiProvider(LLMProvider):
                 pass
 
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        config_kwargs["safetySettings"] = self._safety_settings
         generate_kwargs = {
             "model": self.config.model_name,
             "contents": contents,
@@ -3017,21 +3569,41 @@ class GeminiProvider(LLMProvider):
             logger.debug("[Gemini] structured model=%s, tokens=%s, cost=$%.4f, duration=%.2fs, thinking=%s",
                          self.config.model_name, tokens_used, cost, duration, thinking_tokens)
 
-            content = (response.text or "").strip()
-            if content.startswith("```") and content.endswith("```"):
-                if "\n" in content:
-                    content = content.split("\n", 1)[1]
-                else:
-                    content = content[3:]
-                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
-                content = content.rsplit("```", 1)[0].strip()
-            elif content.startswith("```"):
-                if "\n" in content:
-                    content = content.split("\n", 1)[1]
-                else:
-                    content = content[3:]
-                    content = content.lstrip("abcdefghijklmnopqrstuvwxyz")
-                content = content.strip()
+            finish_reason = "complete"
+            if response.candidates and response.candidates[0].finish_reason:
+                fr = response.candidates[0].finish_reason
+                finish_reason = getattr(fr, 'name', str(fr)).lower()
+
+            if finish_reason in ("max_tokens", "length"):
+                raise RuntimeError(
+                    "Gemini native structured response truncated "
+                    f"(finish_reason={finish_reason}, "
+                    f"output_tokens={output_tokens})"
+                )
+
+            # Safety/prohibited-content block: empty text with a
+            # blocking finish_reason previously fell through to
+            # json.loads("") → JSONDecodeError → silent JSON-in-prompt
+            # fallback re-send of the same payload (which usually
+            # blocks again — double spend). Raise with the "blocked
+            # response" phrasing so the failure classifies as blocked
+            # (non-retryable, own disposition), matching generate().
+            _blocked_reasons = (
+                "safety", "recitation", "blocked", "prohibited_content",
+                "other",
+            )
+            if not (response.text or "").strip() and (
+                finish_reason in _blocked_reasons
+            ):
+                raise RuntimeError(
+                    f"Gemini blocked response (finish_reason="
+                    f"{finish_reason}). This typically happens with "
+                    f"exploit code or attack scenario prompts."
+                )
+
+            # Shared hardened fence-stripping (last-block preference
+            # — see _structured_fallback for the injection rationale).
+            content = strip_json_fences((response.text or "").strip()).strip()
             parsed = json.loads(content)
             if not parsed:
                 raise ValueError("Gemini returned empty object in structured mode")
@@ -3047,9 +3619,18 @@ class GeminiProvider(LLMProvider):
             )
 
         except (json.JSONDecodeError, ValueError, KeyError) as e:
-            # Schema/parsing error — native mode incompatible, fall back to JSON-in-prompt
-            logger.warning("Gemini native structured generation failed (falling back): %s", e)
-            return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+            # Schema/parsing error — native mode incompatible, fall back
+            # to JSON-in-prompt. Sanitise before logging: the rendered
+            # exception can embed the model's raw output (control
+            # bytes / secret-shaped tokens) — same funnel class as the
+            # _structured_fallback handler.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.redaction import redact_secrets
+            logger.warning(
+                "Gemini native structured generation failed (falling back): %s",
+                escape_nonprintable(redact_secrets(str(e)))[:512],
+            )
+            return self._structured_fallback(prompt, schema, pydantic_model, system_prompt, timeout_s=kwargs.get("timeout_s"))
         except Exception:
             # Auth, network, quota — don't waste a second call
             raise
@@ -3079,9 +3660,9 @@ class GeminiProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         **provider_specific: Any,
     ) -> TurnResponse:
         """Tool-use via the ABC's JSON-protocol fallback."""
@@ -3120,13 +3701,13 @@ class ClaudeCodeProvider:
         self.call_count = 0
         self.total_duration = 0.0
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+    def generate(self, prompt: str, system_prompt: str | None = None,
                  **kwargs):
         """Returns None — Claude Code will do the reasoning."""
-        return None
+        return
 
-    def generate_structured(self, prompt: str, schema: Dict[str, Any],
-                           system_prompt: Optional[str] = None,
+    def generate_structured(self, prompt: str, schema: dict[str, Any],
+                           system_prompt: str | None = None,
                            **kwargs):
         """Returns (None, None) — Claude Code will do the reasoning.
 
@@ -3138,7 +3719,7 @@ class ClaudeCodeProvider:
         """
         return None, None
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Return zero stats."""
         return {
             "total_requests": 0,
@@ -3146,27 +3727,6 @@ class ClaudeCodeProvider:
             "budget_remaining": 0.0,
             "providers": {},
         }
-
-
-def _safe_subprocess_stderr(stderr: Optional[str], *, limit: int = 500) -> str:
-    """Sanitise subprocess stderr for inclusion in operator-facing
-    ``RuntimeError`` messages.
-
-    Per ``project_log_sanitisation_adoption.md`` (threats A + B):
-    redact credentials that the child process may have echoed
-    (``ANTHROPIC_API_KEY``, bearer tokens, ``user:pass@`` URLs) and
-    escape non-printable bytes (ANSI / BIDI / control bytes) so the
-    error message can't corrupt operator terminals or be reshared
-    with secrets intact.
-
-    Truncation happens *after* sanitisation so the limit applies to
-    the rendered length, not the raw byte count.
-    """
-    if not stderr:
-        return ""
-    from core.security.log_sanitisation import escape_nonprintable
-    from core.security.redaction import redact_secrets
-    return escape_nonprintable(redact_secrets(stderr))[:limit]
 
 
 class ClaudeCodeLLMProvider(LLMProvider):
@@ -3192,16 +3752,36 @@ class ClaudeCodeLLMProvider(LLMProvider):
         self,
         config: ModelConfig,
         *,
-        claude_bin: Optional[str] = None,
-        budget_usd: str = "1.00",
-        timeout_s: Optional[int] = None,
+        claude_bin: str | None = None,
+        # Per-CALL abort ceiling (claude -p --max-budget-usd), not a
+        # run budget — orchestrators cap total spend via --max-cost.
+        # Audit-sized structured reviews (system prompt + context
+        # slice + schema) measure $0.9-1.3 per call on Opus-class
+        # models; the old "1.00" default aborted them mid-response
+        # with subtype error_max_budget_usd. On pricier backends the
+        # biggest call classes (Mode 2 checker synthesis: multi-KB
+        # system prompt, no cross-process cache reuse) can exceed
+        # "5.00" too — RAPTOR_CC_BUDGET_USD overrides the default
+        # without touching call sites.
+        budget_usd: str | None = None,
+        timeout_s: int | None = None,
         resumable: bool = False,
     ) -> None:
         super().__init__(config)
         self._claude_bin = claude_bin or "claude"
+        if budget_usd is None:
+            budget_usd = os.environ.get("RAPTOR_CC_BUDGET_USD", "5.00")
+            try:
+                float(budget_usd)
+            except ValueError:
+                logger.warning(
+                    "RAPTOR_CC_BUDGET_USD=%r is not a number — using 5.00",
+                    budget_usd,
+                )
+                budget_usd = "5.00"
         self._budget_usd = budget_usd
         self._resumable = resumable
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
         self._messages_seen: int = 0
         # Per-call timeout: prefer explicit kwarg, then ModelConfig.timeout,
         # then a generous default (Claude Code subprocess + tool-use can
@@ -3226,21 +3806,57 @@ class ClaudeCodeLLMProvider(LLMProvider):
         self._session_id = None
         self._messages_seen = 0
 
+    def context_window(self) -> int:
+        return self.config.max_context
+
+    def _cli_model(self) -> str | None:
+        """Model name to pass as ``claude -p --model``.
+
+        ``None`` (omit the flag; the subprocess inherits the CLI
+        session's own default model) when the config carries the
+        claudecode fallback sentinel rather than an operator-chosen
+        name — a hardcoded name breaks backends (Bedrock/Vertex)
+        that don't serve bare Anthropic model IDs.
+        """
+        from .config import CLAUDECODE_SESSION_MODEL
+        if self.config.model_name == CLAUDECODE_SESSION_MODEL:
+            return None
+        return self.config.model_name
+
+    def _effective_timeout_s(
+        self, override: int | None,
+    ) -> int | None:
+        """Resolve the timeout for one call.
+
+        ``override`` is the per-call ``timeout_s`` kwarg — callers
+        whose call class is known to outlive the provider default
+        (e.g. checker synthesis: huge system prompt + JSON-schema
+        output, measured >600s on Bedrock-backed CLIs) pass their
+        own ceiling. Same ``<= 0`` = "no timeout" sentinel as
+        ``__init__``; ``None`` means "not overridden".
+        """
+        if override is None:
+            return self._timeout_s
+        return None if override <= 0 else override
+
     def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Dispatch a prompt to ``claude -p`` via stream-json and parse
         the response."""
+        import subprocess
+        import time as _time
+
         from .cc_adapter import (
             CCDispatchConfig,
             build_cc_command,
             run_cc_streaming,
         )
-        import subprocess
-        import time as _time
+
+        call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
 
         # Pass the user prompt as-is and route the system prompt
         # through CC's `--system-prompt` flag (see CCDispatchConfig.system_prompt
@@ -3253,39 +3869,42 @@ class ClaudeCodeLLMProvider(LLMProvider):
             # us via _tool_use_fallback's JSON-protocol synthesis.
             tools="",
             budget_usd=self._budget_usd,
-            timeout_s=self._timeout_s,
+            timeout_s=call_timeout,
             capture_json_envelope=False,
             stream_json=True,
             system_prompt=system_prompt,
-            model=self.config.model_name,
+            model=self._cli_model(),
         )
         cmd = build_cc_command(cc_config)
 
-        # Pass safe env to the cc subprocess. Pre-fix
-        # `subprocess.run(cmd, ...)` inherited the parent's
-        # full environment, including HTTPS_PROXY, BASH_ENV,
-        # PYTHONSTARTUP, and any other variable a poisoned
-        # operator dotfile might set. Use RaptorConfig.get_
-        # safe_env() to strip DANGEROUS_ENV_VARS + proxy
-        # vars so cc runs with a clean baseline. See
-        # the long-form rationale at the first cc subprocess.
-        from core.config import RaptorConfig as _RaptorConfig
-        _cc_env = _RaptorConfig.get_safe_env()
+        # Sanitised baseline (get_safe_env strips shell-evaluated
+        # vars a poisoned dotfile might set) + the backend env
+        # families (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) the CLI needs
+        # to reach its provider — a bare get_safe_env() left a
+        # Bedrock-backed CLI child with no credentials/model
+        # mapping, hanging every call until timeout. See
+        # cc_subprocess_env's docstring.
+        from .cc_adapter import cc_subprocess_env
+        _cc_env = cc_subprocess_env()
 
         # monotonic() — wall clock can jump under NTP/DST, producing
         # negative durations on long CC calls.
         start = _time.monotonic()
         try:
             sr = run_cc_streaming(
-                cmd, prompt, env=_cc_env, timeout_s=self._timeout_s,
+                cmd, prompt, env=_cc_env, timeout_s=call_timeout,
             )
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"claude -p timed out after {self._timeout_s}s") from e
+            raise RuntimeError(f"claude -p timed out after {call_timeout}s") from e
         duration = _time.monotonic() - start
 
-        if sr.error:
-            raise RuntimeError(sr.error)
-
+        # Book usage BEFORE the error check: a failed call (budget
+        # abort, API refusal) still spent real money — up to the
+        # per-call budget cap. The client books nothing on failure
+        # and relies on this provider ledger as the failed-attempt
+        # floor (``_effective_spent_locked`` reads
+        # ``max(total_cost, provider_spend)``), so raising first
+        # made the spend invisible to max-cost enforcement.
         total_tokens = sr.input_tokens + sr.output_tokens
         self.track_usage(
             tokens=total_tokens,
@@ -3296,6 +3915,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
             cache_write_tokens=sr.cache_creation_tokens,
             duration=duration,
         )
+
+        if sr.error:
+            raise RuntimeError(sr.error)
 
         # The claude-code harness reports the model it used in the
         # stream-json output; treat that as the resolved snapshot. But
@@ -3315,29 +3937,35 @@ class ClaudeCodeLLMProvider(LLMProvider):
             resolved_model=resolved,
             input_tokens=sr.input_tokens,
             output_tokens=sr.output_tokens,
+            # Surface the per-call prompt-cache counters on the
+            # response itself (not only the provider aggregate) so the
+            # client's per-call telemetry can report cache hit rates.
+            cache_read_tokens=sr.cache_read_tokens,
+            cache_write_tokens=sr.cache_creation_tokens,
             duration=duration,
         )
 
     def generate_structured(
         self,
         prompt: str,
-        schema: Dict[str, Any],
-        system_prompt: Optional[str] = None,
+        schema: dict[str, Any],
+        system_prompt: str | None = None,
         **kwargs,
-    ) -> Tuple[Dict[str, Any], str]:
+    ) -> StructuredResponse:
         """Dispatch with ``--json-schema`` for structured output via
         stream-json.
 
         Accepts and ignores ``**kwargs`` — `claude` CLI has no
         temperature flag (see ClaudeCodeProvider.generate_structured).
         """
+        import subprocess
+        import time as _time
+
         from .cc_adapter import (
             CCDispatchConfig,
             build_cc_command,
             run_cc_streaming,
         )
-        import subprocess
-        import time as _time
 
         # Route system_prompt through CC's `--system-prompt` flag instead of
         # concatenating into the user prompt. Pre-fix this path used
@@ -3360,46 +3988,47 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # the user content; system_prompt routes through
         # CCDispatchConfig.system_prompt (which build_cc_command
         # converts into a `--system-prompt` flag).
+        call_timeout = self._effective_timeout_s(kwargs.pop("timeout_s", None))
+
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,
             tools="",                                # see generate() comment
             budget_usd=self._budget_usd,
-            timeout_s=self._timeout_s,
+            timeout_s=call_timeout,
             json_schema=schema,
             capture_json_envelope=False,
             stream_json=True,
             system_prompt=system_prompt,
-            model=self.config.model_name,
+            model=self._cli_model(),
         )
         cmd = build_cc_command(cc_config)
 
-        # Pass safe env to the cc subprocess. Pre-fix
-        # `subprocess.run(cmd, ...)` inherited the parent's
-        # full environment, including HTTPS_PROXY, BASH_ENV,
-        # PYTHONSTARTUP, and any other variable a poisoned
-        # operator dotfile might set. Use RaptorConfig.get_
-        # safe_env() to strip DANGEROUS_ENV_VARS + proxy
-        # vars so cc runs with a clean baseline. See
-        # the long-form rationale at the first cc subprocess.
-        from core.config import RaptorConfig as _RaptorConfig
-        _cc_env = _RaptorConfig.get_safe_env()
+        # Sanitised baseline (get_safe_env strips shell-evaluated
+        # vars a poisoned dotfile might set) + the backend env
+        # families (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) the CLI needs
+        # to reach its provider — a bare get_safe_env() left a
+        # Bedrock-backed CLI child with no credentials/model
+        # mapping, hanging every call until timeout. See
+        # cc_subprocess_env's docstring.
+        from .cc_adapter import cc_subprocess_env
+        _cc_env = cc_subprocess_env()
 
         start = _time.monotonic()
         try:
             sr = run_cc_streaming(
-                cmd, prompt, env=_cc_env, timeout_s=self._timeout_s,
+                cmd, prompt, env=_cc_env, timeout_s=call_timeout,
             )
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"claude -p timed out after {self._timeout_s}s") from e
+            raise RuntimeError(f"claude -p timed out after {call_timeout}s") from e
         duration = _time.monotonic() - start
 
-        if sr.error:
-            raise RuntimeError(sr.error)
-
-        result = self._parse_stream_content(sr.content)
-        if isinstance(result, dict) and "error" in result and result["error"]:
-            raise RuntimeError(f"claude -p structured parse failed: {result['error']}")
-
+        # Book usage BEFORE the error/parse checks: a failed call
+        # (budget abort, API refusal, unparseable output) still spent
+        # real money. The client books nothing on failure and relies
+        # on this provider ledger as the failed-attempt floor
+        # (``_effective_spent_locked`` reads
+        # ``max(total_cost, provider_spend)``), so raising first
+        # made the spend invisible to max-cost enforcement.
         total_tokens = sr.input_tokens + sr.output_tokens
         self.track_usage(
             tokens=total_tokens,
@@ -3411,6 +4040,18 @@ class ClaudeCodeLLMProvider(LLMProvider):
             duration=duration,
         )
 
+        if sr.error:
+            raise RuntimeError(sr.error)
+
+        if sr.structured_output is not None:
+            result = sr.structured_output
+        else:
+            result = self._parse_stream_content(sr.content)
+            if isinstance(result, dict) and "error" in result and result["error"]:
+                raise RuntimeError(
+                    f"claude -p structured parse failed: {result['error']}"
+                )
+
         return StructuredResponse(
             result=result,
             raw=json.dumps(result, indent=2),
@@ -3419,10 +4060,33 @@ class ClaudeCodeLLMProvider(LLMProvider):
             model=sr.model or self.config.model_name,
             provider="claudecode",
             duration=duration,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
+            cache_read_tokens=sr.cache_read_tokens,
+            cache_write_tokens=sr.cache_creation_tokens,
         )
 
     def supports_tool_use(self) -> bool: return True
-    def supports_prompt_caching(self) -> bool: return False
+
+    def supports_prompt_caching(self) -> bool:
+        """False: ``claude -p`` exposes no cache_control breakpoint
+        API to this process — callers cannot mark cache regions."""
+        return False
+
+    def prefers_stable_system_prefix(self) -> bool:
+        """True: the CLI's backend does server-side prefix caching
+        across separate ``claude -p`` children when the prefix is
+        byte-stable (measured on this transport: 19k cache-read
+        tokens and ~13x input-cost drop on the second
+        identical-prefix call — see cc_adapter.CCDispatchConfig).
+        The system prompt travels via ``--system-prompt`` and the
+        audit composes it once per run, so run-stable material moved
+        into it bills at the cached-input rate from the second call
+        on. Per-call cache-read/-write counters stream back in the
+        usage events and flow through telemetry, so the realised hit
+        rate is measurable on live runs."""
+        return True
+
     def supports_parallel_tools(self) -> bool: return False
 
     # ------------------------------------------------------------------
@@ -3454,9 +4118,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = 4096,
-        cache_control: CacheControl = CacheControl(),
+        cache_control: CacheControl = _DEFAULT_CACHE_CONTROL,
         **provider_specific: Any,
     ) -> TurnResponse:
         """Tool-use via ``generate_structured`` with a discriminated
@@ -3509,7 +4173,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
     ) -> TurnResponse:
         """Original per-subprocess turn with no session state."""
         schema = self._build_turn_schema(tools)
@@ -3536,18 +4200,25 @@ class ClaudeCodeLLMProvider(LLMProvider):
         if isinstance(response, StructuredResponse):
             result = response.result
             cost_usd = response.cost
-            tokens = response.tokens_used
+            # Preserve the real input/output split —
+            # generate_structured populates both fields, and
+            # ToolUseLoop records per-turn (input, output) pairs plus
+            # separate totals. Collapsing the sum into output_tokens
+            # (as this path once did) skewed all of them.
+            input_tokens = response.input_tokens
+            output_tokens = response.output_tokens
         else:
             result, _ = response
             cost_usd = 0.0
-            tokens = 0
+            input_tokens = 0
+            output_tokens = 0
 
         return self._parse_turn_structured_result(
             result,
             tools,
             cost_usd=cost_usd,
-            input_tokens=0,
-            output_tokens=tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     def _turn_resumable(
@@ -3555,7 +4226,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         messages: Sequence[Message],
         tools: Sequence[ToolDef],
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         _retry: bool = False,
     ) -> TurnResponse:
         """Resume-based turn: CC preserves conversation state across
@@ -3569,13 +4240,14 @@ class ClaudeCodeLLMProvider(LLMProvider):
         Uses ``--output-format stream-json`` for streaming responses
         and proper input/output token accounting.
         """
+        import subprocess
+        import time as _time
+
         from .cc_adapter import (
             CCDispatchConfig,
             build_cc_command,
             run_cc_streaming,
         )
-        import subprocess
-        import time as _time
 
         schema = self._build_turn_schema(tools)
         first_turn = self._session_id is None
@@ -3597,15 +4269,15 @@ class ClaudeCodeLLMProvider(LLMProvider):
             capture_json_envelope=False,
             stream_json=True,
             system_prompt=sys_combined,
-            model=self.config.model_name,
+            model=self._cli_model(),
             session_id=self._session_id,
             persist_session=True,
         )
         cmd = build_cc_command(cc_config)
 
-        from core.config import RaptorConfig as _RaptorConfig
+        from .cc_adapter import cc_subprocess_env
 
-        _cc_env = _RaptorConfig.get_safe_env()
+        _cc_env = cc_subprocess_env()
 
         start = _time.monotonic()
         try:
@@ -3623,6 +4295,21 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 error_message=err_msg,
             )
         duration = _time.monotonic() - start
+
+        # Book usage BEFORE the error/empty-content returns: a failed
+        # turn (budget abort, refusal) still spent real money, and
+        # budget enforcement reads this ledger as the failed-attempt
+        # floor. The retry path below issues a SECOND call which books
+        # its own spend — two calls, two bookings.
+        self.track_usage(
+            tokens=sr.input_tokens + sr.output_tokens,
+            cost=sr.cost_usd,
+            input_tokens=sr.input_tokens,
+            output_tokens=sr.output_tokens,
+            cache_read_tokens=sr.cache_read_tokens,
+            cache_write_tokens=sr.cache_creation_tokens,
+            duration=duration,
+        )
 
         if sr.error:
             err_msg = sr.error
@@ -3659,7 +4346,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             )
 
         content_text = sr.content
-        if not content_text:
+        if not content_text and sr.structured_output is None:
             return TurnResponse(
                 content=[],
                 stop_reason=StopReason.ERROR,
@@ -3668,25 +4355,18 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 error_message="empty response from stream-json",
             )
 
-        self.track_usage(
-            tokens=sr.input_tokens + sr.output_tokens,
-            cost=sr.cost_usd,
-            input_tokens=sr.input_tokens,
-            output_tokens=sr.output_tokens,
-            cache_read_tokens=sr.cache_read_tokens,
-            cache_write_tokens=sr.cache_creation_tokens,
-            duration=duration,
-        )
-
-        result = self._parse_stream_content(content_text)
-        if isinstance(result, dict) and "error" in result and result["error"]:
-            return TurnResponse(
-                content=[],
-                stop_reason=StopReason.ERROR,
-                input_tokens=sr.input_tokens,
-                output_tokens=sr.output_tokens,
-                error_message=f"structured parse: {result['error']}",
-            )
+        if sr.structured_output is not None:
+            result = sr.structured_output
+        else:
+            result = self._parse_stream_content(content_text)
+            if isinstance(result, dict) and "error" in result and result["error"]:
+                return TurnResponse(
+                    content=[],
+                    stop_reason=StopReason.ERROR,
+                    input_tokens=sr.input_tokens,
+                    output_tokens=sr.output_tokens,
+                    error_message=f"structured parse: {result['error']}",
+                )
 
         return self._parse_turn_structured_result(
             result,
@@ -3699,8 +4379,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
     @staticmethod
     def _parse_stream_content(text: str) -> dict[str, Any]:
         """Extract the structured JSON object from stream-json content text."""
-        from .cc_adapter import strip_json_fences
         import json
+
+        from .cc_adapter import strip_json_fences
 
         text = strip_json_fences(text.strip())
         try:
@@ -3724,7 +4405,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_turn_schema(tools: Sequence[ToolDef]) -> Dict[str, Any]:
+    def _build_turn_schema(tools: Sequence[ToolDef]) -> dict[str, Any]:
         """Discriminated-union schema CC fills in for one turn.
 
         ``tool_name`` is constrained to the registered tool set so CC
@@ -3771,7 +4452,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
     def _build_turn_system_prompt(
         tools: Sequence[ToolDef],
         *,
-        extra: Optional[str] = None,
+        extra: str | None = None,
     ) -> str:
         # The "do not invent values" instruction is critical and
         # substrate-level (not consumer-specific): without it, the
@@ -3783,19 +4464,25 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # (cve-diff's verified-SHA gate, etc.) remain the
         # belt-and-braces second line.
         lines = [
-            "Decide the next action for an agentic tool-use loop. "
-            "Either invoke a tool to gather more information or "
-            "deliver a final answer. Output JSON matching the "
-            "provided schema.",
+            (
+                "Decide the next action for an agentic tool-use loop. "
+                "Either invoke a tool to gather more information or "
+                "deliver a final answer. Output JSON matching the "
+                "provided schema."
+            ),
             "",
             "RULES:",
-            "1. When invoking a tool, the values you put in tool_input "
-            "MUST come from either the conversation history or the "
-            "user's request. Do not guess, invent, or recall from "
-            "training data — even values that look plausible (slugs, "
-            "SHAs, URLs, IDs, package names).",
-            "2. If you don't have a value the next tool needs, call "
-            "a discovery tool first to obtain it.",
+            (
+                "1. When invoking a tool, the values you put in tool_input "
+                "MUST come from either the conversation history or the "
+                "user's request. Do not guess, invent, or recall from "
+                "training data — even values that look plausible (slugs, "
+                "SHAs, URLs, IDs, package names)."
+            ),
+            (
+                "2. If you don't have a value the next tool needs, call "
+                "a discovery tool first to obtain it."
+            ),
             "3. Call only one tool per response.",
             "",
             "TOOL CATALOG:",
@@ -3834,7 +4521,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
     def _parse_turn_structured_result(
         self,
-        result: Dict[str, Any],
+        result: dict[str, Any],
         tools: Sequence[ToolDef],
         *,
         cost_usd: float = 0.0,
@@ -3845,7 +4532,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         :class:`TurnResponse`. Defensive against malformed output —
         falls back to a text block if the result doesn't fit either
         branch of the discriminated schema."""
-        usd: Optional[float] = float(cost_usd) if cost_usd is not None else None
+        usd: float | None = float(cost_usd) if cost_usd is not None else None
         rtype = result.get("type")
         if rtype == "tool_call":
             name = result.get("tool_name")
@@ -3886,6 +4573,79 @@ class ClaudeCodeLLMProvider(LLMProvider):
         )
 
 
+class ModelTransportMismatchError(RuntimeError):
+    """A model id is provider-shaped for a DIFFERENT transport than
+    the one about to serve it (e.g. a Bedrock inference-profile id on
+    the direct-API / claudecode path).
+
+    Raised at provider CONSTRUCTION, before any request is built:
+    shipping the id upstream yields a bare HTTP 400 with none of the
+    routing context, and burns a billable call on backends that
+    partially process the request.  Non-retryable by design (the
+    message deliberately avoids the transient-error vocabulary
+    ``_is_retryable_error`` matches on), so the fallback chain moves
+    on immediately and the operator sees THIS message, not a generic
+    400.
+    """
+
+
+def _guard_transport_model_shape(
+    config: ModelConfig, *, transport: str,
+) -> None:
+    """Fail loud when ``config.model_name`` cannot be served by
+    ``transport``.
+
+    Covers the observed misroute: resolution falls back from a
+    dispatcher-only Bedrock entry to the claudecode transport (or a
+    direct-API entry borrows a Bedrock id), and ``claude -p --model
+    us.anthropic...`` / the Anthropic SDK then hits the direct API --
+    HTTP 400 with no hint that the id was Bedrock-shaped.
+
+    Never trips on legitimate ids for the transport: bare catalog
+    names, the ``session-default`` sentinel, aliases and Vertex ids
+    are not Bedrock-shaped, and a Bedrock-backed claude CLI
+    (``CLAUDE_CODE_USE_BEDROCK`` set -- the same signal
+    ``cc_subprocess_env`` gates its AWS overlay on; settings.json-only
+    Bedrock setups must export it, documented trade-off) serves
+    Bedrock ids natively.  Custom ``api_base`` endpoints are the
+    operator's own gateway contract and are exempt.
+    """
+    from core.llm.bedrock_prefixes import bedrock_shaped_model_id
+
+    if not bedrock_shaped_model_id(config.model_name):
+        return
+    if transport == "claudecode":
+        if os.environ.get("CLAUDE_CODE_USE_BEDROCK"):
+            return
+        raise ModelTransportMismatchError(
+            f"model id {config.model_name!r} is Bedrock-shaped but is "
+            "routed to the claudecode transport on a NON-Bedrock "
+            "claude CLI (CLAUDE_CODE_USE_BEDROCK is unset) -- "
+            "`claude -p --model` would send it to the direct Anthropic "
+            "API, which rejects Bedrock ids with a bare HTTP 400. "
+            "Remedies: add a models.json entry with \"provider\": "
+            "\"bedrock\" so the RAPTOR dispatcher routes it (SigV4/"
+            "bearer), or export CLAUDE_CODE_USE_BEDROCK=1 if the "
+            "claude CLI really is Bedrock-backed (settings.json-only "
+            "Bedrock installs must export it), or pin a direct-API "
+            "model name instead."
+        )
+    if transport == "anthropic":
+        if config.api_base:
+            # Operator-supplied gateway -- their endpoint, their
+            # id vocabulary.
+            return
+        raise ModelTransportMismatchError(
+            f"model id {config.model_name!r} is Bedrock-shaped but is "
+            "configured on the direct Anthropic API path (provider "
+            "\"anthropic\"), which serves bare claude-* ids only -- "
+            "the request would fail upstream with a bare HTTP 400. "
+            "Remedies: set \"provider\": \"bedrock\" on the "
+            "models.json entry so the RAPTOR dispatcher routes it "
+            "(SigV4/bearer), or use the direct-API model name."
+        )
+
+
 def create_provider(config: ModelConfig) -> LLMProvider:
     """
     Factory function to create appropriate provider.
@@ -3905,10 +4665,13 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         "claudecode-resumable",
         "claude_code_resumable",
         "claude-code-resumable",
+        "claudecode", "claude_code", "claude-code",
     ):
-        return ClaudeCodeLLMProvider(config, resumable=True)
-    if provider in ("claudecode", "claude_code", "claude-code"):
-        return ClaudeCodeLLMProvider(config)
+        _guard_transport_model_shape(config, transport="claudecode")
+        return ClaudeCodeLLMProvider(
+            config,
+            resumable=provider.replace("_", "-").endswith("-resumable"),
+        )
     if provider == "bedrock":
         # AWS Bedrock — routed via the dispatcher's bedrock rule.  Two
         # API surfaces are available; the operator chooses with
@@ -3959,11 +4722,22 @@ def create_provider(config: ModelConfig) -> LLMProvider:
             provider_instance.instructor_client = instructor.from_anthropic(
                 provider_instance.client,
             )
+        if api == "runtime":
+            # InvokeModel has no SSE surface; the dispatcher rejects
+            # ``stream`` with a 400 mid-run. Surface the capability
+            # limit at construction time so a streaming consumer's
+            # failure isn't the first hint.
+            logger.warning(
+                "Bedrock runtime surface is non-streaming (InvokeModel)"
+                " — streaming consumers will get a 400; use "
+                "bedrock_api=mantle for SSE streaming",
+            )
         logger.debug(
             "Bedrock provider: routing via dispatcher /bedrock/%s", api,
         )
         return provider_instance
     if provider == "anthropic":
+        _guard_transport_model_shape(config, transport="anthropic")
         if ANTHROPIC_SDK_AVAILABLE:
             return AnthropicProvider(config)
         elif OPENAI_SDK_AVAILABLE:

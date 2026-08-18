@@ -16,24 +16,26 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from core.config import env_flag
 from core.hash import sha256_string
 from core.logging import get_logger
 from core.security.redaction import redact_secrets
 
+from . import rowmac
 from .client import SageClient
 from .config import SageConfig
 
 logger = get_logger()
 
 _client_lock = threading.Lock()
-_client: Optional[SageClient] = None
+_client: SageClient | None = None
 _client_initialised: bool = False
 _client_none_decided_at: float = 0.0
 _CLIENT_NONE_TTL_S: float = 300.0
 _metrics_lock = threading.Lock()
-_sage_metrics: Dict[str, int] = {
+_sage_metrics: dict[str, int] = {
     "propose_attempted": 0,
     "propose_succeeded": 0,
     "propose_failed": 0,
@@ -46,7 +48,7 @@ def _metric_inc(key: str, n: int = 1) -> None:
     with _metrics_lock:
         _sage_metrics[key] += n
 
-_ollama_has_gpu: Optional[bool] = None
+_ollama_has_gpu: bool | None = None
 
 
 def _ollama_gpu_available() -> bool:
@@ -60,14 +62,29 @@ def _ollama_gpu_available() -> bool:
     try:
         import httpx
 
+        from .config import ensure_loopback_no_proxy
+
+        # Without this, a proxied shell routes the probe to the proxy and
+        # a GPU host silently misreports as CPU-only (halved recall
+        # workers, direct-embed path chosen on a wrong premise).
+        ensure_loopback_no_proxy()
         resp = httpx.get("http://localhost:11435/api/ps", timeout=5)
         if resp.status_code == 200:
             for model in resp.json().get("models", []):
-                if model.get("size_vram", 0) > 0:
+                # Full offload (size_vram >= size), not size_vram > 0:
+                # Ollama 0.32 reports a non-zero size_vram even when the
+                # model runs on pure CPU (server logs library=cpu,
+                # total_vram=0B), so the >0 test misdetects GPU and
+                # re-introduces the 30s SAGE-side embed ceiling. A truly
+                # GPU-resident model is fully offloaded; anything less
+                # falls back to the direct-embed path, which works on
+                # both CPU and GPU.
+                size = model.get("size", 0)
+                if size > 0 and model.get("size_vram", 0) >= size:
                     _ollama_has_gpu = True
                     return True
         _ollama_has_gpu = False
-    except Exception:
+    except Exception:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         _ollama_has_gpu = False
     return _ollama_has_gpu
 
@@ -105,7 +122,7 @@ def _throttle() -> None:
         time.sleep(min(ms, 300_000) / 1000)
 
 
-def _get_client() -> Optional[SageClient]:
+def _get_client() -> SageClient | None:
     """Get or create the SAGE client singleton.
 
     Thread-safe: guarded by `_client_lock` because the orchestrator
@@ -141,7 +158,9 @@ def _get_client() -> Optional[SageClient]:
         ):
             needs_init = True
         if needs_init:
-            if not _ollama_gpu_available() and not os.getenv("SAGE_FORCE_CPU"):
+            if not _ollama_gpu_available() and not env_flag(
+                "SAGE_FORCE_CPU", default=False
+            ):
                 logger.debug(
                     "SAGE pipeline hooks disabled on CPU — too slow for "
                     "automated use. Set SAGE_FORCE_CPU=1 to override. "
@@ -161,7 +180,7 @@ def _get_client() -> Optional[SageClient]:
                     logger.debug("SAGE unavailable — pipeline hooks disabled")
                     _client = None
                     _client_none_decided_at = time.time()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
                 logger.debug("SAGE client init failed: %s", exc)
                 _client = None
                 _client_none_decided_at = time.time()
@@ -189,7 +208,7 @@ def _propose_redacted(
     memory_type: str,
     domain_tag: str,
     confidence: float,
-    tags: Optional[List[str]] = None,
+    tags: list[str] | None = None,
 ) -> bool:
     _metric_inc("propose_attempted")
     redacted_content = redact_secrets(content)
@@ -216,7 +235,45 @@ def _sanitise_delim(value: str) -> str:
     return str(value).replace("|", "")
 
 
-def recall_row_confidence(row: Dict[str, Any]) -> float:
+def _stamp_row(hook: str, content: str, fields: dict[str, str]) -> str:
+    """Append the row-MAC token for *fields* to *content* (store side).
+
+    Stamping is unconditional and invisible to SAGE (just longer
+    content). If minting fails (e.g. the key directory is unwritable),
+    the row is stored unstamped — it then simply never earns mechanical
+    effect, which is the safe direction.
+    """
+    try:
+        return rowmac.stamp(content, fields)
+    except Exception as exc:  # noqa: BLE001 — stamping must never block a store
+        logger.debug("SAGE %s: could not stamp row (%s) — storing unstamped", hook, exc)
+        return content
+
+
+def _row_mac_ok(hook: str, fields: dict[str, str], token: str | None) -> bool:
+    """Gate a mechanical decision on the row's MAC token (recall side).
+
+    Returns True only when the row carries a token minted by this
+    install over exactly *fields*. On any failure the caller must
+    behave as if no memory existed; this helper emits the single debug
+    log naming the hook and the reason. Never raises.
+    """
+    if not token:
+        logger.debug(
+            "SAGE %s: recall row has no MAC token — mechanical use demoted to hint",
+            hook,
+        )
+        return False
+    if not rowmac.verify(fields, token):
+        logger.debug(
+            "SAGE %s: recall row failed MAC verification — mechanical use demoted to hint",
+            hook,
+        )
+        return False
+    return True
+
+
+def recall_row_confidence(row: dict[str, Any]) -> float:
     """Parse 0–1 confidence from a SAGE recall row (missing → 0)."""
     try:
         return float(row.get("confidence") or 0.0)
@@ -225,10 +282,10 @@ def recall_row_confidence(row: Dict[str, Any]) -> float:
 
 
 def pick_strongest_recall_row(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     *,
     min_confidence: float = 0.0,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return the highest-confidence recall row, or None if below ``min_confidence``."""
     if not rows:
         return None
@@ -239,16 +296,16 @@ def pick_strongest_recall_row(
 
 
 def _merge_recall_rows(
-    *hit_lists: List[List[Dict[str, Any]]],
-    top_k: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    *hit_lists: list[list[dict[str, Any]]],
+    top_k: int | None = None,
+) -> list[dict[str, Any]]:
     """Merge SAGE query rows from multiple domains with stable priority.
 
     Lists are consumed in order so repo-scoped hits precede global
     methodology; duplicate ``content`` strings are dropped.
     """
     seen: set = set()
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for lst in hit_lists:
         for r in lst:
             c = (str(r.get("content") or "")).strip()
@@ -266,8 +323,8 @@ def _merge_recall_rows(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def infer_afl_fuzz_flags_from_sage_recall_row(
-    row: Optional[Dict[str, Any]],
-) -> List[str]:
+    row: dict[str, Any] | None,
+) -> list[str]:
     """Derive conservative ``afl-fuzz`` flag tokens from a high-confidence SAGE row.
 
     Only adds flags that are valid without extra instrumented binaries.
@@ -284,11 +341,39 @@ def infer_afl_fuzz_flags_from_sage_recall_row(
 
     Disable all mechanical AFL flag injection with env ``RAPTOR_SAGE_AFL_PRIOR=0``
     (see ``raptor_fuzzing.py`` / ``FuzzingPlanner``).
+
+    Flags are only appended when the row carries a valid MAC token
+    (minted by ``store_fuzzing_strategy_outcome`` on this install) over
+    the decision fields (kind, strategy, fingerprint, flag set). Rows
+    without a valid token contribute no flags — the strategy text still
+    surfaces as a hint via the recall log.
     """
     if not row:
         return []
-    text = str(row.get("content") or "").lower()
-    parts: List[str] = []
+    clean, token = rowmac.strip(str(row.get("content") or ""))
+    flags = _afl_flags_from_text(clean)
+    if not flags:
+        return []
+    match = re.search(r": strategy (.+?), binary fingerprint (.+?), duration", clean)
+    fields = {
+        "kind": "afl_flags",
+        "strategy": match.group(1) if match else "",
+        "fingerprint": match.group(2) if match else "",
+        "flags": " ".join(flags),
+    }
+    if not _row_mac_ok("afl_flags", fields, token):
+        return []
+    return flags
+
+
+def _afl_flags_from_text(text: str) -> list[str]:
+    """Derive the conservative ``afl-fuzz`` flag tokens from row text.
+
+    Shared by the store side (to bind the derived flag set into the
+    row's MAC fields) and the recall side (to re-derive and verify).
+    """
+    text = str(text or "").lower()
+    parts: list[str] = []
     if "mopt" in text or "m-opt" in text:
         parts.extend(["-L", "0"])
     if "deterministic" in text and "fuzz" in text:
@@ -311,9 +396,9 @@ def infer_afl_fuzz_flags_from_sage_recall_row(
     return _dedupe_afl_flag_tokens(parts)
 
 
-def _dedupe_afl_flag_tokens(tokens: List[str]) -> List[str]:
+def _dedupe_afl_flag_tokens(tokens: list[str]) -> list[str]:
     """Order-preserving dedupe for ``afl-fuzz`` argv fragments."""
-    out: List[str] = []
+    out: list[str] = []
     seen_p = False
     seen_mopt = False
     seen_d = False
@@ -345,8 +430,8 @@ def _dedupe_afl_flag_tokens(tokens: List[str]) -> List[str]:
 
 def recall_context_for_codeql_build(
     repo_path: str,
-    languages: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    languages: list[str] | None = None,
+) -> list[dict[str, Any]]:
     client = _get_client()
     if client is None:
         return []
@@ -374,18 +459,18 @@ def recall_context_for_codeql_build(
         merged = _merge_recall_rows(findings, methodology, top_k=8)
         _metric_inc("recall_hits", len(merged))
         return merged
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE codeql recall failed: %s", e)
         return []
 
 
 def store_codeql_build_reliability(
     repo_path: str,
-    languages: List[str],
+    languages: list[str],
     build_command: str,
     auto_detect_outcome: str,
     analyses_completed: int,
-    failure_modes: Optional[List[str]] = None,
+    failure_modes: list[str] | None = None,
 ) -> None:
     client = _get_client()
     if client is None:
@@ -394,11 +479,23 @@ def store_codeql_build_reliability(
         failures = ", ".join(failure_modes or []) or "none"
         lang_str = ", ".join(languages) or "unknown"
         confidence = 0.85 if auto_detect_outcome == "success" else 0.75
+        repo_key = _repo_key(repo_path)
         content = (
             f"CodeQL build reliability for repo {Path(repo_path).name}: "
             f"languages {lang_str}, outcome {auto_detect_outcome}, "
             f"build command {build_command}, analyses completed {analyses_completed}, "
-            f"failure modes {failures}."
+            f"failure modes {failures}. ||repo={repo_key}||"
+        )
+        content = _stamp_row(
+            "codeql_build",
+            content,
+            {
+                "kind": "codeql_build",
+                "repo": repo_key,
+                "outcome": auto_detect_outcome,
+                "build_command": build_command,
+                "languages": lang_str,
+            },
         )
         _propose_redacted(
             client=client,
@@ -408,13 +505,13 @@ def store_codeql_build_reliability(
             confidence=confidence,
             tags=["codeql", "build", auto_detect_outcome],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE codeql reliability store failed: %s", e)
 
 
 def infer_codeql_build_from_sage_recall_row(
-    row: Optional[Dict[str, Any]],
-) -> Dict[str, str]:
+    row: dict[str, Any] | None,
+) -> dict[str, str]:
     """Extract a build hint from a SAGE CodeQL build-reliability row.
 
     Returns a dict with ``outcome``, and optionally ``build_command``
@@ -428,25 +525,45 @@ def infer_codeql_build_from_sage_recall_row(
     Only returns ``build_command`` when ``outcome`` is ``success`` — a
     prior failure is useful for avoidance logging but not for mechanical
     override.
+
+    ``build_command`` additionally requires the row's MAC token (minted
+    by ``store_codeql_build_reliability`` on this install) to verify
+    over the decision fields (kind, repo key, outcome, build command,
+    languages). Rows without a valid token still yield ``outcome`` /
+    ``languages`` as hints, but never a replayable command — an
+    unverified row must not produce a BuildSystem. The parsed command
+    is instead surfaced as ``unverified_build_command`` so the consumer
+    can show it to the operator as a hint (never execute it).
     """
     if not row:
         return {}
-    text = str(row.get("content") or "")
-    out: Dict[str, str] = {}
+    text, token = rowmac.strip(str(row.get("content") or ""))
+    out: dict[str, str] = {}
 
     m_outcome = re.search(r"outcome (\w+)", text)
     if m_outcome:
         out["outcome"] = m_outcome.group(1)
 
+    m_lang = re.search(r"languages ([^,]+(?:, [^,]+)*), outcome", text)
+    if m_lang:
+        out["languages"] = m_lang.group(1).strip()
+
     m_cmd = re.search(r"build command (.+?), analyses completed", text)
     if m_cmd and out.get("outcome") == "success":
         cmd = m_cmd.group(1).strip()
         if cmd and cmd != "auto":
-            out["build_command"] = cmd
-
-    m_lang = re.search(r"languages ([^,]+(?:, [^,]+)*), outcome", text)
-    if m_lang:
-        out["languages"] = m_lang.group(1).strip()
+            m_repo = re.search(r"\|\|repo=([0-9a-f]{12})\|\|", text)
+            fields = {
+                "kind": "codeql_build",
+                "repo": m_repo.group(1) if m_repo else "",
+                "outcome": out["outcome"],
+                "build_command": cmd,
+                "languages": out.get("languages", ""),
+            }
+            if _row_mac_ok("codeql_build", fields, token):
+                out["build_command"] = cmd
+            else:
+                out["unverified_build_command"] = cmd
 
     return out
 
@@ -458,8 +575,8 @@ def infer_codeql_build_from_sage_recall_row(
 def recall_context_for_fuzzing_strategy(
     repo_path: str,
     binary_fingerprint: str,
-    strategy_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    strategy_id: str | None = None,
+) -> list[dict[str, Any]]:
     client = _get_client()
     if client is None:
         return []
@@ -489,7 +606,7 @@ def recall_context_for_fuzzing_strategy(
         merged = _merge_recall_rows(results, methodology, top_k=8)
         _metric_inc("recall_hits", len(merged))
         return merged
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE fuzzing recall failed: %s", e)
         return []
 
@@ -515,6 +632,16 @@ def store_fuzzing_strategy_outcome(
             f"duration {duration_s}s, executions {execs}, unique crashes {unique_crashes}, "
             f"hangs {hangs}, exploitable crashes {exploitable_crashes}."
         )
+        content = _stamp_row(
+            "afl_flags",
+            content,
+            {
+                "kind": "afl_flags",
+                "strategy": strategy_id,
+                "fingerprint": binary_fingerprint,
+                "flags": " ".join(_afl_flags_from_text(content)),
+            },
+        )
         _propose_redacted(
             client=client,
             content=content,
@@ -523,7 +650,7 @@ def store_fuzzing_strategy_outcome(
             confidence=confidence,
             tags=["fuzzing", "strategy", strategy_id],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE fuzzing strategy store failed: %s", e)
 
 
@@ -533,7 +660,7 @@ def store_fuzzing_strategy_outcome(
 
 _SUPPRESS_VERDICTS = frozenset({"false_positive", "not_exploitable"})
 
-_VERDICT_CONFIDENCE: Dict[str, float] = {
+_VERDICT_CONFIDENCE: dict[str, float] = {
     "false_positive": 0.95,
     "not_exploitable": 0.90,
     "exploitable": 0.95,
@@ -572,7 +699,7 @@ def recall_prior_finding_verdict(
     file_path: str,
     function: str,
     source_hash: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Recall a prior finding verdict from SAGE.
 
     Returns ``{verdict, source_hash, confidence}`` if a suppressible
@@ -597,11 +724,20 @@ def recall_prior_finding_verdict(
             min_confidence=0.7,
         )
         for row in results:
-            content = str(row.get("content") or "")
+            content, token = rowmac.strip(str(row.get("content") or ""))
             if f"||src={source_hash}||" not in content:
                 continue
             for v in _SUPPRESS_VERDICTS:
                 if f"||verdict={v}||" in content:
+                    fields = {
+                        "kind": "finding_verdict",
+                        "repo": _repo_key(repo_path),
+                        "fp": _finding_fingerprint(rule_id, file_path, function),
+                        "verdict": v,
+                        "src": source_hash,
+                    }
+                    if not _row_mac_ok("finding_verdict", fields, token):
+                        break
                     _metric_inc("recall_hits")
                     return {
                         "verdict": v,
@@ -609,7 +745,7 @@ def recall_prior_finding_verdict(
                         "confidence": recall_row_confidence(row),
                     }
         return None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE FP recall failed: %s", e)
         return None
 
@@ -636,19 +772,31 @@ def store_finding_verdict(
     try:
         fp = _finding_fingerprint(rule_id, file_path, function)
         _s = _sanitise_delim
+        content = (
+            f"Finding verdict: fp={fp} rule={_s(rule_id)} "
+            f"file={_s(file_path)} fn={_s(function)} "
+            f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}||"
+        )
+        content = _stamp_row(
+            "finding_verdict",
+            content,
+            {
+                "kind": "finding_verdict",
+                "repo": _repo_key(repo_path),
+                "fp": fp,
+                "verdict": verdict,
+                "src": source_hash,
+            },
+        )
         return _propose_redacted(
             client=client,
-            content=(
-                f"Finding verdict: fp={fp} rule={_s(rule_id)} "
-                f"file={_s(file_path)} fn={_s(function)} "
-                f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}||"
-            ),
+            content=content,
             memory_type="fact",
             domain_tag=_fp_domain(repo_path),
             confidence=_VERDICT_CONFIDENCE.get(verdict, 0.80),
             tags=["finding", "verdict", verdict, rule_id],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE FP store failed: %s", e)
         return False
 
@@ -689,26 +837,47 @@ def store_proven_rule_metadata(
     try:
         confidence = 0.90 if dual_control_passed else 0.75
         _s = _sanitise_delim
+        content = (
+            f"Proven checker rule: "
+            f"||engine={_s(engine)}|| ||cwe={_s(cwe)}|| "
+            f"||rule_id={_s(rule_id)}|| "
+            f"||rule_body_hash={_s(rule_body_hash)}|| "
+            f"||rule_path={_s(rule_path)}|| "
+            f"||tp_count={tp_count}|| "
+            f"||fp_count={fp_count}|| "
+            f"||total_matches={total_matches}|| "
+            f"||dual_control={dual_control_passed}|| "
+            f"||targets_tested={targets_tested}||"
+        )
+        # The MAC gates mechanical replay on the recall side
+        # (``recall_verified_proven_rules``): only rows minted by this
+        # install may join sweeps; everything else is hint-only.
+        content = _stamp_row(
+            "proven_rule",
+            content,
+            {
+                "kind": "proven_rule",
+                "engine": _s(engine),
+                "cwe": _s(cwe),
+                "rule_id": _s(rule_id),
+                "rule_body_hash": _s(rule_body_hash),
+                "rule_path": _s(rule_path),
+                "tp_count": str(tp_count),
+                "fp_count": str(fp_count),
+                "total_matches": str(total_matches),
+                "dual_control": str(dual_control_passed),
+                "targets_tested": str(targets_tested),
+            },
+        )
         return _propose_redacted(
             client=client,
-            content=(
-                f"Proven checker rule: "
-                f"||engine={_s(engine)}|| ||cwe={_s(cwe)}|| "
-                f"||rule_id={_s(rule_id)}|| "
-                f"||rule_body_hash={_s(rule_body_hash)}|| "
-                f"||rule_path={_s(rule_path)}|| "
-                f"||tp_count={tp_count}|| "
-                f"||fp_count={fp_count}|| "
-                f"||total_matches={total_matches}|| "
-                f"||dual_control={dual_control_passed}|| "
-                f"||targets_tested={targets_tested}||"
-            ),
+            content=content,
             memory_type="fact",
             domain_tag=_RULE_LIBRARY_DOMAIN,
             confidence=confidence,
             tags=["rule-library", engine, cwe, rule_id],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE rule library store failed: %s", e)
         return False
 
@@ -716,7 +885,7 @@ def store_proven_rule_metadata(
 def recall_proven_rules(
     engine: str,
     cwe: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Recall proven checker rules from SAGE by engine and CWE.
 
     Returns raw recall rows.  Use ``parse_rule_metadata`` to extract
@@ -736,19 +905,19 @@ def recall_proven_rules(
         if results:
             _metric_inc("recall_hits", len(results))
         return results
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE rule library recall failed: %s", e)
         return []
 
 
-def parse_rule_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+def parse_rule_metadata(row: dict[str, Any]) -> dict[str, Any]:
     """Extract structured fields from a rule-library recall row.
 
     Returns a dict with string/int/bool fields parsed from the
     ``||key=value||`` delimiters.  Missing fields are omitted.
     """
     content = str(row.get("content") or "")
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
 
     for key in (
         "engine", "cwe", "rule_id", "rule_body_hash", "rule_path",
@@ -770,7 +939,7 @@ def parse_rule_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def should_replay_rule(meta: Dict[str, Any]) -> bool:
+def should_replay_rule(meta: dict[str, Any]) -> bool:
     """Whether a recalled rule qualifies for direct replay (skip synthesis).
 
     Requires: TP rate >80%, dual control passed, tested on 3+ targets.
@@ -786,6 +955,52 @@ def should_replay_rule(meta: Dict[str, Any]) -> bool:
         and meta.get("dual_control", False)
         and meta.get("targets_tested", 0) >= _RULE_REPLAY_MIN_TARGETS
     )
+
+
+def recall_verified_proven_rules(engine: str, cwe: str) -> list[dict[str, Any]]:
+    """Recall proven rules, keeping only HMAC-verified replay-worthy rows.
+
+    Mechanical consumers (sweep replay in
+    ``core.audit.checker_synthesis``) must call THIS, not
+    ``recall_proven_rules``: unverified recall is hint-only per
+    operator policy. A row is returned (as parsed metadata, see
+    ``parse_rule_metadata``) only when
+
+    * it carries a row MAC minted by THIS install over exactly the
+      parsed decision fields (``_row_mac_ok``), and
+    * it passes the ``should_replay_rule`` quality gate (TP rate,
+      dual control, targets tested).
+
+    Never raises; returns ``[]`` when SAGE is unavailable.
+    """
+    verified: list[dict[str, Any]] = []
+    for row in recall_proven_rules(engine, cwe):
+        try:
+            content = str(row.get("content") or "")
+            clean, token = rowmac.strip(content)
+            meta = parse_rule_metadata({**row, "content": clean})
+            fields = {
+                "kind": "proven_rule",
+                "engine": str(meta.get("engine", "")),
+                "cwe": str(meta.get("cwe", "")),
+                "rule_id": str(meta.get("rule_id", "")),
+                "rule_body_hash": str(meta.get("rule_body_hash", "")),
+                "rule_path": str(meta.get("rule_path", "")),
+                "tp_count": str(meta.get("tp_count", 0)),
+                "fp_count": str(meta.get("fp_count", 0)),
+                "total_matches": str(meta.get("total_matches", 0)),
+                "dual_control": str(meta.get("dual_control", False)),
+                "targets_tested": str(meta.get("targets_tested", 0)),
+            }
+            if not _row_mac_ok("proven_rule", fields, token):
+                continue
+            if not should_replay_rule(meta):
+                continue
+            meta["verified"] = True
+            verified.append(meta)
+        except Exception:
+            logger.debug("SAGE proven-rule row parse failed", exc_info=True)
+    return verified
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -825,21 +1040,35 @@ def store_audit_hypothesis_verdict(
         hyp_hash = sha256_string(hypothesis)[:16]
         _s = _sanitise_delim
         confidence = 0.90 if evidence_tool else 0.75
+        content = (
+            f"Audit hypothesis verdict: "
+            f"||file={_s(file_path)}|| ||fn={_s(function)}|| "
+            f"||hyp={_s(hyp_hash)}|| ||src={_s(source_hash)}|| "
+            f"||status={_s(status)}|| ||tool={_s(evidence_tool)}|| "
+            f"hypothesis: {hypothesis[:300]}"
+        )
+        content = _stamp_row(
+            "audit_hypothesis",
+            content,
+            {
+                "kind": "audit_hypothesis",
+                "repo": _repo_key(repo_path),
+                "file": file_path,
+                "fn": function,
+                "hyp": hyp_hash,
+                "src": source_hash,
+                "status": status,
+            },
+        )
         return _propose_redacted(
             client=client,
-            content=(
-                f"Audit hypothesis verdict: "
-                f"||file={_s(file_path)}|| ||fn={_s(function)}|| "
-                f"||hyp={_s(hyp_hash)}|| ||src={_s(source_hash)}|| "
-                f"||status={_s(status)}|| ||tool={_s(evidence_tool)}|| "
-                f"hypothesis: {hypothesis[:300]}"
-            ),
+            content=content,
             memory_type="fact",
             domain_tag=_audit_domain(repo_path),
             confidence=confidence,
             tags=["audit", "hypothesis", status],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE audit hypothesis store failed: %s", e)
         return False
 
@@ -850,7 +1079,7 @@ def recall_audit_hypothesis_verdict(
     function: str,
     hypothesis: str = "",
     source_hash: str = "",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Recall a prior audit hypothesis verdict from SAGE.
 
     Returns ``{status, tool, source_hash}`` if a prior verdict exists
@@ -883,13 +1112,25 @@ def recall_audit_hypothesis_verdict(
             min_confidence=0.7,
         )
         for row in results:
-            content = str(row.get("content") or "")
+            content, token = rowmac.strip(str(row.get("content") or ""))
             if f"||src={source_hash}||" not in content:
                 continue
             if hyp_hash and f"||hyp={hyp_hash}||" not in content:
                 continue
             for s in _AUDIT_SKIP_STATUSES:
                 if f"||status={s}||" in content:
+                    row_hyp = re.search(r"\|\|hyp=([^|]*)\|\|", content)
+                    fields = {
+                        "kind": "audit_hypothesis",
+                        "repo": _repo_key(repo_path),
+                        "file": file_path,
+                        "fn": function,
+                        "hyp": row_hyp.group(1) if row_hyp else "",
+                        "src": source_hash,
+                        "status": s,
+                    }
+                    if not _row_mac_ok("audit_hypothesis", fields, token):
+                        break
                     tool = ""
                     tool_match = re.search(r"\|\|tool=([^|]*)\|\|", content)
                     if tool_match:
@@ -901,7 +1142,7 @@ def recall_audit_hypothesis_verdict(
                         "source_hash": source_hash,
                     }
         return None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE audit hypothesis recall failed: %s", e)
         return None
 
@@ -936,7 +1177,7 @@ def store_audit_observation(
             confidence=0.85 if kind == "tool_confirmation" else 0.75,
             tags=["audit", "observation", kind],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE audit observation store failed: %s", e)
         return False
 
@@ -944,7 +1185,7 @@ def store_audit_observation(
 def recall_audit_observations(
     subject: str,
     top_k: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Recall prior audit observations from the methodology domain.
 
     Returns tool-confirmed patterns and refutations relevant to a
@@ -964,7 +1205,7 @@ def recall_audit_observations(
         out = [r for r in results if "Audit observation" in str(r.get("content", ""))]
         _metric_inc("recall_hits", len(out))
         return out
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE audit observation recall failed: %s", e)
         return []
 
@@ -979,9 +1220,9 @@ def _sca_domain(repo_path: str) -> str:
 
 def recall_context_for_sca(
     repo_path: str,
-    ecosystems: Optional[List[str]] = None,
-    dep_names: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    ecosystems: list[str] | None = None,
+    dep_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Recall prior SCA verdicts and confirmed-bad packages.
 
     Queries the repo-scoped SCA domain for past dependency findings
@@ -997,8 +1238,10 @@ def recall_context_for_sca(
     try:
         _metric_inc("recall_attempted")
         query_parts = [
-            "Prior SCA findings: confirmed malicious packages,"
-            " false-positive rulings, supply-chain attack patterns"
+            (
+                "Prior SCA findings: confirmed malicious packages,"
+                " false-positive rulings, supply-chain attack patterns"
+            )
         ]
         if ecosystems:
             query_parts.append(f"for ecosystems: {', '.join(ecosystems)}")
@@ -1024,20 +1267,50 @@ def recall_context_for_sca(
             min_confidence=0.5,
         )
         merged = _merge_recall_rows(results, methodology, top_k=10)
+        merged = [row for row in merged if _sca_row_mechanically_usable(row)]
         _metric_inc("recall_hits", len(merged))
         if merged:
             logger.info(
                 "SAGE: Recalled %d SCA memories for context", len(merged)
             )
         return merged
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE SCA recall failed: %s", e)
         return []
 
 
+def _sca_row_mechanically_usable(row: dict[str, Any]) -> bool:
+    """Gate rows that would trigger the confirmed-malicious short-circuit.
+
+    The SCA pipeline short-circuits packages whose recalled content
+    contains ``malicious_confirmed`` — the FAIL direction here is a
+    false positive, not a miss, but it is still a mechanical decision.
+    Such rows are only returned when their MAC token verifies over the
+    decision fields (kind, ecosystem, name, version, verdict) written by
+    ``store_sca_outcomes`` on this install. Rows without the trigger
+    pass through unchanged as ordinary context.
+    """
+    clean, token = rowmac.strip(str(row.get("content") or ""))
+    if "malicious_confirmed" not in clean:
+        return True
+
+    def _field(key: str) -> str:
+        match = re.search(rf"\|\|{key}=([^|]*)\|\|", clean)
+        return match.group(1) if match else ""
+
+    fields = {
+        "kind": "sca_outcome",
+        "eco": _field("sca_eco"),
+        "name": _field("sca_name"),
+        "version": _field("sca_ver"),
+        "verdict": _field("sca_verdict"),
+    }
+    return _row_mac_ok("sca_outcomes", fields, token)
+
+
 def store_sca_outcomes(
     repo_path: str,
-    outcomes: List[Dict[str, Any]],
+    outcomes: list[dict[str, Any]],
 ) -> int:
     """Store SCA finding outcomes for cross-run learning.
 
@@ -1085,7 +1358,24 @@ def store_sca_outcomes(
             if llm_summary:
                 parts.append(f"LLM: {llm_summary[:150]}")
 
+            _s = _sanitise_delim
+            parts.append(
+                f"||sca_eco={_s(eco)}|| ||sca_name={_s(pkg)}|| "
+                f"||sca_ver={_s(version)}|| ||sca_verdict={_s(verdict)}||"
+            )
+
             content = " ".join(parts)
+            content = _stamp_row(
+                "sca_outcomes",
+                content,
+                {
+                    "kind": "sca_outcome",
+                    "eco": _s(eco),
+                    "name": _s(pkg),
+                    "version": _s(version),
+                    "verdict": _s(verdict),
+                },
+            )
 
             confidence = {
                 "malicious_confirmed": 0.98,
@@ -1114,7 +1404,7 @@ def store_sca_outcomes(
             ):
                 stored += 1
             _throttle()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
             logger.debug(
                 "SAGE SCA store failed for %s: %s", outcome.get('package_name', '?'), e
             )
@@ -1132,7 +1422,34 @@ def _concepts_domain(repo_path: str) -> str:
     return f"raptor-concepts-{_repo_key(repo_path)}"
 
 
-_CONFIDENCE_TO_SAGE: Dict[str, float] = {
+def _verified_concept_rows(
+    rows: list[dict[str, Any]],
+    hook: str,
+) -> list[dict[str, Any]]:
+    """Keep only concept rows whose MAC verifies (recall side).
+
+    Concept rows drive skip/seed decisions in study and teach. The
+    per-evidence source hashes already prove freshness; the MAC proves
+    authorship — both are required before a row has mechanical effect.
+    Rows without a valid token (legacy, foreign, tampered) are dropped
+    from the mechanical path, exactly as if no memory existed.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        clean, token = rowmac.strip(str(row.get("content") or ""))
+        m_id = re.search(r"Concept \[([^\]]+)\]", clean)
+        m_src = re.search(r"Source hash: (\S+)", clean)
+        fields = {
+            "kind": "study_concept",
+            "concept": m_id.group(1) if m_id else "",
+            "src": m_src.group(1) if m_src else "",
+        }
+        if _row_mac_ok(hook, fields, token):
+            out.append(row)
+    return out
+
+
+_CONFIDENCE_TO_SAGE: dict[str, float] = {
     "inferred": 0.55,
     "traced": 0.80,
     "corroborated": 0.90,
@@ -1170,11 +1487,11 @@ def store_study_concepts(
     repo_name = Path(repo_path).name
     scope_label = study_scope or repo_name
 
-    concept_invariants: Dict[str, list] = {}
+    concept_invariants: dict[str, list] = {}
     for inv in domain_model.invariants:
         concept_invariants.setdefault(inv.concept, []).append(inv)
 
-    concept_contracts: Dict[str, list] = {}
+    concept_contracts: dict[str, list] = {}
     for contract in domain_model.contracts:
         for concept in domain_model.concepts:
             if any(
@@ -1192,8 +1509,10 @@ def store_study_concepts(
 
         try:
             parts = [
-                f"Concept [{concept.id}] in {scope_label}: "
-                f"{concept.description}"
+                (
+                    f"Concept [{concept.id}] in {scope_label}: "
+                    f"{concept.description}"
+                )
             ]
 
             evidence_files = set()
@@ -1231,6 +1550,7 @@ def store_study_concepts(
                 parts.append(
                     f"  Evidence files: {', '.join(sorted(evidence_files))}"
                 )
+            composite = ""
             if evidence_hashes:
                 composite = sha256_string(
                     "|".join(sorted(evidence_hashes))
@@ -1238,6 +1558,15 @@ def store_study_concepts(
                 parts.append(f"  Source hash: {composite}")
 
             content = "\n".join(parts)
+            content = _stamp_row(
+                "study_concepts",
+                content,
+                {
+                    "kind": "study_concept",
+                    "concept": concept.id,
+                    "src": composite,
+                },
+            )
 
             confidence = _CONFIDENCE_TO_SAGE.get(concept.confidence, 0.70)
 
@@ -1257,7 +1586,7 @@ def store_study_concepts(
             ):
                 stored += 1
             _throttle()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
             logger.debug("SAGE concept store failed for %s: %s", concept.id, e)
 
     if stored:
@@ -1362,11 +1691,11 @@ def recall_concepts_for_teach(
     repo_path: str,
     subject: str,
     *,
-    evidence_files: Optional[List[str]] = None,
-    inventory_functions: Optional[List[str]] = None,
+    evidence_files: list[str] | None = None,
+    inventory_functions: list[str] | None = None,
     min_confidence: float = 0.65,
     top_k: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Recall prior study concepts relevant to a teach query.
 
     Implements the N1 relevance gate: semantic match from SAGE, then
@@ -1415,6 +1744,7 @@ def recall_concepts_for_teach(
         )
 
         all_rows = _merge_recall_rows(results, cross_project, top_k=top_k * 2)
+        all_rows = _verified_concept_rows(all_rows, "concepts_for_teach")
 
         scored = _apply_relevance_gate(
             all_rows,
@@ -1427,17 +1757,17 @@ def recall_concepts_for_teach(
 
         _metric_inc("recall_hits", len(out))
         return out
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE teach recall failed: %s", e)
         return []
 
 
 def recall_concepts_for_study(
     repo_path: str,
-    identifiers: List[str],
+    identifiers: list[str],
     *,
     min_confidence: float = 0.65,
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Recall prior concepts for study identifiers (skip/seed/cross-pollinate).
 
     Returns a dict keyed by identifier name, each value a list of
@@ -1456,7 +1786,7 @@ def recall_concepts_for_study(
     if client is None:
         return {}
 
-    result: Dict[str, List[Dict[str, Any]]] = {}
+    result: dict[str, list[dict[str, Any]]] = {}
     domain = _concepts_domain(repo_path)
 
     def _recall_one(name: str) -> tuple:
@@ -1467,8 +1797,8 @@ def recall_concepts_for_study(
                 top_k=3,
                 min_confidence=min_confidence,
             )
-            return (name, rows)
-        except Exception as e:
+            return (name, _verified_concept_rows(rows, "concepts_for_study"))
+        except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
             logger.debug("SAGE study recall failed for %s: %s", name, e)
             return (name, None)
 
@@ -1500,11 +1830,11 @@ def recall_concepts_for_study(
 
 
 def _apply_relevance_gate(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     *,
-    evidence_files: Optional[List[str]] = None,
-    inventory_functions: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    evidence_files: list[str] | None = None,
+    inventory_functions: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Score recall rows by relevance to the current context.
 
     Relevance signals:
@@ -1520,7 +1850,7 @@ def _apply_relevance_gate(
     evidence_set = set(evidence_files or [])
     fn_set = set(inventory_functions or [])
 
-    scored: List[Dict[str, Any]] = []
+    scored: list[dict[str, Any]] = []
     for row in rows:
         content = row.get("content", "")
         sage_confidence = row.get("confidence", 0.5)
@@ -1564,3 +1894,363 @@ def _apply_relevance_gate(
             scored.append(row_copy)
 
     return scored
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic remember — free-form observation storage
+# ─────────────────────────────────────────────────────────────────────────────
+
+def sage_remember(
+    *,
+    domain: str,
+    content: str,
+    tags: list[str] | None = None,
+    memory_type: str = "observation",
+    confidence: float = 0.8,
+) -> bool:
+    """Store a free-form memory to an explicit domain.
+
+    Prose-only convenience for callers with no mechanical recall side
+    (e.g. corpus-learning summaries).  Rows stored here never earn
+    mechanical effect — they carry no row MAC by design.
+    """
+    if not content:
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        return _propose_redacted(
+            client=client,
+            content=content,
+            memory_type=memory_type,
+            domain_tag=domain,
+            confidence=confidence,
+            tags=tags,
+        )
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE remember failed: %s", e)
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Code understanding (/understand) — cross-run result persistence
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _understand_domain(repo_path: str) -> str:
+    return f"raptor-understand-{_repo_key(repo_path)}"
+
+
+def _clip(text: str, limit: int = 200) -> str:
+    text = str(text)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def store_map_results(repo_path: str, payload: dict[str, Any]) -> bool:
+    """Persist a /understand --map summary for cross-run recall.
+
+    Stores counts plus a bounded sample of entry points and sinks as a
+    prose observation (hint-only on recall — no mechanical effect).
+    """
+    if not isinstance(payload, dict):
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        entry_points = payload.get("entry_points") or []
+        sinks = payload.get("sinks") or []
+        boundaries = payload.get("trust_boundaries") or []
+
+        def _names(items: list[Any], limit: int = 5) -> str:
+            out = []
+            for it in items[:limit]:
+                if isinstance(it, dict):
+                    out.append(str(it.get("name") or it.get("function")
+                                   or it.get("file") or "?"))
+                else:
+                    out.append(str(it))
+            return ", ".join(out) or "none"
+
+        content = (
+            f"Attack-surface map for repo {_repo_key(repo_path)}: "
+            f"{len(entry_points)} entry points, {len(sinks)} sinks, "
+            f"{len(boundaries)} trust boundaries.\n"
+            f"  Entry points: {_clip(_names(entry_points))}\n"
+            f"  Sinks: {_clip(_names(sinks))}"
+        )
+        return _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_understand_domain(repo_path),
+            confidence=0.8,
+            tags=["understand", "map"],
+        )
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE map store failed: %s", e)
+        return False
+
+
+def store_trace_result(repo_path: str, trace: dict[str, Any]) -> bool:
+    """Persist one /understand --trace flow for cross-run recall."""
+    if not isinstance(trace, dict):
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        entry = trace.get("entry") or trace.get("source") or "?"
+        sink = trace.get("sink") or "?"
+        if isinstance(sink, dict):
+            sink = sink.get("name") or sink.get("function") or "?"
+        verdict = trace.get("verdict") or trace.get("attacker_control") or ""
+        steps = trace.get("steps") or trace.get("call_chain") or []
+        content = (
+            f"Flow trace for repo {_repo_key(repo_path)}: "
+            f"{_clip(str(entry), 120)} → {_clip(str(sink), 120)} "
+            f"({len(steps)} steps)"
+        )
+        if verdict:
+            content += f"\n  Assessment: {_clip(str(verdict))}"
+        return _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_understand_domain(repo_path),
+            confidence=0.8,
+            tags=["understand", "trace"],
+        )
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE trace store failed: %s", e)
+        return False
+
+
+def store_hunt_results(repo_path: str, hunt_data: dict[str, Any]) -> bool:
+    """Persist a /understand --hunt variant sweep for cross-run recall."""
+    if not isinstance(hunt_data, dict):
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        meta = hunt_data.get("meta") or {}
+        pattern = meta.get("pattern") or "unknown"
+        total = meta.get("total_matches", 0)
+        groups = hunt_data.get("root_cause_groups") or []
+        content = (
+            f"Variant hunt for repo {_repo_key(repo_path)}: "
+            f"pattern {_clip(str(pattern), 120)} — {total} match(es), "
+            f"{len(groups)} root-cause group(s)."
+        )
+        return _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_understand_domain(repo_path),
+            confidence=0.8,
+            tags=["understand", "hunt"],
+        )
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE hunt store failed: %s", e)
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Validation pipeline (/validate) — verdict history across runs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _validation_domain(repo_path: str) -> str:
+    return f"raptor-validation-{_repo_key(repo_path)}"
+
+
+_VALIDATION_STORE_CAP = 20
+
+_MAC_FIELD_RE = re.compile(r"\|\|(\w+)=([^|]*)\|\|")
+
+
+def store_validation_verdicts(
+    repo_path: str,
+    findings: list[dict[str, Any]],
+    summary: dict[str, Any] | None = None,
+) -> bool:
+    """Store validation verdicts to SAGE for cross-run recall.
+
+    One MAC-stamped row per finding (bounded) plus one prose summary
+    row.  The MAC lets a future mechanical consumer trust the verdict
+    fields; recall today is hint-only.
+    """
+    if not findings:
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    stored = False
+    try:
+        _s = _sanitise_delim
+        repo_key = _repo_key(repo_path)
+        for finding in findings[:_VALIDATION_STORE_CAP]:
+            if not isinstance(finding, dict):
+                continue
+            file_path = _s(finding.get("file") or finding.get("file_path") or "")
+            fn = _s(finding.get("function") or finding.get("function_name") or "")
+            verdict = _s(
+                finding.get("status") or finding.get("verdict") or "unknown",
+            )
+            title = _clip(
+                str(finding.get("title") or finding.get("rule_id")
+                    or finding.get("type") or "finding"), 120,
+            )
+            content = (
+                f"Validation verdict: {title} "
+                f"||file={file_path}|| ||fn={fn}|| ||verdict={verdict}||"
+            )
+            content = _stamp_row(
+                "validation_verdict",
+                content,
+                {
+                    "kind": "validation_verdict",
+                    "repo": repo_key,
+                    "file": file_path,
+                    "fn": fn,
+                    "verdict": verdict,
+                },
+            )
+            if _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="fact",
+                domain_tag=_validation_domain(repo_path),
+                confidence=0.85,
+                tags=["validation", "verdict", verdict],
+            ):
+                stored = True
+        if summary:
+            counts = ", ".join(
+                f"{k}={v}" for k, v in sorted(summary.items())
+                if isinstance(v, (int, float, str))
+            )
+            if counts and _propose_redacted(
+                client=client,
+                content=(
+                    f"Validation run summary for repo {repo_key}: "
+                    f"{_clip(counts, 400)}"
+                ),
+                memory_type="observation",
+                domain_tag=_validation_domain(repo_path),
+                confidence=0.8,
+                tags=["validation", "summary"],
+            ):
+                stored = True
+        return stored
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE validation verdict store failed: %s", e)
+        return stored
+
+
+def store_validation_disproven(
+    repo_path: str,
+    disproven: list[dict[str, Any]],
+) -> bool:
+    """Store disproven validation hypotheses so future runs skip them."""
+    if not disproven:
+        return False
+    client = _get_client()
+    if client is None:
+        return False
+    stored = False
+    try:
+        _s = _sanitise_delim
+        repo_key = _repo_key(repo_path)
+        for item in disproven[:_VALIDATION_STORE_CAP]:
+            if not isinstance(item, dict):
+                continue
+            file_path = _s(item.get("file") or item.get("file_path") or "")
+            fn = _s(item.get("function") or item.get("function_name") or "")
+            reason = _s(_clip(
+                str(item.get("reason") or item.get("why") or "disproven"),
+            ))
+            desc = _clip(
+                str(item.get("hypothesis") or item.get("title")
+                    or item.get("description") or "hypothesis"), 120,
+            )
+            content = (
+                f"Validation disproven: {desc} "
+                f"||file={file_path}|| ||fn={fn}|| ||reason={reason}||"
+            )
+            content = _stamp_row(
+                "validation_disproven",
+                content,
+                {
+                    "kind": "validation_disproven",
+                    "repo": repo_key,
+                    "file": file_path,
+                    "fn": fn,
+                    "reason": reason,
+                },
+            )
+            if _propose_redacted(
+                client=client,
+                content=content,
+                memory_type="fact",
+                domain_tag=_validation_domain(repo_path),
+                confidence=0.85,
+                tags=["validation", "disproven"],
+            ):
+                stored = True
+        return stored
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE validation disproven store failed: %s", e)
+        return stored
+
+
+def recall_context_for_validation(
+    repo_path: str,
+    top_k: int = 8,
+) -> list[dict[str, Any]]:
+    """Recall prior validation verdicts + disproven hypotheses.
+
+    Hint-only: rows are returned for prompt/report context, annotated
+    with ``mac_verified`` so a consumer can distinguish rows minted by
+    this install from arbitrary recall text.  Never raises.
+    """
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _metric_inc("recall_attempted")
+        results = client.query(
+            text="Validation verdict and disproven hypothesis history",
+            domain_tag=_validation_domain(repo_path),
+            top_k=top_k,
+            min_confidence=0.7,
+        )
+        repo_key = _repo_key(repo_path)
+        out: list[dict[str, Any]] = []
+        for row in results:
+            raw = str(row.get("content") or "")
+            if "Validation verdict" not in raw and "Validation disproven" not in raw:
+                continue
+            content, token = rowmac.strip(raw)
+            parsed = dict(_MAC_FIELD_RE.findall(content))
+            if "Validation disproven" in content:
+                kind, extra = "validation_disproven", "reason"
+            else:
+                kind, extra = "validation_verdict", "verdict"
+            fields = {
+                "kind": kind,
+                "repo": repo_key,
+                "file": parsed.get("file", ""),
+                "fn": parsed.get("fn", ""),
+                extra: parsed.get(extra, ""),
+            }
+            out.append({
+                "content": content,
+                "confidence": recall_row_confidence(row),
+                "mac_verified": _row_mac_ok(kind, fields, token),
+            })
+        _metric_inc("recall_hits", len(out))
+        return out
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE validation recall failed: %s", e)
+        return []

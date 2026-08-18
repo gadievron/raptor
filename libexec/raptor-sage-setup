@@ -12,11 +12,19 @@
 #   7. Generate stdio MCP entry in ./.mcp.json (replaces old SSE template).
 #   8. Merge SAGE_ENABLED=true into .claude/settings.local.json.
 #   9. Smoke-test the MCP wrapper.
+#  10. Capture the server's boot payload and record it as operator-authorized
+#      (.sage/boot-payload.authorized).
+#  11. Generate the per-install row-MAC key if absent — authenticates SAGE
+#      rows consumed mechanically (core/sage/rowmac.py). Lives at
+#      $XDG_DATA_HOME/raptor/rowmac.key (default ~/.local/share/raptor/)
+#      so no sandbox-readable target tree contains it. Never removed by
+#      uninstall; deleting it is the operator's reset.
 #
 # Uninstall (--uninstall):
 #   1. docker compose down (data volumes preserved).
 #   2. Remove the SAGE entry from ./.mcp.json (delete file if it becomes empty).
 #   3. Remove SAGE_ENABLED from .claude/settings.local.json (delete file if empty).
+#   4. Remove .sage/boot-payload.authorized.
 #
 # SAGE is opt-in — 99% of users never touch this. .mcp.json is .gitignored so
 # users who don't install SAGE have no MCP registration, no connection errors,
@@ -162,6 +170,27 @@ MCP_WRAPPER="$RAPTOR_DIR/libexec/raptor-sage-mcp"
 MCP="$RAPTOR_DIR/.mcp.json"
 SETTINGS_LOCAL="$RAPTOR_DIR/.claude/settings.local.json"
 SAGE_URL="http://localhost:8090"
+# Lives under .sage/ — already gitignored, per-machine SAGE state.
+AUTHORIZED_PAYLOAD="$RAPTOR_DIR/.sage/boot-payload.authorized"
+# Per-install HMAC key for mechanically consumed SAGE rows
+# (core/sage/rowmac.py). Deliberately OUTSIDE the repo tree — several
+# sandbox profiles grant children repo-root read, and a sandboxed
+# target that could read an in-repo key could mint valid row MACs.
+# Must resolve identically to core/sage/rowmac.py:_key_path().
+ROWMAC_KEY="${XDG_DATA_HOME:-$HOME/.local/share}/raptor/rowmac.key"
+
+# ─── proxy hygiene ──────────────────────────────────────────
+# In proxied environments (HTTP_PROXY/HTTPS_PROXY set) every localhost
+# call this script makes — the curl health probes, the seed/register
+# scripts, the MCP smoke test — would be routed through the proxy,
+# which cannot reach this machine's loopback. Corporate NO_PROXY
+# values rarely include loopback, so append it for our children.
+# Container-side passthrough lives in core/sage/docker-compose.yml.
+if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
+    NO_PROXY="localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
+    no_proxy="$NO_PROXY"
+    export NO_PROXY no_proxy
+fi
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -712,6 +741,127 @@ smoke_test_mcp() {
     fi
 }
 
+capture_boot_payload() {
+    # Fetch the two instruction surfaces the SAGE server injects into
+    # agents at connection time: the MCP initialize `instructions`
+    # field and the sage_inception result message. These are prompt
+    # surfaces — an agent cannot otherwise distinguish them from
+    # untrusted runtime text, so authorize_boot_payload records them
+    # for core/sage/CLAUDE.md's trust declaration to point at.
+    # The payload text is state-dependent (first connection returns an
+    # "Auto-Inception" variant with boot safeguards; later connections
+    # a shorter "Auto-Connect" variant) — whichever the server emits
+    # NOW is what gets recorded.
+    local timeout_cmd=""
+    if command -v timeout >/dev/null 2>&1; then
+        timeout_cmd="timeout 15"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        timeout_cmd="gtimeout 15"
+    fi
+    printf '%s\n%s\n%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-sage-setup","version":"1.0.0"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sage_inception","arguments":{}}}' \
+        | CLAUDECODE=1 $timeout_cmd "$MCP_WRAPPER" 2>/dev/null \
+        | jq -r 'if .id == 1 then "### initialize.instructions\n" + (.result.instructions // "")
+                 elif .id == 2 then "### sage_inception.message\n" + ((try (.result.content[0].text | fromjson | .message) catch "") // "")
+                 else empty end'
+}
+
+authorize_boot_payload() {
+    # Capture the server's boot payload and record it as operator-
+    # authorized. Running setup IS the authorization event: SAGE is
+    # opt-in, the image is pinned in the compose file, and the operator
+    # deliberately invoked this install — so the payload the pinned
+    # server emits now is what the operator is choosing to trust. No
+    # separate review step; the stamp (time, image, hash) makes the
+    # authorization auditable, and re-running setup after an upgrade
+    # re-authorizes automatically.
+    # Non-fatal: without the recorded file, agents treat server boot
+    # instructions as unreviewed and may ask before executing them.
+    local payload
+    if ! payload=$(capture_boot_payload) || [ -z "$payload" ]; then
+        echo "Warning: could not capture the SAGE boot payload." >&2
+        echo "  Agents will treat server boot instructions as unreviewed." >&2
+        echo "  Once SAGE is responsive, re-run: bin/raptor sage-setup install" >&2
+        return 0
+    fi
+    local sha image stamp
+    sha=$(printf '%s\n' "$payload" | sha256sum | awk '{print $1}')
+    image=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null \
+        | grep sage | head -1 || true)
+    image="${image:-unknown}"
+    stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    # Show what changed when re-authorizing a different payload — the
+    # only moment an operator would want to eyeball an upgrade's new
+    # boot text. Informational, never blocking.
+    if [ -f "$AUTHORIZED_PAYLOAD" ]; then
+        local old_sha
+        old_sha=$(sed -n 's/^# SHA256: //p' "$AUTHORIZED_PAYLOAD" | head -1)
+        if [ -n "$old_sha" ] && [ "$old_sha" != "$sha" ]; then
+            echo "SAGE boot payload changed since last authorization:"
+            sed '1,/^# ---$/d' "$AUTHORIZED_PAYLOAD" \
+                | diff -u --label previous --label current - <(printf '%s\n' "$payload") \
+                || true
+            echo "Re-authorized by this setup run."
+        fi
+    fi
+    # Same-fs mktemp + atomic mv — see enable_sage_env for the rationale.
+    mkdir -p "$(dirname "$AUTHORIZED_PAYLOAD")"
+    local tmp
+    tmp=$(mktemp "$(dirname "$AUTHORIZED_PAYLOAD")/.tmp.payload.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
+    trap 'rm -f "$tmp"' RETURN
+    {
+        echo "# SAGE boot payload — operator-authorized"
+        echo "# Generated: $stamp by raptor-sage-setup"
+        echo "# Image: $image"
+        echo "# SHA256: $sha"
+        echo "# Running raptor-sage-setup constitutes operator authorization of the"
+        echo "# payload below. Regenerated on every install; per-machine; gitignored."
+        echo "# Trust semantics: core/sage/CLAUDE.md."
+        echo "# ---"
+        printf '%s\n' "$payload"
+    } > "$tmp"
+    mv "$tmp" "$AUTHORIZED_PAYLOAD"
+    trap - RETURN
+    echo "Recorded operator-authorized SAGE boot payload:"
+    echo "  File:    $AUTHORIZED_PAYLOAD"
+    echo "  Image:   $image"
+    echo "  SHA256:  $sha"
+    echo "  Surfaces: initialize.instructions, sage_inception.message"
+}
+
+ensure_rowmac_key() {
+    # Generate the per-install row-MAC key used by core/sage/rowmac.py
+    # to authenticate SAGE rows that drive mechanical decisions.
+    # 32 random bytes, directory 0700, file 0600. An existing key is
+    # never touched: there is no rotation — previously stamped rows must
+    # keep verifying, and deleting the key is the operator's explicit
+    # reset (existing rows demote to hints and re-earn their status).
+    # The library also creates this lazily on first store, so setup
+    # order does not matter; this just front-loads it.
+    if [ -f "$ROWMAC_KEY" ]; then
+        echo "SAGE row-MAC key already present: $ROWMAC_KEY"
+        return 0
+    fi
+    mkdir -p "$(dirname "$ROWMAC_KEY")"
+    chmod 700 "$(dirname "$ROWMAC_KEY")"
+    local tmp
+    tmp=$(mktemp "$(dirname "$ROWMAC_KEY")/.tmp.rowmac.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
+    chmod 600 "$tmp"
+    head -c 32 /dev/urandom > "$tmp"
+    # ln (not mv) so publication is exclusive: if the library's lazy
+    # O_EXCL create won the race between the -f check above and here,
+    # that key wins and the tmp copy is discarded — a clobbering mv
+    # would orphan any tokens already minted with the other key.
+    if ln "$tmp" "$ROWMAC_KEY" 2>/dev/null; then
+        echo "Generated SAGE row-MAC key: $ROWMAC_KEY"
+    else
+        echo "SAGE row-MAC key already present: $ROWMAC_KEY"
+    fi
+    rm -f "$tmp"
+}
+
 remove_mcp_entry() {
     [ -f "$MCP" ] || return 0
     # Same same-fs mktemp pattern as generate_mcp_entry.
@@ -905,9 +1055,15 @@ verify_embeddings() {
         printenv SAGE_EMBEDDING_MODEL 2>/dev/null || true)
     model=$(printf '%s' "$model" | tr -d '[:space:]')
     model="${model:-nomic-embed-text}"
+    # Ask the ollama container itself (same pattern as status_sage).
+    # Pre-fix this probed http://ollama:11434/api/tags with wget from
+    # INSIDE the sage container — but SAGE 11.17.11+ images ship neither
+    # wget nor curl (see the compose file's healthcheck comment), so the
+    # probe always failed and the "model not found" warning fired even
+    # on healthy installs.
     local models
-    models=$(docker compose -f "$COMPOSE_FILE" exec -T sage \
-        wget -qO- http://ollama:11434/api/tags 2>/dev/null || true)
+    models=$(docker compose -f "$COMPOSE_FILE" exec -T ollama \
+        ollama list 2>/dev/null || true)
     if printf '%s' "$models" | grep -q "${model%%:*}"; then
         echo "SAGE using $provider embeddings ($model)."
     else
@@ -978,6 +1134,8 @@ install_sage() {
     generate_mcp_entry
     enable_sage_env
     smoke_test_mcp
+    authorize_boot_payload
+    ensure_rowmac_key
     grant_mcp_permissions
     echo
     echo "SAGE is up. Restart Claude Code so it picks up the MCP registration."
@@ -1001,6 +1159,10 @@ uninstall_sage() {
     remove_mcp_entry
     disable_sage_env
     revoke_mcp_permissions
+    if [ -f "$AUTHORIZED_PAYLOAD" ]; then
+        rm -f "$AUTHORIZED_PAYLOAD"
+        echo "Removed $AUTHORIZED_PAYLOAD."
+    fi
     echo "SAGE sidecar stopped. Data volumes preserved."
     echo "To wipe volumes: docker compose -f $COMPOSE_FILE down -v --remove-orphans"
 }
@@ -1066,6 +1228,34 @@ status_sage() {
         echo "  MCP entry: present in $MCP"
     else
         echo "  MCP entry: missing (run install to generate)"
+    fi
+    # Boot payload authorization + live drift check. All mechanical —
+    # operators (and agents) get the answer from this allowlisted
+    # script instead of ad-hoc head/sha256sum invocations that would
+    # trip permission prompts.
+    if [ -f "$AUTHORIZED_PAYLOAD" ]; then
+        local auth_stamp auth_image auth_sha
+        auth_stamp=$(sed -n 's/^# Generated: //p' "$AUTHORIZED_PAYLOAD" | head -1)
+        auth_image=$(sed -n 's/^# Image: //p' "$AUTHORIZED_PAYLOAD" | head -1)
+        auth_sha=$(sed -n 's/^# SHA256: //p' "$AUTHORIZED_PAYLOAD" | head -1)
+        echo "  Boot payload: authorized ${auth_stamp:-unknown} (${auth_image:-unknown}, sha256 ${auth_sha:0:12})"
+        # Compare against what the running server emits now. The payload
+        # is state-dependent (first-connection vs steady-state variant),
+        # so a mismatch means "look", not "compromised".
+        local live live_sha
+        if live=$(capture_boot_payload) && [ -n "$live" ]; then
+            live_sha=$(printf '%s\n' "$live" | sha256sum | awk '{print $1}')
+            if [ "$live_sha" = "$auth_sha" ]; then
+                echo "  Boot payload drift: none — live payload matches"
+            else
+                echo "  Boot payload drift: live payload DIFFERS (sha256 ${live_sha:0:12})"
+                echo "    Review + re-authorize: bin/raptor sage-setup install"
+            fi
+        else
+            echo "  Boot payload drift: could not capture live payload to compare"
+        fi
+    else
+        echo "  Boot payload: not recorded — authorize: bin/raptor sage-setup install"
     fi
 }
 

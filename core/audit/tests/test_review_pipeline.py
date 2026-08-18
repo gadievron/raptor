@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # ── Feature 1: Wrapper auto-clean ─────────────────────────────────
 
@@ -463,7 +462,7 @@ class _MockOutcome:
     function: str
     status: str
     verification_tier: str = "speculative"
-    hypotheses: Optional[List[Dict[str, Any]]] = None
+    hypotheses: list[dict[str, Any]] | None = None
 
 
 class TestConfidencePropagation:
@@ -493,6 +492,27 @@ class TestConfidencePropagation:
         assert len(demotions) == 1
         assert demotions[0].file == "b.c"
         assert demotions[0].function == "target"
+
+    def test_demotion_log_entry_carries_source_functions(self):
+        """The audit-log record must carry the full evidentiary basis
+        for the verdict flip, not just the (truncated) prose reason."""
+        from core.audit.orchestrator import _demotion_log_entry
+        from core.audit.propagation import ConfidenceDemotion
+
+        d = ConfidenceDemotion(
+            file="b.c",
+            function="target",
+            reason="all 7 callers verified clean: c1, c2, c3, c4, c5",
+            source_functions=["c1", "c2", "c3", "c4", "c5", "c6", "c7"],
+        )
+        entry = _demotion_log_entry(d)
+        assert entry["action"] == "sweep_promotion"
+        assert entry["key"] == "b.c:target:0"
+        assert entry["evidence_tool"] == "confidence_propagation"
+        assert entry["hypothesis"] == d.reason
+        assert entry["source_functions"] == [
+            "c1", "c2", "c3", "c4", "c5", "c6", "c7",
+        ]
 
     def test_one_caller_not_clean_keeps(self):
         from core.audit.propagation import propagate_confidence
@@ -642,18 +662,28 @@ class TestConcurrencyHypothesisMapping:
         assert result is not None
         assert "atomic_check_then_act" in result
 
-    def test_cwe_362_now_covered(self):
+    def test_cwe_362_covered_when_coccinelle_ran(self):
         from core.audit.tool_coverage import is_class_covered
         assert is_class_covered(
             "CWE-362", "race condition", "",
             {"coccinelle": True},
+            ran_tools={"coccinelle"},
         )
 
-    def test_cwe_667_now_covered(self):
+    def test_cwe_362_not_covered_when_coccinelle_never_ran(self):
+        """Installed-but-never-dispatched is NOT coverage."""
+        from core.audit.tool_coverage import is_class_covered
+        assert not is_class_covered(
+            "CWE-362", "race condition", "",
+            {"coccinelle": True},
+        )
+
+    def test_cwe_667_covered_when_coccinelle_ran(self):
         from core.audit.tool_coverage import is_class_covered
         assert is_class_covered(
             "CWE-667", "improper locking", "",
             {"coccinelle": True},
+            ran_tools={"coccinelle"},
         )
 
     def test_toctou_routes_to_double_fetch_first(self):
@@ -780,6 +810,43 @@ class TestPreconditionVerification:
         text = format_precondition_verification([v])
         assert "UNIVERSALLY SATISFIED" in text
         assert "mechanically refuted" in text
+
+    def test_format_verification_splits_violated_and_unknown(self):
+        """'2/5 verified' is ambiguous — 3 violated is a live lead,
+        3 unknown is benign. The split must be rendered."""
+        from core.audit.spec_inference import (
+            PreconditionVerification,
+            format_precondition_verification,
+        )
+        v = PreconditionVerification(
+            precondition="len <= BUF_SIZE",
+            total_call_sites=5,
+            verified_sites=2,
+            violated_sites=2,
+            unknown_sites=1,
+            is_universally_satisfied=False,
+        )
+        text = format_precondition_verification([v])
+        assert "2/5 callers verified" in text
+        assert "(2 violated, 1 unknown)" in text
+        assert "chase the violating call site(s)" in text
+
+    def test_format_verification_no_violations_no_callout(self):
+        from core.audit.spec_inference import (
+            PreconditionVerification,
+            format_precondition_verification,
+        )
+        v = PreconditionVerification(
+            precondition="ptr != NULL",
+            total_call_sites=4,
+            verified_sites=1,
+            violated_sites=0,
+            unknown_sites=3,
+            is_universally_satisfied=False,
+        )
+        text = format_precondition_verification([v])
+        assert "(0 violated, 3 unknown)" in text
+        assert "chase the violating" not in text
 
 
 # ── Feature 6: Convergence loop ───────────────────────────────────
@@ -1103,7 +1170,7 @@ class TestLearningLoop:
         assert extract_fp_patterns(results) == []
 
     def test_save_and_load_corrections(self, tmp_path):
-        from core.audit.learning import save_corrections, load_corrections
+        from core.audit.learning import load_corrections, save_corrections
         patterns = [
             {"category": "caller_contract", "count": 5,
              "correction": "Do not flag caller contract issues.",
@@ -1113,6 +1180,27 @@ class TestLearningLoop:
         corrections = load_corrections(tmp_path)
         assert len(corrections) == 1
         assert "caller contract" in corrections[0]
+
+    def test_corpus_fallback_anchored_to_raptor_dir(self, tmp_path, monkeypatch):
+        """The out/audit-corpus-* fallback must not depend on process CWD."""
+        import json as _json
+
+        from core.audit.learning import load_corrections
+
+        repo_root = tmp_path / "repo"
+        corpus = repo_root / "out" / "audit-corpus-20260101"
+        corpus.mkdir(parents=True)
+        (corpus / "prompt-corrections.json").write_text(_json.dumps({
+            "corrections": [{"rule": "Check bounds before memcpy."}],
+        }))
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setenv("RAPTOR_DIR", str(repo_root))
+
+        corrections = load_corrections()
+        assert corrections == ["Check bounds before memcpy."]
 
     def test_format_corrections_for_prompt(self):
         from core.audit.learning import format_corrections_for_prompt
@@ -1153,18 +1241,20 @@ class TestEnsembleMerge:
         assert merged[0].cost_usd == 0.02
 
     def test_suspicious_without_agreement_demoted(self):
+        """Disagree without evidence: conservative merge picks lower."""
         from core.audit.pipeline import _merge_outcomes
         sec = [self._make_outcome("a.c", "f", "clean")]
         bf = [self._make_outcome("a.c", "f", "suspicious")]
         merged = _merge_outcomes(sec, bf)
         assert merged[0].status == "clean"
 
-    def test_suspicious_with_detection_evidence_kept(self):
+    def test_suspicious_with_detection_evidence_demoted(self):
+        """Detection-only evidence is not verification — conservative merge picks lower."""
         from core.audit.pipeline import _merge_outcomes
         sec = [self._make_outcome("a.c", "f", "clean")]
         bf = [self._make_outcome("a.c", "f", "suspicious", evidence="smt:check")]
         merged = _merge_outcomes(sec, bf)
-        assert merged[0].status == "suspicious"
+        assert merged[0].status == "clean"
 
     def test_suspicious_with_verification_evidence_kept(self):
         from core.audit.pipeline import _merge_outcomes
@@ -1195,8 +1285,8 @@ class TestEnsembleMerge:
 
     # ── Bug-class-aware disagree demotion ────────────────────────
 
-    def test_disagree_no_evidence_demotes_to_lower(self):
-        """Disagreement without evidence resolves to lower status."""
+    def test_disagree_no_evidence_picks_lower(self):
+        """Disagreement without evidence: conservative merge picks lower."""
         from core.audit.pipeline import _merge_outcomes
         sec = [self._make_outcome("a.c", "f", "clean")]
         bf = [self._make_outcome(
@@ -1206,8 +1296,8 @@ class TestEnsembleMerge:
         merged = _merge_outcomes(sec, bf)
         assert merged[0].status == "clean"
 
-    def test_disagree_finding_no_evidence_demotes_to_lower(self):
-        """Finding disagreement without evidence resolves to lower status."""
+    def test_disagree_finding_no_evidence_picks_lower(self):
+        """Finding disagreement without evidence: conservative merge picks lower."""
         from core.audit.pipeline import _merge_outcomes
         sec = [self._make_outcome("a.c", "f", "clean")]
         bf = [self._make_outcome(
@@ -1348,7 +1438,8 @@ class TestSelfContradictionDemotion:
 
     def test_all_refuted_suspicious_demoted(self):
         from core.audit.orchestrator import (
-            OrchestratorResult, _demote_self_contradictions,
+            OrchestratorResult,
+            _demote_self_contradictions,
         )
         outcome = self._make_outcome("suspicious", [
             {"mechanism": "overflow", "confidence": "refuted"},
@@ -1365,7 +1456,8 @@ class TestSelfContradictionDemotion:
 
     def test_mixed_confidence_not_demoted(self):
         from core.audit.orchestrator import (
-            OrchestratorResult, _demote_self_contradictions,
+            OrchestratorResult,
+            _demote_self_contradictions,
         )
         outcome = self._make_outcome("suspicious", [
             {"mechanism": "overflow", "confidence": "refuted"},
@@ -1379,7 +1471,8 @@ class TestSelfContradictionDemotion:
 
     def test_evidence_backed_not_demoted(self):
         from core.audit.orchestrator import (
-            OrchestratorResult, _demote_self_contradictions,
+            OrchestratorResult,
+            _demote_self_contradictions,
         )
         outcome = self._make_outcome("suspicious", [
             {"mechanism": "overflow", "confidence": "refuted"},
@@ -1392,7 +1485,8 @@ class TestSelfContradictionDemotion:
 
     def test_no_hypotheses_not_demoted(self):
         from core.audit.orchestrator import (
-            OrchestratorResult, _demote_self_contradictions,
+            OrchestratorResult,
+            _demote_self_contradictions,
         )
         outcome = self._make_outcome("suspicious", [])
         result = OrchestratorResult()
@@ -1419,6 +1513,7 @@ class TestFormatStringGoGate:
             "format string injection via user input", "src/logger.c",
         )
         assert result is not None
+        Path(result).unlink()
 
 
 # ── Auth bypass SMT check (check-auth-bypass) ──────────────────
@@ -1426,7 +1521,10 @@ class TestFormatStringGoGate:
 class TestAuthBypass:
 
     def test_early_return_before_auth_check(self):
+        # ptrace_has_cap is pack-tier vocabulary (kernel targets get it
+        # via the linux_kernel vocab pack; seeds alone no longer carry it).
         from core.audit.condition_smt import check_auth_bypass
+        from core.audit.vocab_packs import load_pack
         source = (
             "int func(struct task *task) {\n"
             "    if (same_thread_group(task, current))\n"
@@ -1436,7 +1534,7 @@ class TestAuthBypass:
             "    return 0;\n"
             "}\n"
         )
-        result = check_auth_bypass(source)
+        result = check_auth_bypass(source, load_pack("linux_kernel"))
         assert result.bypass_found
         assert "ptrace_has_cap" in str(result.bypassed_checks)
 
@@ -1909,15 +2007,16 @@ class TestDeepenParallel:
         ]
         return {"files": files}
 
-    def test_serial_and_parallel_produce_same_results(self, monkeypatch):
+    def test_serial_and_parallel_produce_same_results(self, monkeypatch, tmp_path):
+        import copy
+        import time
+
+        import core.audit.orchestrator as _orch
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _deepen_suspicious,
         )
-        import copy
-        import time
-        import core.audit.orchestrator as _orch
 
         outcomes = [
             self._make_outcome("a.c", "foo", "suspicious"),
@@ -1928,8 +2027,8 @@ class TestDeepenParallel:
             ("a.c", "foo"), ("b.c", "bar"), ("c.c", "baz"),
         )
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             sweep_validate_findings=False,
             deepen_suspicious=True,
             enable_session_context=False,
@@ -1975,21 +2074,22 @@ class TestDeepenParallel:
         assert serial_count == call_count == 3
         assert result_serial.findings == result_parallel.findings
 
-    def test_parallel_deepen_no_targets(self):
+    def test_parallel_deepen_no_targets(self, tmp_path):
+        import time
+
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _deepen_suspicious,
         )
-        import time
 
         result = OrchestratorResult(
             outcomes=[self._make_outcome("a.c", "foo", "clean")],
             clean=1,
         )
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             deepen_suspicious=True,
         )
         out = _deepen_suspicious(
@@ -1999,14 +2099,15 @@ class TestDeepenParallel:
         )
         assert out.clean == 1
 
-    def test_parallel_deepen_handles_review_failure(self, monkeypatch):
+    def test_parallel_deepen_handles_review_failure(self, monkeypatch, tmp_path):
+        import time
+
+        import core.audit.orchestrator as _orch
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _deepen_suspicious,
         )
-        import time
-        import core.audit.orchestrator as _orch
 
         outcomes = [
             self._make_outcome("a.c", "foo", "suspicious"),
@@ -2014,8 +2115,8 @@ class TestDeepenParallel:
         ]
         checklist = self._make_checklist(("a.c", "foo"), ("b.c", "bar"))
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             sweep_validate_findings=False,
             deepen_suspicious=True,
             enable_session_context=False,
@@ -2057,30 +2158,31 @@ class TestDisagreementParallel:
             review_result={"body": body},
         )
 
-    def test_serial_and_parallel_same_results(self, monkeypatch):
+    def test_serial_and_parallel_same_results(self, monkeypatch, tmp_path):
+        import copy
+        import time
+        from types import SimpleNamespace
+
+        import core.audit.orchestrator as _orch
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _re_review_disagreements,
         )
-        import copy
-        import time
-        import core.audit.orchestrator as _orch
-        from types import SimpleNamespace
 
         outcomes = [
             self._make_outcome("a.c", "foo", "clean"),
             self._make_outcome("b.c", "bar", "clean"),
         ]
         checklist = {
-            "items": [
-                {"file": "a.c", "functions": [{"name": "foo", "line_start": 1, "line_end": 50}]},
-                {"file": "b.c", "functions": [{"name": "bar", "line_start": 1, "line_end": 50}]},
+            "files": [
+                {"file": "a.c", "items": [{"name": "foo", "line_start": 1, "line_end": 50}]},
+                {"file": "b.c", "items": [{"name": "bar", "line_start": 1, "line_end": 50}]},
             ],
         }
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             sweep_validate_findings=False,
         )
         monkeypatch.setattr(
@@ -2130,29 +2232,30 @@ class TestDisagreementParallel:
         assert serial_count == call_count == 2
         assert result_serial.suspicious == result_parallel.suspicious == 2
 
-    def test_handles_review_failure(self, monkeypatch):
+    def test_handles_review_failure(self, monkeypatch, tmp_path):
+        import time
+        from types import SimpleNamespace
+
+        import core.audit.orchestrator as _orch
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _re_review_disagreements,
         )
-        import time
-        import core.audit.orchestrator as _orch
-        from types import SimpleNamespace
 
         outcomes = [
             self._make_outcome("a.c", "foo", "clean"),
             self._make_outcome("b.c", "bar", "clean"),
         ]
         checklist = {
-            "items": [
-                {"file": "a.c", "functions": [{"name": "foo"}]},
-                {"file": "b.c", "functions": [{"name": "bar"}]},
+            "files": [
+                {"file": "a.c", "items": [{"name": "foo"}]},
+                {"file": "b.c", "items": [{"name": "bar"}]},
             ],
         }
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             sweep_validate_findings=False,
         )
         monkeypatch.setattr(
@@ -2197,15 +2300,16 @@ class TestIterativeReReviewParallel:
             review_result={"body": body},
         )
 
-    def test_parallel_iteration_same_results(self, monkeypatch):
+    def test_parallel_iteration_same_results(self, monkeypatch, tmp_path):
+        import copy
+        import time
+
+        import core.audit.orchestrator as _orch
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _iterative_re_review,
         )
-        import copy
-        import time
-        import core.audit.orchestrator as _orch
 
         outcomes = [
             self._make_outcome("a.c", "caller1", "clean"),
@@ -2231,8 +2335,8 @@ class TestIterativeReReviewParallel:
             },
         }
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             sweep_validate_findings=False,
             propagate_constraints=True,
             enable_session_context=False,
@@ -2288,15 +2392,16 @@ class TestStudyReReviewParallel:
             review_result={"body": body},
         )
 
-    def test_serial_and_parallel_same_results(self, monkeypatch):
+    def test_serial_and_parallel_same_results(self, monkeypatch, tmp_path):
+        import copy
+        import time
+
+        import core.audit.orchestrator as _orch
         from core.audit.orchestrator import (
             OrchestratorConfig,
             OrchestratorResult,
             _re_review_study_enriched,
         )
-        import copy
-        import time
-        import core.audit.orchestrator as _orch
 
         outcomes = [
             self._make_outcome("a.c", "foo", "clean"),
@@ -2309,8 +2414,8 @@ class TestStudyReReviewParallel:
             ],
         }
         config = OrchestratorConfig(
-            target_path=Path("/tmp"),
-            out_dir=Path("/tmp"),
+            target_path=tmp_path,
+            out_dir=tmp_path,
             sweep_validate_findings=False,
             enable_session_context=False,
         )
@@ -2353,6 +2458,73 @@ class TestStudyReReviewParallel:
         assert serial_count == call_count == 2
         assert result_serial.suspicious == result_parallel.suspicious
 
+    def test_duplicate_gap_entries_do_not_crash(self, monkeypatch, tmp_path):
+        """Duplicate reading-list entries resolve to the same prior
+        outcome; the second replace used to raise ValueError from
+        outcomes.index() once the first iteration had swapped the prior
+        out of the list. Candidates are now deduped and the replace is
+        guarded (same shape as _re_review_joern_enriched)."""
+        import copy
+        import time
+
+        import core.audit.orchestrator as _orch
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            OrchestratorResult,
+            _re_review_study_enriched,
+        )
+
+        outcomes = [
+            self._make_outcome("a.c", "foo", "clean"),
+            self._make_outcome("b.c", "bar", "clean"),
+        ]
+        checklist = {
+            "files": [
+                {"path": "a.c", "functions": [{"name": "foo", "line_start": 1, "line_end": 50}]},
+                {"path": "b.c", "functions": [{"name": "bar", "line_start": 1, "line_end": 50}]},
+            ],
+        }
+        config = OrchestratorConfig(
+            target_path=tmp_path,
+            out_dir=tmp_path,
+            sweep_validate_findings=False,
+            enable_session_context=False,
+        )
+        monkeypatch.setattr(
+            _orch, "_build_context",
+            lambda cfg, gap, *a, **kw: {"file": gap["file"], "function": gap["name"]},
+        )
+        monkeypatch.setattr(
+            _orch, "_commit_outcome", lambda *a, **kw: None,
+        )
+
+        call_count = 0
+        def mock_review(ctx, cfg):
+            nonlocal call_count
+            call_count += 1
+            return self._make_outcome(ctx["file"], ctx["function"], "suspicious")
+
+        # A list (not a set) so the duplicate entries actually reach
+        # the candidate loop — the signature says set, but nothing
+        # enforces it and the dedupe must hold either way.
+        reading_list = ["a.c:foo", "a.c:foo", "b.c:bar"]
+
+        result = OrchestratorResult(
+            outcomes=copy.deepcopy(outcomes), clean=2,
+        )
+        _re_review_study_enriched(
+            result, config, mock_review, checklist, None, {},
+            None, set(), reading_list, time.time(), None,
+            max_workers=1,
+        )
+
+        # Each function reviewed exactly once; no duplicate outcomes.
+        assert call_count == 2
+        assert len(result.outcomes) == 2
+        statuses = {(o.file, o.function): o.status for o in result.outcomes}
+        assert statuses[("a.c", "foo")] == "suspicious"
+        assert statuses[("b.c", "bar")] == "suspicious"
+
 
 # ── Pre-loop SMT screen ──────────────────────────────────────────────
 
@@ -2366,8 +2538,8 @@ class TestPreLoopSmtScreen:
             sweep_validate_findings: bool = True
         return _Cfg()
 
-    def test_auth_bypass_locked_in_and_removed_from_workqueue(self, tmp_path):
-        from core.audit.orchestrator import _pre_loop_smt_screen, OrchestratorResult
+    def test_auth_bypass_injects_evidence_and_keeps_in_workqueue(self, tmp_path):
+        from core.audit.orchestrator import OrchestratorResult, _pre_loop_smt_screen
 
         src = tmp_path / "auth.c"
         src.write_text("""\
@@ -2379,6 +2551,9 @@ int check_access(struct task *t) {
     return 0;
 }
 """)
+        # ptrace_has_cap comes from the linux_kernel vocab pack; mark
+        # the target as a kernel tree so the screen's vocab loads it.
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         workqueue = [
             {"file": "auth.c", "name": "check_access", "line_start": 1, "line_end": 7},
         ]
@@ -2386,13 +2561,12 @@ int check_access(struct task *t) {
         config = self._make_config(tmp_path)
 
         kept = _pre_loop_smt_screen(workqueue, config, result)
-        assert len(kept) == 0
-        assert result.findings == 1
-        assert result.outcomes[0].status == "finding"
-        assert "auth-bypass" in result.outcomes[0].evidence_tool
+        assert len(kept) == 1
+        assert result.findings == 0
+        assert "_smt_pre_evidence" in kept[0]
 
     def test_clean_function_stays_in_workqueue(self, tmp_path):
-        from core.audit.orchestrator import _pre_loop_smt_screen, OrchestratorResult
+        from core.audit.orchestrator import OrchestratorResult, _pre_loop_smt_screen
 
         src = tmp_path / "clean.c"
         src.write_text("""\
@@ -2412,7 +2586,7 @@ int add(int a, int b) {
         assert len(result.outcomes) == 0
 
     def test_non_c_file_skips_c_only_checks(self, tmp_path):
-        from core.audit.orchestrator import _pre_loop_smt_screen, OrchestratorResult
+        from core.audit.orchestrator import OrchestratorResult, _pre_loop_smt_screen
 
         src = tmp_path / "app.py"
         src.write_text("""\
@@ -2430,7 +2604,7 @@ def greet(name):
         assert result.findings == 0
 
     def test_mixed_workqueue_partial_screen(self, tmp_path):
-        from core.audit.orchestrator import _pre_loop_smt_screen, OrchestratorResult
+        from core.audit.orchestrator import OrchestratorResult, _pre_loop_smt_screen
 
         buggy = tmp_path / "leak.c"
         buggy.write_text("""\
@@ -2456,6 +2630,8 @@ int add(int a, int b) {
         config = self._make_config(tmp_path)
 
         kept = _pre_loop_smt_screen(workqueue, config, result)
-        assert len(kept) == 1
-        assert kept[0]["name"] == "add"
-        assert result.findings == 1
+        assert len(kept) == 2
+        assert kept[0]["name"] == "process"
+        assert "_smt_pre_evidence" in kept[0]
+        assert kept[1]["name"] == "add"
+        assert result.findings == 0

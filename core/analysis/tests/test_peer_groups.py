@@ -1,5 +1,8 @@
 """Tests for core.analysis.peer_groups — layered peer group resolver."""
 
+import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from unittest.mock import MagicMock
 
@@ -258,6 +261,41 @@ class TestBinaryCoCalleeGroups:
         idx = FakeBinaryEdgeIndex(edges=[])
         assert _binary_co_callee_groups(idx, [_func("a")]) == []
 
+    def test_ambiguous_name_excluded_not_misbound(self):
+        """Two remaining records sharing a name: the bare callee name
+        is ambiguous — grouping must exclude it rather than bind the
+        sibling (and the claim) to an arbitrary file's record."""
+        idx = FakeBinaryEdgeIndex(edges=[
+            FakeBinaryCallEdge("dispatch", "parse"),
+            FakeBinaryCallEdge("dispatch", "handle_get"),
+            FakeBinaryCallEdge("dispatch", "handle_post"),
+        ])
+        funcs = [
+            _func("parse", file="src/a.c"),
+            _func("parse", file="src/b.c"),
+            _func("handle_get"),
+            _func("handle_post"),
+        ]
+        groups = _binary_co_callee_groups(idx, funcs)
+        assert len(groups) == 1
+        names = {s.function for s in groups[0].siblings}
+        assert names == {"handle_get", "handle_post"}
+        assert "parse" not in names
+
+    def test_unique_name_binds_to_its_own_file(self):
+        idx = FakeBinaryEdgeIndex(edges=[
+            FakeBinaryCallEdge("dispatch", "handle_get"),
+            FakeBinaryCallEdge("dispatch", "handle_post"),
+        ])
+        funcs = [
+            _func("handle_get", file="src/get.c", line=7),
+            _func("handle_post", file="src/post.c", line=9),
+        ]
+        groups = _binary_co_callee_groups(idx, funcs)
+        by_fn = {s.function: s for s in groups[0].siblings}
+        assert by_fn["handle_get"].file == "src/get.c"
+        assert by_fn["handle_post"].file == "src/post.c"
+
 
 # ── L2: Dispatch-site ─────────────────────────────────────────────────
 
@@ -461,6 +499,15 @@ class TestVerbPrefixGroups:
         # handle_delete alone in verb bucket → no group
         assert len(verb_groups) == 0
 
+    def test_verb_prefix_group_carries_shared_context(self):
+        groups = _verb_prefix_groups(
+            [_func("parse_header"), _func("parse_body")]
+        )
+        assert len(groups) == 1
+        group = groups[0]
+        assert group.shared_context
+        assert "parse" in group.shared_context
+
     def test_decorator_claim_does_not_cross_directories(self):
         funcs = [
             _func("handle_get", file="src/api/h.c", metadata={
@@ -528,6 +575,52 @@ class TestPairedOperationGroups:
         funcs = [_func("get_page"), _func("put_page")]
         groups = _paired_operation_groups(funcs)
         assert len(groups) == 1
+
+    # Names crafted so two forward names collide on the same
+    # lowercased stem ("blob") and contend for one reverse partner.
+    COLLIDING = (
+        "encode_Blob", "encode_blob", "decode_blob",
+        "get_item", "put_item", "set_item",
+        "lock_table", "unlock_table",
+    )
+
+    def test_stem_collision_winner_is_sorted_last_writer(self):
+        groups = _paired_operation_groups(
+            [_func(n) for n in self.COLLIDING]
+        )
+        pair_ids = {g.group_id for g in groups}
+        # sorted() puts "encode_Blob" before "encode_blob"; the
+        # last writer for stem "blob" is therefore "encode_blob".
+        assert "pair:encode_blob:decode_blob" in pair_ids
+        assert "pair:encode_Blob:decode_blob" not in pair_ids
+
+    def test_pairing_stable_across_hash_seeds(self):
+        # Set iteration order varies with PYTHONHASHSEED; the pairing
+        # must not.
+        snippet = (
+            "from core.analysis.peer_groups import _paired_operation_groups\n"
+            f"names = {list(self.COLLIDING)!r}\n"
+            "fns = [{'name': n, 'file': 'src/mod.c', 'line': 1}"
+            " for n in names]\n"
+            "print(sorted(g.group_id for g in"
+            " _paired_operation_groups(fns)))\n"
+        )
+        outputs = set()
+        for seed in ("0", "1", "42"):
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            proc = subprocess.run(
+                [sys.executable, "-c", snippet],
+                capture_output=True, text=True, env=env, check=True,
+            )
+            outputs.add(proc.stdout.strip())
+        assert len(outputs) == 1, outputs
+
+    def test_first_claim_still_exclusive(self):
+        # A name already claimed by an earlier pattern is not re-paired.
+        groups = _paired_operation_groups(
+            [_func("get_item"), _func("put_item"), _func("set_item")]
+        )
+        assert [g.group_id for g in groups] == ["pair:get_item:put_item"]
 
 
 # ── resolve_peer_groups integration ───────────────────────────────────
@@ -644,3 +737,357 @@ class TestLargestCompatibleSubset:
 
     def test_empty(self):
         assert _largest_compatible_subset([]) == []
+
+
+# ── Producers: binary_edge_index_from_inventory (L1) ─────────────────
+
+
+def _bo_inventory(binaries):
+    return {"binary_oracle": {"binaries": binaries}}
+
+
+class TestBinaryEdgeIndexFromInventory:
+    def _patch_cache(self, monkeypatch, mapping):
+        """Route load_cached_edge_index through an in-memory cache."""
+        import core.analysis.binary_oracle_edges as edges_mod
+
+        def _fake_load(path):
+            return mapping.get(str(path))
+
+        monkeypatch.setattr(
+            edges_mod, "load_cached_edge_index", _fake_load,
+        )
+
+    def test_none_inventory(self):
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        assert binary_edge_index_from_inventory(None) is None
+        assert binary_edge_index_from_inventory({}) is None
+        assert binary_edge_index_from_inventory(
+            {"binary_oracle": {}}) is None
+
+    def test_operator_opt_out(self, monkeypatch):
+        """--no-binary-oracle wins even with eligible cached binaries."""
+        from core.analysis.binary_oracle_edges import BinaryEdgeIndex
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        idx = BinaryEdgeIndex(binary_path="/b/app")
+        idx.edges.append(FakeBinaryCallEdge("main", "h_get"))
+        self._patch_cache(monkeypatch, {"/b/app": idx})
+        inv = _bo_inventory(
+            [{"path": "/b/app", "build_id": "aa", "tier": "full"}])
+        assert binary_edge_index_from_inventory(
+            inv, no_binary_oracle=True) is None
+
+    def test_tier_gate_skips_symbol_only_and_unknown(self, monkeypatch):
+        """Chokepoint tier gating: stripped / unknown-tier binaries
+        never feed L1 — name-keyed joins from a stripped binary can't
+        earn an exclusive-claim layer."""
+        from core.analysis.binary_oracle_edges import BinaryEdgeIndex
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        idx = BinaryEdgeIndex(binary_path="/b/stripped")
+        idx.edges.append(FakeBinaryCallEdge("main", "h_get"))
+        self._patch_cache(
+            monkeypatch, {"/b/stripped": idx, "/b/unknown": idx})
+        inv = _bo_inventory([
+            {"path": "/b/stripped", "build_id": "aa",
+             "tier": "symbol_only"},
+            {"path": "/b/unknown", "build_id": "bb", "tier": "unknown"},
+        ])
+        assert binary_edge_index_from_inventory(inv) is None
+
+    def test_cache_miss_stays_empty(self, monkeypatch):
+        """Cold cache -> None -> layer stays empty (equivalence pin).
+        The producer never runs r2."""
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        self._patch_cache(monkeypatch, {})
+        inv = _bo_inventory(
+            [{"path": "/b/app", "build_id": "aa", "tier": "full"}])
+        assert binary_edge_index_from_inventory(inv) is None
+
+    def test_full_tier_cache_hit_merges_binaries(self, monkeypatch):
+        from core.analysis.binary_oracle_edges import BinaryEdgeIndex
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        idx_a = BinaryEdgeIndex(binary_path="/b/app")
+        idx_a.edges.append(FakeBinaryCallEdge("main", "h_get", "/b/app"))
+        idx_a.callees.add("h_get")
+        idx_b = BinaryEdgeIndex(binary_path="/b/lib")
+        idx_b.edges.append(FakeBinaryCallEdge("main", "h_put", "/b/lib"))
+        idx_b.callees.add("h_put")
+        self._patch_cache(monkeypatch, {"/b/app": idx_a, "/b/lib": idx_b})
+        inv = _bo_inventory([
+            {"path": "/b/app", "build_id": "aa", "tier": "full"},
+            {"path": "/b/lib", "build_id": "bb", "tier": "full"},
+        ])
+        merged = binary_edge_index_from_inventory(inv)
+        assert merged is not None
+        assert len(merged.edges) == 2
+        assert merged.callees == {"h_get", "h_put"}
+
+    def test_coverage_gain_l1_groups_where_l2_l6_cannot(self, monkeypatch):
+        """Functions no other layer can group (no dispatch table, no
+        verb prefix, no pair pattern) get grouped once the L1 producer
+        supplies cached binary edges."""
+        from core.analysis.binary_oracle_edges import BinaryEdgeIndex
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        funcs = [
+            _func("frobnicate", file="src/a.c"),
+            _func("quuxify", file="src/b.c"),
+        ]
+        # Without the L1 input: no groups at all.
+        assert resolve_peer_groups(funcs) == []
+
+        idx = BinaryEdgeIndex(binary_path="/b/app")
+        idx.edges.append(
+            FakeBinaryCallEdge("dispatch_all", "frobnicate", "/b/app"))
+        idx.edges.append(
+            FakeBinaryCallEdge("dispatch_all", "quuxify", "/b/app"))
+        idx.callees.update({"frobnicate", "quuxify"})
+        self._patch_cache(monkeypatch, {"/b/app": idx})
+        inv = _bo_inventory(
+            [{"path": "/b/app", "build_id": "aa", "tier": "full"}])
+
+        edge_index = binary_edge_index_from_inventory(inv)
+        groups = resolve_peer_groups(funcs, binary_edge_index=edge_index)
+        assert len(groups) == 1
+        assert groups[0].sibling_type == "co_callee"
+        assert {s.function for s in groups[0].siblings} == {
+            "frobnicate", "quuxify",
+        }
+
+    def test_equivalence_absent_input_byte_identical(self):
+        """No binaries declared -> resolver output identical to a call
+        that never mentions the layer."""
+        funcs = [
+            _func("handle_get", file="src/h.c"),
+            _func("handle_put", file="src/h.c"),
+            _func("encode_frame", file="src/codec.c"),
+            _func("decode_frame", file="src/codec.c"),
+        ]
+        from core.analysis.peer_groups import (
+            binary_edge_index_from_inventory,
+        )
+
+        produced = binary_edge_index_from_inventory({"files": []})
+        assert produced is None
+        baseline = resolve_peer_groups(funcs)
+        wired = resolve_peer_groups(funcs, binary_edge_index=produced)
+        assert [
+            (g.group_id, g.sibling_type,
+             [(s.file, s.function) for s in g.siblings])
+            for g in baseline
+        ] == [
+            (g.group_id, g.sibling_type,
+             [(s.file, s.function) for s in g.siblings])
+            for g in wired
+        ]
+
+
+# ── Producers: type_ref_index_from_inventory (L4) ────────────────────
+
+
+def _inv_file(path, language, items):
+    return {"path": path, "language": language, "items": items}
+
+
+def _inv_fn(name, *, params=None, return_type=None, signature=None):
+    item = {"name": name, "kind": "function", "line_start": 1}
+    meta = {}
+    if params is not None:
+        meta["parameters"] = params
+    if return_type is not None:
+        meta["return_type"] = return_type
+    if meta:
+        item["metadata"] = meta
+    if signature is not None:
+        item["signature"] = signature
+    return item
+
+
+class TestTypeRefIndexFromInventory:
+    def test_none_without_type_info(self):
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        assert type_ref_index_from_inventory(None) is None
+        assert type_ref_index_from_inventory({}) is None
+        # untyped items -> nothing distinctive -> None
+        inv = {"files": [_inv_file("a.py", "python", [
+            _inv_fn("f"), _inv_fn("g"),
+        ])]}
+        assert type_ref_index_from_inventory(inv) is None
+
+    def test_cohort_from_typed_params(self):
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        inv = {"files": [_inv_file("a.py", "python", [
+            _inv_fn("login", params=[["ctx", "AuthContext"]]),
+            _inv_fn("logout", params=[["ctx", "AuthContext"]]),
+            _inv_fn("unrelated", params=[["n", "int"]]),
+        ])]}
+        idx = type_ref_index_from_inventory(inv)
+        assert idx is not None
+        assert set(idx) == {"AuthContext"}
+        assert [fn for fn, _cls in idx["AuthContext"]] == ["login", "logout"]
+
+    def test_primitives_never_form_cohorts(self):
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        inv = {"files": [_inv_file("a.py", "python", [
+            _inv_fn("f", params=[["s", "str"], ["n", "int"]],
+                    return_type="bool"),
+            _inv_fn("g", params=[["s", "str"], ["n", "int"]],
+                    return_type="bool"),
+        ])]}
+        assert type_ref_index_from_inventory(inv) is None
+
+    def test_decorated_forms_normalise(self):
+        """const ptr / Optional[...] / std::vector<...> all yield the
+        distinctive core type."""
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        inv = {"files": [
+            _inv_file("a.c", "c", [
+                _inv_fn("c_reader",
+                        params=[["r", "const request_ctx_t *"]]),
+            ]),
+            _inv_file("b.py", "python", [
+                _inv_fn("py_reader",
+                        params=[["r", "Optional[request_ctx_t]"]]),
+            ]),
+            _inv_file("c.cpp", "cpp", [
+                _inv_fn("cpp_reader",
+                        params=[["r", "std::vector<request_ctx_t>"]]),
+            ]),
+        ]}
+        idx = type_ref_index_from_inventory(inv)
+        assert idx is not None
+        assert [fn for fn, _cls in idx["request_ctx_t"]] == [
+            "c_reader", "cpp_reader", "py_reader",
+        ]
+
+    def test_return_type_counts(self):
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        inv = {"files": [_inv_file("a.py", "python", [
+            _inv_fn("make_token", return_type="SessionToken"),
+            _inv_fn("verify_token", params=[["t", "SessionToken"]]),
+        ])]}
+        idx = type_ref_index_from_inventory(inv)
+        assert idx is not None
+        entries = dict(idx["SessionToken"])
+        assert entries == {"make_token": "return", "verify_token": "param"}
+
+    def test_c_signature_fallback(self):
+        """C items without parameter metadata mine the signature for
+        _t / struct tokens (language-aware degradation)."""
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        inv = {"files": [_inv_file("net.c", "c", [
+            _inv_fn("conn_open",
+                    signature="int conn_open(conn_state_t *cs)"),
+            _inv_fn("conn_close",
+                    signature="void conn_close(struct conn_state *cs)"),
+            _inv_fn("conn_reset",
+                    signature="void conn_reset(conn_state_t *cs)"),
+        ])]}
+        idx = type_ref_index_from_inventory(inv)
+        assert idx is not None
+        assert [fn for fn, _cls in idx["conn_state_t"]] == [
+            "conn_open", "conn_reset",
+        ]
+        # struct tag from the fallback regex
+        assert "conn_state" in idx or "conn_state_t" in idx
+
+    def test_bounded_cohort_size(self):
+        """A type shared by half the codebase is not distinctive."""
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        items = [
+            _inv_fn(f"f{i}", params=[["g", "GodObject"]])
+            for i in range(30)
+        ]
+        inv = {"files": [_inv_file("a.py", "python", items)]}
+        assert type_ref_index_from_inventory(inv) is None
+        # under the cap it forms normally
+        inv_small = {"files": [_inv_file("a.py", "python", items[:5])]}
+        idx = type_ref_index_from_inventory(inv_small)
+        assert idx is not None and len(idx["GodObject"]) == 5
+
+    def test_bounded_total_types(self):
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        files = []
+        for i in range(300):
+            files.append(_inv_file(f"m{i}.py", "python", [
+                _inv_fn(f"use_a_{i}", params=[["x", f"WidgetKind{i}"]]),
+                _inv_fn(f"use_b_{i}", params=[["x", f"WidgetKind{i}"]]),
+            ]))
+        idx = type_ref_index_from_inventory({"files": files})
+        assert idx is not None
+        assert len(idx) == 200
+
+    def test_coverage_gain_l4_groups_where_l5_l6_cannot(self):
+        """Functions with unrelated names (no verb prefix, no pair)
+        sharing a distinctive type get grouped once the L4 producer
+        runs."""
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        funcs = [
+            _func("frobnicate", file="src/a.py"),
+            _func("quuxify", file="src/b.py"),
+        ]
+        assert resolve_peer_groups(funcs) == []
+
+        inv = {"files": [
+            _inv_file("src/a.py", "python", [
+                _inv_fn("frobnicate", params=[["p", "PayloadEnvelope"]]),
+            ]),
+            _inv_file("src/b.py", "python", [
+                _inv_fn("quuxify", params=[["p", "PayloadEnvelope"]]),
+            ]),
+        ]}
+        idx = type_ref_index_from_inventory(inv)
+        groups = resolve_peer_groups(funcs, type_ref_index=idx)
+        assert len(groups) == 1
+        assert groups[0].sibling_type == "type_cohort"
+        assert groups[0].group_id == "type_cohort:PayloadEnvelope"
+        assert {s.function for s in groups[0].siblings} == {
+            "frobnicate", "quuxify",
+        }
+
+    def test_equivalence_absent_input_byte_identical(self):
+        funcs = [
+            _func("handle_get", file="src/h.c"),
+            _func("handle_put", file="src/h.c"),
+        ]
+        from core.analysis.peer_groups import type_ref_index_from_inventory
+
+        produced = type_ref_index_from_inventory({"files": []})
+        assert produced is None
+        baseline = resolve_peer_groups(funcs)
+        wired = resolve_peer_groups(funcs, type_ref_index=produced)
+        assert [
+            (g.group_id, g.sibling_type,
+             [(s.file, s.function) for s in g.siblings])
+            for g in baseline
+        ] == [
+            (g.group_id, g.sibling_type,
+             [(s.file, s.function) for s in g.siblings])
+            for g in wired
+        ]

@@ -34,7 +34,7 @@ CONSTRAINTS_FILENAME = "constraints.json"
 
 def find_audit_output(
     validate_dir: Path,
-    target_path: str = None,
+    target_path: str | None = None,
 ) -> Path | None:
     """Find the best sibling audit run directory with constraints.json.
 
@@ -47,9 +47,21 @@ def find_audit_output(
     from core.orchestration.run_discovery import find_sibling_run
 
     validate_dir = Path(validate_dir)
+
+    def _target_matches(d: Path) -> bool:
+        if not target_path:
+            return True
+        try:
+            meta = json.loads((d / ".raptor-run.json").read_text())
+            stored = meta.get("target_path", "")
+            return Path(stored).resolve() == Path(target_path).resolve()
+        except Exception:  # noqa: BLE001 — unreadable metadata = no match
+            return False
+
     best = find_sibling_run(
         validate_dir, CONSTRAINTS_FILENAME,
         search_global=bool(target_path),
+        dir_filter=_target_matches if target_path else None,
     )
     if best:
         logger.info("audit_bridge: selected %s", best)
@@ -250,6 +262,114 @@ def is_audit_format(findings: list[dict[str, Any]]) -> bool:
 
 ATTACK_CHAINS_FILENAME = "attack-chains.json"
 SUMMARIES_FILENAME = "summaries.json"
+GRADED_FINDINGS_FILENAME = "findings-graded.json"
+
+
+def load_dark_findings(audit_dir: Path) -> list[dict[str, Any]]:
+    """Load status=dark findings from an audit run's graded export.
+
+    Dark is /audit's "tool-blind, needs concrete verification" bucket
+    (auth bypass, IDOR, business logic, ...) — no mechanical channel
+    can decide these classes, which makes /validate exactly the
+    consumer for them. Exported with ``needs_validation: true``.
+
+    Returns list of finding dicts, empty on any error.
+    """
+    path = Path(audit_dir) / GRADED_FINDINGS_FILENAME
+    if not path.exists():
+        return []
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        logger.debug("audit_bridge: failed to read %s", path, exc_info=True)
+        return []
+
+    findings = data.get("findings", []) if isinstance(data, dict) else []
+    return [
+        f for f in findings
+        if isinstance(f, dict) and f.get("status") == "dark"
+    ]
+
+
+def inject_dark_as_hypotheses(
+    dark_findings: list[dict[str, Any]],
+    attack_surface_file: Path,
+) -> int:
+    """Inject /audit dark outcomes into attack-surface.json as hypotheses.
+
+    Each dark finding becomes an entry in attack_surface.hypotheses[]
+    with status="imported" and source="audit_dark". Stage B sees these
+    and verifies/disproves the tool-blind claim instead of the bucket
+    dying unexamined.
+
+    Returns number of hypotheses injected.
+    """
+    if not dark_findings:
+        return 0
+
+    attack_surface_file = Path(attack_surface_file)
+    if not attack_surface_file.exists():
+        return 0
+
+    try:
+        surface = json.loads(attack_surface_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return 0
+
+    if not isinstance(surface, dict):
+        return 0
+
+    hypotheses = surface.setdefault("hypotheses", [])
+    injected = 0
+
+    existing_keys: set = set()
+    base_idx = 0
+    for h in hypotheses:
+        if isinstance(h, dict) and h.get("source") == "audit_dark":
+            existing_keys.add(
+                (h.get("file", ""), h.get("function", ""), h.get("description", "")),
+            )
+            base_idx += 1
+
+    for f in dark_findings:
+        file_path = f.get("file", "")
+        function = f.get("function", "")
+        desc = f.get("hypothesis", "") or f.get("title", "")
+        key = (file_path, function, desc)
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        hypothesis = {
+            "id": f"audit_dark_{base_idx + injected}",
+            "source": "audit_dark",
+            "status": "imported",
+            "needs_validation": True,
+            "description": desc,
+            "file": file_path,
+            "function": function,
+            "line": f.get("line", 0),
+            "cwe": f.get("cwe_class", ""),
+            "verification_tier": f.get("verification_tier", ""),
+        }
+        hypotheses.append(hypothesis)
+        injected += 1
+
+    if injected:
+        try:
+            tmp = attack_surface_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(surface, indent=2), encoding="utf-8")
+            tmp.replace(attack_surface_file)
+            logger.info(
+                "audit_bridge: injected %d dark-outcome hypotheses", injected,
+            )
+        except OSError:
+            logger.debug(
+                "audit_bridge: failed to write dark hypotheses", exc_info=True,
+            )
+            return 0
+
+    return injected
 
 
 def load_attack_chains(audit_dir: Path) -> list[dict[str, Any]]:
@@ -341,10 +461,12 @@ def inject_chains_as_hypotheses(
 
     # Build a set of existing content keys to avoid duplicate injection.
     existing_keys: set = set()
+    base_idx = 0
     for h in hypotheses:
         if isinstance(h, dict) and h.get("source") == "audit_chain":
             key = (h.get("description", ""), h.get("goal", ""))
             existing_keys.add(key)
+            base_idx += 1
 
     for chain in chains:
         desc = chain.get("description", "")
@@ -353,7 +475,7 @@ def inject_chains_as_hypotheses(
             continue
         existing_keys.add((desc, goal))
         hypothesis = {
-            "id": f"audit_chain_{injected}",
+            "id": f"audit_chain_{base_idx + injected}",
             "source": "audit_chain",
             "status": "imported",
             "description": desc,

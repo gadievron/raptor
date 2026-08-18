@@ -6,11 +6,24 @@ Task subclasses define semantics: what prompt, what schema, which model.
 """
 
 import logging
-import re
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
+
+# Error classification moved to the shared consumer-side envelope
+# (core.llm.structured_call) — the word-boundary regexes this module
+# introduced are now the ONE classifier, extended with audit's
+# provider phrasings ("model refused", content_filter, "blocked by").
+# The aliased names below stay as thin aliases: they are this
+# package's documented seam (tests and callers import them from here).
+from core.llm.structured_call import (
+    classify_error_text as _classify_error,
+)
+from core.llm.structured_call import (
+    is_auth_error_text as _is_auth_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +39,23 @@ _DISPATCH_CORPORA = (
 )
 
 
+class _ModelCircuitOpen(Exception):
+    """Signal from a worker that its model was already circuit-broken.
+
+    Every (model, item) future is pre-submitted before the drain loop
+    starts, so "stopping dispatch to this model" needs an execution-time
+    check: a queued future whose model has since been declared dead
+    raises this instead of spending another API call on it. Carries the
+    model key as its message.
+    """
+
+
 class DispatchResult:
     """Normalised result from any dispatch path (external LLM or CC)."""
 
-    def __init__(self, result: Dict[str, Any], cost: float = 0.0,
+    def __init__(self, result: dict[str, Any], cost: float = 0.0,
                  tokens: int = 0, model: str = "", duration: float = 0.0,
-                 quality: float = 1.0, resolved_model: Optional[str] = None):
+                 quality: float = 1.0, resolved_model: str | None = None):
         self.result = result
         self.cost = cost
         self.tokens = tokens
@@ -78,15 +102,15 @@ class DispatchTask:
         model = role_resolution.get(f"{self.model_role}_model")
         return [model] if model else []
 
-    def build_prompt(self, item: Dict[str, Any]) -> str:
+    def build_prompt(self, item: dict[str, Any]) -> str:
         """Build the prompt for one item. Must be implemented by subclass."""
         raise NotImplementedError
 
-    def get_schema(self, item: Dict[str, Any]) -> Optional[dict]:
+    def get_schema(self, item: dict[str, Any]) -> dict | None:
         """Schema for structured output, or None for free-form generate()."""
         return None
 
-    def get_system_prompt(self) -> Optional[str]:
+    def get_system_prompt(self) -> str | None:
         """System prompt for this task."""
         return None
 
@@ -99,8 +123,8 @@ class DispatchTask:
         return 0
 
     def process_result(
-        self, item: Dict[str, Any], result: DispatchResult,
-    ) -> Dict[str, Any]:
+        self, item: dict[str, Any], result: DispatchResult,
+    ) -> dict[str, Any]:
         """Post-process a single result. Default: return result dict with metadata."""
         out = dict(result.result)
         if result.cost > 0:
@@ -125,18 +149,18 @@ class DispatchTask:
             out["quality"] = quality_rounded
         return out
 
-    def finalize(self, results: List[Dict], prior_results: dict) -> List[Dict]:
+    def finalize(self, results: list[dict], prior_results: dict) -> list[dict]:
         """Post-dispatch processing. Default: no-op.
 
         Override for consensus verdicts, etc.
         """
         return results
 
-    def get_item_id(self, item: Dict[str, Any]) -> str:
+    def get_item_id(self, item: dict[str, Any]) -> str:
         """ID for result matching and progress display."""
         return item.get("finding_id", item.get("group_id", "unknown"))
 
-    def get_item_display(self, item: Dict[str, Any]) -> str:
+    def get_item_display(self, item: dict[str, Any]) -> str:
         """Human-readable location for progress line."""
         fp = item.get("file_path", "")
         if fp:
@@ -152,75 +176,6 @@ def _format_elapsed(seconds: float) -> str:
     return format_elapsed(seconds)
 
 
-# Word-boundary patterns for auth and classify_error keywords.
-# Pre-fix the substring `in lower` checks produced false positives:
-#   * `"401"` matched any error string containing the digits "401"
-#     anywhere — including stack-trace line numbers (`line 401, in
-#     ...`), HTTP status logs from unrelated endpoints, content-
-#     length headers, etc.
-#   * `"safety"` matched legitimate non-content-filter contexts
-#     ("safety check failed in tokenizer", "thread-safety
-#     violation", "safe to retry").
-#   * `"credit"` matched "credentials", "credit card validation",
-#     "discredit". The intent was billing-credit-exhausted but
-#     the substring caught everything credit-shaped.
-#   * `"refusal"` was OK as a substring; "refused request" was
-#     fine; but neither is reliably emitted by all providers.
-# Word-boundary regex via `\b...\b` keeps the keywords but
-# anchors them to token boundaries.
-_AUTH_KEYWORDS_RE = re.compile(
-    # Bare 401/403 only when preceded by a status-context word
-    # (HTTP, status, code) — "line 401" in a stack trace
-    # otherwise false-positives. Word words remain unconstrained.
-    r"\b((?:http|status|code)\s+40[13]\b|"
-    r"40[13]\s+(?:unauthorized|forbidden)|"
-    r"authentication|unauthorized|invalid api key|billing|"
-    r"quota|rate limit|insufficient_quota|credits?|"
-    r"api[_ ]?key (?:invalid|expired|missing))\b",
-    re.IGNORECASE,
-)
-
-_BLOCKED_KEYWORDS_RE = re.compile(
-    r"\b(content filter|blocked response|content (?:policy|safety) violation|"
-    r"refused (?:request|to respond)|response (?:was )?refused|"
-    r"safety filter|content blocked|moderation block)\b",
-    re.IGNORECASE,
-)
-
-_TIMEOUT_KEYWORDS_RE = re.compile(
-    r"\b(timeout|timed out|deadline exceeded|read timed? out)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_auth_error(error_str: str) -> bool:
-    """Check if an error string indicates an authentication/billing failure.
-
-    Word-boundary matched (see module-level RE comments) so a
-    "line 401, in foo" stack-trace fragment doesn't false-positive.
-    """
-    return bool(_AUTH_KEYWORDS_RE.search(error_str or ""))
-
-
-def _classify_error(error_str: str) -> str:
-    """Classify an error for structured reporting.
-
-    Returns: 'blocked' (content filter/safety/refusal), 'auth' (key/billing/quota),
-    'timeout', or 'error' (everything else).
-
-    Uses word-boundary regex matching — see module RE comments for
-    the substring false-positives this fixes.
-    """
-    text = error_str or ""
-    if _BLOCKED_KEYWORDS_RE.search(text):
-        return "blocked"
-    if _is_auth_error(text):
-        return "auth"
-    if _TIMEOUT_KEYWORDS_RE.search(text):
-        return "timeout"
-    return "error"
-
-
 def dispatch_task(
     task: DispatchTask,
     items: list,
@@ -229,8 +184,8 @@ def dispatch_task(
     prior_results: dict,
     cost_tracker: Any,
     max_parallel: int = 3,
-    prefilter_fn: Optional[Callable] = None,
-) -> List[Dict[str, Any]]:
+    prefilter_fn: Callable | None = None,
+) -> list[dict[str, Any]]:
     """Generic parallel dispatcher.
 
     Handles threading, progress output, cost tracking, error handling,
@@ -346,24 +301,28 @@ def dispatch_task(
         _throttle.close()
 
 
-def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
+def _dispatch_inner(
     task, work, selected, dispatch_fn, cost_tracker,
     max_parallel, prefilter_fn, prior_results, _throttle,
     start, system_prompt, profile_name,
 ):
-    from core.security.prompt_telemetry import defense_telemetry
     from core.security.prompt_input_preflight import preflight
+    from core.security.prompt_telemetry import defense_telemetry
 
     total = len(work)
     completed = 0
     running_cost = 0.0
     results = []
     abort = False
+    abort_reason = "auth failure"
     _per_model_auth_fail: set = set()
     _per_model_dead: set = set()
-    _per_model_state: Dict[str, Dict[str, int]] = {}
+    _per_model_state: dict[str, dict[str, int]] = {}
 
     import threading as _th
+    # Guards _per_model_dead: the drain loop (main thread) adds dead
+    # models while worker threads check membership in _do_one.
+    _dead_lock = _th.Lock()
     # Key by (item_id, model_key) tuple — NOT just item_id. With N
     # models analysing the same item (multi-model orchestration),
     # all N writes land on the same `iid` key and last-writer-
@@ -389,6 +348,15 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
         futures = {}
         for model, item in work:
             def _do_one(m=model, it=item):
+                # Circuit-breaker enforcement. All (model, item)
+                # futures are pre-submitted before the drain loop
+                # starts, so a model declared dead mid-run still has
+                # queued work — short-circuit those futures here
+                # instead of spending another API call on a model
+                # that keeps failing.
+                with _dead_lock:
+                    if _model_key(m) in _per_model_dead:
+                        raise _ModelCircuitOpen(_model_key(m))
                 # Prefilter hook (fast-tier scorecard) — fires before
                 # prompt build and full dispatch so we don't pay for
                 # token-heavy work when the cheap-tier verdict is
@@ -537,7 +505,28 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
                 )
                 print(f"{prefix} {display} {status}{cost_str}")
 
-            except Exception as e:
+            except _ModelCircuitOpen:
+                # The worker short-circuited a pre-submitted future
+                # for an already-dead model: no API call was made, no
+                # nonce was stored, and this is not a fresh failure —
+                # record the skip without touching the per-model
+                # consecutive-failure counters or telemetry.
+                model_name = model.model_name if model is not None else "?"
+                results.append({
+                    "finding_id": item_id,
+                    "error": "skipped (model circuit-broken)",
+                    "error_type": "circuit_breaker",
+                    "analysed_by": model_name,
+                })
+                display = task.get_item_display(item)
+                prefix = (
+                    f"  [{completed}/{total} "
+                    f"{_format_elapsed(elapsed)} "
+                    f"${running_cost:.2f}]"
+                )
+                print(f"{prefix} {display} skipped — model circuit-broken")
+
+            except Exception as e:  # noqa: BLE001 — per-item isolation: one failed dispatch must not sink the batch
                 err_str = str(e)
                 error_type = _classify_error(err_str)
                 model_name = model.model_name if model is not None else "?"
@@ -601,6 +590,7 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
                             file=sys.stderr,
                         )
                         abort = True
+                        abort_reason = "auth failure"
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
                     else:
@@ -621,10 +611,14 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
                 # fail/fail/fail-from-same-model bursts that the
                 # GLOBAL counter saw as universal failure even
                 # when other models had succeeded between them.
-                # Per-model counter only triggers when this
-                # specific model has 3 consecutive failures
-                # AND every result for this model has been a
-                # failure.
+                # Per-model counter only triggers when this model
+                # itself fails 3 times in a row AND has never
+                # succeeded (completed == consec: every completion
+                # so far was one of those failures). A proven model
+                # riding out a transient burst (timeout storm, proxy
+                # blip) keeps dispatching; a model that has produced
+                # nothing but failures gets circuit-broken (enforced
+                # by the dead-check in _do_one).
                 pm = _per_model_state.setdefault(
                     model_key, {"consec": 0, "completed": 0},
                 )
@@ -638,10 +632,17 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
                         " to this model (others continue)",
                         file=sys.stderr,
                     )
-                    _per_model_dead.add(model_key)
+                    with _dead_lock:
+                        _per_model_dead.add(model_key)
                     distinct_models = {_model_key(m) for m, _ in work}
                     if _per_model_dead >= distinct_models:
+                        print(
+                            "\n  All models circuit-broken —"
+                            " aborting remaining",
+                            file=sys.stderr,
+                        )
                         abort = True
+                        abort_reason = "all models circuit-broken"
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
 
@@ -650,9 +651,13 @@ def _dispatch_inner(  # noqa: PLR0913, PLR0912, PLR0915
         for item in selected:
             item_id = task.get_item_id(item)
             if item_id not in completed_ids:
+                # Pre-fix this hardcoded "aborted (auth failure)" even
+                # when the abort came from the all-models-circuit-broken
+                # branch — mislabelling non-auth death spirals in the
+                # per-item error records. Carry the actual reason.
                 results.append({
                     "finding_id": item_id,
-                    "error": "aborted (auth failure)",
+                    "error": f"aborted ({abort_reason})",
                 })
 
     # Finalize (e.g. consensus verdict rules)

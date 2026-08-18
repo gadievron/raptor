@@ -28,8 +28,9 @@ Outputs (scan):
 
 Exit codes:
     0 — subcommand completed successfully.
-    1 — fix: major-version bumps blocked (review needed); upgrade: mixed/
-        regression; check: review needed; diff: new findings.
+    1 — scan: --fail-on-* CI-gate threshold breached; fix: major-version
+        bumps blocked (review needed); upgrade: mixed/regression;
+        check: review needed; diff: new findings.
     2 — invalid arguments; check: block.
     3 — unrecoverable internal error.
 """
@@ -39,9 +40,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence
 
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
@@ -56,7 +57,7 @@ SUBCOMMANDS = ("fix", "check", "upgrade", "diff",
 _SUBCOMMANDS = SUBCOMMANDS  # backcompat alias for internal callers
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """CLI main; returns process exit code (0 on success)."""
     raw = list(sys.argv[1:] if argv is None else argv)
     sub, rest = _split_subcommand(raw)
@@ -67,7 +68,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 # Subcommand dispatch
 # ---------------------------------------------------------------------------
 
-def _split_subcommand(argv: Sequence[str]) -> "tuple[str, List[str]]":
+def _split_subcommand(argv: Sequence[str]) -> tuple[str, list[str]]:
     """Return (subcommand, remaining_args).
 
     If the first arg matches a known subcommand it's consumed; otherwise
@@ -79,7 +80,7 @@ def _split_subcommand(argv: Sequence[str]) -> "tuple[str, List[str]]":
     return "scan", list(argv)
 
 
-def _dispatch(subcommand: str, argv: List[str]) -> int:
+def _dispatch(subcommand: str, argv: list[str]) -> int:
     if subcommand == "scan":
         return _run_analyse(argv)
     if subcommand == "fix":
@@ -127,7 +128,7 @@ def _dispatch(subcommand: str, argv: List[str]) -> int:
     return 2
 
 
-def _dispatch_fix(argv: List[str]) -> int:
+def _dispatch_fix(argv: list[str]) -> int:
     """Route ``fix`` to the right backend based on flags.
 
     update.py (--cve-only) uses ``--target <path>`` instead of a positional
@@ -155,7 +156,7 @@ def _dispatch_fix(argv: List[str]) -> int:
     return optimise.main(argv)
 
 
-def _positional_to_target_flag(argv: List[str]) -> List[str]:
+def _positional_to_target_flag(argv: list[str]) -> list[str]:
     """Convert a bare positional path to ``--target <path>`` for update.py.
 
     update.py uses a mutually-exclusive group (``--findings`` | ``--target``)
@@ -169,7 +170,7 @@ def _positional_to_target_flag(argv: List[str]) -> List[str]:
         return argv
     has_findings = "--findings" in argv
     _VALUE_FLAGS = {"--findings", "--out", "--fix", "--target", "--cache-root"}
-    out: List[str] = []
+    out: list[str] = []
     expect_value = False
     for arg in argv:
         if expect_value:
@@ -193,7 +194,7 @@ def _positional_to_target_flag(argv: List[str]) -> List[str]:
 # analyse — the default mechanical pipeline
 # ---------------------------------------------------------------------------
 
-def _run_analyse(argv: List[str]) -> int:
+def _run_analyse(argv: list[str]) -> int:
     args = _parse_analyse_args(argv)
     _configure_logging(args.verbose)
 
@@ -205,17 +206,6 @@ def _run_analyse(argv: List[str]) -> int:
         args.review_slopsquats = False
         args.llm_inline_installs = False
         args.impact_analysis = False
-
-    # Propagate ``--trust-repo`` to the process-wide flag so any
-    # cc_trust.check_repo_claude_trust() call later in the run honours
-    # it (e.g., future sandbox-gated resolver invocations).
-    if args.trust_repo:
-        try:
-            from core.security.cc_trust import set_trust_override
-            set_trust_override(True)
-        except ImportError:
-            logger.debug("raptor-sca: core.security.cc_trust unavailable; "
-                          "--trust-repo had no effect")
 
     target = Path(args.target).resolve()
     if not target.exists():
@@ -229,18 +219,27 @@ def _run_analyse(argv: List[str]) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     _configure_logging(args.verbose, log_dir=output_dir)
 
+    # ``options_from_args`` resolves the repo-trust umbrella
+    # (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
+    # marker > off) and propagates the resolved value to the
+    # process-wide ``cc_trust`` / ``codeql_trust`` overrides, so the
+    # pipeline and the process-wide gates always agree. Do NOT set
+    # the overrides from the raw flag here — the raw-flag path missed
+    # marker-implied trust and mishandled ``--trust-repo
+    # --no-trust-repo`` (pipeline untrusted, override trusted).
     from ._scan_args import apply_no_llm_umbrella, options_from_args
     apply_no_llm_umbrella(args)
     options = options_from_args(args)
 
     try:
         result = run_sca(target=target, output_dir=output_dir, options=options)
-    except Exception:                       # noqa: BLE001
+    except Exception:
         # Surface which pipeline phase died so operators don't have
         # to read the traceback to know whether it was an OSV lookup,
         # reachability scan, LLM review, etc. Phase descriptions
         # carry one-line operator-facing context.
         from core.progress import last_stage_name
+
         from .pipeline_phases import describe_phase
         stage = last_stage_name()
         if stage:
@@ -262,7 +261,7 @@ def _run_analyse(argv: List[str]) -> int:
                 emit_pr_comment=args.pr_comment,
                 pr_comment_label=args.pr_comment_label,
             )
-        except Exception:                   # noqa: BLE001
+        except Exception:
             logger.exception("raptor-sca: baseline delta computation failed")
             # Don't fail the run; the primary findings.json is fine.
 
@@ -270,7 +269,11 @@ def _run_analyse(argv: List[str]) -> int:
 
     # CI-gate threshold evaluation — only fires when --fail-on-* set.
     from .thresholds import (
-        cfg_from_args, evaluate as eval_thresholds, print_result,
+        cfg_from_args,
+        print_result,
+    )
+    from .thresholds import (
+        evaluate as eval_thresholds,
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:
@@ -299,7 +302,7 @@ def _emit_baseline_delta(
     current_findings: Path,
     output_dir: Path,
     emit_pr_comment: bool = False,
-    pr_comment_label: Optional[str] = None,
+    pr_comment_label: str | None = None,
 ) -> None:
     """Write ``baseline-delta.json`` + ``baseline-delta.md`` showing the
     NEW/CLEARED/CHANGED set since ``baseline_path``.
@@ -313,8 +316,11 @@ def _emit_baseline_delta(
     label (default: ``raptor-sca``).
     """
     import json as _json
+
     from .diff import (
-        compute_delta, _delta_to_dict, _render_markdown,
+        _delta_to_dict,
+        _render_markdown,
+        compute_delta,
         render_pr_comment,
     )
 
@@ -382,7 +388,7 @@ def _parse_analyse_args(argv: Sequence[str]) -> argparse.Namespace:
 def _configure_logging(
     verbosity: int,
     *,
-    log_dir: Optional[Path] = None,
+    log_dir: Path | None = None,
 ) -> None:
     if verbosity <= 0:
         level = logging.WARNING
@@ -409,7 +415,7 @@ def _configure_logging(
 
 
 def _resolve_output_dir(
-    explicit: Optional[str], *, prefix: str,
+    explicit: str | None, *, prefix: str,
 ) -> Path:
     if explicit:
         return Path(explicit).resolve()
@@ -419,7 +425,7 @@ def _resolve_output_dir(
 
 def _print_summary(result) -> None:
     """Print a one-screen analyse-mode summary."""
-    lines: List[str] = [
+    lines: list[str] = [
         "",
         f"raptor-sca: target            {result.target}",
         f"raptor-sca: output            {result.output_dir}",
@@ -449,13 +455,13 @@ def _print_summary(result) -> None:
     if result.llm_cost > 0:
         lines.append(f"raptor-sca: LLM cost          ${result.llm_cost:.4f}")
     lines.extend([
-        f"raptor-sca: cache             {result.cache_hits} hits / "
-        f"{result.cache_misses} misses",
+        (f"raptor-sca: cache             {result.cache_hits} hits / "
+         f"{result.cache_misses} misses"),
         f"raptor-sca: findings.json     {result.findings_path}",
         f"raptor-sca: report.md         {result.report_path}",
         *(
-            [f"raptor-sca: report.html       "
-             f"{result.report_path.with_suffix('.html')}"]
+            [(f"raptor-sca: report.html       "
+              f"{result.report_path.with_suffix('.html')}")]
             if (result.report_path.with_suffix('.html')).exists()
             else []
         ),
@@ -467,7 +473,7 @@ def _print_summary(result) -> None:
     sys.stdout.flush()
 
 
-def _format_transitive_line(result) -> Optional[str]:
+def _format_transitive_line(result) -> str | None:
     """Compact one-liner about transitive expansion. None when there's
     nothing meaningful to say (no manifests qualified, expansion off
     + no skip reasons worth surfacing).

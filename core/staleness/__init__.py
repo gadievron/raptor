@@ -27,9 +27,9 @@ from __future__ import annotations
 import hashlib
 import os
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from core.source.lines import slice_lines as _slice_lines
 from core.source.strip import strip_comments as _strip_comments
@@ -42,6 +42,7 @@ __all__ = [
     "check_spans",
     "hash_span",
     "hash_spans",
+    "hash_spans_text",
     "norm_hash",
     "normalize_source",
 ]
@@ -163,6 +164,21 @@ def hash_spans(
         text = file_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return [""] * len(spans)
+    lines = text.splitlines()
+    return [_hash_from_lines(lines, s, e) for s, e in spans]
+
+
+def hash_spans_text(
+    text: str,
+    spans: Sequence[tuple[int, int]],
+) -> list[str]:
+    """Hash spans of an in-memory *text* — same format as
+    :func:`hash_spans` (SHA-256[:12] over the raw span lines), for
+    producers that already hold the file content (e.g. the inventory
+    builder stamping per-item span hashes at parse time).
+
+    Invalid ranges produce ``""`` for that span.
+    """
     lines = text.splitlines()
     return [_hash_from_lines(lines, s, e) for s, e in spans]
 

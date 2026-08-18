@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
-from packages.sca import review
 from core.json import JsonCache
+from packages.sca import review
+from packages.sca.models import (
+    Confidence,
+    Dependency,
+    PinStyle,
+    Reachability,
+    SupplyChainFinding,
+    VulnFinding,
+)
 from packages.sca.osv import OSV_VULN_URL_TEMPLATE
-
 
 _LODASH_VULN_RECORD = {
     "id": "GHSA-jf85-cpcp-j695",
@@ -50,10 +57,10 @@ _LOG4SHELL_RECORD = {
 
 
 class StubHttp:
-    def __init__(self, posts: Dict[Any, Any] | None = None,
-                 gets: Dict[str, Any] | None = None) -> None:
-        self.posts: List[tuple] = []
-        self.gets: List[str] = []
+    def __init__(self, posts: dict[Any, Any] | None = None,
+                 gets: dict[str, Any] | None = None) -> None:
+        self.posts: list[tuple] = []
+        self.gets: list[str] = []
         self._post_response = posts or {"results": [{"vulns": []}]}
         self._get_responses = gets or {}
 
@@ -102,14 +109,33 @@ def test_clean_dep_returns_zero(tmp_path: Path, capsys) -> None:
     assert "No advisories found" in out
 
 
-def test_unknown_ecosystem_returns_2(tmp_path: Path, capsys) -> None:
-    """Unrecognised ecosystem rejected before any OSV call."""
+def test_unknown_ecosystem_returns_3(tmp_path: Path, capsys) -> None:
+    """Unrecognised ecosystem rejected before any OSV call.
+
+    Exit 3, not 2 — the exit-code contract reserves 2 for the block
+    verdict; invalid arguments map to 3 so CI gates keyed on 2 don't
+    treat a typo'd ecosystem as a blocked package.
+    """
     http = StubHttp()
     cache = JsonCache(root=tmp_path)
     rc = review.main(["Bogus", "requests", "0.1.0"], http=http, cache=cache)
-    assert rc == 2
+    assert rc == 3
     err = capsys.readouterr().err
     assert "unknown ecosystem" in err
+
+
+def test_internal_error_returns_3(tmp_path: Path, monkeypatch) -> None:
+    """Unexpected exceptions map to exit 3 (internal error), never to a
+    verdict code or a raw traceback exit."""
+    def _boom(*args: Any, **kwargs: Any):
+        raise RuntimeError("finding builder melted")
+
+    monkeypatch.setattr(review, "build_vuln_findings", _boom)
+    rc = review.main(
+        ["npm", "lodash", "4.17.4", "--no-transitive"],
+        http=StubHttp(), cache=JsonCache(root=tmp_path),
+    )
+    assert rc == 3
 
 
 def test_lowercase_ecosystem_canonicalised(tmp_path: Path, capsys) -> None:
@@ -310,10 +336,12 @@ def test_slopsquat_check_dep_public_api(tmp_path: Path) -> None:
     test it directly (not via the CLI) to pin the public API
     shape — keeps external callers (bumper, harden, future
     consumers) from drifting onto the private ``_check_one``."""
-    from packages.sca.supply_chain.slopsquat import check_dep
     from packages.sca.models import (
-        Confidence, Dependency, PinStyle,
+        Confidence,
+        Dependency,
+        PinStyle,
     )
+    from packages.sca.supply_chain.slopsquat import check_dep
     dep = Dependency(
         ecosystem="npm", name="lodash-pro", version="1.0",
         declared_in=Path("/x"), scope="main", is_lockfile=False,
@@ -515,11 +543,6 @@ def test_kev_in_transitive_escalates_verdict_to_block(
 # high-EPSS threshold additions.
 # ---------------------------------------------------------------------------
 
-from packages.sca.models import (                       # noqa: E402
-    Confidence, Dependency, PinStyle, Reachability,
-    VulnFinding,
-)
-
 
 def _vuln(severity: str = "critical", *, fixed: str | None = "9.0.0",
            in_kev: bool = False, epss: float | None = None) -> VulnFinding:
@@ -556,7 +579,8 @@ def test_two_criticals_with_fix_now_block() -> None:
     single finding tripped a threshold. Multiple criticals at
     install time are blocker-tier."""
     from packages.sca.review import (
-        _VERDICT_BLOCK, _compute_verdict,
+        _VERDICT_BLOCK,
+        _compute_verdict,
     )
     findings = [_vuln(severity="critical"),
                 _vuln(severity="critical")]
@@ -568,7 +592,8 @@ def test_single_critical_with_fix_stays_review() -> None:
     still a Review (operator may have a reason to accept a single
     fixable critical for a release-train window)."""
     from packages.sca.review import (
-        _VERDICT_REVIEW, _compute_verdict,
+        _VERDICT_REVIEW,
+        _compute_verdict,
     )
     assert _compute_verdict([_vuln(severity="critical")], []) == _VERDICT_REVIEW
 
@@ -579,7 +604,8 @@ def test_single_critical_with_high_epss_blocks() -> None:
     a fix available — telling someone "I'll upgrade next sprint"
     isn't defensible when the EPSS is that high."""
     from packages.sca.review import (
-        _VERDICT_BLOCK, _compute_verdict,
+        _VERDICT_BLOCK,
+        _compute_verdict,
     )
     f = _vuln(severity="critical", epss=0.65)
     assert _compute_verdict([f], []) == _VERDICT_BLOCK
@@ -589,7 +615,8 @@ def test_single_critical_with_low_epss_does_not_block() -> None:
     """Below-threshold EPSS doesn't fire the high-EPSS escalation;
     falls back to Review."""
     from packages.sca.review import (
-        _VERDICT_REVIEW, _compute_verdict,
+        _VERDICT_REVIEW,
+        _compute_verdict,
     )
     f = _vuln(severity="critical", epss=0.10)
     assert _compute_verdict([f], []) == _VERDICT_REVIEW
@@ -599,7 +626,8 @@ def test_single_critical_no_epss_does_not_block() -> None:
     """``epss=None`` (FIRST.org has no score for this CVE yet) is
     not an escalation signal; falls back to Review."""
     from packages.sca.review import (
-        _VERDICT_REVIEW, _compute_verdict,
+        _VERDICT_REVIEW,
+        _compute_verdict,
     )
     f = _vuln(severity="critical", epss=None)
     assert _compute_verdict([f], []) == _VERDICT_REVIEW
@@ -614,8 +642,6 @@ def test_single_critical_no_epss_does_not_block() -> None:
 # tested separately); this verdict pass just consumes pre-computed
 # findings and maps them onto Clean / Review / Block.
 # ---------------------------------------------------------------------------
-
-from packages.sca.models import SupplyChainFinding         # noqa: E402
 
 
 def _supply(kind: str = "recent_publish",
@@ -644,7 +670,8 @@ def test_bump_unused_when_param_omitted() -> None:
     is computed exactly as before. Pin against accidental
     behavioural drift."""
     from packages.sca.review import (
-        _VERDICT_CLEAN, _compute_verdict,
+        _VERDICT_CLEAN,
+        _compute_verdict,
     )
     assert _compute_verdict([], []) == _VERDICT_CLEAN
 
@@ -655,7 +682,8 @@ def test_bump_single_high_severity_blocks() -> None:
     current and target (account-takeover shape) — the operator
     should not auto-merge that bump."""
     from packages.sca.review import (
-        _VERDICT_BLOCK, _compute_verdict,
+        _VERDICT_BLOCK,
+        _compute_verdict,
     )
     sf = _supply(kind="maintainer_account_change", severity="high")
     assert _compute_verdict([], [], bump_supply_chain_findings=[sf]) == _VERDICT_BLOCK
@@ -666,7 +694,8 @@ def test_bump_single_medium_escalates_to_review() -> None:
     Clean → Review. Example: target version published 5 days ago
     (rapid-release window) — operator should pause and look."""
     from packages.sca.review import (
-        _VERDICT_REVIEW, _compute_verdict,
+        _VERDICT_REVIEW,
+        _compute_verdict,
     )
     sf = _supply(kind="recent_publish", severity="medium")
     assert _compute_verdict([], [], bump_supply_chain_findings=[sf]) == _VERDICT_REVIEW
@@ -679,7 +708,8 @@ def test_bump_two_mediums_compound_block() -> None:
     e.g. recently published AND from a changed maintainer AND
     added an install hook."""
     from packages.sca.review import (
-        _VERDICT_BLOCK, _compute_verdict,
+        _VERDICT_BLOCK,
+        _compute_verdict,
     )
     sfs = [
         _supply(kind="recent_publish", severity="medium"),
@@ -694,7 +724,8 @@ def test_bump_low_info_does_not_change_verdict() -> None:
     ``maintainer_email_change`` is operator-visible context, not
     a gate signal."""
     from packages.sca.review import (
-        _VERDICT_CLEAN, _compute_verdict,
+        _VERDICT_CLEAN,
+        _compute_verdict,
     )
     sfs = [
         _supply(kind="maintainer_email_change", severity="low"),
@@ -709,7 +740,8 @@ def test_bump_high_severity_dominates_typo_distance_two() -> None:
     distance two alone would be Review; a high-severity bump
     finding alone is Block.)"""
     from packages.sca.review import (
-        _VERDICT_BLOCK, _compute_verdict,
+        _VERDICT_BLOCK,
+        _compute_verdict,
     )
     from packages.sca.supply_chain.typosquat import TyposquatFinding
     typo_dep = Dependency(
@@ -734,7 +766,43 @@ def test_bump_clean_when_only_clean_signals() -> None:
     Pinpoints the Clean-tier passthrough for the bumper's
     auto-merge eligibility check."""
     from packages.sca.review import (
-        _VERDICT_CLEAN, _compute_verdict,
+        _VERDICT_CLEAN,
+        _compute_verdict,
     )
     assert _compute_verdict([], [],
                               bump_supply_chain_findings=[]) == _VERDICT_CLEAN
+
+
+# ---------------------------------------------------------------------------
+# OSV-field sanitisation in the markdown renderer
+# ---------------------------------------------------------------------------
+
+def test_review_markdown_sanitises_osv_fields() -> None:
+    """OSV id / aliases / summary are registry content headed for
+    the operator's terminal — ANSI escapes and autofetch markup
+    must be defanged like report.py already does."""
+    from packages.sca.models import Advisory
+    from packages.sca.review import (
+        _VERDICT_REVIEW,
+        _render_review_markdown,
+        _synthesise_dep,
+    )
+
+    adv = Advisory(
+        osv_id="GHSA-x\x1b[2Jwiped",
+        aliases=["CVE-2099-0001\x1b[31m"],
+        summary="bad ![exfil](https://evil.example/p.png) thing\x07",
+        details="",
+        affected=[],
+        severity=None,
+        fixed_versions=["9.0.0"],
+        references=[],
+    )
+    f = _vuln(severity="high")
+    f.advisories = [adv]
+    dep = _synthesise_dep("PyPI", "x", "1.0")
+    md = _render_review_markdown(dep, [f], [], _VERDICT_REVIEW)
+    assert "\x1b" not in md
+    assert "\x07" not in md
+    assert "\\x1b" in md
+    assert "![exfil](https://evil.example/p.png)" not in md

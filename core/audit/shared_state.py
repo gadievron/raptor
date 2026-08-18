@@ -80,14 +80,17 @@ class SharedState:
     sibling_ns_findings: list[Any] = field(default_factory=list)
     sibling_postcond_violations: list[Any] = field(default_factory=list)
 
+    # Capability displacement findings (dispatch-table analysis).
+    capability_displacements: list[Any] = field(default_factory=list)
+
+    # Struct-field co-accessor index: field_name → [AccessorRecord, ...].
+    struct_accessor_index: dict[str, list[Any]] = field(default_factory=dict)
+
     # Sibling peer groups for semantic-consistency and paired-operation checks.
     peer_groups: list[Any] = field(default_factory=list)
 
     # Semantic consistency outlier findings across peer groups.
     semantic_findings: list[Any] = field(default_factory=list)
-
-    # Contract pair index: function name → list of ContractPairGroup objects.
-    contract_pair_index: dict[str, list[Any]] = field(default_factory=dict)
 
     # Cross-function / cross-file mechanical detector results; keyed by
     # "file:function".
@@ -143,9 +146,6 @@ class SharedState:
     # lookups during chain injection.
     checklist_index: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
 
-    # IRIS bypass findings loaded from a prior run; keyed by target function.
-    iris_bypass_by_func: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-
     # Domain model (concepts + invariants) loaded from the journal.
     domain_model: dict[str, Any] | None = None
 
@@ -183,15 +183,9 @@ class SharedState:
     # Synthesis hits discovered mid-loop; drained into a second executor pass.
     synthesis_queue: list[dict[str, Any]] = field(default_factory=list)
 
-    # Functions that queued reading-list items during review; tracked so the
-    # JIT study enrichment pass can re-review only affected functions.
-    reading_list_functions: set[str] = field(default_factory=set)
-
-    # Accumulated reading-list items from review outcomes; flushed once
-    # post-loop to avoid file-level races across concurrent workers.
-    _reading_list_items: list[dict[str, Any]] = field(default_factory=list)
-    _reading_list_lock: threading.Lock = field(default_factory=threading.Lock)
-    _early_study_fired: bool = False
+    # Incremental study consumer queue; set at runtime when C/C++ files
+    # are present.  Typed as Any to avoid circular import.
+    study_queue: Any = None
 
     # Live-discovered sinks, sanitizers, and entry points accumulated
     # from LLM review outcomes during the loop.
@@ -237,8 +231,9 @@ class SharedState:
         prop_config: PropagationConfig | None,
         iris_taint_specs: list[Any],
         call_edges: list[dict[str, Any]],
-        iris_bypass_by_func: dict[str, list[dict[str, Any]]] | None = None,
         domain_model: dict[str, Any] | None = None,
+        capability_displacements: list[Any] | None = None,
+        struct_accessor_index: dict[str, list[Any]] | None = None,
         # Mutable fields initialised at the start of the loop; callers pass
         # the seed values so that the state object owns them from day one.
         taint_summary_results: dict[str, Any] | None = None,
@@ -309,8 +304,9 @@ class SharedState:
             call_edges=call_edges,
             call_edge_index=edge_index,
             checklist_index=cl_index,
-            iris_bypass_by_func=iris_bypass_by_func if iris_bypass_by_func is not None else {},
             domain_model=domain_model,
+            capability_displacements=capability_displacements if capability_displacements is not None else [],
+            struct_accessor_index=struct_accessor_index if struct_accessor_index is not None else {},
             taint_summary_results=taint_summary_results if taint_summary_results is not None else {},
             constraints=constraints,
             expansion_budget=expansion_budget,

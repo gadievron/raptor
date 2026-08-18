@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.audit.dynamic_sweep import (
     DynamicSweepResult,
@@ -26,7 +26,7 @@ class FakeOutcome:
     status: str = "finding"
     hypothesis: str = "buffer overflow"
     evidence_tool: str = ""
-    review_result: Optional[Dict[str, Any]] = None
+    review_result: dict[str, Any] | None = None
 
 
 @dataclass
@@ -121,6 +121,52 @@ class TestGenerateCHarness:
         ctx = {"source": ""}
         code = generate_c_harness(o, ctx)
         assert "main" in code
+
+
+class TestGenerateCHarnessCweDispatch:
+    """CWE lookup order in harness dispatch: review_result beats hypothesis."""
+
+    @staticmethod
+    def _outcome(function="target_fn", hypothesis="", review_result=None):
+        return FakeOutcome(
+            function=function,
+            hypothesis=hypothesis,
+            file="src/a.c",
+            review_result=review_result,
+        )
+
+    def test_cwe_from_review_result_selects_harness(self):
+        harness = generate_c_harness(
+            self._outcome(review_result={"cwe_class": "CWE-134"}),
+            {"source": "int f;"},
+        )
+        assert "%s%s" in harness  # format-string harness
+
+    def test_cwe_fallback_key_selects_harness(self):
+        harness = generate_c_harness(
+            self._outcome(review_result={"cwe": "CWE-476"}),
+            {"source": "int f;"},
+        )
+        assert "NULL" in harness  # null-deref harness
+
+    def test_missing_review_result_falls_back_to_hypothesis(self):
+        harness = generate_c_harness(
+            self._outcome(hypothesis="buffer overflow in copy"),
+            {"source": "int f;"},
+        )
+        assert "small_buf" in harness  # buffer-overflow harness
+
+    def test_no_cwe_no_hypothesis_gives_generic_harness(self):
+        harness = generate_c_harness(self._outcome(), {"source": "int f;"})
+        assert "HARNESS_COMPLETE" in harness
+        assert "target_fn" not in harness  # generic harness ignores func
+
+    def test_invalid_identifier_rejected(self):
+        harness = generate_c_harness(
+            self._outcome(function="bad; rm -rf /"),
+            {"source": "int f;"},
+        )
+        assert harness == ""
 
 
 class TestGeneratePythonHarness:
@@ -218,3 +264,102 @@ class TestEvidenceStrength:
             exit_code=0, evidence_strength="inconclusive", duration_s=0.1,
         )
         assert r.evidence_strength == "inconclusive"
+
+
+class TestHarnessContainment:
+    """LLM-generated harness code must never execute unsandboxed.
+
+    The runners route compile + execute through run_untrusted() and
+    deliberately have NO bare-subprocess fallback: when isolation
+    cannot engage (SandboxSetupError), the dynamic channel is skipped
+    with an inconclusive result instead.
+    """
+
+    @staticmethod
+    def _ok(returncode: int = 0):
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=returncode, stdout="", stderr="")
+
+    def test_c_harness_skips_on_sandbox_setup_error(self, tmp_path):
+        import time
+        from unittest import mock
+
+        from core.audit.dynamic_sweep import _run_c_harness
+        from core.sandbox import SandboxSetupError
+
+        outcome = FakeOutcome(file="a.c", hypothesis="buffer overflow")
+        config = FakeConfig(target_path=str(tmp_path))
+        with mock.patch("core.sandbox.run_untrusted",
+                        side_effect=SandboxSetupError("no ns")), \
+             mock.patch("subprocess.run") as bare:
+            result = _run_c_harness(outcome, {}, config, time.monotonic())
+        assert result is not None
+        assert result.ran is False
+        assert result.evidence_strength == "inconclusive"
+        assert "sandbox unavailable" in (result.sanitizer_output or "")
+        # The point of the design: no bare-host execution path exists.
+        assert not bare.called
+
+    def test_python_harness_skips_on_sandbox_setup_error(self, tmp_path):
+        import time
+        from unittest import mock
+
+        from core.audit.dynamic_sweep import _run_python_harness
+        from core.sandbox import SandboxSetupError
+
+        outcome = FakeOutcome(file="mod.py", hypothesis="null deref")
+        config = FakeConfig(target_path=str(tmp_path))
+        with mock.patch("core.sandbox.run_untrusted",
+                        side_effect=SandboxSetupError("no ns")), \
+             mock.patch("subprocess.run") as bare:
+            result = _run_python_harness(outcome, {}, config, time.monotonic())
+        assert result is not None
+        assert result.ran is False
+        assert "sandbox unavailable" in (result.sanitizer_output or "")
+        assert not bare.called
+
+    def test_c_harness_confines_compile_and_run(self, tmp_path):
+        """Both steps get target= (read: -I headers) and output= (the
+        scratch dir) so Landlock actually engages — the pre-fix call
+        passed neither, leaving the harness read-everywhere."""
+        import time
+        from unittest import mock
+
+        from core.audit.dynamic_sweep import _run_c_harness
+
+        outcome = FakeOutcome(file="a.c", hypothesis="buffer overflow")
+        config = FakeConfig(target_path=str(tmp_path))
+        with mock.patch("core.sandbox.run_untrusted",
+                        return_value=self._ok()) as m:
+            result = _run_c_harness(outcome, {}, config, time.monotonic())
+        assert result is not None and result.ran is True
+        assert m.call_count == 2  # compile, then execute
+        for call in m.call_args_list:
+            assert call.kwargs["target"] == str(tmp_path)
+            assert call.kwargs["output"]  # the scratch tmpdir
+
+    def test_python_harness_preludes_sys_path_not_pythonpath(self, tmp_path):
+        """strict_env strips PYTHONPATH, so the target path must ride
+        in a sys.path prelude inside the harness script instead."""
+        import time
+        from pathlib import Path
+        from unittest import mock
+
+        from core.audit.dynamic_sweep import _run_python_harness
+
+        outcome = FakeOutcome(file="mod.py", hypothesis="null deref")
+        config = FakeConfig(target_path=str(tmp_path))
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["code"] = Path(cmd[1]).read_text()
+            seen["kwargs"] = kw
+            return self._ok()
+
+        with mock.patch("core.sandbox.run_untrusted", side_effect=fake_run):
+            result = _run_python_harness(outcome, {}, config, time.monotonic())
+        assert result is not None and result.ran is True
+        prelude = f"sys.path.insert(0, {str(tmp_path)!r})"
+        assert prelude in seen["code"].splitlines()[1]
+        assert "PYTHONPATH" not in (seen["kwargs"].get("env") or {})
+        assert seen["kwargs"]["target"] == str(tmp_path)

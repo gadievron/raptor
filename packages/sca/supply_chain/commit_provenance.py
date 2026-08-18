@@ -55,10 +55,10 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
 
@@ -119,17 +119,15 @@ _BOT_NAME_MARKERS = (
 # attacker who has set git config to CLAIM the bot name.
 #
 # FP-tightening: when the author NAME matches a bot marker AND the
-# email matches the canonical pattern, we treat the conjunction as
-# a real (rebased) bot commit and SUPPRESS the finding even though
-# the bot+unsigned+skewed-date shape would otherwise fire.  The
+# email matches the canonical pattern, the finding is emitted at
+# REDUCED severity/confidence rather than suppressed.  The
 # legitimate-but-skewed shape is dependabot's normal rebase
-# behaviour; flagging it would FP-flood every active repo.
-#
-# An attacker who can ALSO match the canonical email pattern has
-# either compromised the bot's account (out of scope — that's
-# upstream) or has write access to the repo with the ability to
-# set canonical author identity (still high blast radius, but
-# the email-mismatch path catches the lower-bar shape).
+# behaviour, so full-severity flagging would FP-flood active repos —
+# but the author email is an unauthenticated free-text field, so on
+# an UNSIGNED commit the canonical shape is trivially claimable and
+# cannot justify suppression.  The email-mismatch path stays the
+# high-severity signal (the low-effort forgery shape); the
+# canonical-match path stays visible at low confidence for review.
 _CANONICAL_BOT_EMAIL_RE = re.compile(
     r"^\d+\+"
     r"(?:dependabot|renovate|github-actions|snyk-bot|mend-bot|imgbot|allcontributors)"
@@ -162,7 +160,7 @@ class CommitProvenanceHit:
     committer_date_iso: str
     skew_days: int
     subject: str
-    paths_touched: List[str]
+    paths_touched: list[str]
 
 
 @dataclass(frozen=True)
@@ -171,6 +169,12 @@ class CommitProvenanceFinding:
     hit: CommitProvenanceHit
     severity: str
     confidence: Confidence
+    # "impersonation" (bot name claimed, non-canonical email — the
+    # low-effort forgery shape, full severity) or "canonical" (email
+    # matches the canonical bot pattern — downgraded, never
+    # suppressed; the label lets consumers render the two shapes
+    # distinctly).
+    claim_shape: str = "impersonation"
 
 
 def scan_target(
@@ -180,7 +184,7 @@ def scan_target(
     *,
     max_commits: int = _DEFAULT_MAX_COMMITS_WALKED,
     date_skew_days: int = _DEFAULT_DATE_SKEW_DAYS,
-) -> List[CommitProvenanceFinding]:
+) -> list[CommitProvenanceFinding]:
     """Walk the manifest-touching commit history of ``target`` and
     emit findings on bot-identity-claim + unsigned + skewed-dates
     conjunctions.
@@ -198,7 +202,7 @@ def scan_target(
     if not rows:
         return []
     host = _placeholder_dep(target)
-    out: List[CommitProvenanceFinding] = []
+    out: list[CommitProvenanceFinding] = []
     for row in rows:
         finding = _classify(row, host, date_skew_days)
         if finding is not None:
@@ -208,7 +212,7 @@ def scan_target(
 
 def _classify(
     row: dict, host: Dependency, date_skew_days: int,
-) -> Optional[CommitProvenanceFinding]:
+) -> CommitProvenanceFinding | None:
     """Apply the three-way conjunction.  Returns None when the
     commit doesn't earn a finding."""
     sig_status = row["sig_status"]
@@ -219,12 +223,6 @@ def _classify(
         return None
     bot_claim = _classify_bot_claim(author_name, author_email)
     if bot_claim == "none":
-        return None
-    if bot_claim == "canonical":
-        # Real rebased bot commit — author email matches the
-        # canonical ``<numeric-id>+<bot>[bot]@users.noreply.github.com``
-        # shape.  Skewed dates are dependabot's normal rebase
-        # behaviour; firing here would FP-flood every active repo.
         return None
     skew = _date_skew_days(row["author_date_iso"], row["committer_date_iso"])
     if skew is None or skew < date_skew_days:
@@ -240,6 +238,32 @@ def _classify(
         subject=row["subject"],
         paths_touched=row.get("paths_touched", []),
     )
+    if bot_claim == "canonical":
+        # Author email matches the canonical
+        # ``<numeric-id>+<bot>[bot]@users.noreply.github.com`` shape.
+        # On an UNSIGNED commit that shape is declarative only — the
+        # author fields are free text, so the email provides no
+        # assurance the real bot produced the commit. Rebased bot
+        # commits legitimately look exactly like this (dependabot's
+        # normal rebase drops the App signature and skews the dates),
+        # so the finding is emitted at reduced severity/confidence
+        # rather than suppressed: visible for review, cheap to triage.
+        return CommitProvenanceFinding(
+            dependency=host,
+            hit=hit,
+            severity="medium",
+            confidence=Confidence(
+                "low",
+                reason=(
+                    "bot-identity author + unsigned + author/committer "
+                    f"date skew {skew}d; author email matches the "
+                    "canonical bot shape, but unsigned commits carry no "
+                    "authenticated identity — indistinguishable from a "
+                    "rebased bot commit, hence reduced confidence"
+                ),
+            ),
+            claim_shape="canonical",
+        )
     return CommitProvenanceFinding(
         dependency=host,
         hit=hit,
@@ -251,6 +275,7 @@ def _classify(
                 f"date skew {skew}d (forgery-shape conjunction)"
             ),
         ),
+        claim_shape="impersonation",
     )
 
 
@@ -261,14 +286,14 @@ def _classify_bot_claim(name: str, email: str) -> str:
       * ``"none"`` — no automation identity claimed
       * ``"canonical"`` — bot identity claimed AND email matches
         the canonical ``<numeric-id>+<bot>[bot]@users.noreply.github.com``
-        pattern.  Treated as a legitimate rebased bot commit and
-        suppressed in :func:`_classify`.
+        pattern.  Usually a legitimate rebased bot commit, but the
+        email is free text (anyone can set it), so :func:`_classify`
+        downgrades rather than suppresses when the commit is also
+        unsigned.
       * ``"impersonation"`` — bot identity claimed in the AUTHOR
-        NAME but email does NOT match the canonical pattern.  This
-        is the actual forgery signal — anyone with write access to
-        the repo can ``git config user.name "dependabot[bot]"`` and
-        push, but they can't produce the canonical email shape
-        without controlling the real bot account.
+        NAME but email does NOT match the canonical pattern.  The
+        low-effort forgery shape — ``git config user.name
+        "dependabot[bot]"`` plus a push — kept at full severity.
     """
     lname = (name or "").lower()
     lemail = (email or "").lower()
@@ -296,7 +321,7 @@ def _classify_bot_claim(name: str, email: str) -> str:
     return "impersonation"
 
 
-def _date_skew_days(author_iso: str, committer_iso: str) -> Optional[int]:
+def _date_skew_days(author_iso: str, committer_iso: str) -> int | None:
     """Return absolute skew (days) between author and committer
     timestamps.  None when either timestamp fails to parse."""
     a = _parse_iso(author_iso)
@@ -306,7 +331,7 @@ def _date_skew_days(author_iso: str, committer_iso: str) -> Optional[int]:
     return abs(c - a).days
 
 
-def _parse_iso(iso: str) -> Optional[datetime]:
+def _parse_iso(iso: str) -> datetime | None:
     """Parse git's ``--date=iso-strict`` output.  Returns timezone-
     aware datetime or None on failure."""
     iso = iso.strip()
@@ -321,12 +346,12 @@ def _parse_iso(iso: str) -> Optional[datetime]:
 
 def _resolve_manifest_paths(
     target: Path, manifests: Sequence[Manifest],
-) -> List[str]:
+) -> list[str]:
     """Return repo-relative paths of every manifest under ``target``
     matching ``_MANIFEST_FILENAMES``.  When ``manifests`` is supplied,
     use it; otherwise walk the tree for any matching file.
     """
-    paths: List[str] = []
+    paths: list[str] = []
     if manifests:
         for m in manifests:
             if m.path.name not in _MANIFEST_FILENAMES:
@@ -338,7 +363,7 @@ def _resolve_manifest_paths(
             paths.append(str(rel))
         if paths:
             return paths
-    # Fallback walk — bounded; only top-level + immediate subdirs.
+    # Fallback walk — full depth, pruned only by the discovery skip set.
     for entry in _iter_manifest_files(target):
         try:
             rel = entry.resolve().relative_to(target)
@@ -349,9 +374,11 @@ def _resolve_manifest_paths(
 
 
 def _iter_manifest_files(target: Path) -> Iterable[Path]:
-    """Bounded walk for manifest files when the caller hasn't passed
-    a manifest list.  Honours the ``EXCLUDED_DIR_NAMES`` skip set."""
+    """Walk for manifest files when the caller hasn't passed a
+    manifest list.  Recurses to every depth; the only pruning is the
+    ``EXCLUDED_DIR_NAMES`` skip set."""
     import os
+
     from ..discovery import EXCLUDED_DIR_NAMES
     for dirpath, dirnames, filenames in os.walk(target):
         dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
@@ -361,8 +388,8 @@ def _iter_manifest_files(target: Path) -> Iterable[Path]:
 
 
 def _git_log_provenance(
-    target: Path, paths: List[str], max_commits: int,
-) -> List[dict]:
+    target: Path, paths: list[str], max_commits: int,
+) -> list[dict]:
     """Run ``git log`` over ``paths`` and parse provenance fields.
 
     Output format: ``%H|%G?|%an|%ae|%aI|%cI|%s`` per commit, then
@@ -373,8 +400,12 @@ def _git_log_provenance(
     # Use NUL between fields + form-feed between records so embedded
     # ``|`` in subjects doesn't break parsing.
     fmt = "%x0c%H%x00%G?%x00%an%x00%ae%x00%aI%x00%cI%x00%s%x00"
-    from core.git.clone import safe_git_command
+    from core.git.clone import safe_git_command, signature_probe_overrides
+    # Deliberate signature-verification site: re-enable ``%G?`` through
+    # the PATH-resolved system verifiers (the safe overrides pin the
+    # repo-configurable gpg programs to a no-op; last ``-c`` wins).
     cmd = safe_git_command(
+        *signature_probe_overrides(),
         "-C", str(target), "log",
         f"--max-count={max_commits}",
         "--no-merges",
@@ -405,9 +436,9 @@ def _git_log_provenance(
     return _parse_git_log(proc.stdout)
 
 
-def _parse_git_log(stdout: str) -> List[dict]:
+def _parse_git_log(stdout: str) -> list[dict]:
     """Parse the NUL/FF-delimited git log stream into row dicts."""
-    out: List[dict] = []
+    out: list[dict] = []
     for record in stdout.split("\x0c"):
         record = record.strip("\n")
         if not record:

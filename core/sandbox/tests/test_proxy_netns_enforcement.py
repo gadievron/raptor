@@ -16,7 +16,9 @@ from unittest import mock
 import pytest
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
-os.environ.setdefault("RAPTOR_DIR", str(RAPTOR_DIR))
+# Hard-SET (never setdefault): the code under test derives paths from
+# RAPTOR_DIR; an ambient value for another checkout must not win.
+os.environ["RAPTOR_DIR"] = str(RAPTOR_DIR)
 if str(RAPTOR_DIR) not in sys.path:
     sys.path.insert(0, str(RAPTOR_DIR))
 
@@ -131,6 +133,46 @@ class TestProxyUnixSocket:
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning:multiprocessing")
 @pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
+
+def _free_loopback_port() -> int:
+    """Ephemeral free port on 127.0.0.1.
+
+    The forwarder tests used FIXED ports (19876/19877): a concurrent
+    session running the same suite collides outright, and even a
+    solo back-to-back rerun used to fail on the TIME_WAIT remnant
+    before _run_forwarder gained SO_REUSEADDR. A kernel-assigned
+    port sidesteps both.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def _connect_with_retry(port: int, deadline_s: float = 5.0) -> socket.socket:
+    """Connect to a just-forked forwarder, retrying while it binds.
+
+    A fixed pre-connect sleep is not hermetic: under full-suite load
+    the forked forwarder can take longer than the sleep to import and
+    bind, and the parent's connect() then fails with ECONNREFUSED.
+    Retry until the deadline instead.
+    """
+    end = time.monotonic() + deadline_s
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        try:
+            s.connect(("127.0.0.1", port))
+            return s
+        except OSError:
+            s.close()
+            if time.monotonic() >= end:
+                raise
+            time.sleep(0.05)
+
+
 class TestProxyBridge:
     """TCP-to-Unix forwarder integration."""
 
@@ -166,7 +208,7 @@ class TestProxyBridge:
         )
         result = subprocess.run(
             [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, check=False,
             env={"PYTHONPATH": str(RAPTOR_DIR), "PATH": os.environ["PATH"]},
         )
         if result.returncode != 0 and "PermissionError" in result.stderr:
@@ -180,6 +222,7 @@ class TestProxyBridge:
     def test_forwarder_relays_data(self):
         """_run_forwarder bridges TCP ↔ Unix socket."""
         sock_path = str(self.tmp / "relay.sock")
+        port = _free_loopback_port()
 
         # Stand up a simple unix socket echo server.
         echo_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -207,17 +250,16 @@ class TestProxyBridge:
         if fwd_pid == 0:
             os.close(death_w)
             try:
-                _run_forwarder(19876, sock_path, death_r)
+                _run_forwarder(port, sock_path, death_r)
             finally:
                 os._exit(0)
         os.close(death_r)
 
         try:
-            time.sleep(0.2)  # let forwarder bind
-
             # Connect via TCP → forwarder → unix → echo server → back.
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(("127.0.0.1", 19876))
+            # Retries while the forked forwarder starts up and binds — a
+            # fixed sleep is not hermetic under full-suite load.
+            s = _connect_with_retry(port)
             s.sendall(b"hello-bridge")
             s.settimeout(5.0)
             got = s.recv(4096)
@@ -227,6 +269,108 @@ class TestProxyBridge:
         finally:
             os.close(death_w)
             os.waitpid(fwd_pid, 0)
+
+    def test_forwarder_concurrent_connections_with_churn(self):
+        """Multiple simultaneous relays with interleaved teardown must
+        not cross-contaminate. Regression cover for the readable-
+        snapshot restructure: a relay fd closed earlier in a select
+        iteration must be skipped (not read/closed again), and accepts
+        are deferred until after the snapshot is processed so a fresh
+        connection can't alias a just-closed fd number."""
+        sock_path = str(self.tmp / "churn.sock")
+        echo_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        echo_srv.bind(sock_path)
+        echo_srv.listen(64)
+        stop = threading.Event()
+
+        def _echo_loop():
+            # Echo each connection's bytes back until EOF.
+            conns = []
+            echo_srv.settimeout(0.1)
+            while not stop.is_set():
+                try:
+                    conn, _ = echo_srv.accept()
+                except OSError:
+                    pass
+                else:
+                    conn.setblocking(False)
+                    conns.append(conn)
+                for c in list(conns):
+                    try:
+                        data = c.recv(4096)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        conns.remove(c)
+                        c.close()
+                        continue
+                    if not data:
+                        conns.remove(c)
+                        c.close()
+                        continue
+                    try:
+                        c.sendall(data)
+                    except OSError:
+                        conns.remove(c)
+                        c.close()
+            for c in conns:
+                c.close()
+            echo_srv.close()
+
+        echo_thread = threading.Thread(target=_echo_loop, daemon=True)
+        echo_thread.start()
+
+        port = _free_loopback_port()
+        death_r, death_w = os.pipe()
+        from core.sandbox._proxy_bridge import _run_forwarder
+
+        fwd_pid = os.fork()
+        if fwd_pid == 0:
+            os.close(death_w)
+            try:
+                _run_forwarder(port, sock_path, death_r)
+            finally:
+                os._exit(0)
+        os.close(death_r)
+
+        try:
+            # Rapid rounds of: open several connections, exchange a
+            # unique payload on each, abruptly close some while others
+            # are mid-flight, verify the survivors' payloads are
+            # intact (no bytes from a torn-down relay leak in).
+            for round_no in range(10):
+                socks = []
+                for i in range(6):
+                    s = _connect_with_retry(port)
+                    s.settimeout(5.0)
+                    socks.append(s)
+                # Abruptly close half BEFORE any traffic — their
+                # teardown lands in the same select snapshots as the
+                # survivors' data + new accepts.
+                for s in socks[::2]:
+                    s.close()
+                survivors = socks[1::2]
+                for i, s in enumerate(survivors):
+                    payload = f"r{round_no}-c{i}".encode() * 50
+                    s.sendall(payload)
+                    got = b""
+                    while len(got) < len(payload):
+                        chunk = s.recv(4096)
+                        assert chunk, (
+                            f"round {round_no} conn {i}: relay died "
+                            f"mid-payload (got {len(got)} bytes)"
+                        )
+                        got += chunk
+                    assert got == payload, (
+                        f"round {round_no} conn {i}: payload corrupted"
+                    )
+                for s in survivors:
+                    s.close()
+        finally:
+            stop.set()
+            os.close(death_w)
+            os.waitpid(fwd_pid, 0)
+            echo_thread.join(timeout=5)
 
     def test_forwarder_exits_on_death_pipe(self):
         """Forwarder exits when death pipe write end is closed."""
@@ -244,7 +388,7 @@ class TestProxyBridge:
         if fwd_pid == 0:
             os.close(death_w)
             try:
-                _run_forwarder(19877, sock_path, death_r)
+                _run_forwarder(_free_loopback_port(), sock_path, death_r)
             finally:
                 os._exit(0)
         os.close(death_r)
@@ -261,40 +405,102 @@ class TestProxyBridge:
 # context.py: proxy_netns fallback path
 # ---------------------------------------------------------------------------
 
+def _spawn_backend_live() -> bool:
+    """Production gates for the netns bridge tier (Tier 1): the
+    forwarder rides the fork spawn backend, which needs REAL userns +
+    mount-ns capability — the same probes context.py consults. Late
+    attribute lookup (``probes.check_...``) so a harness that patches
+    the probe module is honoured."""
+    if sys.platform != "linux":
+        return False
+    from core.sandbox import probes
+    return probes.check_net_available() and probes.check_mount_available()
+
+
 class TestProxyNetnsContextWiring:
-    """Verify context.py picks the netns path on low ABI."""
+    """Verify context.py routes between the egress tiers on the
+    production gates: netns bridge (Tier 1) needs the SPAWN backend
+    (net capability AND the mount probe), any Landlock ABI; without
+    the backend the context takes the Landlock TCP pin (ABI >= 4) /
+    advisory (ABI < 4) tier — both reported as ``landlock_tcp``.
+
+    The probe inputs are pinned by mock so each test asserts the TIER
+    DECISION for one explicit host shape; tests whose decision lands
+    on the netns tier additionally gate on the REAL probes because
+    they spawn a live child through that tier."""
 
     @pytest.fixture(autouse=True)
     def _tmpdir(self, tmp_path):
         self.out = str(tmp_path / "out")
         os.makedirs(self.out, exist_ok=True)
 
-    @pytest.mark.skipif(sys.platform != "linux", reason="netns is Linux-only")
-    def test_netns_path_selected_on_low_abi(self):
-        """When ABI < 4, sandbox_info reports netns enforcement."""
+    def _enforcement_with(self, *, abi: int, net: bool, mount: bool):
+        """Run a trivial child with the probe surface pinned; return
+        the proxy_enforcement the context chose."""
         from core.sandbox import sandbox
 
         with mock.patch(
-            "core.sandbox.context._get_landlock_abi", return_value=3,
+            "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(
             "core.sandbox.context.check_landlock_available",
             return_value=True,
-        ):
-            with sandbox(
-                target=self.out,
-                output=self.out,
-                use_egress_proxy=True,
-                proxy_hosts=["example.com"],
-            ) as run:
-                result = run(
-                    ["echo", "proxy-netns-test"],
-                    capture_output=True, text=True, timeout=15,
-                )
-                assert result.returncode == 0
-                assert result.sandbox_info.get("proxy_enforcement") == "netns"
+        ), mock.patch(
+            "core.sandbox.context.check_net_available",
+            return_value=net,
+        ), mock.patch(
+            "core.sandbox.context.check_mount_available",
+            return_value=mount,
+        ), sandbox(
+            target=self.out,
+            output=self.out,
+            use_egress_proxy=True,
+            proxy_hosts=["example.com"],
+        ) as run:
+            result = run(
+                ["echo", "proxy-tier-test"],
+                capture_output=True, text=True, timeout=15,
+            )
+            assert result.returncode == 0
+            return result.sandbox_info.get("proxy_enforcement")
 
-    def test_tcp_path_on_high_abi(self):
-        """When ABI >= 4, sandbox_info reports landlock_tcp."""
+    @pytest.mark.skipif(
+        not _spawn_backend_live(),
+        reason="netns tier spawns a live child through the fork "
+               "backend (needs real userns + mount-ns capability)",
+    )
+    def test_netns_path_selected_on_low_abi(self):
+        """ABI < 4 with the spawn backend live → netns enforcement."""
+        assert self._enforcement_with(abi=3, net=True, mount=True) == "netns"
+
+    @pytest.mark.skipif(
+        not _spawn_backend_live(),
+        reason="netns tier spawns a live child through the fork "
+               "backend (needs real userns + mount-ns capability)",
+    )
+    def test_netns_tier_wins_on_high_abi(self):
+        """netns is the strongest tier and wins on ANY ABI when the
+        spawn backend is live — the Landlock pin is port-scoped to
+        any host and needs the seccomp UDP block, so ABI >= 4 no
+        longer routes to landlock_tcp on backend-capable hosts."""
+        assert self._enforcement_with(abi=4, net=True, mount=True) == "netns"
+
+    def test_landlock_tcp_when_mount_probe_fails_on_high_abi(self):
+        """netns capability alone is NOT enough: without the mount-ns
+        spawn backend there is no forwarder, so the context must take
+        the Landlock TCP pin tier (the netns tier would hand the child
+        an empty namespace with no route to the proxy)."""
+        assert (self._enforcement_with(abi=4, net=True, mount=False)
+                == "landlock_tcp")
+
+    def test_advisory_tier_when_mount_probe_fails_on_low_abi(self):
+        """Same mount-gate routing on ABI < 4: the advisory tier
+        (env-vars only) is reported under the same non-netns label."""
+        assert (self._enforcement_with(abi=3, net=True, mount=False)
+                == "landlock_tcp")
+
+    def test_tcp_path_when_netns_unavailable(self):
+        """Without netns capability, ABI >= 4 falls back to the
+        Landlock TCP pin tier — the pre-generalisation posture."""
         from core.sandbox import sandbox
 
         abi = 4
@@ -303,19 +509,21 @@ class TestProxyNetnsContextWiring:
         ), mock.patch(
             "core.sandbox.context.check_landlock_available",
             return_value=True,
-        ):
-            with sandbox(
-                target=self.out,
-                output=self.out,
-                use_egress_proxy=True,
-                proxy_hosts=["example.com"],
-            ) as run:
-                result = run(
-                    ["echo", "proxy-tcp-test"],
-                    capture_output=True, text=True, timeout=15,
-                )
-                assert result.returncode == 0
-                assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
+        ), mock.patch(
+            "core.sandbox.context.check_net_available",
+            return_value=False,
+        ), sandbox(
+            target=self.out,
+            output=self.out,
+            use_egress_proxy=True,
+            proxy_hosts=["example.com"],
+        ) as run:
+            result = run(
+                ["echo", "proxy-tcp-test"],
+                capture_output=True, text=True, timeout=15,
+            )
+            assert result.returncode == 0
+            assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
 
     def test_fallback_on_unix_bind_failure(self):
         """If bind_unix fails, falls back to TCP-only without crash."""
@@ -332,16 +540,15 @@ class TestProxyNetnsContextWiring:
         ), mock.patch(
             "core.sandbox.proxy.EgressProxy.bind_unix",
             side_effect=_fail_bind,
-        ):
-            with sandbox(
-                target=self.out,
-                output=self.out,
-                use_egress_proxy=True,
-                proxy_hosts=["example.com"],
-            ) as run:
-                result = run(
-                    ["echo", "fallback-test"],
-                    capture_output=True, text=True, timeout=15,
-                )
-                assert result.returncode == 0
-                assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
+        ), sandbox(
+            target=self.out,
+            output=self.out,
+            use_egress_proxy=True,
+            proxy_hosts=["example.com"],
+        ) as run:
+            result = run(
+                ["echo", "fallback-test"],
+                capture_output=True, text=True, timeout=15,
+            )
+            assert result.returncode == 0
+            assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"

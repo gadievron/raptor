@@ -7,11 +7,13 @@ corpus runner can run in-process (no subprocess, no cold-start).
 
 from __future__ import annotations
 
+import contextlib
 import enum
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -59,46 +61,94 @@ class AuditPipelineOpts:
 
     target_path: Path = field(default_factory=lambda: Path("."))
     out_dir: Path = field(default_factory=lambda: Path("out"))
-    scope: Optional[list[str]] = None
-    functions: Optional[list[str]] = None
-    models: Optional[list[str]] = None
-    max_cost_usd: Optional[float] = None
-    max_seconds: Optional[float] = None
-    budget: Optional[int] = None
-    strategy_filter: Optional[str] = None
+    scope: list[str] | None = None
+    scope_floor: bool = True
+    # ``--pin file:function`` (repeatable): guaranteed review slots
+    # hoisted ahead of the budget cut; never excludes other gaps.
+    pins: list[str] | None = None
+    functions: list[str] | None = None
+    models: list[str] | None = None
+    max_cost_usd: float | None = None
+    max_seconds: float | None = None
+    budget: int | None = None
+    strategy_filter: str | None = None
     review_passes: int = 1
+    batch_sloc_threshold: int | None = None
+    include_kinds: set | None = None
     adversarial: bool = False
-    max_propagation_depth: Optional[int] = None
+    max_propagation_depth: int | None = None
     subsystem_depth: int = 0
     validate: bool = True
     no_binary_oracle: bool = False
-    binary_verdicts: Optional[Dict[str, str]] = None
-    inventory: Optional[Dict[str, Any]] = None
-    annotations_dir: Optional[Path] = None
-    codeql_db_path: Optional[str] = None
-    threat_model: Optional[Dict[str, Any]] = None
-    joern_overrides: Optional[Dict[str, Any]] = None
-    joern_server: Optional[Any] = None
-    on_progress: Optional[Callable] = None
-    study_root: Optional[Path] = None
+    binary_verdicts: dict[str, str] | None = None
+    inventory: dict[str, Any] | None = None
+    annotations_dir: Path | None = None
+    codeql_db_path: str | None = None
+    threat_model: dict[str, Any] | None = None
+    joern_overrides: dict[str, Any] | None = None
+    joern_server: Any | None = None
+    on_progress: Callable | None = None
+    study_root: Path | None = None
     mode: ReviewMode = ReviewMode.ENSEMBLE
     max_workers: int = 0
+    # Tri-state: True/False = explicit per-run choice (--dynamic /
+    # --no-dynamic); None = defer to the active project's 'dynamic'
+    # trust marker, else off. Resolved via
+    # core.project.trust.resolve_dynamic_validation at config build.
+    dynamic_validation: bool | None = None
+    # Cross-run verdict reuse (--no-verdict-reuse to disable): import
+    # prior-run verdicts for functions whose source hash is unchanged
+    # instead of silently suppressing them.
+    verdict_reuse: bool = True
+    # Opt-in (--pre-scan): bounded semgrep baseline pass when no scan
+    # SARIF exists in this run or any fresh sibling run.
+    pre_scan: bool = False
+    # Parallel review scheduling: "cost" = most-expensive-first
+    # makespan packing (default), "priority" = time-to-first-finding.
+    schedule: str = "cost"
+    # On-demand Mode-2 checker synthesis for chain-less suspicious
+    # hypotheses (--no-on-demand-synthesis to disable). Capped per run.
+    on_demand_synthesis: bool = True
+    # Determine-value compile probes (--probe-determine-value):
+    # bisection over static assertions for claim-less constant study
+    # questions. Default off (up to ~66 sandboxed compiles/constant).
+    probe_determine_value: bool = False
+    # Slice of --max-cost held back for the deepen phase so announced
+    # re-reviews can execute (None = orchestrator default).
+    deepen_reserve_fraction: float | None = None
+    # Same-run resume (raptor-audit resume): re-import this run's own
+    # journal verdicts at $0 and re-review only the remaining gaps.
+    same_run_reuse: bool = False
+    # Prior segments' reconciled cost-breakdown.json contents; booked
+    # into the run ledger at reconciliation so the rewritten ledger
+    # covers all segments.
+    prior_cost_breakdown: dict[str, Any] | None = None
+    # Segment number for a resumed run (from core.run.metadata.
+    # resume_run); 1 for a first run.
+    resume_segment: int = 1
 
 
-def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
-    """Run the audit orchestrator and return its result.
 
-    Sets up the LLM client, builds the OrchestratorConfig, and calls
-    ``run_orchestrator``.  Returns the ``OrchestratorResult``.
+def _resolve_dynamic(opts: AuditPipelineOpts) -> bool:
+    """Resolve ``dynamic_validation``: explicit per-run choice wins;
+    else the active project's ``dynamic`` trust marker (with the
+    trust banner); else off. Best-effort — a project-substrate error
+    must never break the audit."""
+    try:
+        from core.project.trust import resolve_dynamic_validation
+        return resolve_dynamic_validation(
+            opts.dynamic_validation, target_path=opts.target_path,
+        )
+    except Exception:  # noqa: BLE001 — fail-closed to off
+        return bool(opts.dynamic_validation)
+
+
+def _make_llm_client(opts: AuditPipelineOpts):
+    """Build the budget-capped LLM client both entry points share.
+
+    Returns ``(client, models, primary_model)``.
     """
-    from core.llm.log_quiet import quiet_noisy_loggers
-
-    quiet_noisy_loggers()
-
     from core.llm.client import LLMClient
-    from core.audit.llm_review import make_review_fn
-    from core.audit.orchestrator import OrchestratorConfig, run_orchestrator
-
     from core.llm.config import LLMConfig
 
     models = opts.models or ["default"]
@@ -111,16 +161,73 @@ def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
     else:
         llm_cfg = LLMConfig(max_cost_per_scan=max_cost)
         client = LLMClient(config=llm_cfg)
+    _ensure_dispatcher_route(client, models)
+    return client, models, primary_model
 
-    review_fn = make_review_fn(
-        client, task_type="audit", model_name=primary_model,
-        mode=opts.mode, out_dir=opts.out_dir,
-    )
-    config = OrchestratorConfig(
+
+def _ensure_dispatcher_route(client, models: list[str]) -> None:
+    """Self-serve an in-process dispatcher for dispatcher-only models.
+
+    Bedrock is dispatcher-only (this process holds the AWS
+    credentials; the SDK client itself never does).  Pipeline runs get
+    the dispatcher from ``raptor.py``'s launcher, but the audit
+    entry points (``raptor-audit run``, the corpus runner) call the
+    LLM in-process — without a route every Bedrock-routed review dies
+    with 'requires the RAPTOR LLM dispatcher' and the client silently
+    falls back to the claudecode transport.  Same gate and lifecycle
+    as the ``raptor-llm-ask`` self-serve.
+
+    Scans the resolved primary + fallbacks AND every ``--model`` panel
+    member (multi-model runs dispatch per-name via
+    ``config_for_model``).  Best-effort: a dispatcher start failure
+    must not kill the audit — the provider surfaces its own error.
+    """
+    import os
+
+    if os.environ.get("RAPTOR_LLM_SOCKET"):
+        return
+    candidates = [client.config.primary_model]
+    candidates.extend(client.config.fallback_models or [])
+    for name in models:
+        if name == "default":
+            continue
+        try:
+            candidates.append(client.config.config_for_model(name))
+        except Exception:  # unresolvable name surfaces later
+            logger.debug("config_for_model(%r) failed", name, exc_info=True)
+    try:
+        from core.llm.dispatcher.lifecycle import (
+            ensure_route_for_model_configs,
+        )
+        ensure_route_for_model_configs(candidates, label="raptor-audit")
+    except Exception:  # provider errors surface downstream
+        logger.warning(
+            "could not start in-process LLM dispatcher for "
+            "Bedrock-routed models", exc_info=True,
+        )
+
+
+def _build_orchestrator_config(
+    opts: AuditPipelineOpts,
+    client: Any,
+    models: list[str],
+    mode: ReviewMode,
+):
+    """Thread AuditPipelineOpts into an OrchestratorConfig.
+
+    Single source of truth for the opts → config mapping — a new
+    OrchestratorConfig field only needs wiring here for both
+    ``run_audit_pipeline`` and ``run_ensemble_pipeline`` to pick it up.
+    """
+    from core.audit.orchestrator import OrchestratorConfig
+
+    return OrchestratorConfig(
         target_path=opts.target_path,
         out_dir=opts.out_dir,
         budget=opts.budget,
         scope=opts.scope,
+        scope_floor=opts.scope_floor,
+        pins=opts.pins,
         strategy_filter=opts.strategy_filter,
         models=models,
         multi_model=len(models) > 1,
@@ -129,6 +236,9 @@ def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
         max_seconds=opts.max_seconds,
         review_passes=opts.review_passes,
         subsystem_depth=opts.subsystem_depth,
+        **({"batch_sloc_threshold": opts.batch_sloc_threshold}
+           if opts.batch_sloc_threshold is not None else {}),
+        include_kinds=opts.include_kinds,
         max_propagation_depth=opts.max_propagation_depth,
         validate=opts.validate,
         no_binary_oracle=opts.no_binary_oracle,
@@ -141,9 +251,58 @@ def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
         joern_overrides=opts.joern_overrides,
         joern_server=opts.joern_server,
         study_root=opts.study_root,
-        mode=opts.mode,
+        mode=mode,
         max_workers=opts.max_workers,
+        dynamic_validation=_resolve_dynamic(opts),
+        verdict_reuse=opts.verdict_reuse,
+        pre_scan=opts.pre_scan,
+        schedule=opts.schedule,
+        on_demand_synthesis=opts.on_demand_synthesis,
+        probe_determine_value=opts.probe_determine_value,
+        **({"deepen_reserve_fraction": opts.deepen_reserve_fraction}
+           if opts.deepen_reserve_fraction is not None else {}),
+        same_run_reuse=opts.same_run_reuse,
+        prior_cost_breakdown=opts.prior_cost_breakdown,
+        resume_segment=opts.resume_segment,
+        llm_budget_client=client,
+        llm_client=client,
     )
+
+
+def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
+    """Run the audit orchestrator and return its result.
+
+    Sets up the LLM client, builds the OrchestratorConfig, and calls
+    ``run_orchestrator``.  Returns the ``OrchestratorResult``.
+    """
+    from core.llm.log_quiet import quiet_noisy_loggers
+
+    quiet_noisy_loggers()
+
+    from core.audit.llm_review import make_review_fn
+    from core.audit.orchestrator import run_orchestrator
+
+    client, models, primary_model = _make_llm_client(opts)
+
+    review_fn = make_review_fn(
+        client, task_type="audit", model_name=primary_model,
+        mode=opts.mode, out_dir=opts.out_dir,
+    )
+    config = _build_orchestrator_config(opts, client, models, opts.mode)
+
+    if len(models) > 1:
+        # Cross-model panel: one review_fn per configured model so the
+        # multi-model dispatch actually invokes each model. Without
+        # this map every panel member ran the models[0]-pinned
+        # review_fn — the other configured models were never called.
+        config.review_fns_by_model = {
+            m: make_review_fn(
+                client, task_type="audit",
+                model_name=(m if m != "default" else None),
+                mode=opts.mode, out_dir=opts.out_dir,
+            )
+            for m in models
+        }
 
     return run_orchestrator(
         config, review_fn, on_progress=opts.on_progress, prep_cache=prep_cache,
@@ -166,12 +325,12 @@ def _is_verification_evidence(ev: str) -> bool:
     """
     if not ev or ev.startswith(_NON_MECHANICAL):
         return False
-    try:
+    # Import guard only: pipeline↔orchestrator is a potential import
+    # cycle; _is_detection_only itself is a pure string check.
+    with contextlib.suppress(ImportError):
         from core.audit.orchestrator import _is_detection_only
         if _is_detection_only(ev):
             return False
-    except Exception:
-        pass
     return True
 
 
@@ -183,9 +342,7 @@ def _has_any_mechanical_evidence(ev: str) -> bool:
     discarding findings that have real tool support even if the tool's
     role is detection rather than verification.
     """
-    if not ev or ev.startswith(_NON_MECHANICAL):
-        return False
-    return True
+    return bool(ev) and not ev.startswith(_NON_MECHANICAL)
 
 
 # ---------------------------------------------------------------------------
@@ -262,9 +419,7 @@ def _needs_second_pass(outcome) -> bool:
     if outcome.status != "clean":
         return True
     ev = outcome.evidence_tool or ""
-    if ev and not ev.startswith(NON_MECHANICAL):
-        return True
-    return False
+    return bool(ev) and not ev.startswith(NON_MECHANICAL)
 
 
 def _merge_outcomes(sec_outcomes, bf_outcomes):
@@ -289,8 +444,8 @@ def _merge_outcomes(sec_outcomes, bf_outcomes):
                 sec_ev = sec.evidence_tool or ""
                 bf_ev = bf.evidence_tool or ""
                 has_evidence = (
-                    _has_any_mechanical_evidence(sec_ev)
-                    or _has_any_mechanical_evidence(bf_ev)
+                    _is_verification_evidence(sec_ev)
+                    or _is_verification_evidence(bf_ev)
                 )
                 if not has_evidence:
                     use_max = False
@@ -298,6 +453,10 @@ def _merge_outcomes(sec_outcomes, bf_outcomes):
             if use_max:
                 winner = copy(bf if br > sr else sec)
             else:
+                # Conservative merge: the lower-ranked outcome wins.
+                # It can never be a finding here — use_max is only
+                # False when exactly one side is >= suspicious, so the
+                # lower side is at most dormant.
                 winner = copy(sec if sr <= br else bf)
 
             if br > sr and winner.evidence_tool and sec.evidence_tool:
@@ -320,37 +479,24 @@ def run_ensemble_pipeline(opts: AuditPipelineOpts):
     """Per-function pipelined ensemble: pass 1 → conditional pass 2 → merge.
 
     Each function is reviewed in security mode first.  If the result is not
-    a confident clean (non-clean status, has evidence, or compelling
-    counter-hypothesis), a bug_first review runs immediately and the two
-    outcomes are merged.  The executor parallelises across functions, so
+    a confident clean (non-clean status or has evidence), a bug_first
+    review runs immediately and the two outcomes are merged.  The executor parallelises across functions, so
     pass-2 reviews for early functions overlap with pass-1 reviews for
     later ones — wall-clock ≈ max(per-function chains), not sum-of-passes.
     """
-    import time
     import threading
+    import time
 
     from core.llm.log_quiet import quiet_noisy_loggers
 
     quiet_noisy_loggers()
 
-    from core.llm.client import LLMClient
     from core.audit.llm_review import make_review_fn
-    from core.audit.orchestrator import OrchestratorConfig, run_orchestrator
+    from core.audit.orchestrator import run_orchestrator
 
     t0 = time.monotonic()
 
-    from core.llm.config import LLMConfig
-
-    models = opts.models or ["default"]
-    primary_model = models[0] if models[0] != "default" else None
-    max_cost = opts.max_cost_usd if opts.max_cost_usd is not None else float("inf")
-
-    if primary_model:
-        client = LLMClient(pinned_model=primary_model)
-        client.config.max_cost_per_scan = max_cost
-    else:
-        llm_cfg = LLMConfig(max_cost_per_scan=max_cost)
-        client = LLMClient(config=llm_cfg)
+    client, models, primary_model = _make_llm_client(opts)
 
     sec_review = make_review_fn(
         client, task_type="audit", model_name=primary_model,
@@ -384,34 +530,14 @@ def run_ensemble_pipeline(opts: AuditPipelineOpts):
         result.duration_s = outcome1.duration_s + outcome2.duration_s
         return result
 
-    config = OrchestratorConfig(
-        target_path=opts.target_path,
-        out_dir=opts.out_dir,
-        budget=opts.budget,
-        scope=opts.scope,
-        strategy_filter=opts.strategy_filter,
-        models=models,
-        multi_model=len(models) > 1,
-        adversarial=opts.adversarial,
-        max_cost_usd=opts.max_cost_usd,
-        max_seconds=opts.max_seconds,
-        review_passes=opts.review_passes,
-        subsystem_depth=opts.subsystem_depth,
-        max_propagation_depth=opts.max_propagation_depth,
-        validate=opts.validate,
-        no_binary_oracle=opts.no_binary_oracle,
-        binary_verdicts=opts.binary_verdicts,
-        inventory=opts.inventory,
-        codeql_db_path=opts.codeql_db_path,
-        threat_model=opts.threat_model,
-        annotations_dir=opts.annotations_dir,
-        functions=opts.functions,
-        joern_overrides=opts.joern_overrides,
-        joern_server=opts.joern_server,
-        study_root=opts.study_root,
-        mode=ReviewMode.SECURITY,
-        max_workers=opts.max_workers,
+    config = _build_orchestrator_config(
+        opts, client, models, ReviewMode.SECURITY,
     )
+    # File-level pile-up dampening runs as a pre-export hook INSIDE the
+    # orchestrator so the journal correction pass, findings-graded.json
+    # and the summary counters all see the same (dampened) statuses.
+    # Running it post-hoc here left the export disagreeing with stats.
+    config.pre_export_hooks = [dampen_pileup_pre_export]
 
     result = run_orchestrator(
         config, ensemble_review_fn, on_progress=opts.on_progress,
@@ -423,21 +549,6 @@ def run_ensemble_pipeline(opts: AuditPipelineOpts):
     )
 
     result.total_duration_s = time.monotonic() - t0
-
-    dampened = _dampen_file_pileup(result.outcomes)
-    if dampened:
-        logger.info(
-            "file-level dampening: demoted %d pile-up findings", dampened,
-        )
-
-    any_gate = dampened
-    if any_gate:
-        result.findings = sum(
-            1 for o in result.outcomes if o.status == "finding"
-        )
-        result.suspicious = sum(
-            1 for o in result.outcomes if o.status == "suspicious"
-        )
 
     return result
 
@@ -489,90 +600,210 @@ _FILE_HEAVY_THRESHOLD = FILE_HEAVY_THRESHOLD
 _FILE_HEAVY_KEEP = FILE_HEAVY_KEEP
 
 
-def dampen_file_pileup(outcomes) -> int:
-    """Demote evidence-free pile-up findings.
+NEAR_DUP_JACCARD = 0.6
+DAMPENING_MARKER = "[file-dampening]"
+DAMPENING_LOG = "dampening-log.jsonl"
+
+
+def _hypothesis_tokens(item) -> frozenset:
+    import re
+
+    return frozenset(re.findall(r"[a-z0-9_]+", _get_hypothesis(item).lower()))
+
+
+def _near_duplicate(a: frozenset, b: frozenset) -> bool:
+    """Token-Jaccard near-duplicate check between two hypotheses."""
+    if not a or not b:
+        return False
+    union = len(a | b)
+    return union > 0 and (len(a & b) / union) >= NEAR_DUP_JACCARD
+
+
+def _get_function(item):
+    if isinstance(item, dict):
+        fid = item.get("function_id", "")
+        if ":" in fid:
+            return fid.rsplit(":", 1)[1]
+        return item.get("function", "")
+    return getattr(item, "function", "")
+
+
+def _mark_dampened(item, info: dict) -> None:
+    """Stamp a body marker + structured record on a dampened outcome."""
+    hyp = _get_hypothesis(item)
+    if DAMPENING_MARKER not in hyp:
+        _set(item, "hypothesis", value=(hyp + " " + DAMPENING_MARKER).strip())
+    if isinstance(item, dict):
+        item["file_dampening"] = info
+        return
+    rr = getattr(item, "review_result", None)
+    if isinstance(rr, dict):
+        rr["file_dampening"] = info
+    else:
+        # Outcome objects vary (dicts, dataclasses, mocks); slotted or
+        # frozen ones reject the attribute — dampening info is optional.
+        with contextlib.suppress(AttributeError):
+            item.review_result = {"file_dampening": info}
+
+
+def dampen_file_pileup(outcomes, records: list | None = None) -> int:
+    """Soften evidence-free pile-up findings — never demote to clean.
 
     Works on both ReviewOutcome objects and plain dicts.
 
-    Three tiers:
-    1. Same-class: >=3 findings in the same file sharing a bug class
-       and none having mechanical evidence -> keep strongest, demote rest
-       (finding→suspicious, suspicious→clean).
-    2. Class-agnostic: >=4 evidence-free findings in the same file
-       (regardless of class) -> keep top 2, demote rest
-       (finding→suspicious, suspicious→clean).
-    3. Heavy pile-up: >=6 evidence-free findings in the same file ->
-       demote ALL excess beyond top 1 to clean outright.
+    Vulnerability density is heavy-tailed: the one legacy file with six
+    genuine issues is where audits earn their keep, so demotion is at
+    most one step (finding→suspicious) and ``suspicious`` outcomes are
+    never silenced to ``clean``.
 
-    Tool-backed findings are never demoted.
+    Two tiers:
+    1. Near-duplicate collapse: >=3 evidence-free suspicious/finding
+       outcomes in the same file whose hypotheses are near-duplicates
+       (token Jaccard >= NEAR_DUP_JACCARD) -> keep strongest, demote
+       finding-status rest to suspicious. Suspicious members keep
+       their status but are marked as collapsed into the survivor.
+    2. File-level cap: >=4 evidence-free findings in the same file ->
+       keep top 2 (top 1 at >=6 heavy pile-up), demote the excess
+       finding→suspicious.
+
+    Tool-backed findings are never demoted. Every affected outcome
+    gets a ``[file-dampening]`` hypothesis/body marker plus a
+    structured ``file_dampening`` record, and — when ``records`` is
+    supplied — an audit-trail row appended to it.
+
+    Returns the number of status DEMOTIONS (marker-only collapses of
+    suspicious siblings are recorded but not counted).
     """
     from collections import defaultdict
+
+    if records is None:
+        records = []
 
     def _has_mechanical(i):
         ev = _get_evidence(outcomes[i])
         return ev and not ev.startswith(NON_MECHANICAL)
 
+    tokens = {}
+
     def _rank_key(i):
         return (
             STATUS_RANK.get(_get_status(outcomes[i]), 0),
+            len(tokens.get(i, ())),
             len(_get_hypothesis(outcomes[i])),
         )
 
-    already_dampened: set[int] = set()
-    dampened = 0
+    def _dampen(idx, tier, group_size, kept_idx):
+        cur = _get_status(outcomes[idx])
+        new = "suspicious" if cur == "finding" else cur
+        info = {
+            "tier": tier,
+            "from_status": cur,
+            "to_status": new,
+            "group_size": group_size,
+            "kept_function": _get_function(outcomes[kept_idx]),
+        }
+        if new != cur:
+            _set_status(outcomes[idx], new)
+        _mark_dampened(outcomes[idx], info)
+        records.append(
+            {
+                "file": _get_file(outcomes[idx]),
+                "function": _get_function(outcomes[idx]),
+                "hypothesis": _get_hypothesis(outcomes[idx]),
+                **info,
+            }
+        )
+        return 1 if new != cur else 0
 
-    # --- Tier 1: same-class dampening ---
-    class_groups: dict[tuple, list[int]] = defaultdict(list)
-    for i, o in enumerate(outcomes):
-        if _get_status(o) in ("suspicious", "finding"):
-            bc = extract_bug_class(o)
-            class_groups[(_get_file(o), bc)].append(i)
-
-    for indices in class_groups.values():
-        if len(indices) < FILE_CLASS_THRESHOLD:
-            continue
-        if any(_has_mechanical(i) for i in indices):
-            continue
-        ranked = sorted(indices, key=_rank_key, reverse=True)
-        for idx in ranked[1:]:
-            cur = _get_status(outcomes[idx])
-            if cur == "finding":
-                _set_status(outcomes[idx], "suspicious")
-                already_dampened.add(idx)
-                dampened += 1
-            elif cur == "suspicious":
-                _set_status(outcomes[idx], "clean")
-                already_dampened.add(idx)
-                dampened += 1
-
-    # --- Tier 2: class-agnostic file-level cap ---
+    # Evidence-free suspicious/finding outcomes per file.
     file_groups: dict[str, list[int]] = defaultdict(list)
     for i, o in enumerate(outcomes):
         if _get_status(o) in ("suspicious", "finding") and not _has_mechanical(i):
             file_groups[_get_file(o)].append(i)
+            tokens[i] = _hypothesis_tokens(o)
 
+    already_dampened: set[int] = set()
+    dampened = 0
+
+    # --- Tier 1: near-duplicate hypothesis collapse ---
+    for indices in file_groups.values():
+        # Greedy clustering: an outcome joins the first cluster with a
+        # near-duplicate member.
+        clusters: list[list[int]] = []
+        for i in indices:
+            for cluster in clusters:
+                if any(_near_duplicate(tokens[i], tokens[j]) for j in cluster):
+                    cluster.append(i)
+                    break
+            else:
+                clusters.append([i])
+
+        for cluster in clusters:
+            if len(cluster) < FILE_CLASS_THRESHOLD:
+                continue
+            ranked = sorted(cluster, key=_rank_key, reverse=True)
+            for idx in ranked[1:]:
+                dampened += _dampen(
+                    idx, "near_duplicate", len(cluster), ranked[0],
+                )
+                already_dampened.add(idx)
+
+    # --- Tier 2: file-level cap on evidence-free findings ---
     for indices in file_groups.values():
         if len(indices) < FILE_AGNOSTIC_THRESHOLD:
             continue
         ranked = sorted(indices, key=_rank_key, reverse=True)
-        keep = FILE_AGNOSTIC_KEEP
         heavy = len(indices) >= FILE_HEAVY_THRESHOLD
-        if heavy:
-            keep = FILE_HEAVY_KEEP
+        keep = FILE_HEAVY_KEEP if heavy else FILE_AGNOSTIC_KEEP
+        tier = "file_cap_heavy" if heavy else "file_cap"
         for idx in ranked[keep:]:
             if idx in already_dampened:
                 continue
-            cur = _get_status(outcomes[idx])
-            if cur == "finding":
-                _set_status(outcomes[idx], "suspicious" if not heavy else "clean")
-                dampened += 1
-            elif cur == "suspicious":
-                _set_status(outcomes[idx], "clean")
-                dampened += 1
+            if _get_status(outcomes[idx]) != "finding":
+                continue
+            dampened += _dampen(idx, tier, len(indices), ranked[0])
+            already_dampened.add(idx)
 
     return dampened
 
 _dampen_file_pileup = dampen_file_pileup
+
+
+def dampen_pileup_pre_export(result, config) -> None:
+    """Pre-export hook: dampen pile-ups and write the audit trail.
+
+    Runs inside the orchestrator BEFORE the journal correction pass
+    and the graded findings export, so journal, export and summary
+    counters all agree on the dampened statuses. One JSONL row per
+    affected finding lands in ``<out_dir>/dampening-log.jsonl``.
+    """
+    import json
+
+    records: list[dict] = []
+    dampened = dampen_file_pileup(result.outcomes, records=records)
+
+    out_dir = getattr(config, "out_dir", None)
+    if records and out_dir:
+        try:
+            path = Path(out_dir) / DAMPENING_LOG
+            with path.open("a", encoding="utf-8") as fh:
+                for rec in records:
+                    fh.write(json.dumps(rec, sort_keys=True) + "\n")
+        except Exception:
+            logger.debug("dampening audit log write failed", exc_info=True)
+
+    if dampened:
+        logger.info(
+            "file-level dampening: demoted %d pile-up findings "
+            "(%d marked; see %s)",
+            dampened, len(records), DAMPENING_LOG,
+        )
+        result.findings = sum(
+            1 for o in result.outcomes if o.status == "finding"
+        )
+        result.suspicious = sum(
+            1 for o in result.outcomes if o.status == "suspicious"
+        )
 
 
 # -- Counter-hypothesis veto -----------------------------------------------
@@ -595,6 +826,35 @@ COUNTER_VETO_EXEMPT_KW = (
     "sequence number", "credential", "privilege escalation",
     "capability check", "capability bypass",
 )
+
+
+# Refutation-direction markers: the counter-hypothesis argues AGAINST
+# the vulnerability (supports clean), not for it. Direction matters —
+# a refuting counter is stuffed with vulnerability vocabulary
+# ("refcount", "use-after-free", "TOCTOU") because it names the
+# mechanisms it defeats, which fooled the vocabulary-only heuristics
+# on both sides of this gate (live corpus case: a review that refuted
+# an SMT check-early-release signal and every fresh mechanism was
+# re-escalated to suspicious off its own refuting counter).
+COUNTER_REFUTATION_KW = (
+    "was refuted", "were refuted", "is refuted", "are refuted",
+    "has been refuted", "have been refuted",
+    "refuted with", "refuted by",
+    "not a vulnerability", "not a security concern",
+    "not a security issue", "not a security bug",
+    "no security impact", "not security-relevant",
+    "not security relevant", "not exploitable",
+    "cannot be exploited", "defeating it as a security",
+    "quality wart",
+)
+
+
+def counter_refutes_vulnerability(counter: str) -> bool:
+    """True when the counter-hypothesis argues the vulnerability is NOT
+    real (refutation direction), rather than arguing the verdict
+    under-calls a real one."""
+    lower = (counter or "").lower()
+    return any(kw in lower for kw in COUNTER_REFUTATION_KW)
 
 
 def counter_hypothesis_vetoes(item) -> bool:
@@ -623,7 +883,12 @@ def counter_hypothesis_vetoes(item) -> bool:
         return False
 
     lower = counter.lower()
-    return any(kw in lower for kw in COUNTER_PROTECTION_KW)
+    # A counter that asserts the hypothesis was refuted / is not a
+    # security issue vetoes just like one naming a concrete protection
+    # mechanism — both argue the speculative verdict is wrong in the
+    # clean direction.
+    return any(kw in lower for kw in COUNTER_PROTECTION_KW) or \
+        counter_refutes_vulnerability(lower)
 
 _counter_hypothesis_vetoes = counter_hypothesis_vetoes
 
@@ -653,7 +918,7 @@ RACE_HYPOTHESIS_KW = (
     "deadlock", "livelock",
 )
 
-RACE_EVIDENCE_WHITELIST = (
+RACE_EVIDENCE_ALLOWLIST = (
     "smt:", "coccinelle:", "semgrep:", "codeql:", "joern:",
     "sarif:", "prefilter:lock", "prefilter:race",
 )
@@ -666,10 +931,7 @@ def is_speculative_race(item) -> bool:
         return False
 
     ev = _get_evidence(item)
-    if ev and any(ev.startswith(p) for p in RACE_EVIDENCE_WHITELIST):
-        return False
-
-    return True
+    return not (ev and any(ev.startswith(p) for p in RACE_EVIDENCE_ALLOWLIST))
 
 
 def apply_speculative_race_gate(outcomes) -> int:

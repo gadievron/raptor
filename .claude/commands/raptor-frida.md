@@ -39,6 +39,8 @@ libexec/raptor-frida --target ... --template ...
 |------|---------|
 | `api-trace` | libc/syscall surface: `open`, `read`, `write`, `connect`, `fork`, `execve`, etc. |
 | `ssl-unpin` | iOS/macOS Security.framework, OpenSSL `SSL_get_verify_result`, Android `X509TrustManager`. |
+| `bb-coverage` | Basic-block coverage collection. |
+| `binary-flow-trace` | Flow tracing used by `/binary runtime`. |
 
 List dynamically: `raptor frida --list-templates`.
 
@@ -95,7 +97,7 @@ Read `metadata.json` first. Common patterns:
 
 ## Status
 
-Alpha. Two templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned.
+Alpha. Four templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned.
 
 The runner currently does **not** wrap frida in `core/sandbox/`; the `--unsafe-attach` flag is forward-looking and logged into `metadata.json` for when the sandbox envelope lands.
 

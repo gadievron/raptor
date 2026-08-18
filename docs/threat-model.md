@@ -88,7 +88,9 @@ raptor project status
 ```
 
 `project status` now shows whether a threat model exists and how many focus
-areas it has.
+areas it has. Beyond `show`/`export`, the subcommand surface also covers
+`lint` (structural checks), `diff` (compare against the map), `report`,
+`sync`, and `add`/`remove` for focus areas.
 
 ## What To Put In It
 

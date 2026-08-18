@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Run all context-map enrichers in sequence, loading shared data once.
 
 Usage: raptor-enrich-context-map <understand_dir>
@@ -11,18 +13,13 @@ the result once at the end.
 Individual enricher scripts remain for standalone use.
 """
 import argparse
-import faulthandler
 import logging
-import signal
 import sys
 import tempfile
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -32,12 +29,12 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
-from core.json import load_json, save_json
+from core.json import load_json, save_json  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +72,17 @@ def main() -> int:
     )
     checklist_path = understand_dir / "checklist.json"
 
+    # checklist.json is a mutable run artefact — corroborate the
+    # recovered target against the target_path sealed into
+    # .raptor-run.json at run start before touching that tree.
+    if target_path:
+        from core.run.metadata import corroborate_target_path
+        mismatch = corroborate_target_path(understand_dir, target_path)
+        if mismatch:
+            print(f"raptor-enrich-context-map: {mismatch}; refusing "
+                  "recovered target", file=sys.stderr)
+            return 1
+
     changed = False
     summary: list[str] = []
 
@@ -93,7 +101,7 @@ def main() -> int:
         if n_edges:
             changed = True
             summary.append(f"callgraph: {n_edges} edges")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("callgraph enrichment failed: %s", e, exc_info=True)
 
     # 2. Build inventory once (shared by ast-view and forward-reachable)
@@ -103,7 +111,7 @@ def main() -> int:
             from core.inventory.builder import build_inventory
             with tempfile.TemporaryDirectory() as td:
                 inventory = build_inventory(str(target_path), td)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("inventory build failed: %s", e, exc_info=True)
 
     # 3. Forward reachability (needs target_path + inventory)
@@ -118,7 +126,7 @@ def main() -> int:
             if n_ep:
                 changed = True
                 summary.append(f"forward-reachable: {n_ep} entry points")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("forward-reachable enrichment failed: %s", e,
                          exc_info=True)
 
@@ -134,7 +142,7 @@ def main() -> int:
             if n_ast:
                 changed = True
                 summary.append(f"ast-view: {n_ast} entries")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("ast-view enrichment failed: %s", e, exc_info=True)
 
     # 5. Sites (source_intel — spatch, needs target_path)
@@ -155,7 +163,7 @@ def main() -> int:
                     f"sites: {counts['ownership_model']} ownership + "
                     f"{counts['privilege_model']} privilege"
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("sites enrichment failed: %s", e, exc_info=True)
 
     # 6. Sink discovery (needs target_path)
@@ -172,14 +180,27 @@ def main() -> int:
                     extra_sinks = iris_sinks
             except Exception as e:  # noqa: BLE001
                 logger.debug("IRIS sink fetch failed: %s", e)
+            # ``extra_sinks`` support depends on the substrate revision;
+            # pass it only when the signature accepts it so the whole
+            # sink stage doesn't die on a TypeError (which the handler
+            # below would eat).
+            import inspect
+            sink_kwargs = {}
+            if "extra_sinks" in inspect.signature(
+                    enrich_with_sink_discovery).parameters:
+                sink_kwargs["extra_sinks"] = extra_sinks
+            elif extra_sinks:
+                logger.warning(
+                    "IRIS sinks available but enrich_with_sink_discovery "
+                    "predates extra_sinks — continuing without them")
             n_sinks = enrich_with_sink_discovery(
-                context_map, Path(target_path), extra_sinks=extra_sinks,
+                context_map, Path(target_path), **sink_kwargs,
             )
             if n_sinks:
                 changed = True
                 summary.append(f"sinks: {n_sinks} entries")
-        except Exception as e:  # noqa: BLE001
-            logger.debug("sink enrichment failed: %s", e, exc_info=True)
+        except Exception as e:
+            logger.warning("sink enrichment failed: %s", e, exc_info=True)
 
     if changed:
         save_json(context_map_path, context_map)

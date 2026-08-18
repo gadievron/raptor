@@ -27,10 +27,13 @@ Limitations (see :doc:`README`):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 from core.http import HttpClient
 
@@ -40,7 +43,6 @@ from .auth import (
 )
 from .image_ref import ImageRef
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ logger = logging.getLogger(__name__)
 # schema 2 — without it, some registries fall back to schema 1
 # which we deliberately do NOT support (deprecated, missing
 # digest invariants we rely on).
-_MANIFEST_ACCEPT = ", ".join([
+_MANIFEST_ACCEPT = ", ".join([  # noqa: FLY002 — per-entry comments below
     # OCI Image Manifest v1
     "application/vnd.oci.image.manifest.v1+json",
     # OCI Image Index v1 (multi-arch)
@@ -66,6 +68,12 @@ _MANIFEST_ACCEPT = ", ".join([
 # memory. 16 MiB is generous for real manifests/tags lists (typical
 # manifest <10 KiB, tags list a few MiB at most).
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+
+# The one digest algorithm this client speaks. Content addresses are
+# recomputed from response bytes and compared against requested
+# references, so the grammar is deliberately strict — a looser OCI
+# grammar would admit algorithms we can't verify.
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_TAGS_BYTES = 16 * 1024 * 1024
 _MAX_TOKEN_BYTES = 256 * 1024  # token-exchange responses are tiny
 
@@ -77,7 +85,7 @@ _MAX_TOKEN_BYTES = 256 * 1024  # token-exchange responses are tiny
 # ``WWW-Authenticate: Bearer realm="https://attacker.com/steal"``.
 # Keep this list tight; new entries require explicit knowledge of
 # the registry's token-service host.
-_REALM_HOST_ALLOWLIST: Dict[str, frozenset[str]] = {
+_REALM_HOST_ALLOWLIST: dict[str, frozenset[str]] = {
     "docker.io":            frozenset({"auth.docker.io"}),
     "registry-1.docker.io": frozenset({"auth.docker.io"}),
     "ghcr.io":              frozenset({"ghcr.io"}),
@@ -126,8 +134,8 @@ def _validate_realm(registry: str, realm: str) -> None:
 
 
 def _validate_link_next(
-    raw: Optional[str], *, repository: str,
-) -> Optional[str]:
+    raw: str | None, *, repository: str,
+) -> str | None:
     """Validate a ``Link: rel=next`` URL extracted from a registry
     response. Returns the URL if it's a relative path under
     ``/v2/<repository>/`` (the only shape the OCI spec produces
@@ -164,16 +172,20 @@ def _validate_link_next(
     return s
 
 
-def _parse_link_next(link_header: Optional[str]) -> Optional[str]:
+def _parse_link_next(link_header: str | None) -> str | None:
     """Pull the ``<url>`` of the ``rel="next"`` entry out of an
     RFC-5988 ``Link:`` header. Returns None if no next link, or
     the header is absent / malformed.
 
     The OCI Distribution Spec lets registries paginate
-    ``/tags/list`` via this header; URLs may be relative (path
-    only) or absolute. We strip leading whitespace + the angle
-    brackets but otherwise pass the value through verbatim — the
-    HTTP client below treats both shapes.
+    ``/tags/list`` via this header; registries may emit relative
+    (path-only) or absolute URLs. We strip leading whitespace + the
+    angle brackets and pass the value through verbatim; the caller
+    then runs it through :func:`_validate_link_next`, which accepts
+    only relative ``/v2/<repository>/`` paths (absolute URLs are
+    rejected as an SSRF guard, ending pagination), and
+    ``_authed_request`` resolves the surviving path against the
+    registry's API endpoint.
     """
     if not link_header:
         return None
@@ -196,14 +208,15 @@ class ManifestResponse:
     """A registry manifest fetch result.
 
     ``content_type`` tells consumers which parser to dispatch
-    (image manifest vs image index). ``digest`` is the
-    server-reported manifest digest from ``Docker-Content-Digest``
-    — load-bearing for caching, since it's what an immutable
-    reference would point at."""
+    (image manifest vs image index). ``digest`` is the sha256 of
+    ``raw`` COMPUTED by this client — load-bearing for caching, and
+    safe for it precisely because it is derived from the bytes rather
+    than echoed from the ``Docker-Content-Digest`` header (which is
+    cross-checked and must agree)."""
     raw: bytes
-    parsed: Dict[str, Any]
+    parsed: dict[str, Any]
     content_type: str
-    digest: Optional[str]
+    digest: str | None
 
 
 class RegistryError(RuntimeError):
@@ -219,10 +232,15 @@ class OciRegistryClient:
     """Stateful client tied to a single :class:`HttpClient` and an
     optional ``BasicCredentials``-providing callable.
 
-    State held: per-(realm, service, scope) bearer-token cache. The
-    cache is a plain dict — bounded by distinct image references
+    State held: per-(realm, service, scope) bearer-token cache plus a
+    per-registry memo of the most recent challenge triple (the triple
+    is only discoverable from a 401 challenge, so the memo is what
+    lets later requests attach a cached token on their FIRST attempt).
+    Both are plain dicts — bounded by distinct image references
     consulted in a single process; tokens are short-lived (5-15 min
-    typically) so there's no hard expiry tracking.
+    typically) so there's no hard expiry tracking: an expired token
+    surfaces as a 401, which evicts it and re-exchanges. Not
+    thread-safe — one client per thread, like the HttpClient it wraps.
     """
 
     def __init__(
@@ -236,7 +254,11 @@ class OciRegistryClient:
         # Default uses the documented chain; tests inject a stub.
         self._lookup = credentials_lookup or lookup_credentials
         # Token cache keyed by (realm, service, scope).
-        self._tokens: Dict[Tuple[str, str, str], str] = {}
+        self._tokens: dict[tuple[str, str, str], str] = {}
+        # Most recent challenge triple seen per registry — the key
+        # under which the next request for that registry looks up a
+        # cached token for its first attempt.
+        self._last_challenge: dict[str, tuple[str, str, str]] = {}
 
     # ----- Public API -----
 
@@ -246,6 +268,15 @@ class OciRegistryClient:
         When ``ref.digest`` is set, returns it without a network
         call. Otherwise issues a HEAD on the tag and reads the
         ``Docker-Content-Digest`` response header.
+
+        The HEAD path has no body to hash, so the returned value is a
+        SERVER CLAIM, not a verified content address. It is safe to use
+        only as a fetch reference: ``fetch_manifest`` re-verifies any
+        digest-shaped reference against the bytes it actually returns,
+        so a lying HEAD is caught at fetch time. Do not key caches or
+        name files on this value without fetching through it first.
+        The shape is validated here so a malformed header can't smuggle
+        path syntax into later URL construction.
         """
         if ref.digest:
             return ref.digest
@@ -259,10 +290,16 @@ class OciRegistryClient:
                 f"manifest HEAD missing Docker-Content-Digest "
                 f"for {ref.to_canonical()}",
             )
+        if not _DIGEST_RE.match(digest):
+            raise RegistryError(
+                resp.status_code,
+                f"malformed Docker-Content-Digest for "
+                f"{ref.to_canonical()}: {digest[:80]!r}",
+            )
         return digest
 
     def fetch_manifest(
-        self, ref: ImageRef, *, reference: Optional[str] = None,
+        self, ref: ImageRef, *, reference: str | None = None,
     ) -> ManifestResponse:
         """Fetch the manifest for ``ref``. If ``reference`` is given,
         it overrides ``ref``'s reference (used to fetch a child
@@ -294,18 +331,43 @@ class OciRegistryClient:
             ) from e
         content_type = resp.headers.get("Content-Type", "") \
             or resp.headers.get("content-type", "")
-        digest = resp.headers.get("Docker-Content-Digest") \
+        # The digest we report is COMPUTED from the body, never echoed
+        # from the Docker-Content-Digest header: downstream consumers
+        # key forever-caches and filenames on it, so it must be a
+        # provable content address, not a server claim. The header and
+        # the requested reference (fetch-by-digest / index sub-manifest
+        # picks) are cross-checked against the computed value and a
+        # disagreement is an integrity failure, not a soft fallback.
+        computed = "sha256:" + hashlib.sha256(resp.content).hexdigest()
+        header_digest = resp.headers.get("Docker-Content-Digest") \
             or resp.headers.get("docker-content-digest")
+        if (header_digest and header_digest.startswith("sha256:")
+                and header_digest != computed):
+            raise RegistryError(
+                resp.status_code,
+                f"manifest digest mismatch for {ref.to_canonical()}: "
+                f"header claims {header_digest}, body hashes to "
+                f"{computed}",
+            )
+        requested = reference if _DIGEST_RE.match(reference or "") \
+            else ref.digest
+        if (requested and requested.startswith("sha256:")
+                and requested != computed):
+            raise RegistryError(
+                resp.status_code,
+                f"manifest digest mismatch for {ref.to_canonical()}: "
+                f"requested {requested}, body hashes to {computed}",
+            )
         return ManifestResponse(
             raw=resp.content, parsed=parsed,
             content_type=content_type.split(";", 1)[0].strip(),
-            digest=digest,
+            digest=computed,
         )
 
     def list_tags(
         self, ref: ImageRef, *, per_page: int = 100,
         max_pages: int = 50,
-    ) -> List[str]:
+    ) -> list[str]:
         """Return the full tag list for ``ref.repository`` on its
         registry, following ``Link`` headers across pages.
 
@@ -330,8 +392,8 @@ class OciRegistryClient:
         Raises :class:`RegistryError` on non-200 or malformed
         response.
         """
-        all_tags: List[str] = []
-        next_url: Optional[str] = (
+        all_tags: list[str] = []
+        next_url: str | None = (
             f"/v2/{ref.repository}/tags/list?n={per_page}"
         )
         for _ in range(max_pages):
@@ -397,7 +459,19 @@ class OciRegistryClient:
         consume the entire iterator (or ensure the underlying
         response is closed) — leaking a half-read response leaks
         the registry connection.
+
+        The stream is hashed as it is consumed and checked against
+        ``digest`` once exhausted — blobs are content-addressed, so a
+        registry that serves different bytes is an integrity failure
+        (RegistryError after the final chunk). A caller that stops
+        early skips the check by construction; only fully-consumed
+        streams are verified.
         """
+        if not _DIGEST_RE.match(digest):
+            # Also keeps digest inert in the URL path below.
+            raise RegistryError(
+                0, f"malformed blob digest: {digest[:80]!r}",
+            )
         url = f"/v2/{ref.repository}/blobs/{digest}"
         resp = self._authed_request(
             "GET", ref.registry, url, stream=True,
@@ -408,17 +482,26 @@ class OciRegistryClient:
                 f"blob GET failed for {digest} in "
                 f"{ref.to_canonical()}: {resp.text[:200]}",
             )
+        hasher = hashlib.sha256()
         try:
             for chunk in resp.iter_content(chunk_size=chunk_size):
                 if chunk:
+                    hasher.update(chunk)
                     yield chunk
         finally:
             resp.close()
+        computed = "sha256:" + hasher.hexdigest()
+        if computed != digest:
+            raise RegistryError(
+                200,
+                f"blob digest mismatch for {ref.to_canonical()}: "
+                f"requested {digest}, body hashes to {computed}",
+            )
 
     # ----- Internals -----
 
     def _manifest_url(
-        self, ref: ImageRef, *, reference: Optional[str] = None,
+        self, ref: ImageRef, *, reference: str | None = None,
     ) -> str:
         return (
             f"/v2/{ref.repository}/manifests/"
@@ -428,7 +511,7 @@ class OciRegistryClient:
     def _authed_request(
         self, method: str, registry: str, url_path: str,
         *,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         stream: bool = False,
     ):
         """Issue ``METHOD https://<api-endpoint><url_path>`` with the
@@ -443,10 +526,18 @@ class OciRegistryClient:
         full_url = f"https://{api_endpoint_for(registry)}{url_path}"
         req_headers = dict(headers) if headers else {}
         # First attempt with whatever auth is already cached for
-        # this registry's most-recent (realm, service, scope) tuple.
-        # Cache is keyed by the challenge triple, so we don't have
-        # one yet — make the unauthenticated attempt first to
-        # discover the realm.
+        # this registry's most-recent (realm, service, scope) tuple —
+        # repeat calls for the same image must skip the exchange
+        # dance. The triple is only discoverable from a 401 challenge,
+        # so the very first call for a registry goes out
+        # unauthenticated and takes the challenge path below.
+        used_cache_key: tuple[str, str, str] | None = None
+        last_challenge = self._last_challenge.get(registry)
+        if last_challenge is not None:
+            cached_token = self._tokens.get(last_challenge)
+            if cached_token is not None:
+                req_headers["Authorization"] = f"Bearer {cached_token}"
+                used_cache_key = last_challenge
         # raise_on_status=False so the 401-with-WWW-Authenticate
         # challenge reaches the retry path below instead of being
         # converted to an exception by the backend.
@@ -499,7 +590,16 @@ class OciRegistryClient:
         # hosts per registry (most are sub-domains of the registry
         # host; explicit list keeps the surface small).
         _validate_realm(registry, realm)
-        self._tokens.pop((realm, service, scope), None)
+        cache_key = (realm, service, scope)
+        # Evict only the token that actually failed: a 401 while
+        # presenting the cached token for THIS exact triple means that
+        # token is stale/expired. A 401 with no token attached (first
+        # contact) or with a token cached under a different triple
+        # (scope change between repositories) says nothing about other
+        # cache entries — those stay.
+        if used_cache_key == cache_key:
+            self._tokens.pop(cache_key, None)
+        self._last_challenge[registry] = cache_key
         token = self._exchange_token(registry, realm, service, scope)
         req_headers["Authorization"] = f"Bearer {token}"
         resp.close()
@@ -540,7 +640,7 @@ class OciRegistryClient:
             sep = "&" if "?" in realm else "?"
             token_url = f"{realm}{sep}{urlencode(qs_pairs)}"
 
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         creds = self._lookup(registry)
         if creds is not None:
             headers["Authorization"] = f"Basic {creds.to_basic_header()}"
@@ -582,7 +682,7 @@ class OciRegistryClient:
 
 
 __all__ = [
-    "OciRegistryClient",
     "ManifestResponse",
+    "OciRegistryClient",
     "RegistryError",
 ]

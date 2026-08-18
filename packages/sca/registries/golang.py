@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from typing import List, Optional
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -30,6 +29,15 @@ _CACHE_KEY_PREFIX = "go-versions"
 _DEFAULT_TTL = 24 * 3600
 
 
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — Go module paths legitimately contain ``/``, and a raw
+    path with ``..`` segments could otherwise alias another module's
+    cache file after JsonCache path sanitisation. Old raw-name entries
+    re-fetch once."""
+    return urllib.parse.quote(value, safe="")
+
+
 class GoClient:
     """List versions from the Go module proxy."""
 
@@ -38,7 +46,7 @@ class GoClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -48,12 +56,12 @@ class GoClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         # Module path encoding: capital letters are encoded as ``!<lower>``
         # (Go's case-insensitive mapping). Slashes and dots are passed
         # through.
         encoded = _encode_module_path(name)
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -94,14 +102,14 @@ def _encode_module_path(name: str) -> str:
     return urllib.parse.quote("".join(out), safe="/!@.-_")
 
 
-def _extract_versions(text: str) -> List[str]:
+def _extract_versions(text: str) -> list[str]:
     """Parse the proxy's newline-delimited version list.
 
     Lines are tags like ``v1.2.3``, ``v1.2.3-rc.1``, or pseudo-versions
     like ``v0.0.0-20210101120000-abcdef123456``. We drop pre-releases
     and pseudo-versions, leaving only stable tagged releases.
     """
-    out: List[str] = []
+    out: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or not line.startswith("v"):

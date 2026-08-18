@@ -28,8 +28,9 @@ What this detector must defend against:
 
   * **Allowlist DOS via huge fixture trees** — attacker ships a
     million binaries in ``tests/fixtures/`` to slow the walk.
-    Defence: we honour the same ``EXCLUDED_DIR_NAMES`` discovery
-    uses + cap the walk via a stat budget.
+    Defence: we skip ``_BINARY_SKIP_DIRS`` (a deliberate subset of
+    discovery's ``EXCLUDED_DIR_NAMES`` — see its comment) + cap the
+    walk via a stat budget.
 
   * **Magic-byte spoofing** — file starts with ``\\x7fELF`` but is
     actually a text wrapper.  Defence: we don't claim "this WILL
@@ -334,8 +335,10 @@ def _path_matches_allowlist(
 def _walk_for_binaries(
     root: Path,
 ) -> Iterable[Path]:
-    """Yield files under ``root`` skipping the same excluded dirs
-    discovery skips.  Bounded by ``_MAX_WALKED_FILES``."""
+    """Yield files under ``root`` skipping ``_BINARY_SKIP_DIRS`` — a
+    deliberate subset of discovery's excluded dirs that still recurses
+    into ``dist``/``build``/``target``/``vendor`` (common publication
+    paths).  Bounded by ``_MAX_WALKED_FILES``."""
     yielded = 0
     # ``Path.walk`` (3.12+) would be nicer but we keep compatibility.
     for dirpath, dirnames, filenames in __import__("os").walk(root):
@@ -393,8 +396,10 @@ def scan_target(
 
     Soundness notes:
 
-      * Skips the same excluded dirs as discovery (so vendored deps
-        / VCS metadata don't dominate the noise).
+      * Skips ``_BINARY_SKIP_DIRS`` (VCS metadata, caches, installed
+        deps) — a subset of discovery's excluded dirs that deliberately
+        still recurses into ``dist``/``build``/``target``/``vendor``,
+        the common publication paths for planted binaries.
       * Suppresses via the data-file allowlist (legitimate
         per-platform layouts) AND per-package opt-in (manifest
         fields, per-platform package naming).

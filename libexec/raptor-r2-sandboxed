@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """raptor-r2-sandboxed — spawn radare2 under the host-fingerprint
 sandbox, transparently to r2pipe.
 
@@ -55,15 +57,13 @@ Env:
 
 Exit codes:
 - r2's returncode on successful invocation
-- 2 on argv whitelist refusal
+- 2 on argv allowlist refusal
 - 3 on missing env or sandbox-setup failure
 """
 
 from __future__ import annotations
-import faulthandler
-import subprocess
 
-import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,12 +78,10 @@ _RC_WRAPPER_TRUST_MISSING  = 102
 _RC_WRAPPER_ENV_INVALID    = 103
 _RC_WRAPPER_BINARY_MISSING = 104
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (libexec convention) ───────────────
+# fmt: off
 import os  # noqa: E402
+
 # Inline before any RAPTOR import (matches raptor-run-sandboxed,
 # raptor-binary) so a malicious PYTHONPATH can't hijack
 # core.* imports before the check fires. This script is invoked
@@ -98,6 +96,7 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(_RC_WRAPPER_TRUST_MISSING)
+# fmt: on
 # ─── end trust-marker check ────────────────────────────────
 
 # Resolve RAPTOR root via this script's path — libexec/<script>, so
@@ -120,16 +119,16 @@ def _die(msg: str, code: int = _RC_WRAPPER_SANDBOX_FAILED) -> None:
 # existing "-N" (in case the caller already set it; we'd add it
 # anyway in the prepend below).
 #
-# COUPLING NOTE: this whitelist is intentionally narrow — it matches
+# COUPLING NOTE: this allowlist is intentionally narrow — it matches
 # what packages/binary_analysis/radare2_understand.py passes today
 # (`flags=["-2"]`) plus r2pipe's own spawn-time additions. If a future
 # r2pipe version adds a NEW default flag we don't know about, the
 # wrapper will refuse with `_die("refused argv (flag not in
-# whitelist...)")` and the operator will see a clear diagnostic. Add
+# allowlist...)")` and the operator will see a clear diagnostic. Add
 # the new flag here AFTER confirming it doesn't enable a shell escape
 # or change r2's analysis posture. Likewise for any new flag that
 # radare2_understand wants to pass — must be reviewed for safety and
-# explicitly whitelisted here.
+# explicitly allowlisted here.
 _ALLOWED_FLAGS = frozenset({"-2", "-q0", "-N"})
 
 
@@ -174,11 +173,11 @@ def _parse_and_validate_argv(argv: list[str]) -> tuple[list[str], str]:
         _die(f"refused: binary not found or not a regular file: {binary!r}",
              code=_RC_WRAPPER_BINARY_MISSING)
 
-    # Validate every flag is in the whitelist.
+    # Validate every flag is in the allowlist.
     for f in flags:
         if f not in _ALLOWED_FLAGS:
             _die(
-                f"refused argv (flag not in whitelist "
+                f"refused argv (flag not in allowlist "
                 f"{sorted(_ALLOWED_FLAGS)}): {f!r}",
                 code=_RC_WRAPPER_ARGV_REFUSED,
             )

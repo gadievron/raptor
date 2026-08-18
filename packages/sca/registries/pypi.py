@@ -16,12 +16,12 @@ leave the dep alone rather than failing the whole run.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import urllib.parse
 
 from packaging.version import InvalidVersion, Version
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "pypi-versions"
 _DEFAULT_TTL = 24 * 3600
+
+
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — a raw name containing ``/`` or ``..`` could otherwise
+    alias another package's cache file after JsonCache path
+    sanitisation. Old raw-name entries re-fetch once."""
+    return urllib.parse.quote(value, safe="")
 
 
 # Top-level fields with no RAPTOR consumer.
@@ -114,7 +122,7 @@ class PyPIClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -148,18 +156,16 @@ class PyPIClient:
         # usually points at the simple-index path, but the JSON API
         # is one level up.
         base = self._base_url
-        if base.endswith("/simple"):
-            base = base[: -len("/simple")]
-        if base.endswith("/simple/"):
-            base = base[: -len("/simple/")]
+        base = base.removesuffix("/simple")
+        base = base.removesuffix("/simple/")
         return f"{base}/pypi/{name}/json"
 
-    def _request_headers(self) -> Optional[dict]:
+    def _request_headers(self) -> dict | None:
         if self._auth_header:
             return {"Authorization": self._auth_header}
         return None
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         """Return the raw PyPI JSON for a package — or ``None`` on miss.
 
         Cached separately from the version list so callers needing publish
@@ -170,7 +176,7 @@ class PyPIClient:
         don't re-query on every detector call.
         """
         canon = _canonical_name(name)
-        cache_key = f"pypi-meta:{canon}"
+        cache_key = f"pypi-meta:{_key_component(canon)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -196,7 +202,7 @@ class PyPIClient:
 
     def get_version_metadata(
         self, name: str, version: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Return the version-specific PyPI JSON.
 
         ``/pypi/<name>/<version>/json`` returns metadata as
@@ -211,7 +217,8 @@ class PyPIClient:
         Same negative-caching policy as ``get_metadata``.
         """
         canon = _canonical_name(name)
-        cache_key = f"pypi-meta:{canon}:{version}"
+        cache_key = (f"pypi-meta:{_key_component(canon)}:"
+                     f"{_key_component(version)}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -239,9 +246,9 @@ class PyPIClient:
             self._cache.put(cache_key, data, ttl_seconds=self._ttl)
         return data
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         canon = _canonical_name(name)
-        cache_key = f"{_CACHE_KEY_PREFIX}:{canon}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(canon)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -273,7 +280,7 @@ def _canonical_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _extract_versions(data: dict) -> List[str]:
+def _extract_versions(data: dict) -> list[str]:
     """Pull the version list from PyPI's JSON shape, drop pre-releases and
     versions with all yanked artefacts.
 
@@ -292,7 +299,7 @@ def _extract_versions(data: dict) -> List[str]:
     releases = data.get("releases") or {}
     if not isinstance(releases, dict):
         return []
-    out: List[str] = []
+    out: list[str] = []
     for ver, files in releases.items():
         if not isinstance(files, list):
             continue

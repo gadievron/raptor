@@ -40,13 +40,20 @@ _MAX_CACHE_ENTRIES = 16
 
 _cache: OrderedDict[str, Dict[str, Tuple[str, str]]] = OrderedDict()
 
+_C_STRING_OR_CHAR_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+
+
+def _count_braces(line: str) -> int:
+    cleaned = _C_STRING_OR_CHAR_RE.sub("", line)
+    return cleaned.count("{") - cleaned.count("}")
+
 
 def _extract_function_body(lines: List[str], open_brace_line: int) -> Optional[str]:
     """Extract function body from opening brace line to closing brace."""
     depth = 0
     start = open_brace_line
     for i in range(start, min(start + _MAX_BODY_LINES + 5, len(lines))):
-        depth += lines[i].count("{") - lines[i].count("}")
+        depth += _count_braces(lines[i])
         if depth <= 0:
             body_lines = lines[start:i + 1]
             if len(body_lines) > _MAX_BODY_LINES:

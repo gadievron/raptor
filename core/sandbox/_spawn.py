@@ -46,6 +46,7 @@ Graceful degrade:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import platform
@@ -55,8 +56,9 @@ import subprocess
 import sys
 import time
 import traceback
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Optional, Sequence
+from typing import TYPE_CHECKING
 
 from . import state
 from ._fork_safe_warn import warn_post_fork
@@ -103,11 +105,12 @@ def _write_setup_status(fd: int, category: bytes, reason: str = "") -> None:
     child after fork — must not raise and must not touch the Python logger
     (not fork-safe), so swallow everything.
     """
-    try:
+    # Broad by design: fork-safe last-chance status write in a dying
+    # child (see docstring) — any propagation here would run the
+    # parent's stack in the child.
+    with contextlib.suppress(BaseException):
         payload = category + b":" + reason.encode("utf-8", "replace")[:512]
         os.write(fd, payload)
-    except BaseException:
-        pass
 
 
 def _parse_setup_status(raw: bytes):
@@ -160,6 +163,46 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
     return _parse_setup_status(raw)
 
 
+# Path to the raptor-gidmap-allow helper — same checkout-relative
+# resolution as the coord-launcher.  When built and granted CAP_SETGID
+# this binary writes gid_map WITHOUT denying setgroups, letting targets
+# that call setgroups(2) during init (sudo, su, login) start normally.
+GIDMAP_ALLOW_PATH = (
+    Path(__file__).resolve().parent / "helpers" / "raptor-gidmap-allow"
+)
+
+
+def _gidmap_allow_available() -> str | None:
+    """Return the path to raptor-gidmap-allow if built and capable.
+
+    Probes once per process (cached in ``state._gidmap_allow_cache``).
+    Returns the resolved path string if the binary exists and ``getcap``
+    confirms ``cap_setgid``, else ``None``.
+    """
+    with state._cache_lock:
+        if state._gidmap_allow_cache is not None:
+            return state._gidmap_allow_cache or None
+        result: str | bool = False
+        try:
+            if GIDMAP_ALLOW_PATH.is_file():
+                getcap = shutil.which("getcap")
+                if getcap:
+                    r = subprocess.run(
+                        [getcap, str(GIDMAP_ALLOW_PATH)],
+                        capture_output=True, text=True, timeout=2,
+                        check=False,
+                    )
+                    if "cap_setgid" in r.stdout:
+                        result = str(GIDMAP_ALLOW_PATH)
+        except (OSError, subprocess.SubprocessError):
+            # Capability probe is best-effort; a probe failure
+            # (unreadable path, missing/hung getcap) means "helper
+            # unavailable", cached as False.
+            pass
+        state._gidmap_allow_cache = result
+        return result or None
+
+
 def mount_ns_available() -> bool:
     """Return True if the full mount-ns+newuidmap path is usable here.
 
@@ -189,6 +232,7 @@ def mount_ns_available() -> bool:
             return False
         try:
             import subprocess as _sp
+
             # `env=` to a stripped environment so the probe doesn't
             # inherit the parent's full env. Same rationale as the
             # adjacent sandbox probes: LD_PRELOAD / LD_LIBRARY_PATH
@@ -200,11 +244,11 @@ def mount_ns_available() -> bool:
             from core.config import RaptorConfig
             r = _sp.run(
                 [newuidmap, "--help"],
-                capture_output=True, timeout=2,
+                capture_output=True, timeout=2, check=False,
                 env=RaptorConfig.get_safe_env(),
             )
             _ = r.returncode  # binary is callable
-        except Exception:
+        except Exception:  # noqa: BLE001
             state._mount_ns_available_cache = False
             return False
         state._mount_ns_available_cache = True
@@ -225,7 +269,7 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
     # belt-and-braces the env hygiene anyway.
     from core.config import RaptorConfig
     r = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=5,
+        cmd, capture_output=True, text=True, timeout=5, check=False,
         env=RaptorConfig.get_safe_env(),
     )
     if r.returncode != 0:
@@ -242,8 +286,12 @@ def _set_rlimits(limits: dict) -> None:
     Each rlimit applies independently — a single failure no longer
     aborts the rest. Failures surface via fork-safe stderr warning so
     operators can spot when a documented cap silently became a no-op.
+    One deliberate exception: RLIMIT_CORE is fail-closed — if
+    suppressing coredumps fails, the child warns and os._exit(99)s
+    rather than continuing (see the inline rationale).
     """
     import resource
+
     from .preexec import _DEFAULT_LIMITS
     mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
     file_mb = limits.get("max_file_mb", _DEFAULT_LIMITS["max_file_mb"])
@@ -385,25 +433,33 @@ def _reap_tracer(tracer_pid: int, timeout_s: float = 2.0) -> None:
     _kill_and_reap(tracer_pid)
 
 
-def _sweep_stale_audit_configs() -> None:
+def _sweep_stale_audit_configs(max_age_s: float = 3600.0) -> None:
     """Remove stale raptor-audit-cfg-* tempfiles in /tmp owned by
     the current UID, dating from prior crashed runs.
 
     Audit-config tempfiles get unlinked in the normal lifecycle path
-    (BaseException + final finally in run_sandboxed). But if the
-    parent process gets SIGKILL'd mid-audit (OOM, kernel panic,
-    operator's session terminated externally), the tempfile leaks.
-    Accumulation is slow but real on long-lived dev machines.
+    (BaseException + final finally in run_sandboxed) AND by the tracer
+    itself right after it parses the config. But if both processes get
+    SIGKILL'd mid-audit (OOM, kernel panic, operator's session
+    terminated externally), the tempfile leaks. Accumulation is slow
+    but real on long-lived dev machines.
 
-    Sweep on first engaged-audit per process (idempotent — no-op
-    when no stale files exist). Same-UID-only — never touch other
-    operators' files. Best-effort: any unlink failure is silently
-    ignored (file may have been cleaned up by another process,
-    or ownership changed).
+    Runs on EVERY engaged-audit spawn. That is safe because of the
+    ``max_age_s`` floor: a live config belongs to a concurrent spawn
+    and exists only for the seconds between mkstemp and the tracer
+    parsing (then deleting) it — an hour-old file is unambiguously an
+    orphan. (The floor also fixes a latent race in the previous
+    once-per-process form, which could delete a concurrent process's
+    just-minted config.) Same-UID-only — never touch other operators'
+    files. Best-effort: any unlink failure is silently ignored (file
+    may have been cleaned up by another process, or ownership
+    changed).
     """
     import glob
     import tempfile as _tempfile
+    import time as _time
     my_uid = os.getuid()
+    now = _time.time()
     # Sweep ``$TMPDIR`` when set, not the hardcoded ``/tmp``. On macOS
     # ``tempfile`` defaults to a per-UID ``/var/folders/...`` path; on
     # space-constrained Linux dev boxes ``TMPDIR=/data/tmp``. Pre-fix
@@ -416,12 +472,11 @@ def _sweep_stale_audit_configs() -> None:
             st = os.lstat(path)
             if st.st_uid != my_uid:
                 continue
+            if now - st.st_mtime < max_age_s:
+                continue  # possibly a concurrent spawn's live config
             os.unlink(path)
         except OSError:
             continue
-
-
-_audit_swept = False
 
 
 def _cleanup_stub(root_dir: str) -> None:
@@ -429,10 +484,14 @@ def _cleanup_stub(root_dir: str) -> None:
 
     lstat-check defeats TOCTOU: if a same-UID attacker raced to replace
     the random-name stub with a symlink between tmpdir creation and our
-    cleanup, rmdir on the symlink would fail (ENOTDIR), and we
-    deliberately do not fall back to a recursive remove — stale stubs
-    are an acceptable leak, removing the wrong thing via symlink-follow
-    is not.
+    cleanup, the lstat + S_ISDIR guard returns without touching it.
+    A plain rmdir is tried first; when partial setup left sub-dirs
+    (pre-pivot makedirs) we fall back to a symlink-hardened manual walk
+    (os.walk followlinks=False; unlink never follows, rmdir on a
+    symlink fails ENOTDIR) — never a follow-happy shutil.rmtree.
+    Whatever the hardened walk cannot remove is left behind: stale
+    stubs are an acceptable leak, removing the wrong thing via
+    symlink-follow is not.
     """
     try:
         st = os.lstat(root_dir)
@@ -470,39 +529,58 @@ def _cleanup_stub(root_dir: str) -> None:
 def run_sandboxed(
     cmd: Sequence[str],
     *,
-    target: Optional[str],
-    output: Optional[str],
+    target: str | None,
+    output: str | None,
     block_network: bool,
     nproc_limit: int,
     limits: dict,
     writable_paths: Iterable[str],
-    readable_paths: Optional[Iterable[str]],
-    allowed_tcp_ports: Optional[Iterable[int]],
-    seccomp_profile: Optional[str],
+    readable_paths: Iterable[str] | None,
+    allowed_tcp_ports: Iterable[int] | None,
+    seccomp_profile: str | None,
     seccomp_block_udp: bool,
-    env: Optional[dict],
-    cwd: Optional[str],
-    timeout: Optional[float],
+    env: dict | None,
+    cwd: str | None,
+    timeout: float | None,
     capture_output: bool = True,
     text: bool = True,
     stdin=None,
     start_new_session: bool = True,
     audit_mode: bool = False,
-    audit_run_dir: Optional[str] = None,
+    audit_run_dir: str | None = None,
     audit_verbose: bool = False,
     observe_mode: bool = False,
-    observe_nonce: Optional[str] = None,
+    observe_nonce: str | None = None,
     restrict_reads: bool = False,
     strict_env: bool = False,
-    persona: Optional["Persona"] = None,
+    persona: Persona | None = None,
     inherit_netns: bool = False,
-    etc_overlay: Optional[dict] = None,
+    etc_overlay: dict | None = None,
     skip_pid_ns: bool = False,
     skip_mount_ns: bool = False,
-    proxy_unix_socket: Optional[str] = None,
-    proxy_forwarder_port: Optional[int] = None,
+    proxy_unix_socket: str | None = None,
+    proxy_forwarder_port: int | None = None,
+    extra_unix_bridges: Sequence[tuple[int, str]] | None = None,
+    exec_pid_callback: Callable[[int], None] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
+
+    exec_pid_callback: optional callable invoked in the PARENT with the
+    pid of the exec'ing grandchild while it is still running. The pid is
+    valid in the parent's pid namespace (fork(2) returns caller-namespace
+    pids, and /proc/<pid> stays host-visible even when the grandchild
+    unshares its own pid-ns). Intended for callers that must observe a
+    live sandboxed child — e.g. /proc/<pid>/maps sampling — without
+    running it outside the sandbox. The callback runs before output
+    collection starts, so it should return promptly (a child writing more
+    than a pipe buffer of output stalls until the callback returns) and
+    is itself responsible for terminating the child if it wants the call
+    to return early (SIGKILL is fine; the normal reap flow handles the
+    rest). Callback exceptions are logged and swallowed. Note the
+    callback may be invoked slightly before the target's execve
+    completes — callers reading /proc should poll for the state they
+    need. If sandbox setup fails before the grandchild fork, the
+    callback is not invoked.
 
     Sets up (in order inside the forked child): user-ns + mount-ns + ipc-ns
     [+ net-ns], newuidmap/newgidmap applied from parent, mount pivot_root
@@ -545,7 +623,17 @@ def run_sandboxed(
     # target on its first traced syscall. The probe + warning is
     # idempotent (cached + warn-once).
     _audit_engaged = False
-    _audit_config_path: Optional[str] = None
+    # Anonymous fd holding the tracer's audit-config JSON (F31: the
+    # config carries the observe nonce, so it must never exist at a
+    # filesystem path the target can name). Passed to the tracer as
+    # /proc/self/fd/N; CLOEXEC everywhere except the tracer's exec.
+    _audit_config_fd: int | None = None
+    # argv spelling of the config fd for the tracer child.
+    _audit_config_arg: str | None = None
+    # Parent-held evidence file (F11): <run_dir>/.audit/<jsonl>,
+    # created O_EXCL before the sandbox starts; the tracer inherits
+    # the fd and appends through it; inode verified at finalisation.
+    _evidence_file = None
     if audit_mode:
         if audit_run_dir is None:
             # Clean up the just-created mkdtemp stub before raising.
@@ -568,9 +656,9 @@ def run_sandboxed(
         # All three log at debug; the spawn-side warn-once for case 2
         # / 3 surfaces them at warn level once per process for
         # operator visibility.
+        from . import summary as _summary_mod
         from .ptrace_probe import check_ptrace_available
         from .seccomp import check_seccomp_available
-        from . import summary as _summary_mod
         if not seccomp_profile:
             logger.debug(
                 "audit_mode=True but no seccomp filter active; "
@@ -612,14 +700,16 @@ def run_sandboxed(
             )
         elif check_ptrace_available():
             _audit_engaged = True
-            # First engaged-audit per process: sweep stale config
-            # tempfiles from prior crashed runs (SIGKILL'd parent
-            # leaves the mkstemp file behind). Idempotent; no-op
-            # when no stale files exist.
-            global _audit_swept
-            if not _audit_swept:
-                _sweep_stale_audit_configs()
-                _audit_swept = True
+            # Sweep stale config tempfiles from prior crashed runs
+            # (SIGKILL'd parent leaves the mkstemp file behind) on
+            # EVERY engaged-audit spawn. The sweep's age floor makes
+            # per-spawn safe — files younger than an hour may belong
+            # to a concurrent spawn and are left alone, so orphans
+            # created after process start no longer outlive it (the
+            # previous once-per-process guard missed them for the
+            # rest of a long-lived session). Idempotent; no-op when
+            # no stale files exist.
+            _sweep_stale_audit_configs()
             # Build the tracer's filter config. Filtered mode (the
             # `audit` profile) drops openat/connect events that match
             # the Landlock allowlist; verbose mode (`audit-verbose`)
@@ -665,8 +755,7 @@ def run_sandboxed(
             _read_allow = list(_writable)
             for p in (readable_paths or ()):
                 _read_allow.append(_osp.abspath(p))
-            for p in _system_ro:
-                _read_allow.append(p)
+            _read_allow.extend(_system_ro)
             if target:
                 _read_allow.append(_osp.abspath(target))
             # Under restrict_reads=False, Landlock allows ALL reads.
@@ -681,7 +770,28 @@ def run_sandboxed(
             # state._cli_sandbox_audit_budget; we must serialise
             # the value through the same JSON channel as the
             # filter config. None = use the AuditBudget default.
+            from . import evidence as _evidence_mod
             from . import state as _state
+            from .tracer import _resolve_output_filename as _out_name
+            # F11: create the evidence JSONL up-front in
+            # <run_dir>/.audit/ — a directory excluded from the
+            # target's writable view (mount-ns shadows it with a
+            # read-only tmpfs; Landlock never grants it explicitly).
+            # O_EXCL defeats a pre-created file/symlink; the tracer
+            # inherits the held fd and appends through it, so a path-
+            # level swap cannot redirect records; the inode recorded
+            # here is verified when the file is closed at the end of
+            # this call.
+            try:
+                _evidence_file = _evidence_mod.EvidenceFile.open(
+                    audit_run_dir, _out_name(bool(observe_mode)),
+                )
+            except BaseException:
+                # Same inline cleanup contract as the config-fd
+                # failure below: the fork try/except that normally
+                # owns stub cleanup hasn't been entered yet.
+                _cleanup_stub(_root_dir)
+                raise
             audit_config = {
                 "verbose": bool(audit_verbose),
                 "writable_paths": _writable,
@@ -712,65 +822,44 @@ def run_sandboxed(
                 # tracer, never by sandboxed tools, so no nonce
                 # needed).
                 "observe_nonce": observe_nonce,
+                # Held evidence fd the tracer inherits across its
+                # exec (F11). The number is the parent-side fd value;
+                # the tracer-child branch below clears CLOEXEC on it
+                # so it survives the tracer's execvpe (never the
+                # target's — the target's exec keeps default CLOEXEC).
+                "evidence_fd": _evidence_file.fd,
             }
-            # mkstemp under /tmp; cleaned up after tracer exits.
-            # If the write fails (disk full, EIO mid-flight), the
-            # tracer would later read an empty/partial JSON file →
-            # decode error → exit 1 → parent times out waiting for
-            # ready → audit silently disabled. Better: catch the
-            # write failure HERE, unlink the partial file, raise so
-            # the operator sees an error AT spawn-time rather than
-            # an ambiguous "tracer attach failed" minutes later.
-            import tempfile as _tf
+            # F31: the config (which carries the observe nonce) goes
+            # into an ANONYMOUS fd — memfd on Linux — instead of a
+            # /tmp tempfile a same-UID target could glob and read.
+            # The tracer receives it as /proc/self/fd/N in argv; N is
+            # meaningless to any process other than the tracer, and
+            # the tracer closes it immediately after parsing. If the
+            # write fails (memfd size limit, EIO), raise HERE so the
+            # operator sees an error AT spawn-time rather than an
+            # ambiguous "tracer attach failed" minutes later.
             import json as _json
-            _cfd, _audit_config_path = _tf.mkstemp(
-                prefix="raptor-audit-cfg-", suffix=".json",
-            )
             # sort_keys=True — same rationale as _landlock_audit.py:
             # the serialised audit config is hashed elsewhere for
             # cache lookups; stable ordering keeps the identity
             # contract intact across Python versions.
             _serialised = _json.dumps(audit_config, sort_keys=True).encode("utf-8")
             try:
-                # os.write may write fewer bytes than requested
-                # (rare on local fs, possible on network mounts).
-                # Loop until done or error.
-                _written = 0
-                while _written < len(_serialised):
-                    n = os.write(_cfd, _serialised[_written:])
-                    if n <= 0:
-                        raise OSError(
-                            "audit-config write returned 0 bytes — "
-                            "filesystem may be full or read-only"
-                        )
-                    _written += n
+                _audit_config_fd = _evidence_mod.anonymous_fd(_serialised)
+                _audit_config_arg = _evidence_mod.fd_path(_audit_config_fd)
             except BaseException:
-                # Partial / failed write — unlink the empty/partial
-                # file AND the mkdtemp stub created above, then
+                # Failed to mint the config fd — close the evidence
+                # file AND remove the mkdtemp stub created above, then
                 # propagate so the operator sees the error immediately
                 # rather than an ambiguous tracer timeout later. The
                 # fork try/except below would re-cleanup if reached,
                 # but it isn't reached when we raise here, so do both
                 # cleanups inline.
-                try:
-                    os.close(_cfd)
-                except OSError:
-                    pass
-                try:
-                    os.unlink(_audit_config_path)
-                except OSError:
-                    pass
+                _evidence_file.close(verify=False)
+                _evidence_file = None
                 _cleanup_stub(_root_dir)
-                _audit_config_path = None
                 _audit_engaged = False
                 raise
-            finally:
-                # Close the fd — only if not already closed by the
-                # except branch above.
-                try:
-                    os.close(_cfd)
-                except OSError:
-                    pass
         else:
             # Probe already logged the once-per-process warning with
             # workaround pointers; nothing more to say here. Workflow
@@ -865,21 +954,92 @@ def run_sandboxed(
         death_r, death_w = os.pipe()
         _parent_fds.update({death_r, death_w})
 
+        # Exec-pid pipe (optional): when exec_pid_callback is supplied,
+        # the intermediate child writes the grandchild's pid here right
+        # after forking it; the parent reads it post-go-signal and hands
+        # it to the callback. Data (not EOF) is the success signal — a
+        # child that dies before the fork closes its copies and the
+        # parent reads EOF, degrading to "no callback".
+        pid_r = pid_w = None
+        if exec_pid_callback is not None:
+            pid_r, pid_w = os.pipe()
+            _parent_fds.update({pid_r, pid_w})
+
         # Precompute Landlock / seccomp preexec callables in parent so
         # import errors surface before fork. Each returns a callable we
         # can invoke in the child.
+        # rw_submounts_ok: mount_ns may recursively bind an
+        # extra_ro_paths tree whose locked submounts stay rw at the
+        # mount layer — permitted only when Landlock's unconditional
+        # write mask is there to enforce read-only anyway. Probe in
+        # the parent (fork-safe: the child only closes over a bool).
+        from .landlock import check_landlock_available as _ll_avail
+        # ONLY the conditions that actually build landlock_fn below
+        # count: readable_paths alone builds no write mask, so a
+        # readable-only spawn claiming "Landlock enforces read-only
+        # anyway" would leave the locked-submount rescue bind
+        # writable with nothing masking it. Kernel availability is
+        # necessary but not sufficient — the predicate must mirror
+        # THIS spawn's actual Landlock engagement.
+        _rw_submounts_ok = bool(
+            (writable_paths or allowed_tcp_ports)
+            and _ll_avail()
+        )
+
+        # All-or-nothing persona: without the mount-ns overlay step the
+        # file half (/proc/cpuinfo, /etc/os-release, ...) never applies
+        # while UTS + affinity still would — an inconsistent
+        # half-persona is a fingerprint TELL, worse than none. The
+        # construction-time gate in context.py rejects that
+        # combination; the per-call skip_mount_ns path must not
+        # sidestep it. Drop the persona for this spawn and say so.
+        if persona is not None and (skip_mount_ns or not (target or output)):
+            logger.warning(
+                "sandbox: persona dropped for this spawn — mount-ns "
+                "overlay unavailable (skip_mount_ns=%s, "
+                "target/output present=%s); a UTS/affinity-only "
+                "half-persona would be a fingerprint tell",
+                skip_mount_ns, bool(target or output),
+            )
+            persona = None
         landlock_fn = None
         if writable_paths or allowed_tcp_ports:
             effective_paths = list(writable_paths) if writable_paths else []
+            # readable_paths serves two consumers with different
+            # semantics: the mount-ns bind list (always) and Landlock's
+            # read allowlist (ONLY under restrict_reads — Landlock
+            # treats a non-None readable_paths as "deny reads
+            # everywhere else", docstring in landlock.py). Passing it
+            # unconditionally turned every tool_paths caller into an
+            # accidental floor-less read restriction: the child could
+            # not even read /bin/sh to exec it, failed with EACCES,
+            # and the speculative-failure cache silently degraded the
+            # binary to Landlock-only for the rest of the process.
+            # The setup-report at the bottom of this function already
+            # reported read_allowlist only when restrict_reads — the
+            # enforcement now matches it.
             landlock_fn = _make_landlock_preexec(
                 effective_paths,
                 list(allowed_tcp_ports) if allowed_tcp_ports else None,
-                readable_paths=list(readable_paths) if readable_paths else None,
+                readable_paths=(list(readable_paths)
+                                if (readable_paths and restrict_reads)
+                                else None),
             )
+        # AF_UNIX is safe to allow exactly when this child gets the
+        # mount-ns (fresh tmpfs masks /run's pathname sockets; the rest
+        # of the host is read-only under pivot_root) on top of its
+        # netns (abstract sockets are namespace-scoped). Mirrors the
+        # child-side engagement condition at step 9; a mount failure
+        # aborts the child before the payload runs, and the caller's
+        # fallback re-runs through the preexec path where AF_UNIX
+        # stays blocked. Needed for Python >= 3.14 multiprocessing
+        # (forkserver listener) inside sandboxed tools.
+        _allow_unix = bool((target or output) and not skip_mount_ns)
         seccomp_fn = _make_seccomp_preexec(
             seccomp_profile, block_udp=seccomp_block_udp,
             audit_mode=_audit_engaged,
             observe_mode=bool(observe_mode) and _audit_engaged,
+            allow_unix_sockets=_allow_unix,
         ) if seccomp_profile else None
 
         # Tracer-ready pipe: the tracer subprocess writes a byte once
@@ -904,12 +1064,34 @@ def run_sandboxed(
         # inside the child would fail with ModuleNotFoundError. Binding
         # the function objects here means the child only needs the
         # in-memory references, no filesystem import.
-        _proxy_loopback_fn = None
         _proxy_forwarder_fn = None
+        # Loopback bring-up is bound unconditionally: EVERY fresh netns
+        # needs lo up, not just the proxy-bridge variant. A new netns
+        # has lo DOWN, so self-loopback connects fail ENETUNREACH —
+        # which silently broke every loopback-IPC tool (gradle daemon,
+        # language servers, self-connecting test suites) under
+        # block_network profiles until 2026-08-15. The netns is per-run
+        # and externally unreachable, so a working loopback adds no
+        # exposure — it realises the isolated-loopback semantics the
+        # netns_coordinator and proxy-bridge paths already had.
+        from core.sandbox._proxy_bridge import (
+            _bring_up_loopback as _loopback_up_fn,
+        )
+        # Bridge pairs (listen_port, unix_socket_path): the egress
+        # proxy's relay plus any caller-declared extra loopback
+        # services (LLM dispatcher for credential-proxy CLI children).
+        # Materialised pre-fork so the child needs no filesystem
+        # imports and no non-trivial object construction.
+        _bridge_pairs: list[tuple[int, str]] = []
         if proxy_unix_socket and proxy_forwarder_port:
+            _bridge_pairs.append((proxy_forwarder_port, proxy_unix_socket))
+        if extra_unix_bridges:
+            _bridge_pairs.extend(
+                (int(port), str(path)) for port, path in extra_unix_bridges
+            )
+        if _bridge_pairs:
             from core.sandbox._proxy_bridge import (
-                _bring_up_loopback as _proxy_loopback_fn,
-                _run_forwarder as _proxy_forwarder_fn,
+                _run_bridges as _proxy_forwarder_fn,
             )
 
         # Suppress Python 3.12+ DeprecationWarning about multi-threaded
@@ -926,17 +1108,19 @@ def run_sandboxed(
             )
             child_pid = os.fork()
     except BaseException:
-        # Any failure before fork returns: close opened pipes, unlink
-        # the audit-config tempfile if it was created, and remove the
-        # mkdtemp stub. Without this, a pipe-exhaustion OSError or
-        # import-time failure in preexec construction would leak FDs,
-        # the audit-config file, and a .raptor-sbx-* dir on every call.
+        # Any failure before fork returns: close opened pipes, release
+        # the audit-config fd and evidence file if created, and remove
+        # the mkdtemp stub. Without this, a pipe-exhaustion OSError or
+        # import-time failure in preexec construction would leak FDs
+        # and a .raptor-sbx-* dir on every call.
         _close_leftover()
-        if _audit_config_path is not None:
-            try:
-                os.unlink(_audit_config_path)
-            except OSError:
-                pass
+        if _audit_config_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(_audit_config_fd)
+            _audit_config_fd = None
+        if _evidence_file is not None:
+            _evidence_file.close(verify=False)
+            _evidence_file = None
         _cleanup_stub(_root_dir)
         raise
     if child_pid == 0:
@@ -951,6 +1135,10 @@ def run_sandboxed(
         # Death pipe: child watches death_r; close the write end so only
         # the parent holds it. Parent dying → death_w closes → EOF.
         os.close(death_w)
+        # Exec-pid pipe: the child side only WRITES (pid_w, from the
+        # intermediate after the grandchild fork); close the read end.
+        if pid_r is not None:
+            os.close(pid_r)
         # Which setup step we're about to attempt — the BaseException
         # catch-all below writes this category to status_w so the parent
         # knows whether to degrade (mount) or fail loud (Landlock/seccomp/
@@ -1051,6 +1239,22 @@ def run_sandboxed(
                 ns_flags |= CLONE_NEWUTS
             os.unshare(ns_flags)
 
+            # Step 3.5: bring lo up in the fresh netns. A new netns has
+            # loopback DOWN — bind() works but self-connect fails
+            # ENETUNREACH, breaking every loopback-IPC tool under
+            # block_network. We own the netns (created by our user-ns)
+            # so SIOCSIFFLAGS is permitted even pre-uidmap. Best-effort:
+            # on failure the netns behaves exactly as before this fix.
+            if ns_flags & CLONE_NEWNET:
+                try:
+                    _loopback_up_fn()
+                except OSError as e:
+                    warn_post_fork(
+                        b"_spawn: netns loopback bringup failed "
+                        b"(errno=%d); loopback IPC unavailable in "
+                        b"this sandbox\n" % (e.errno or 0)
+                    )
+
             # Step 4.5: declare PR_SET_PTRACER_ANY under Yama scope 1.
             #
             # Two cases need this:
@@ -1067,7 +1271,15 @@ def run_sandboxed(
             # before newuidmap — PR_SET_PTRACER doesn't require any
             # capability; it just declares permission to be traced.
             if _audit_engaged or seccomp_profile == "debug":
-                try:
+                # prctl failure isn't fatal — Yama may already be
+                # permissive. Tracer's SEIZE is the actual gate.
+                # Legitimate failures: ctypes absent on minimal Python
+                # builds (ImportError), libc lookup/load failure
+                # (OSError), prctl symbol missing on exotic libcs
+                # (AttributeError — ctypes raises it on symbol access).
+                with contextlib.suppress(
+                    ImportError, OSError, AttributeError,
+                ):
                     import ctypes as _c
                     import ctypes.util as _cu
                     _c_libc = _c.CDLL(_cu.find_library("c"),
@@ -1083,10 +1295,6 @@ def run_sandboxed(
                     _c_libc.prctl(_PR_SET_PTRACER,
                                   _c.c_ulong(-1),
                                   0, 0, 0)
-                except Exception:
-                    # prctl failure isn't fatal — Yama may already be
-                    # permissive. Tracer's SEIZE is the actual gate.
-                    pass
 
             # Step 5: tell parent we're ready for newuidmap.
             os.write(p_ready_w, b"R")
@@ -1137,6 +1345,75 @@ def run_sandboxed(
                         % (e.errno or 0)
                     )
 
+            # Step 8.7: proxy netns bridge. When the child is in an
+            # empty netns with an egress proxy, fork a TCP-to-Unix
+            # relay so the target can reach the proxy at
+            # 127.0.0.1:<port> via HTTPS_PROXY. Ordering is
+            # load-bearing twice over: BEFORE Landlock/seccomp so the
+            # forwarder runs unrestricted (it needs AF_UNIX socket()
+            # which seccomp blocks for the target), and BEFORE
+            # setup_mount_ns so the forwarder keeps the HOST mount
+            # view — after pivot_root the per-sandbox tmpfs replaces
+            # /tmp and can shadow the unix socket path (observed with
+            # output=/tmp), leaving the relay unable to reach the
+            # proxy. The loopback bringup already happened at Step 3.5
+            # for every fresh netns; the call here is a harmless
+            # idempotent belt-and-braces retained for the proxy
+            # error-handling contract (bridge is skipped, loudly, if
+            # loopback cannot come up).
+            _forwarder_pid = 0
+            _forwarder_death_w = -1
+            if _proxy_forwarder_fn is not None:
+                try:
+                    _loopback_up_fn()
+                except OSError as e:
+                    warn_post_fork(
+                        b"_spawn: loopback bringup failed (errno=%d)"
+                        b"; proxy bridge will not work\n"
+                        % (e.errno or 0)
+                    )
+                else:
+                    _fwd_death_r, _fwd_death_w = os.pipe()
+                    _forwarder_death_w = _fwd_death_w
+                    import warnings as _w2
+                    with _w2.catch_warnings():
+                        _w2.filterwarnings(
+                            "ignore", category=DeprecationWarning,
+                            message=r".*fork.*may lead to deadlocks.*",
+                        )
+                        _forwarder_pid = os.fork()
+                    if _forwarder_pid == 0:
+                        os.close(_fwd_death_w)
+                        os.close(status_w)
+                        # p_ready_w was closed at step 5 — do NOT close
+                        # here; the fd number may have been reused by
+                        # the death pipe allocated above.
+                        #
+                        # Detach into a PRIVATE COPY of the current
+                        # (pre-pivot) mount tree. Fork order alone does
+                        # not protect the forwarder's filesystem view:
+                        # it shares the mount NAMESPACE entered at Step
+                        # 3, so the target child's pivot_root at Step 9
+                        # would swap the tree under it — the unix
+                        # socket path then reads through the per-
+                        # sandbox tmpfs and the relay dies with ENOENT
+                        # (observed with output=/tmp). unshare(NEWNS)
+                        # here snapshots the host view; capabilities
+                        # are still intact (no exec has happened).
+                        with contextlib.suppress(OSError):
+                            os.unshare(CLONE_NEWNS)
+                        # Broad by design: forked forwarder child must
+                        # reach os._exit(0) on ANY failure — letting an
+                        # exception propagate would run the parent's
+                        # stack in the child.
+                        with contextlib.suppress(BaseException):
+                            _proxy_forwarder_fn(
+                                _bridge_pairs,
+                                _fwd_death_r,
+                            )
+                        os._exit(0)
+                    os.close(_fwd_death_r)
+
             # Step 9: mount-ns pivot_root if target/output supplied.
             # readable_paths from the caller also get bind-mounted at
             # their original paths so they exist inside the pivoted
@@ -1148,7 +1425,8 @@ def run_sandboxed(
                                extra_ro_paths=readable_paths,
                                root_path=_root_dir,
                                persona=persona,
-                               etc_overlay=etc_overlay)
+                               etc_overlay=etc_overlay,
+                               rw_submounts_ok=_rw_submounts_ok)
 
             # Step 9.5 (fingerprint sanitisation): pin sched_setaffinity
             # to a mask of size persona.cpu_count. The persona's
@@ -1195,50 +1473,6 @@ def run_sandboxed(
                     except OSError:
                         pass
                     os._exit(127)
-
-            # Step 9.7: proxy netns bridge. When the child is in an
-            # empty netns with an egress proxy, bring up loopback and
-            # fork a TCP-to-Unix relay so the target can reach the proxy
-            # at 127.0.0.1:<port> via HTTPS_PROXY. The forwarder forks
-            # BEFORE Landlock/seccomp so it runs unrestricted — it needs
-            # AF_UNIX socket() which seccomp blocks for the target.
-            _forwarder_pid = 0
-            _forwarder_death_w = -1
-            if _proxy_loopback_fn is not None and _proxy_forwarder_fn is not None:
-                try:
-                    _proxy_loopback_fn()
-                except OSError as e:
-                    warn_post_fork(
-                        b"_spawn: loopback bringup failed (errno=%d)"
-                        b"; proxy bridge will not work\n"
-                        % (e.errno or 0)
-                    )
-                else:
-                    _fwd_death_r, _fwd_death_w = os.pipe()
-                    _forwarder_death_w = _fwd_death_w
-                    import warnings as _w2
-                    with _w2.catch_warnings():
-                        _w2.filterwarnings(
-                            "ignore", category=DeprecationWarning,
-                            message=r".*fork.*may lead to deadlocks.*",
-                        )
-                        _forwarder_pid = os.fork()
-                    if _forwarder_pid == 0:
-                        os.close(_fwd_death_w)
-                        os.close(status_w)
-                        # p_ready_w was closed at step 5 — do NOT close
-                        # here; the fd number may have been reused by
-                        # the death pipe allocated above.
-                        try:
-                            _proxy_forwarder_fn(
-                                proxy_forwarder_port,
-                                proxy_unix_socket,
-                                _fwd_death_r,
-                            )
-                        except BaseException:
-                            pass
-                        os._exit(0)
-                    os.close(_fwd_death_r)
 
             # Step 10: Landlock. Must run BEFORE seccomp so seccomp
             # inherits PR_SET_NO_NEW_PRIVS.
@@ -1320,14 +1554,15 @@ def run_sandboxed(
                             if k not in _dangerous
                         }
                 else:
-                    exec_env = os.environ.copy()
-                    if strict_env:
-                        from core.config import RaptorConfig
-                        _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
-                        exec_env = {
-                            k: v for k, v in exec_env.items()
-                            if k not in _dangerous
-                        }
+                    # env=None → scrubbed allowlist env, NOT the full
+                    # host environment. The public context.run() path
+                    # always supplies an env; this default only serves
+                    # direct callers of run_sandboxed, and a sandboxed
+                    # child must not inherit ambient secrets because a
+                    # caller skipped the wrapper. Allowlist filtering
+                    # subsumes the DANGEROUS_ENV_VARS strip.
+                    from core.config import RaptorConfig
+                    exec_env = RaptorConfig.get_safe_env()
                 # bounded fork count via RLIMIT_NPROC (prlimit).
                 if nproc_limit and nproc_limit > 0:
                     import resource
@@ -1363,6 +1598,15 @@ def run_sandboxed(
                     os._exit(126)
                 os._exit(125)  # unreachable
             else:
+                # Report the exec'ing grandchild's pid to the parent.
+                # One short ASCII write is atomic (well under PIPE_BUF);
+                # best-effort — if the parent went away the observation
+                # is simply lost and the run proceeds normally.
+                if pid_w is not None:
+                    with contextlib.suppress(OSError):
+                        os.write(pid_w, str(grand).encode("ascii"))
+                    with contextlib.suppress(OSError):
+                        os.close(pid_w)
                 # Intermediate (pid 1's parent-in-parent-ns). Wait
                 # for grandchild and mirror its exit status so the
                 # top-level parent sees the same returncode shape
@@ -1441,7 +1685,7 @@ def run_sandboxed(
                     os.kill(os.getpid(), sig)
                     os._exit(128 + sig)
                 os._exit(255)
-        except BaseException:
+        except BaseException:  # noqa: BLE001
             # Setup failed before exec. Signal WHICH step (status_w) so the
             # parent can degrade (mount) or fail loud (Landlock/seccomp/
             # unshare) deterministically — unspoofably, regardless of exit
@@ -1451,16 +1695,15 @@ def run_sandboxed(
                 status_w, _status_step,
                 _tb.splitlines()[-1] if _tb else "",
             )
-            try:
+            # os.write to a possibly-closed/broken stderr → OSError.
+            with contextlib.suppress(OSError):
                 os.write(2, f"RAPTOR sandbox child failure:\n{traceback.format_exc()}\n".encode())
-            except Exception:
-                pass
             os._exit(126)
 
     # ================ PARENT ================
     # Initialised before the try so the outer finally can reference it
     # regardless of where in the parent flow we exit.
-    tracer_pid: Optional[int] = None
+    tracer_pid: int | None = None
     try:
         # Close the ends the child owns — parent doesn't write to them.
         os.close(p_ready_w)
@@ -1477,6 +1720,12 @@ def run_sandboxed(
         # (BEFORE the tracer fork) so the tracer can't inherit it.
         os.close(death_r)
         _parent_fds.discard(death_r)
+        # Exec-pid pipe: the parent only READS (pid_r); close the write
+        # end now (BEFORE the tracer fork) so only the children hold it
+        # and EOF reaches the parent when they exit pre-fork.
+        if pid_w is not None:
+            os.close(pid_w)
+            _parent_fds.discard(pid_w)
         if capture_output:
             os.close(out_w)
             _parent_fds.discard(out_w)
@@ -1493,10 +1742,14 @@ def run_sandboxed(
             _parent_fds.discard(p_ready_r)
 
         # Step 6: newuidmap / newgidmap.
+        # Prefer raptor-gidmap-allow when available — it writes gid_map
+        # WITHOUT denying setgroups, so targets that call setgroups(2)
+        # during init can start.  Falls back to newgidmap silently.
         host_uid = os.getuid()
         host_gid = os.getgid()
         newuidmap = shutil.which("newuidmap")
-        newgidmap = shutil.which("newgidmap")
+        gidmap_allow = _gidmap_allow_available()
+        newgidmap = gidmap_allow or shutil.which("newgidmap")
         if not newuidmap or not newgidmap:
             _kill_and_reap(child_pid)
             raise FileNotFoundError(
@@ -1505,6 +1758,13 @@ def run_sandboxed(
             )
         try:
             _run_newuidmap(child_pid, newuidmap, ["0", str(host_uid), "1"])
+            # Argument contract with raptor-gidmap-allow (see the header
+            # comment in helpers/raptor-gidmap-allow.c): exactly this
+            # shape — one strictly-numeric triple mapping gid 0 inside
+            # the namespace to the invoker's own gid, on a namespace the
+            # invoker just created. The helper refuses foreign gids,
+            # namespaces owned by other uids, and non-numeric or
+            # oversized mappings (exit 3).
             _run_newuidmap(child_pid, newgidmap, ["0", str(host_gid), "1"])
         except Exception:
             _kill_and_reap(child_pid)
@@ -1567,28 +1827,47 @@ def run_sandboxed(
                 soft, _hard = _resource.getrlimit(
                     _resource.RLIMIT_NOFILE)
                 upper = min(soft, 65536)
-                sync_fd = t_ready_w
-                # Three cases, all handled by the split:
-                #   sync_fd in [3, upper):  two ranges, gap at sync_fd
-                #   sync_fd >= upper:       single range [3, upper)
-                #   sync_fd < 3:            (impossible — pipe()
-                #                            returns >=3 once stdio
-                #                            is open) treat as
-                #                            single range
-                if 3 <= sync_fd < upper:
-                    os.closerange(3, sync_fd)
-                    os.closerange(sync_fd + 1, upper)
-                else:
-                    os.closerange(3, upper)
+                # fds the tracer legitimately needs across its exec:
+                # the sync write end, the audit-config anonymous fd,
+                # and the held evidence fd. closerange over the gaps
+                # between them — one close_range(2) syscall per gap
+                # on Linux 5.9+.
+                _keep = sorted(
+                    fd for fd in (
+                        t_ready_w,
+                        _audit_config_fd,
+                        _evidence_file.fd if _evidence_file is not None
+                        else None,
+                    )
+                    if fd is not None and 3 <= fd < upper
+                )
+                _lo = 3
+                for _k in _keep:
+                    os.closerange(_lo, _k)
+                    _lo = _k + 1
+                os.closerange(_lo, upper)
+                # Clear CLOEXEC on the config + evidence fds so THEY
+                # survive the tracer's execvpe. Only ever done in
+                # this post-fork tracer branch — the target child's
+                # exec keeps the default close-on-exec, so the
+                # nonce-carrying config and the evidence fd never
+                # reach the target's fd table.
+                for _fd in (_audit_config_fd,
+                            _evidence_file.fd if _evidence_file is not None
+                            else None):
+                    if _fd is not None:
+                        os.set_inheritable(_fd, True)
                 # Replace argv via execvpe so the tracer runs as a
                 # clean Python module without inheriting the parent's
                 # complicated state. Pass the target_pid, audit_run_dir,
                 # and the write end of t_ready as the sync_fd argument.
                 #
                 # Use the current Python interpreter for module loading
-                # consistency. -I is isolated mode (ignore env vars,
-                # don't add cwd to sys.path) — same hardening pattern
-                # as raptor-pid1-shim.
+                # consistency. Interpreter lockdown comes from the
+                # hand-crafted 2-key env below, not from `-I` — see
+                # the note ahead of tracer_env for why isolated mode
+                # is deliberately not used here (unlike
+                # raptor-pid1-shim, which can afford it).
                 try:
                     raptor_dir = os.environ.get("RAPTOR_DIR")
                     if raptor_dir is None:
@@ -1609,16 +1888,18 @@ def run_sandboxed(
                         "PATH": "/usr/bin:/bin",
                     }
                     # Build tracer argv: pid, run_dir, sync_fd,
-                    # optional config_path. Config path tells the
-                    # tracer which audit mode (filtered vs verbose)
-                    # to run.
+                    # optional config arg. The config arg is the
+                    # /proc/self/fd/N spelling of the anonymous
+                    # config fd — "self" resolves in the TRACER when
+                    # it opens the path, so the argv value (visible
+                    # in /proc/<pid>/cmdline) discloses nothing.
                     tracer_argv = [
                         sys.executable, "-m", "core.sandbox.tracer",
                         str(child_pid), str(audit_run_dir),
                         str(t_ready_w),
                     ]
-                    if _audit_config_path is not None:
-                        tracer_argv.append(_audit_config_path)
+                    if _audit_config_arg is not None:
+                        tracer_argv.append(_audit_config_arg)
                     # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
                     # tracer_env is hand-crafted: 2 keys
                     # (PYTHONPATH + PATH), no inheritance. Explicitly
@@ -1638,11 +1919,21 @@ def run_sandboxed(
                     # sys.executable not executable. Distinct code
                     # 126 (matches subprocess convention).
                     os._exit(126)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     # Unknown execvpe failure (rare). 125 distinct
                     # from the documented codes so it's not
                     # confused with a successful run.
                     os._exit(125)
+
+            # Parent: drop our copy of the anonymous config fd now —
+            # the tracer holds its own inherited copy (and closes it
+            # right after parsing). Closing here minimises the window
+            # in which /proc/<parent-pid>/fd exposes the nonce-
+            # carrying config to same-UID processes.
+            if _audit_config_fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(_audit_config_fd)
+                _audit_config_fd = None
 
             # Parent: close the write end now (tracer has its own copy).
             # Without this close, the parent's `os.read(t_ready_r, ...)`
@@ -1664,7 +1955,7 @@ def run_sandboxed(
                 # Tracer failed to attach. Reap it (capture exit code
                 # for diagnostics), kill the target child (still
                 # blocked on go-pipe), abort.
-                tracer_status: Optional[int] = None
+                tracer_status: int | None = None
                 try:
                     _, tracer_status = os.waitpid(tracer_pid, 0)
                 except (ChildProcessError, OSError):
@@ -1729,6 +2020,42 @@ def run_sandboxed(
         finally:
             os.close(p_go_w)
             _parent_fds.discard(p_go_w)
+
+        # Step 8.9: deliver the live grandchild pid to the caller.
+        # Blocks (bounded) until the intermediate has forked the
+        # grandchild and written its pid — i.e. after mount/Landlock/
+        # seccomp setup completed. A select timeout (child wedged in
+        # setup) or EOF-without-data (child failed pre-fork; the exec-
+        # status pipe carries the real diagnostic) both degrade to
+        # "callback not invoked".
+        if pid_r is not None:
+            _exec_pid = None
+            try:
+                import select as _pid_sel
+                _pid_ready, _, _ = _pid_sel.select([pid_r], [], [], 15.0)
+                if _pid_ready:
+                    _pid_raw = os.read(pid_r, 64)
+                    if _pid_raw:
+                        try:
+                            _exec_pid = int(_pid_raw)
+                        except ValueError:
+                            _exec_pid = None
+            except OSError:
+                _exec_pid = None
+            finally:
+                try:
+                    os.close(pid_r)
+                except OSError:
+                    pass
+                _parent_fds.discard(pid_r)
+            if _exec_pid is not None and _exec_pid > 0:
+                try:
+                    exec_pid_callback(_exec_pid)
+                except Exception:
+                    logger.warning(
+                        "exec_pid_callback raised; continuing with the "
+                        "sandboxed run", exc_info=True,
+                    )
     except BaseException:
         # Any failure above: kill+reap the target child if it's not
         # already dead, reap the audit tracer if forked, close
@@ -1761,16 +2088,19 @@ def run_sandboxed(
             except Exception:
                 logger.debug("tracer reap during cleanup failed",
                              exc_info=True)
-        if _audit_config_path is not None:
-            try:
-                os.unlink(_audit_config_path)
-            except OSError:
-                pass
-            # Mark unlinked so the final-finally below doesn't try
-            # to unlink an already-removed file. Avoids the
-            # silent-OSError swallowed-and-discarded path AND
-            # keeps the audit lifecycle bookkeeping honest.
-            _audit_config_path = None
+        if _audit_config_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(_audit_config_fd)
+            # Mark closed so the final-finally below doesn't try to
+            # close an already-released fd. Keeps the audit lifecycle
+            # bookkeeping honest.
+            _audit_config_fd = None
+        if _evidence_file is not None:
+            # Finalise the evidence file — the inode verification
+            # inside close() fires its loud warning here too, so a
+            # tamper attempt isn't masked by an unrelated failure.
+            _evidence_file.close()
+            _evidence_file = None
         _close_leftover()
         _cleanup_stub(_root_dir)
         raise
@@ -1870,15 +2200,17 @@ def run_sandboxed(
         # the right thing for any surviving tracees).
         if tracer_pid is not None:
             _reap_tracer(tracer_pid)
-        # Clean up the audit-config file we wrote for the tracer.
-        # The tracer has already read it and finished, so this is
-        # safe even if the tracer is technically still in its post-
-        # _reap_tracer cleanup phase.
-        if _audit_config_path is not None:
-            try:
-                os.unlink(_audit_config_path)
-            except OSError:
-                pass
+        # Release the anonymous config fd (normally already closed
+        # right after the tracer fork; this covers early-exit paths).
+        if _audit_config_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(_audit_config_fd)
+        # Finalise the evidence file AFTER the tracer is reaped so no
+        # writer shares the description any more: verify the on-disk
+        # path still names the inode created at sandbox start (loud
+        # warning on a swap), then close the held fd.
+        if _evidence_file is not None:
+            _evidence_file.close()
         _cleanup_stub(_root_dir)
 
     if os.WIFEXITED(status):

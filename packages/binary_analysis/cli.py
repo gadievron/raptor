@@ -3,11 +3,16 @@
 This is the human-facing router behind ``/binary`` and ``raptor.py binary``.
 It keeps the substrate mechanical:
 
-- ``map`` reads bytes and radare2 output only.
+- ``map`` reads bytes and radare2 output, and can ingest evidence
+  from EXISTING runtime / fuzz run directories (``--runtime-dir`` /
+  ``--fuzz-dir``) — it never executes the target itself.
 - ``runtime`` is an explicit Frida run.
 - ``harness`` turns one evidence-backed ingress into a harness plan.
 - ``fuzz`` is an explicit handoff to the existing fuzz workflow.
-- ``graph`` / ``report`` / ``handoff`` / ``diagram`` are read-only views.
+- ``graph`` / ``report`` / ``handoff`` are read-only views.
+- ``diagram`` is a derived view too, but writes ``diagrams.md`` into
+  the run dir by default (``--stdout`` prints instead; ``--force``
+  overwrites).
 
 The CLI does not silently execute an unknown target during ``map``.
 """
@@ -244,12 +249,18 @@ def _run_active_phase(
     cmd: list[str],
     output_dir: Path,
     trusted: bool = False,
+    llm: bool = False,
 ) -> dict[str, Any]:
+    """``llm=True`` for children that make LLM calls (raptor_fuzzing's
+    crash analysis): they get ``get_llm_env()`` — API keys + the
+    transport-routing family — instead of the bare safe baseline that
+    starves their backend selection. Frida trace phases stay on the
+    safe env."""
     output_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = output_dir / "stdout.log"
     stderr_path = output_dir / "stderr.log"
     try:
-        env = RaptorConfig.get_safe_env()
+        env = RaptorConfig.get_llm_env() if llm else RaptorConfig.get_safe_env()
         if trusted:
             env.setdefault("_RAPTOR_TRUSTED", "1")
         proc = subprocess.run(
@@ -407,6 +418,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
                     kind="fuzz",
                     output_dir=fuzz_dir,
                     trusted=True,
+                    llm=True,
                     cmd=[
                         sys.executable,
                         str(_repo_root() / "raptor_fuzzing.py"),
@@ -431,6 +443,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
                     kind="fuzz_plan",
                     output_dir=fuzz_dir,
                     trusted=True,
+                    llm=True,
                     cmd=[
                         sys.executable,
                         str(_repo_root() / "raptor_fuzzing.py"),
@@ -615,7 +628,10 @@ def _run_fuzz(args: argparse.Namespace) -> int:
         str(target),
         *args.fuzz_args,
     ]
-    return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
+    # get_llm_env: the re-entrant `raptor.py fuzz` builds ITS
+    # children's env from this process's environ — a safe-env hop
+    # here starves the grandchild's LLM crash analysis.
+    return subprocess.call(cmd, env=RaptorConfig.get_llm_env())
 
 
 def _run_harness(args: argparse.Namespace) -> int:

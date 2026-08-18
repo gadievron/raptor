@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import logging
 import threading as _threading
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from ..models import Confidence, Dependency
 
@@ -54,7 +55,7 @@ class RegistryMetaFinding:
                                               # "payload_size_spike"
     dependency: Dependency
     detail: str
-    evidence: Dict[str, Any]
+    evidence: dict[str, Any]
     severity: str
     confidence: Confidence
 
@@ -64,11 +65,11 @@ def scan_deps(
     *,
     pypi_client=None,
     npm_client=None,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     recent_publish_days: int = _RECENT_PUBLISH_DAYS,
     version_publish_days: int = _VERSION_PUBLISH_DAYS,
     dormant_days: int = _DORMANT_DAYS,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     """Run all registry-metadata detectors over direct deps only.
 
     ``pypi_client`` and ``npm_client`` are the canonical
@@ -92,7 +93,7 @@ def scan_deps(
     if not direct_deps_all:
         return []
     seen_keys: set = set()
-    direct_deps: List[Dependency] = []
+    direct_deps: list[Dependency] = []
     for d in direct_deps_all:
         key = (d.ecosystem, d.name)
         if key in seen_keys:
@@ -100,11 +101,24 @@ def scan_deps(
         seen_keys.add(key)
         direct_deps.append(d)
 
-    def _scan_one(dep: Dependency) -> List[RegistryMetaFinding]:
+    def _scan_one(dep: Dependency) -> list[RegistryMetaFinding]:
+        # Fault isolation: one registry document with an unexpected
+        # shape must not abort the whole batch — log the package and
+        # skip it, keeping every other dep's findings intact.
+        try:
+            return _scan_one_unguarded(dep)
+        except Exception:
+            logger.warning(
+                "registry_metadata: scan failed for %s:%s — skipping",
+                dep.ecosystem, dep.name, exc_info=True,
+            )
+            return []
+
+    def _scan_one_unguarded(dep: Dependency) -> list[RegistryMetaFinding]:
         meta = _fetch(dep, pypi_client=pypi_client, npm_client=npm_client)
         if meta is None:
             return []
-        dep_findings: List[RegistryMetaFinding] = []
+        dep_findings: list[RegistryMetaFinding] = []
         dep_findings.extend(_recent_publish_check(dep, meta, now,
                                                    threshold=recent_publish_days))
         dep_findings.extend(_version_publish_check(dep, meta, now,
@@ -127,7 +141,7 @@ def scan_deps(
     # because the JsonCache memo dominates after the first pass and
     # the HTTP-side concurrency is already capped by the egress
     # proxy's tunnel ceiling.
-    out: List[RegistryMetaFinding] = []
+    out: list[RegistryMetaFinding] = []
     if len(direct_deps) <= 4:
         # Below the worker-count threshold the executor's spin-up
         # overhead exceeds the sequential cost. Walk straight.
@@ -150,22 +164,22 @@ def scan_deps(
 class _Meta:
     """Normalised view of a package's registry metadata."""
 
-    first_publish: Optional[datetime] = None
-    latest_publish: Optional[datetime] = None
-    second_latest_publish: Optional[datetime] = None
-    maintainers: List[Dict[str, Any]] = field(default_factory=list)
+    first_publish: datetime | None = None
+    latest_publish: datetime | None = None
+    second_latest_publish: datetime | None = None
+    maintainers: list[dict[str, Any]] = field(default_factory=list)
     # ``[{name, email, joined_at?, last_email_change?}, ...]``
-    previous_maintainers: List[Dict[str, Any]] = field(default_factory=list)
+    previous_maintainers: list[dict[str, Any]] = field(default_factory=list)
     # maintainer list from the second-most-recent version (npm only)
     is_dormant: bool = False
     # True when the gap between latest and second-latest publish exceeds
     # _DORMANT_DAYS.
-    version_sizes: Dict[str, int] = field(default_factory=dict)
+    version_sizes: dict[str, int] = field(default_factory=dict)
     # Per-version unpacked tarball size in bytes. npm-only — populated
     # from ``versions[v].dist.unpackedSize``. Used by the payload-size-
     # spike detector to compare a freshly-installed version against
     # the immediately-prior version's footprint.
-    version_chronology: List[str] = field(default_factory=list)
+    version_chronology: list[str] = field(default_factory=list)
     # Versions in publish-order (oldest → newest). Enables finding the
     # version PUBLISHED IMMEDIATELY BEFORE the dep's installed version
     # without re-walking the raw timestamps dict.
@@ -192,25 +206,25 @@ class _Meta:
 # duplicate parses from a check-then-set race are rare and
 # harmless (whichever thread wins the store overwrites with an
 # identical value).
-_META_CACHE: Dict[tuple, Optional["_Meta"]] = {}
+_META_CACHE: dict[tuple, _Meta | None] = {}
 _META_CACHE_LOCK = _threading.Lock()
 _META_CACHE_SENTINEL = object()
 
 
 def _fetch(
     dep: Dependency, *, pypi_client, npm_client,
-) -> Optional[_Meta]:
+) -> _Meta | None:
     key = (dep.ecosystem, dep.name)
     with _META_CACHE_LOCK:
         cached = _META_CACHE.get(key, _META_CACHE_SENTINEL)
     if cached is not _META_CACHE_SENTINEL:
         return cached  # type: ignore[return-value]
 
-    meta: Optional[_Meta] = None
+    meta: _Meta | None = None
     if dep.ecosystem == "PyPI" and pypi_client is not None:
         try:
             raw = pypi_client.get_metadata(dep.name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("registry_metadata: PyPI fetch error for %r",
                          dep.name, exc_info=True)
             raw = None
@@ -218,7 +232,7 @@ def _fetch(
     elif dep.ecosystem == "npm" and npm_client is not None:
         try:
             raw = npm_client.get_metadata(dep.name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("registry_metadata: npm fetch error for %r",
                          dep.name, exc_info=True)
             raw = None
@@ -289,23 +303,23 @@ def _from_pypi(raw: dict) -> _Meta:
     info = raw.get("info") or {}
     releases = raw.get("releases") or {}
     # Collect per-version first-publish timestamps.
-    version_timestamps: List[datetime] = []
+    version_timestamps: list[datetime] = []
     if isinstance(releases, dict):
         for files in releases.values():
             if not isinstance(files, list):
                 continue
-            earliest_for_ver: Optional[datetime] = None
+            earliest_for_ver: datetime | None = None
             for f in files:
                 if not isinstance(f, dict):
                     continue
                 ts = _parse_iso(f.get("upload_time_iso_8601"))
-                if ts:
-                    if earliest_for_ver is None or ts < earliest_for_ver:
-                        earliest_for_ver = ts
+                if ts and (earliest_for_ver is None
+                           or ts < earliest_for_ver):
+                    earliest_for_ver = ts
             if earliest_for_ver is not None:
                 version_timestamps.append(earliest_for_ver)
     version_timestamps.sort()
-    maintainers: List[Dict[str, Any]] = []
+    maintainers: list[dict[str, Any]] = []
     for field_name in ("maintainer", "author"):
         n = info.get(field_name)
         if not (isinstance(n, str) and n.strip()):
@@ -360,7 +374,7 @@ def _from_npm(raw: dict) -> _Meta:
     """
     times = raw.get("time") or {}
     # Collect per-version timestamps (excluding created/modified meta-keys).
-    version_entries: List[tuple] = []  # (datetime, version_key)
+    version_entries: list[tuple] = []  # (datetime, version_key)
     if isinstance(times, dict):
         for k, v in times.items():
             if k in ("created", "modified"):
@@ -382,7 +396,7 @@ def _from_npm(raw: dict) -> _Meta:
 
     # Top-level maintainers (current).
     raw_maint = raw.get("maintainers") or []
-    maintainers: List[Dict[str, Any]] = []
+    maintainers: list[dict[str, Any]] = []
     if isinstance(raw_maint, list):
         for m in raw_maint:
             if isinstance(m, dict):
@@ -393,7 +407,7 @@ def _from_npm(raw: dict) -> _Meta:
 
     # Per-version maintainer comparison: extract maintainer list from
     # the second-most-recent version to detect maintainer additions.
-    previous_maintainers: List[Dict[str, Any]] = []
+    previous_maintainers: list[dict[str, Any]] = []
     versions_obj = raw.get("versions") or {}
     if isinstance(versions_obj, dict) and second_latest_ver:
         prev_ver_data = versions_obj.get(second_latest_ver)
@@ -413,7 +427,7 @@ def _from_npm(raw: dict) -> _Meta:
     # empty and the payload-size detector skips them. Don't fall
     # back to ``dist.size`` (compressed tarball) — that's not
     # directly comparable to the unpacked-bytes value.
-    version_sizes: Dict[str, int] = {}
+    version_sizes: dict[str, int] = {}
     if isinstance(versions_obj, dict):
         for ver, ver_data in versions_obj.items():
             if not isinstance(ver_data, dict):
@@ -444,7 +458,7 @@ def _from_npm(raw: dict) -> _Meta:
 def _recent_publish_check(
     dep: Dependency, meta: _Meta, now: datetime,
     *, threshold: int = _RECENT_PUBLISH_DAYS,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     if meta.first_publish is None:
         return []
     age_days = (now - meta.first_publish).days
@@ -476,7 +490,7 @@ def _version_publish_check(
     dep: Dependency, meta: _Meta, now: datetime,
     *, threshold: int = _VERSION_PUBLISH_DAYS,
     dormant_threshold: int = _DORMANT_DAYS,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     """Flag when the latest version was published within ``threshold`` days.
 
     Fresh publishes on dormant packages are particularly suspicious --
@@ -511,7 +525,7 @@ def _version_publish_check(
         f"latest version of {dep.ecosystem}:{dep.name} was published "
         f"{age_days} days ago{dormant_detail}"
     )
-    evidence: Dict[str, Any] = {
+    evidence: dict[str, Any] = {
         "latest_publish": meta.latest_publish.isoformat(),
         "version_age_days": age_days,
         "dormant": True,                    # only dormant fires now
@@ -537,7 +551,7 @@ def _version_publish_check(
 
 def _maintainer_change_check(
     dep: Dependency, meta: _Meta, now: datetime,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     """Detect maintainer-list changes between versions.
 
     Two strategies:
@@ -548,7 +562,7 @@ def _maintainer_change_check(
        ``joined_at`` is present, flag additions within
        ``_MAINTAINER_CHANGE_DAYS``.
     """
-    findings: List[RegistryMetaFinding] = []
+    findings: list[RegistryMetaFinding] = []
 
     # Strategy 1: per-version comparison.
     if meta.previous_maintainers:
@@ -581,7 +595,7 @@ def _maintainer_change_check(
 
     # Strategy 2: joined_at enrichment (fires only when data present).
     cutoff = now - timedelta(days=_MAINTAINER_CHANGE_DAYS)
-    recent: List[Dict[str, Any]] = []
+    recent: list[dict[str, Any]] = []
     for m in meta.maintainers:
         joined = m.get("joined_at")
         if isinstance(joined, str):
@@ -615,7 +629,7 @@ def _maintainer_change_check(
 
 def _maintainer_account_change_check(
     dep: Dependency, meta: _Meta, now: datetime,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     """Heuristic for the Axios pattern: maintainer email changed within
     ``_MAINTAINER_CHANGE_DAYS`` of a new release.
 
@@ -630,7 +644,7 @@ def _maintainer_account_change_check(
     cutoff = now - timedelta(days=_MAINTAINER_CHANGE_DAYS)
     if meta.latest_publish < cutoff:
         return []
-    suspect: List[Dict[str, Any]] = []
+    suspect: list[dict[str, Any]] = []
     for m in meta.maintainers:
         chg = m.get("last_email_change")
         if isinstance(chg, str):
@@ -698,7 +712,7 @@ _PAYLOAD_SIZE_RATIO_THRESHOLD = 5.0
 
 def _payload_size_check(
     dep: Dependency, meta: _Meta,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     """Compare ``dep.version`` size to the immediately-prior version.
 
     Returns ``[]`` when:
@@ -784,7 +798,7 @@ def _payload_size_check(
 
 def _low_bus_factor_check(
     dep: Dependency, meta: _Meta,
-) -> List[RegistryMetaFinding]:
+) -> list[RegistryMetaFinding]:
     """Flag packages with a single maintainer.
 
     Single-maintainer packages are inherently more vulnerable to account
@@ -823,7 +837,7 @@ def _low_bus_factor_check(
 # ---------------------------------------------------------------------------
 
 def _escalate_severity(
-    findings: List[RegistryMetaFinding],
+    findings: list[RegistryMetaFinding],
     meta: _Meta,
 ) -> None:
     """Adjust severities based on which signals co-occur for one dep.
@@ -874,14 +888,21 @@ def _escalate_severity(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_iso(value: Any) -> Optional[datetime]:
+def _parse_iso(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     s = value.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(s)
+        dt = datetime.fromisoformat(s)
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        # Some registry documents carry offset-less timestamps.
+        # Normalise to UTC so every comparison downstream is
+        # aware-vs-aware — an aware-vs-naive compare raises
+        # TypeError and would kill the whole scan.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 __all__ = ["RegistryMetaFinding", "scan_deps"]

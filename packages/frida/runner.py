@@ -18,15 +18,18 @@ tests can monkey-patch frida.* without import-time side effects.
 from __future__ import annotations
 
 import json
+import logging
 import signal
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .platform import HostInfo, detect_host
 
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "FridaUnavailable",
@@ -60,9 +63,9 @@ class TargetSpec:
     is set after :func:`parse_target`.
     """
     raw: str
-    pid: Optional[int] = None
-    name: Optional[str] = None         # process name OR bundle id
-    binary: Optional[str] = None       # filesystem path → spawn
+    pid: int | None = None
+    name: str | None = None         # process name OR bundle id
+    binary: str | None = None       # filesystem path → spawn
 
     @property
     def kind(self) -> str:
@@ -102,7 +105,7 @@ class RunConfig:
     script_source: str
     script_origin: str                  # "template:<name>" or "file:<path>"
     duration_sec: float = 60.0
-    host: Optional[str] = None          # frida-server host[:port]
+    host: str | None = None          # frida-server host[:port]
     use_usb: bool = False
     spawn: bool = False
     unsafe_attach: bool = False         # informational; logged in metadata
@@ -114,12 +117,12 @@ class RunResult:
     fields are what gets written to ``metadata.json``.
     """
     ok: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     events_captured: int = 0
     duration_actual_sec: float = 0.0
-    resolved_pid: Optional[int] = None
-    device_id: Optional[str] = None
-    host_info: Optional[HostInfo] = None
+    resolved_pid: int | None = None
+    device_id: str | None = None
+    host_info: HostInfo | None = None
 
 
 def resolve_template(name: str) -> Path:
@@ -150,14 +153,36 @@ def list_templates() -> list[str]:
     return sorted(p.stem for p in TEMPLATES_DIR.glob("*.js"))
 
 
-def load_script_source(template: Optional[str],
-                      script_path: Optional[str]) -> tuple[str, str]:
+# Bundled-template slot markers → JSON payload producers. Marker-driven
+# so any template can opt in; the slot syntax keeps an unrendered
+# template valid JS (empty list) rather than a ReferenceError.
+_PARSER_HOOKS_SLOT = "/*__PARSER_HOOKS__*/ []"
+
+
+def _render_template_slots(source: str) -> str:
+    """Fill generated-vocabulary slots in a bundled template.
+
+    The parser hook-name list is generated from the central function
+    taxonomy (``core.function_taxonomy.PARSER_FUNCS``) so the JS never
+    carries a hand-copied mirror of it.
+    """
+    if _PARSER_HOOKS_SLOT in source:
+        from core.function_taxonomy import PARSER_FUNCS
+
+        payload = json.dumps(sorted(PARSER_FUNCS))
+        source = source.replace(_PARSER_HOOKS_SLOT, payload)
+    return source
+
+
+def load_script_source(template: str | None,
+                      script_path: str | None) -> tuple[str, str]:
     """Return (source, origin_label). Exactly one input must be set."""
     if bool(template) == bool(script_path):
         raise ValueError("specify exactly one of --template or --script")
     if template:
         path = resolve_template(template)
-        return path.read_text(encoding="utf-8"), f"template:{template}"
+        source = _render_template_slots(path.read_text(encoding="utf-8"))
+        return source, f"template:{template}"
     assert script_path is not None
     p = Path(script_path).resolve()
     if not p.is_file():
@@ -219,7 +244,7 @@ def _attach_or_spawn(frida_mod: Any, device: Any, cfg: RunConfig
 
 
 def run(cfg: RunConfig,
-        on_event: Optional[Callable[[dict], None]] = None,
+        on_event: Callable[[dict], None] | None = None,
         frida_mod_override: Any = None) -> RunResult:
     """Execute one Frida session.
 
@@ -249,7 +274,7 @@ def run(cfg: RunConfig,
     events_lock = threading.Lock()
     event_count = {"n": 0}
 
-    def _message_cb(message: dict, data: Optional[bytes]) -> None:
+    def _message_cb(message: dict, data: bytes | None) -> None:
         """Frida's on('message') callback. Both ``send()`` payloads
         (type='send') and uncaught script errors (type='error')
         flow through here. We persist both so a hook crashing
@@ -285,13 +310,13 @@ def run(cfg: RunConfig,
         if on_event is not None:
             try:
                 on_event(record)
-            except Exception:
-                pass  # never let a test callback break the run
+            except Exception:  # never let a test callback break the run
+                logger.debug("frida on_event callback raised", exc_info=True)
 
     started = time.monotonic()
     session = None
     device = None
-    pid: Optional[int] = None
+    pid: int | None = None
     spawned = False
 
     try:
@@ -333,22 +358,22 @@ def run(cfg: RunConfig,
         result.ok = True
     except FridaUnavailable:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — converted to result.error; report/metadata still written in finally
         result.ok = False
         result.error = f"{type(e).__name__}: {e}"
     finally:
         try:
             if session is not None:
                 session.detach()
-        except Exception:
-            pass
+        except Exception:  # best-effort cleanup on an already-failed path
+            logger.debug("frida session detach failed", exc_info=True)
         # Kill the spawned process so it does not remain permanently
         # suspended when attach/create_script/load/resume failed.
         if spawned and device is not None and pid is not None:
             try:
                 device.kill(pid)
-            except Exception:
-                pass
+            except Exception:  # best-effort cleanup on an already-failed path
+                logger.debug("frida spawned-process kill failed", exc_info=True)
         result.duration_actual_sec = round(time.monotonic() - started, 3)
         result.events_captured = event_count["n"]
         _write_metadata(cfg, result)

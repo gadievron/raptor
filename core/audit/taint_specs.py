@@ -236,9 +236,12 @@ def spec_from_summary(
     summary: Dict[str, Any],
 ) -> Optional[TaintSpec]:
     """Extract a taint spec from a function summary if the function
-    is a plausible source, sink, sanitiser, or propagator.
+    is a plausible source, sink, or sanitiser.
 
-    Returns None if the function doesn't match any taint role.
+    Returns None if the function doesn't match any of those roles.
+    Propagator specs are never produced here — the name heuristic
+    cannot identify propagation; they enter the spec set via other
+    paths.
     """
     role = classify_role_heuristic(function)
     if role is None:

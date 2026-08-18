@@ -3,6 +3,7 @@
 from core.audit.cwe_dispatch import (
     codeql_query_for_cwe,
     cocci_rule_for_cwe,
+    dark_verify_applicable,
     joern_applicable,
     lookup,
     sinks_for_cwe,
@@ -87,3 +88,52 @@ class TestJoernApplicable:
 
     def test_unknown_not_applicable(self):
         assert not joern_applicable("CWE-99999")
+
+
+class TestDarkVerifyApplicable:
+    def test_auth_bypass(self):
+        assert dark_verify_applicable("CWE-287")
+
+    def test_missing_auth(self):
+        assert dark_verify_applicable("CWE-862")
+
+    def test_incorrect_auth(self):
+        assert dark_verify_applicable("CWE-863")
+
+    def test_format_string(self):
+        assert dark_verify_applicable("CWE-134")
+
+    def test_integer_overflow(self):
+        assert dark_verify_applicable("CWE-190")
+
+    def test_use_after_free(self):
+        assert dark_verify_applicable("CWE-416")
+
+    def test_uninitialised(self):
+        assert dark_verify_applicable("CWE-457")
+
+    def test_buffer_overflow_not_eligible(self):
+        assert not dark_verify_applicable("CWE-120")
+
+    def test_concurrency_not_eligible(self):
+        assert not dark_verify_applicable("CWE-362")
+
+    def test_unknown_not_eligible(self):
+        assert not dark_verify_applicable("CWE-99999")
+
+
+class TestDarkVerifyStatuses:
+    """Every dark_verify family outside the original auth trio declares
+    a status filter — a clean outcome must not spend a witness call."""
+
+    def test_expanded_families_filter_statuses(self):
+        from core.audit.cwe_dispatch import dark_verify_statuses
+        for cwe in ("CWE-134", "CWE-190", "CWE-416", "CWE-457"):
+            assert dark_verify_statuses(cwe) == frozenset(
+                {"dark", "suspicious", "finding"}
+            ), cwe
+
+    def test_auth_families_keep_unfiltered_behaviour(self):
+        from core.audit.cwe_dispatch import dark_verify_statuses
+        for cwe in ("CWE-287", "CWE-862", "CWE-863"):
+            assert dark_verify_statuses(cwe) is None

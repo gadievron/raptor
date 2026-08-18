@@ -135,7 +135,9 @@ class CorpusGenerator:
                         logger.info("Detected command: %s", cmd)
 
                 if self.detected_commands:
-                    analysis["commands_detected"] = list(self.detected_commands.keys())
+                    # Sorted for a deterministic report regardless of
+                    # whether the source-context path below re-emits it.
+                    analysis["commands_detected"] = sorted(self.detected_commands)
 
                 logger.info("Binary analysis complete: %d formats, %d commands detected", len(analysis['formats_detected']), len(self.detected_commands))
 

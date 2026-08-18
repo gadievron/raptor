@@ -14,100 +14,19 @@ calls, then exercises the cache via the real public API
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Tuple
 
+from core.testing import (
+    FakeStructuredProvider,
+    install_provider,
+    make_test_client,
+)
 
-from core.llm.client import LLMClient
-from core.llm.config import LLMConfig, ModelConfig
-
-
-class _FakeProvider:
-    """Stand-in provider whose ``generate_structured`` returns a canned
-    result and counts invocations."""
-
-    def __init__(self, result: Dict[str, Any], raw: str = "raw-stub"):
-        self.result = result
-        self.raw = raw
-        self.calls = 0
-        self.total_cost = 0.0
-        self.total_tokens = 0
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.call_count = 0
-        self.total_duration = 0.0
-
-    def generate_structured(
-        self, prompt: str, schema: Dict[str, Any],
-        system_prompt: str | None = None,
-        **kwargs,
-    ) -> Tuple[Dict[str, Any], str]:
-        self.calls += 1
-        # Capture last-call kwargs so tests can assert plumbing
-        # (batch 331). Mimic what real providers do: bump
-        # cost/tokens so the client records non-zero deltas.
-        # Cache hits should bypass this entirely.
-        self.last_kwargs = dict(kwargs)
-        self.total_cost += 0.001
-        self.total_tokens += 100
-        return self.result, self.raw
-
-
-def _client(
-    tmp_path: Path, *,
-    enable_caching: bool = True,
-    cache_ttl_seconds: float | None = None,
-    cache_max_entries: int | None = None,
-) -> LLMClient:
-    """Build a minimally-configured LLMClient backed by a single fake
-    provider keyed under the primary_model identity. Skips the real
-    constructor's health-check + provider creation paths so we can run
-    without API keys."""
-    cfg = LLMConfig.__new__(LLMConfig)
-    cfg.primary_model = ModelConfig(
-        provider="anthropic",
-        model_name="test-primary",
-        max_context=200000,
-        api_key="not-used",
-    )
-    cfg.fallback_models = []
-    cfg.specialized_models = {}
-    cfg.enable_fallback = False
-    cfg.max_retries = 1
-    cfg.retry_delay = 0.0
-    cfg.retry_delay_remote = 0.0
-    cfg.enable_caching = enable_caching
-    cfg.cache_dir = tmp_path / "llm_cache"
-    cfg.cache_ttl_seconds = cache_ttl_seconds
-    cfg.cache_max_entries = cache_max_entries
-    cfg.enable_cost_tracking = False
-    cfg.max_cost_per_scan = 100.0
-    cfg.scorecard_enabled = False  # avoid latent class-default pollution if a future code path consults scorecard
-
-    if enable_caching:
-        cfg.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    client = LLMClient.__new__(LLMClient)
-    import threading
-    from collections import OrderedDict
-    client.config = cfg
-    client.providers = {}
-    client.total_cost = 0.0
-    client.request_count = 0
-    client.cache_hits = 0
-    client.task_type_costs = {}
-    client._daily_quota_exhausted = set()
-    client._stats_lock = threading.RLock()
-    client._key_locks = OrderedDict()
-    client._key_locks_guard = threading.Lock()
-    client._key_locks_cap = 4096
-    return client
-
-
-def _install_provider(client: LLMClient, provider: _FakeProvider) -> None:
-    """Wire a fake provider into ``client.providers`` under the key
-    that ``_get_provider`` looks up."""
-    pm = client.config.primary_model
-    client.providers[f"{pm.provider}:{pm.model_name}"] = provider
+# Shared scaffolding (core/testing) under this suite's historical
+# local names — the definitions used to live here and had already
+# been copy-drifted into sibling suites.
+_FakeProvider = FakeStructuredProvider
+_client = make_test_client
+_install_provider = install_provider
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +74,9 @@ def test_schema_key_order_does_not_affect_cache(tmp_path: Path) -> None:
     to the same key — otherwise consumers that build schemas from
     keyword args would get spurious misses."""
     client = _client(tmp_path)
-    fake = _FakeProvider({"k": "v"})
+    # Result must conform to the schema below — the strict schema floor
+    # rejects responses carrying fields outside the declared properties.
+    fake = _FakeProvider({"a": "v"})
     _install_provider(client, fake)
 
     schema_1 = {"type": "object", "properties": {"a": {"type": "string"},
@@ -499,3 +420,41 @@ def test_eviction_disabled_when_cap_unset(tmp_path: Path) -> None:
 
     files = list(client.config.cache_dir.glob("*.json"))
     assert len(files) == 20
+
+
+def test_cache_cap_defaults_to_bounded():
+    """The config default must bound the cache: unbounded growth is
+    opt-in (cache_max_entries=None), not the default. Pre-fix the
+    default was None and out/llm_cache grew for the life of the
+    install."""
+    from core.llm.config import LLMConfig
+    cfg = LLMConfig()
+    assert cfg.cache_max_entries is not None
+    assert cfg.cache_max_entries > 0
+
+
+class TestCacheTtlDefault:
+    """TTL defaults to 24h (operator decision 2026-08-15: most targets
+    aren't re-audited across days, and the cache key already pins the
+    model name — the TTL guards same-name behaviour drift)."""
+
+    def test_default_is_24h(self, monkeypatch):
+        monkeypatch.delenv("RAPTOR_LLM_CACHE_TTL_S", raising=False)
+        from core.llm.config import LLMConfig
+        assert LLMConfig().cache_ttl_seconds == 86_400.0
+
+    def test_env_overrides_seconds(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", "3600")
+        from core.llm.config import LLMConfig
+        assert LLMConfig().cache_ttl_seconds == 3600.0
+
+    def test_env_none_disables_expiry(self, monkeypatch):
+        for raw in ("none", "off", "0", "-1"):
+            monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", raw)
+            from core.llm.config import LLMConfig
+            assert LLMConfig().cache_ttl_seconds is None, raw
+
+    def test_garbled_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", "tomorrow")
+        from core.llm.config import LLMConfig
+        assert LLMConfig().cache_ttl_seconds == 86_400.0

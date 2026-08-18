@@ -29,14 +29,15 @@ import functools
 import os
 import sys
 import threading
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 
 class _CacheInfo:
     """Minimal stand-in for ``functools.lru_cache``'s ``CacheInfo`` so
     callers using ``cache_info()`` (e.g. ``get_commit``'s hit/miss
     telemetry) keep working after the lru_cache → _cache_unless_none swap."""
-    __slots__ = ("hits", "misses", "currsize")
+    __slots__ = ("currsize", "hits", "misses")
 
     def __init__(self, hits: int, misses: int, currsize: int):
         self.hits = hits
@@ -85,10 +86,9 @@ def _cache_unless_none(func: Callable) -> Callable:
     wrapper.cache_info = cache_info  # type: ignore[attr-defined]
     return wrapper
 
-from core.http import HttpError  # noqa: E402
-from core.http.egress_backend import EgressClient  # noqa: E402
-
-from cve_diff.infra.rate_limit import TokenBucket  # noqa: E402
+from core.http import HttpError
+from core.http.egress_backend import EgressClient
+from cve_diff.infra.rate_limit import TokenBucket
 
 _UNAUTH_CAPACITY = 50
 _AUTH_CAPACITY = 5000
@@ -182,7 +182,7 @@ def _headers() -> dict[str, str]:
     return h
 
 
-def _get(url: str) -> Optional[dict[str, Any]]:
+def _get(url: str) -> dict[str, Any] | None:
     """GET ``url`` against the GitHub API. Returns JSON dict or None.
 
     Returns None on any error (network, timeout, non-2xx). On 401/403/429
@@ -210,7 +210,7 @@ def _get(url: str) -> Optional[dict[str, Any]]:
 
 
 @_cache_unless_none
-def get_repo(slug: str) -> Optional[dict[str, Any]]:
+def get_repo(slug: str) -> dict[str, Any] | None:
     """``GET /repos/{slug}`` — fork/archived/stars/created_at/language/size."""
     if not slug or "/" not in slug:
         return None
@@ -218,7 +218,7 @@ def get_repo(slug: str) -> Optional[dict[str, Any]]:
 
 
 @_cache_unless_none
-def get_languages(slug: str) -> Optional[dict[str, Any]]:
+def get_languages(slug: str) -> dict[str, Any] | None:
     """``GET /repos/{slug}/languages`` — used by shape_dynamic."""
     if not slug or "/" not in slug:
         return None
@@ -226,7 +226,7 @@ def get_languages(slug: str) -> Optional[dict[str, Any]]:
 
 
 @_cache_unless_none
-def commit_exists(slug: str, sha: str) -> Optional[bool]:
+def commit_exists(slug: str, sha: str) -> bool | None:
     """Return True if ``sha`` resolves in ``slug``, False on 404, None on skip.
 
     Used for commit-graph membership checks: if a fix_commit doesn't resolve
@@ -258,7 +258,7 @@ def commit_exists(slug: str, sha: str) -> Optional[bool]:
 
 
 @_cache_unless_none
-def _get_commit_cached(slug: str, sha: str) -> Optional[dict[str, Any]]:
+def _get_commit_cached(slug: str, sha: str) -> dict[str, Any] | None:
     """Inner cached implementation of ``get_commit``. Wrapped by the
     public ``get_commit`` so we can record hit/miss counters via
     ``api_status`` without losing lru_cache semantics."""
@@ -267,7 +267,7 @@ def _get_commit_cached(slug: str, sha: str) -> Optional[dict[str, Any]]:
     return _get(f"https://api.github.com/repos/{slug}/commits/{sha}")
 
 
-def get_commit(slug: str, sha: str) -> Optional[dict[str, Any]]:
+def get_commit(slug: str, sha: str) -> dict[str, Any] | None:
     """``GET /repos/{slug}/commits/{sha}`` — full commit body (files + parents).
 
     Memoized via ``_get_commit_cached`` so `get_commit_files` and the
@@ -299,7 +299,7 @@ def get_commit(slug: str, sha: str) -> Optional[dict[str, Any]]:
     return result
 
 
-def _files_from_commit(data: Optional[dict[str, Any]]) -> Optional[list[str]]:
+def _files_from_commit(data: dict[str, Any] | None) -> list[str] | None:
     if data is None:
         return None
     files = data.get("files")
@@ -316,7 +316,7 @@ def _files_from_commit(data: Optional[dict[str, Any]]) -> Optional[list[str]]:
     return out
 
 
-def get_commit_files(slug: str, sha: str) -> Optional[list[str]]:
+def get_commit_files(slug: str, sha: str) -> list[str] | None:
     """Return the list of changed filenames in ``sha``, or None on skip.
 
     Backs `commit_shape_score` — classifying the fix commit's actual diff by
@@ -329,30 +329,6 @@ def get_commit_files(slug: str, sha: str) -> Optional[list[str]]:
     treats that as skip-worthy (rare but uninformative).
     """
     return _files_from_commit(get_commit(slug, sha))
-
-
-def get_parent_commit_files(slug: str, sha: str) -> Optional[list[str]]:
-    """Return the changed-files list of ``sha``'s first parent, or None.
-
-    Backs `parent_chain_score`. First fetches the candidate commit (memoized
-    with `get_commit`), extracts ``parents[0].sha``, then fetches the parent
-    commit to pull its files. Returns None on any fetch failure, on a root
-    commit (no parents), or on a merge commit whose mainline parent isn't
-    resolvable — all treated as "can't tell" skips upstream.
-    """
-    commit = get_commit(slug, sha)
-    if commit is None:
-        return None
-    parents = commit.get("parents") or []
-    if not parents or not isinstance(parents, list):
-        return None
-    first = parents[0]
-    if not isinstance(first, dict):
-        return None
-    parent_sha = first.get("sha")
-    if not isinstance(parent_sha, str) or not parent_sha:
-        return None
-    return _files_from_commit(get_commit(slug, parent_sha))
 
 
 def reset_for_tests() -> None:

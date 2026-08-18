@@ -294,6 +294,42 @@ class TestLoadChecklist:
         result = load_checklist(tmp_path)
         assert result == {}
 
+    def test_load_malformed_returns_empty(self, tmp_path: Path):
+        (tmp_path / "checklist.json").write_text("{not json")
+        assert load_checklist(tmp_path) == {}
+
+    def test_load_non_dict_returns_empty(self, tmp_path: Path):
+        # A JSON array is corrupt for every consumer that calls .get()
+        # on the checklist — the shared accessor normalises it to {}.
+        (tmp_path / "checklist.json").write_text("[1, 2, 3]")
+        assert load_checklist(tmp_path) == {}
+
+    def test_load_routes_through_shared_accessor(self, tmp_path: Path,
+                                                 monkeypatch):
+        # The audit read side must share the inventory writers' flock +
+        # project-symlink resolution (torn-read protection).
+        import core.inventory as inv
+        calls = []
+
+        def _spy(output_dir):
+            calls.append(Path(output_dir))
+            return {"spied": True}
+
+        monkeypatch.setattr(inv, "read_checklist", _spy)
+        assert load_checklist(tmp_path) == {"spied": True}
+        assert calls == [tmp_path]
+
+    def test_load_reads_project_checklist_through_symlink(
+            self, tmp_path: Path):
+        project = tmp_path / "project"
+        run_dir = project / "run-001"
+        run_dir.mkdir(parents=True)
+        (project / "checklist.json").write_text(
+            json.dumps({"version": "project-level"}))
+        (run_dir / "checklist.json").symlink_to("../checklist.json")
+
+        assert load_checklist(run_dir)["version"] == "project-level"
+
 
 class TestLoadContextMap:
     def test_load_existing(self, tmp_path: Path):
@@ -459,3 +495,55 @@ def test_dead_flag_set_for_all_dead_code_signals():
     assert by_name["after_abort"].get("dead") is True
     assert by_name["excluded"].get("dead") is True
     assert "dead" not in by_name["live"]
+
+
+class TestCoveredKeyInjectivity:
+    """Colon-bearing filenames must not alias another function's
+    coverage — the covered-set keys use the injective encoding."""
+
+    def _checklist(self):
+        return {
+            "target_path": "/tmp/target",
+            "files": [
+                {
+                    "path": "src/a.c:evil",
+                    "items": [
+                        {"name": "f", "line_start": 1, "line_end": 20},
+                    ],
+                },
+                {
+                    "path": "src/a.c",
+                    "items": [
+                        {"name": "evil:f", "line_start": 1, "line_end": 20},
+                    ],
+                },
+            ],
+        }
+
+    def test_coverage_record_does_not_alias(self):
+        records = [{
+            "tool": "semgrep",
+            "files": {
+                "src/a.c:evil": {"functions": {"f": {"status": "clean"}}},
+            },
+            "files_examined": ["src/a.c:evil"],
+        }]
+        gaps = compute_gaps(self._checklist(), records)
+        remaining = {(g["file"], g["name"]) for g in gaps}
+        assert ("src/a.c", "evil:f") in remaining
+        assert ("src/a.c:evil", "f") not in remaining
+
+    def test_journal_fold_does_not_alias(self, tmp_path):
+        from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
+        append_entry(tmp_path, ReviewJournalEntry(
+            ts=now_iso(),
+            run_id="test",
+            file="src/a.c:evil",
+            function="f",
+            verdict="clean",
+            source_hash="",
+        ))
+        gaps = compute_gaps(self._checklist(), [], out_dir=tmp_path)
+        remaining = {(g["file"], g["name"]) for g in gaps}
+        assert ("src/a.c", "evil:f") in remaining
+        assert ("src/a.c:evil", "f") not in remaining

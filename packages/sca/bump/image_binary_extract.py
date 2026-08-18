@@ -37,9 +37,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
-from typing import List, Optional
 
 from core.oci.blob import extract_files_from_layer
 from core.oci.client import OciRegistryClient, RegistryError
@@ -66,12 +66,12 @@ def fetch_image_binary(
     image_ref_str: str,
     *,
     client: OciRegistryClient,
-    binary_path: Optional[str] = None,
+    binary_path: str | None = None,
     platform_os: str = "linux",
     platform_arch: str = "amd64",
-    out_dir: Optional[Path] = None,
+    out_dir: Path | None = None,
     max_layer_bytes: int = DEFAULT_MAX_LAYER_BYTES,
-) -> Optional[Path]:
+) -> Path | None:
     """Pull one binary out of ``image_ref_str``.
 
     ``binary_path`` is an absolute in-image path. When ``None``,
@@ -167,7 +167,7 @@ def fetch_image_binary(
     extract_set = {wanted_path}
     if whiteout_path:
         extract_set.add(whiteout_path)
-    final_bytes: Optional[bytes] = None
+    final_bytes: bytes | None = None
     for layer in image_manifest.layers:
         if layer.size and layer.size > max_layer_bytes:
             continue
@@ -203,16 +203,27 @@ def fetch_image_binary(
         if out_dir is None:
             out_dir = Path(tempfile.gettempdir())
         out_dir.mkdir(parents=True, exist_ok=True)
-        # Name the file by the image's digest + the basename so two
-        # different versions of the same image can coexist on disk
-        # without collision when the same out_dir is reused.
-        if manifest_resp.digest:
-            safe_digest = manifest_resp.digest.replace(":", "_")
-        else:
-            import hashlib
-            safe_digest = hashlib.sha256(final_bytes).hexdigest()[:32]
-        basename = os.path.basename(binary_path) or "binary"
-        out_path = out_dir / f"{safe_digest}-{basename}"
+        # Name the file by the CONTENT hash + a sanitised basename so
+        # two different versions of the same image can coexist on disk
+        # without collision when the same out_dir is reused. The
+        # manifest digest header and the binary path are both
+        # remote-influenced strings, so neither feeds the filename
+        # unsanitised: the hash comes from the bytes we actually hold,
+        # and the basename is reduced to a safe character set.
+        import hashlib
+        content_hash = hashlib.sha256(final_bytes).hexdigest()[:32]
+        basename = _sanitise_filename_component(
+            os.path.basename(binary_path),
+        )
+        out_path = out_dir / f"{content_hash}-{basename}"
+        # Belt and braces: the joined path must stay inside out_dir.
+        resolved_dir = out_dir.resolve()
+        if not out_path.resolve().is_relative_to(resolved_dir):
+            logger.debug(
+                "sca.bump.image_binary_extract: refusing out-of-dir "
+                "write for %s", image_ref_str,
+            )
+            return None
         out_path.write_bytes(final_bytes)
         return out_path
     except OSError as e:
@@ -223,8 +234,26 @@ def fetch_image_binary(
         return None
 
 
+# Characters allowed to pass through from a remote-influenced binary
+# path into an on-disk filename. Everything else is replaced.
+_SAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+_MAX_FILENAME_COMPONENT = 64
+
+
+def _sanitise_filename_component(name: str) -> str:
+    """Reduce a remote-influenced basename to ``[A-Za-z0-9._-]``.
+
+    Also strips leading dots (no hidden / relative-looking names) and
+    caps length so the joined path stays a plain single component.
+    Empty results fall back to ``"binary"``.
+    """
+    cleaned = _SAFE_FILENAME_CHARS.sub("_", name).lstrip(".")
+    cleaned = cleaned[:_MAX_FILENAME_COMPONENT]
+    return cleaned or "binary"
+
+
 def _select_platform(
-    entries: List, platform_os: str, platform_arch: str,
+    entries: list, platform_os: str, platform_arch: str,
 ):
     """Pick the index entry matching ``(platform_os,
     platform_arch)``. Ignores variant — first match wins."""
@@ -236,7 +265,7 @@ def _select_platform(
 
 def _resolve_entrypoint_path(
     *, client: OciRegistryClient, ref, config_digest: str,
-) -> Optional[str]:
+) -> str | None:
     """Fetch the image config blob and read ``Entrypoint`` /
     ``Cmd`` to find the main binary's in-image path.
 

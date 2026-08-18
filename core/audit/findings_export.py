@@ -13,13 +13,14 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .evidence_grade import (
     GradedEvidence,
     finding_confidence,
     grade_evidence_record,
     grade_review_result,
+    is_tool_evidence,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,24 +28,36 @@ logger = logging.getLogger(__name__)
 
 def build_graded_finding(
     outcome: Any,
-    evidence_record: Optional[Any] = None,
-) -> Dict[str, Any]:
+    evidence_record: Any | None = None,
+) -> dict[str, Any]:
     """Build a finding dict with graded evidence chain.
 
     Combines mechanical evidence (from EvidenceRecord) with LLM review
     evidence (from ReviewOutcome.review_result) into a single ordered
     chain with source tags and confidence levels.
+
+    The exported ``confidence`` is computed only from
+    hypothesis-correlated evidence: the review-derived items plus tool
+    receipts (which pass correlation gates before they are stamped).
+    Ambient mechanical signals from the evidence record — e.g. a Joern
+    flow that exists somewhere in the function but was never matched
+    to THIS hypothesis — stay in the exported chain as context but no
+    longer export an LLM-only guess as ``confidence=high``.
     """
-    chain: List[GradedEvidence] = []
+    chain: list[GradedEvidence] = []
 
     if evidence_record is not None:
         chain.extend(grade_evidence_record(evidence_record))
 
     review_result = getattr(outcome, "review_result", None) or {}
     evidence_tool = getattr(outcome, "evidence_tool", "")
-    chain.extend(grade_review_result(review_result, evidence_tool))
+    review_items = grade_review_result(review_result, evidence_tool)
+    chain.extend(review_items)
 
-    confidence = finding_confidence(chain)
+    if is_tool_evidence(evidence_tool):
+        confidence = finding_confidence(chain)
+    else:
+        confidence = finding_confidence(review_items)
 
     file_val = getattr(outcome, "file", "")
     func_val = getattr(outcome, "function", "")
@@ -56,7 +69,19 @@ def build_graded_finding(
     if not finding_id:
         finding_id = f"{file_val}:{func_val}:{line_val}"
 
-    finding: Dict[str, Any] = {
+    # Verification tier: prefer a live recompute (post-resolution
+    # dispatch state), fall back to the journaled attribute.
+    tier = ""
+    compute = getattr(outcome, "compute_tier", None)
+    if callable(compute):
+        try:
+            tier = compute() or ""
+        except Exception:  # noqa: BLE001 — export must not fail the run
+            tier = ""
+    if not tier:
+        tier = getattr(outcome, "verification_tier", "") or "speculative"
+
+    finding: dict[str, Any] = {
         "id": finding_id,
         "file": file_val,
         "function": func_val,
@@ -67,8 +92,41 @@ def build_graded_finding(
         "vuln_type": review_result.get("vuln_type", ""),
         "depth": getattr(outcome, "depth", "L1"),
         "confidence": confidence.value,
+        "verification_tier": tier,
         "evidence_chain": [e.to_dict() for e in chain],
     }
+    if status_val == "dark":
+        # Tool-blind bucket: no mechanical channel can decide this
+        # class — exactly the findings /validate exists to judge.
+        finding["needs_validation"] = True
+
+    # Hypothesis multiplicity: the review's full hypotheses array.
+    # A multi-bug function used to export as one finding with one
+    # hypothesis string — the sibling mechanisms (and their
+    # confidences) were invisible to the operator and to /validate.
+    hyp_entries = getattr(outcome, "hypotheses", None) or []
+    if not hyp_entries and review_result:
+        hyp_entries = review_result.get("hypotheses") or []
+    hyp_entries = [
+        h for h in hyp_entries
+        if isinstance(h, dict) and h.get("mechanism")
+    ]
+    if hyp_entries:
+        finding["hypothesis_multiplicity"] = {
+            "count": len(hyp_entries),
+            "mechanisms": [
+                {
+                    "mechanism": (h.get("mechanism") or "")[:200],
+                    "confidence": (h.get("confidence") or "").lower(),
+                }
+                for h in hyp_entries[:8]
+            ],
+        }
+
+    # Secondary-hypothesis tool confirmations (dispatch lane receipts).
+    secondary = review_result.get("secondary_confirmations")
+    if secondary:
+        finding["secondary_confirmations"] = secondary
 
     if review_result.get("cwe_class"):
         finding["cwe_class"] = review_result["cwe_class"]
@@ -84,6 +142,13 @@ def build_graded_finding(
     ts_viol = review_result.get("typestate_violation")
     if ts_viol and ts_viol.get("violation_kind"):
         finding["typestate_violation"] = ts_viol
+
+    # File pile-up dampening audit trail (see pipeline.dampen_file_pileup):
+    # the demotion/collapse record travels with the exported finding so
+    # the operator can see WHY a status was softened.
+    dampening = review_result.get("file_dampening")
+    if dampening:
+        finding["file_dampening"] = dampening
 
     discovery_sources = []
     if evidence_record is not None:
@@ -143,18 +208,42 @@ def build_graded_finding(
 
 
 def export_findings(
-    outcomes: List[Any],
-    evidence_index: Optional[Dict[str, Any]] = None,
-    attack_chains: Optional[List[Any]] = None,
-) -> Dict[str, Any]:
+    outcomes: list[Any],
+    evidence_index: dict[str, Any] | None = None,
+    attack_chains: list[Any] | None = None,
+    *,
+    out_dir: Path | None = None,
+    run_id: str = "",
+) -> dict[str, Any]:
     """Export all findings with evidence chains and attack chains.
 
     Returns a structured dict suitable for writing to findings-graded.json.
+
+    When ``out_dir`` is given, the promotion-without-tool-evidence
+    alarm sweeps the FINAL outcome statuses here (post-loop promotions
+    run after the per-review journal writes, so the export is the
+    second chokepoint that sees them).  Alarm-only; the export output
+    is unchanged.
     """
-    findings: List[Dict[str, Any]] = []
+    if out_dir is not None:
+        try:
+            from .promotion_alarm import check_outcomes
+            check_outcomes(
+                Path(out_dir), outcomes, stage="findings-export",
+                run_id=run_id,
+            )
+        except Exception:
+            logger.debug("promotion alarm export sweep failed", exc_info=True)
+
+    findings: list[dict[str, Any]] = []
     for outcome in outcomes:
         status = getattr(outcome, "status", "clean")
-        if status not in ("finding", "suspicious"):
+        # "dark" is exported alongside finding/suspicious: it is the
+        # "tool-blind, needs concrete verification" bucket — excluding
+        # it made every hypothesis the gates routed to dark invisible
+        # to the operator and to /validate, the one pipeline built to
+        # judge tool-blind findings.
+        if status not in ("finding", "suspicious", "dark"):
             continue
 
         key = f"{getattr(outcome, 'file', '')}:{getattr(outcome, 'function', '')}"
@@ -162,7 +251,7 @@ def export_findings(
         finding = build_graded_finding(outcome, ev_record)
         findings.append(finding)
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "findings": findings,
         "stats": {
             "total": len(findings),
@@ -174,6 +263,9 @@ def export_findings(
             ),
             "low_confidence": sum(
                 1 for f in findings if f["confidence"] == "low"
+            ),
+            "dark": sum(
+                1 for f in findings if f["status"] == "dark"
             ),
         },
     }
@@ -188,7 +280,7 @@ def export_findings(
 
 
 def write_graded_findings(
-    export: Dict[str, Any],
+    export: dict[str, Any],
     out_dir: Path,
 ) -> Path:
     """Write findings-graded.json to the run directory."""
@@ -208,7 +300,7 @@ def write_graded_findings(
     return path
 
 
-def format_findings_summary(export: Dict[str, Any]) -> str:
+def format_findings_summary(export: dict[str, Any]) -> str:
     """Render a human-readable summary of graded findings."""
     stats = export.get("stats", {})
     total = stats.get("total", 0)
@@ -230,6 +322,13 @@ def format_findings_summary(export: Dict[str, Any]) -> str:
         parts.append(f"{low} low-confidence")
     if parts:
         lines.append(f"Confidence: {', '.join(parts)}")
+
+    dark = stats.get("dark", 0)
+    if dark:
+        lines.append(
+            f"Dark (tool-blind, needs concrete verification): {dark} "
+            f"— route to /validate"
+        )
 
     chains = export.get("attack_chains", [])
     if chains:

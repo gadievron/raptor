@@ -251,7 +251,7 @@ class TestSnippetTruncation:
             cwe="CWE-?", reasoning="r",
             snippet="x " * 100_000,  # ~200KB
         )
-        prompt = build_synthesis_prompt(seed, "semgrep")
+        prompt, _system = build_synthesis_prompt(seed, "semgrep")
         # Prompt body should be much smaller than the raw snippet.
         assert len(prompt.encode("utf-8")) < 50_000
         assert "(snippet truncated)" in prompt
@@ -264,7 +264,7 @@ class TestSnippetTruncation:
             cwe="CWE-?", reasoning="r",
             snippet="def f():\n    pass\n",
         )
-        prompt = build_synthesis_prompt(seed, "semgrep")
+        prompt, _system = build_synthesis_prompt(seed, "semgrep")
         assert "def f():" in prompt
         assert "(snippet truncated)" not in prompt
 
@@ -535,3 +535,110 @@ class TestRealCoccinelleIntegration:
         assert result.rule is None
         assert result.positive_control is False
         assert len(result.errors) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Scripting-block rejection — hostile Coccinelle rule bodies
+# ---------------------------------------------------------------------------
+
+
+_HOSTILE_COCCI_BODY = """\
+@r@
+position p;
+@@
+malloc@p(...)
+
+@script:python@
+p << r.p;
+@@
+import os
+os.system("touch /tmp/pwned")
+"""
+
+
+def _c_seed(tmp_path: Path) -> SeedBug:
+    src_dir = tmp_path / "src"
+    src_dir.mkdir(exist_ok=True)
+    (src_dir / "alloc.c").write_text(
+        "void f(void) {\n    int *p = malloc(4);\n    *p = 1;\n}\n"
+    )
+    return SeedBug(
+        file="src/alloc.c", function="f",
+        line_start=2, line_end=3,
+        cwe="CWE-476", reasoning="unchecked malloc deref",
+    )
+
+
+class TestScriptingBlockRejection:
+    """A compromised LLM that emits @script:/@initialize:/@finalize:
+    blocks in a Coccinelle rule body is trying to execute code inside
+    spatch. The gate shares the runner's matcher and fires before
+    _write_rule, so the hostile rule never reaches disk or an engine."""
+
+    def test_scripted_cocci_rule_rejected_never_persisted(
+        self, tmp_path, monkeypatch,
+    ):
+        seed = _c_seed(tmp_path)
+        engine_calls = _stub_engines(
+            monkeypatch, seed_matches=[], repo_matches=[],
+        )
+        # First response: hostile coccinelle rule (rejected by the
+        # gate). Second: transport error so the semgrep fallback
+        # engine produces no rule either.
+        llm = _stub_llm([
+            {"rule_body": _HOSTILE_COCCI_BODY, "rationale": "x"},
+            RuntimeError("no more rules"),
+        ])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm, max_retries=0,
+        )
+
+        assert result.rule is None
+        assert any("scripting block" in e for e in result.errors)
+        # Nothing persisted, no engine ever invoked.
+        checkers = tmp_path / "out" / "checkers"
+        if checkers.exists():
+            assert list(checkers.glob("*.cocci")) == []
+        assert engine_calls["n"] == 0
+
+    @pytest.mark.parametrize("header", [
+        "@script:ocaml@",
+        "@initialize:python@",
+        "@finalize:python@",
+    ])
+    def test_all_scripting_headers_rejected(self, header):
+        body = f"@r@\nposition p;\n@@\nfree@p(...)\n\n{header}\n@@\nx\n"
+        err = synth_mod._reject_cocci_scripting(body)
+        assert err is not None
+        assert "scripting block" in err
+
+    def test_plain_smpl_body_accepted(self):
+        body = "@r@\nposition p;\n@@\nfree@p(...)\n"
+        assert synth_mod._reject_cocci_scripting(body) is None
+
+    def test_comment_mention_not_rejected(self):
+        body = (
+            "// no @script:python here, just a comment\n"
+            "@r@\nposition p;\n@@\nfree@p(...)\n"
+        )
+        assert synth_mod._reject_cocci_scripting(body) is None
+
+    def test_semgrep_rule_path_untouched(self, tmp_path, monkeypatch):
+        """The gate is coccinelle-only — Semgrep YAML that merely
+        contains the substring is not rejected."""
+        seed = _seed(tmp_path)  # .py seed → semgrep engine
+        seed_match = Match(file="src/auth.py", line=2)
+        _stub_engines(
+            monkeypatch,
+            seed_matches=[seed_match],
+            repo_matches=[seed_match],
+        )
+        body = (
+            "rules:\n  - id: x\n    message: '@script: lookalike'\n"
+        )
+        llm = _stub_llm([{"rule_body": body, "rationale": "x"}])
+        result = synthesise_and_run(
+            seed, tmp_path, tmp_path / "out", llm, max_retries=0,
+        )
+        assert result.rule is not None
+        assert not any("scripting block" in e for e in result.errors)

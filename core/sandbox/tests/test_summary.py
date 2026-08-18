@@ -7,7 +7,16 @@ from pathlib import Path
 
 import pytest
 
+from core.sandbox import evidence as evidence_mod
 from core.sandbox import summary as summary_mod
+
+
+def _denials_path(run_dir):
+    """Canonical (post-relocation) denials JSONL path for a run dir:
+    ``<run_dir>/.audit/.sandbox-denials.jsonl``. Tests that pre-plant
+    fixtures at the LEGACY ``<run_dir>/<name>`` location keep doing so
+    deliberately — they double as back-compat-read coverage."""
+    return evidence_mod.evidence_write_path(run_dir, summary_mod.DENIALS_FILE)
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +52,7 @@ class TestRecordDenial:
     def test_appends_jsonl_when_active(self, tmp_path):
         summary_mod.set_active_run_dir(tmp_path)
         summary_mod.record_denial("git clone evil.com", 1, "network")
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         assert jsonl.exists()
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         assert len(records) == 1
@@ -59,7 +68,7 @@ class TestRecordDenial:
         summary_mod.record_denial("cmd1", 1, "network")
         summary_mod.record_denial("cmd2", 1, "write", path="/etc/foo")
         summary_mod.record_denial("cmd3", 137, "seccomp", profile="full")
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         assert len(records) == 3
         assert [r["type"] for r in records] == ["network", "write", "seccomp"]
@@ -88,7 +97,7 @@ class TestRecordDenial:
         non_jsonable = Path("/tmp/some/path")  # Path is not JSON-serializable
         # Must not raise
         summary_mod.record_denial("cmd", 1, "write", path=non_jsonable)
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         assert len(records) == 1
         # Coerced to string via default=str
@@ -195,8 +204,8 @@ class TestSummarizeAndWrite:
         on_disk = json.loads(summary_path.read_text())
         assert on_disk["total_denials"] == 4
 
-        # Intermediate JSONL removed
-        assert not (tmp_path / summary_mod.DENIALS_FILE).exists()
+        # Intermediate JSONL removed (from the .audit/ evidence dir)
+        assert not _denials_path(tmp_path).exists()
 
     def test_idempotent_when_called_twice(self, tmp_path):
         summary_mod.set_active_run_dir(tmp_path)
@@ -325,7 +334,7 @@ class TestThreadSafety:
         for t in threads:
             t.join()
 
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         # All n_threads * per_thread records should be present
         assert len(records) == n_threads * per_thread
@@ -336,7 +345,7 @@ class TestLifecycleIntegration:
     complete_run writes summary. Verifies the wiring across modules."""
 
     def test_full_lifecycle_writes_summary(self, tmp_path):
-        from core.run.metadata import start_run, complete_run
+        from core.run.metadata import complete_run, start_run
         from core.sandbox.observe import _check_blocked
 
         run_dir = tmp_path / "agentic-20260427-150000-pid12345"
@@ -357,8 +366,8 @@ class TestLifecycleIntegration:
             network_engaged=True,
         )
 
-        # Denial recorded in the JSONL
-        jsonl = run_dir / summary_mod.DENIALS_FILE
+        # Denial recorded in the JSONL (evidence dir)
+        jsonl = _denials_path(run_dir)
         assert jsonl.exists()
 
         # Complete the run — should finalize summary + clear active state
@@ -377,7 +386,7 @@ class TestLifecycleIntegration:
         assert "--sandbox" in on_disk["denials"][0]["suggested_fix"]
 
     def test_failed_run_still_writes_summary(self, tmp_path):
-        from core.run.metadata import start_run, fail_run
+        from core.run.metadata import fail_run, start_run
         from core.sandbox.observe import _check_blocked
 
         run_dir = tmp_path / "scan-failed"
@@ -443,10 +452,9 @@ class TestTrackedRunIntegration:
         from core.run.metadata import tracked_run
         run_dir = tmp_path / "scan-failed"
 
-        with pytest.raises(RuntimeError):
-            with tracked_run(run_dir, command="scan"):
-                self._trigger_denial()
-                raise RuntimeError("simulated workflow failure")
+        with pytest.raises(RuntimeError), tracked_run(run_dir, command="scan"):
+            self._trigger_denial()
+            raise RuntimeError("simulated workflow failure")
 
         # Context exited via exception → fail_run called → summary written
         assert (run_dir / summary_mod.SUMMARY_FILE).exists()
@@ -456,10 +464,10 @@ class TestTrackedRunIntegration:
         from core.run.metadata import tracked_run
         run_dir = tmp_path / "scan-cancelled"
 
-        with pytest.raises(KeyboardInterrupt):
-            with tracked_run(run_dir, command="scan"):
-                self._trigger_denial()
-                raise KeyboardInterrupt()
+        with pytest.raises(KeyboardInterrupt), \
+                tracked_run(run_dir, command="scan"):
+            self._trigger_denial()
+            raise KeyboardInterrupt()
 
         # Context exited via Ctrl-C → cancel_run called → summary written
         # (operators want to see what was blocked even on cancelled runs)
@@ -480,7 +488,7 @@ class TestRedactsSecretsInCmd:
         )
         records = [
             json.loads(line)
-            for line in (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines()
+            for line in _denials_path(tmp_path).read_text().splitlines()
             if line
         ]
         assert "secretpass" not in records[0]["cmd"]
@@ -494,7 +502,7 @@ class TestRedactsSecretsInCmd:
         )
         records = [
             json.loads(line)
-            for line in (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines()
+            for line in _denials_path(tmp_path).read_text().splitlines()
             if line
         ]
         assert "abcdef1234567890" not in records[0]["cmd"]
@@ -505,7 +513,7 @@ class TestRedactsSecretsInCmd:
         summary_mod.record_denial("git clone https://github.com/foo/bar", 1, "network")
         records = [
             json.loads(line)
-            for line in (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines()
+            for line in _denials_path(tmp_path).read_text().splitlines()
             if line
         ]
         # No secrets to redact → cmd preserved verbatim
@@ -690,7 +698,7 @@ class TestAdversarial:
             ts="EVIL_TS",
         )
         records = [json.loads(line) for line in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                   _denials_path(tmp_path).read_text().splitlines() if line]
         r = records[0]
         # Explicit args win — the rogue details didn't override
         assert r["type"] == "seccomp"
@@ -707,7 +715,7 @@ class TestAdversarial:
         for i in range(20):
             summary_mod.record_denial(f"cmd{i}", 1, "network")
         records = [json.loads(line) for line in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                   _denials_path(tmp_path).read_text().splitlines() if line]
         # Exactly the cap, no more (slight overcount allowed by the
         # lock-free design — assert <= cap+1 to be tolerant)
         assert len(records) <= summary_mod.MAX_DENIALS_PER_RUN
@@ -728,7 +736,7 @@ class TestAdversarial:
         for i in range(2):
             summary_mod.record_denial(f"r2c{i}", 1, "network")
         run2_records = [json.loads(line) for line in
-                        (run2 / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                        _denials_path(run2).read_text().splitlines() if line]
         assert len(run2_records) == 2
 
     # ADV3
@@ -757,7 +765,7 @@ class TestAdversarial:
         long_cmd = "x" * 10_000  # well over MAX_CMD_LEN
         summary_mod.record_denial(long_cmd, 1, "network")
         records = [json.loads(line) for line in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                   _denials_path(tmp_path).read_text().splitlines() if line]
         assert len(records[0]["cmd"]) <= summary_mod.MAX_CMD_LEN
         # Truncation marker present
         assert records[0]["cmd"].endswith("…")

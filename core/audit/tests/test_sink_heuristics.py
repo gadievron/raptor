@@ -195,6 +195,41 @@ class TestDiscoverProjectSinks:
         assert len(high_conf) >= 1
 
 
+_SIDE_EFFECT_CALLS = [
+    "fopen", "fwrite", "fread", "unlink", "rename", "mkdir", "chmod",
+]
+
+
+class TestSideEffectWrapsUncapped:
+    """The `wraps` list on side-effect sinks carries every wrapped call."""
+
+    @staticmethod
+    def _call_graphs():
+        return {
+            "src/io.c": FakeCallGraph(calls=[
+                FakeCall("handle_io", [c]) for c in _SIDE_EFFECT_CALLS
+            ]),
+        }
+
+    def test_wraps_lists_all_side_effect_targets(self):
+        result = discover_project_sinks(None, call_graphs=self._call_graphs())
+        side = [s for s in result.discovered if s.reason == "side_effect"]
+        assert len(side) == 1
+        sink = side[0]
+        assert sink.function == "handle_io"
+        # Not truncated to the first few items; must carry all of them,
+        # deterministically ordered.
+        assert sink.wraps == sorted(_SIDE_EFFECT_CALLS)
+
+    def test_wraps_survives_to_dict(self):
+        result = discover_project_sinks(None, call_graphs=self._call_graphs())
+        d = result.to_dict()
+        sinks = [
+            s for s in d["discovered_sinks"] if s["reason"] == "side_effect"
+        ]
+        assert sinks and len(sinks[0]["wraps"]) == len(_SIDE_EFFECT_CALLS)
+
+
 class TestDiscoveredSink:
     def test_to_dict(self):
         s = DiscoveredSink(

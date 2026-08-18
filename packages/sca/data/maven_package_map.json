@@ -1,0 +1,17 @@
+{
+  "_comment": "Curated Maven groupId:artifactId -> Java import-package prefix overrides for the famous groupId-doesn't-match-package cases. Each value is a single package prefix; multi-package artifacts list the most common top-level prefix (sub-modules covered by prefix-matching). Sources are the artifact's actual META-INF/MANIFEST.MF / pom.xml declared packages; when in doubt verify with `jar tf <artifact>.jar | head`. Loaded by packages/sca/reachability/maven.py; keeping the data out of the code keeps source diffs clean as the list grows (cf. python_module_map.json).",
+  "com.fasterxml.jackson.core:jackson-databind": "com.fasterxml.jackson.databind",
+  "com.fasterxml.jackson.core:jackson-core": "com.fasterxml.jackson.core",
+  "com.fasterxml.jackson.core:jackson-annotations": "com.fasterxml.jackson.annotation",
+  "com.google.guava:guava": "com.google.common",
+  "commons-io:commons-io": "org.apache.commons.io",
+  "commons-codec:commons-codec": "org.apache.commons.codec",
+  "commons-cli:commons-cli": "org.apache.commons.cli",
+  "commons-logging:commons-logging": "org.apache.commons.logging",
+  "org.slf4j:slf4j-api": "org.slf4j",
+  "ch.qos.logback:logback-classic": "ch.qos.logback.classic",
+  "ch.qos.logback:logback-core": "ch.qos.logback.core",
+  "org.apache.httpcomponents:httpclient": "org.apache.http",
+  "org.apache.httpcomponents.client5:httpclient5": "org.apache.hc.client5",
+  "org.springframework:spring-jcl": "org.apache.commons.logging"
+}

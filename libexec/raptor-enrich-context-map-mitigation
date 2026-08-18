@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Enrich context-map.json sinks with target-mitigation enrichments.
 
 Usage: raptor-enrich-context-map-mitigation <understand_dir> --binary <path>
@@ -37,15 +39,10 @@ Exit codes:
 * 2 — substrate raised. Original file untouched.
 """
 
-import faulthandler
-import signal
 import sys
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -55,11 +52,13 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
 
-import argparse
-import json
-from datetime import datetime, timezone
-from pathlib import Path
+import argparse  # noqa: E402
+import json  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 # libexec scripts self-resolve the repo root — see CLAUDE.md
 # "Python path safety" section.
@@ -137,8 +136,8 @@ def main() -> int:
         sys.stdout.write(text)
         return 0
 
-    from core.atomic_fs import atomic_write_text
-    atomic_write_text(context_map_path, text)
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(context_map_path, text)
     n_sinks = len(cm.get("sinks") or [])
     enriched = sum(
         1 for s in (cm.get("sinks") or [])

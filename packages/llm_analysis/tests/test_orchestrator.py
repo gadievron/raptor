@@ -4,29 +4,28 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
+from unittest.mock import MagicMock, patch
 
 # packages/llm_analysis/tests/test_orchestrator.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from packages.llm_analysis.orchestrator import (
-    orchestrate,
-    _merge_results,
-    _structural_grouping,
-    _check_self_consistency,
-    CostTracker,
-    CUTOFF_SKIP_CONSENSUS,
-)
-from packages.llm_analysis.tasks import (
-    ConsensusTask,
-    ExploitTask,
-    AggregationTask,
-)
 from packages.llm_analysis.cc_dispatch import (
     build_schema,
 )
+from packages.llm_analysis.orchestrator import (
+    CUTOFF_SKIP_CONSENSUS,
+    CostTracker,
+    _check_self_contradiction,
+    _merge_results,
+    _structural_grouping,
+    orchestrate,
+)
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
+from packages.llm_analysis.tasks import (
+    AggregationTask,
+    ConsensusTask,
+    ExploitTask,
+)
 
 
 def _make_prep_report(findings=None, mode="prep_only"):
@@ -105,10 +104,9 @@ def _make_cc_result(finding_id, exploitable=True, score=0.85):
         # a false positive, so the reason field MUST be None — see
         # contract (2) in the docstring.
         "false_positive_reason": None,
-        "impact": "data exfiltration" if exploitable else None,
-        "prerequisites": (
-            ["authenticated user"] if exploitable else None
-        ),
+        # No fields beyond FINDING_RESULT_SCHEMA's properties —
+        # cc_dispatch enforces the strict unknown-field floor and
+        # rejects responses carrying keys outside the declared schema.
         "tool": "test",
         "rule_id": "test/rule",
     }
@@ -197,7 +195,7 @@ class TestOrchestrate:
         cc_result = json.dumps(_make_cc_result("finding-001"))
 
         with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
-             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
+             patch("core.llm.cc_adapter.resolve_claude_cli", return_value="/usr/bin/claude"), \
              patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok([cc_result])):
             result = orchestrate(
@@ -216,7 +214,7 @@ class TestOrchestrate:
         report_path.write_text(json.dumps(report))
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("packages.llm_analysis.orchestrator.shutil.which", return_value=None):
+             patch("core.llm.cc_adapter.resolve_claude_cli", return_value=None):
             result = orchestrate(
                 prep_report_path=report_path,
                 repo_path=tmp_path,
@@ -261,15 +259,29 @@ class TestOrchestrate:
         # builder uses rule_id / file_path / line, NOT the synthetic
         # finding_id this test assigns. ``db.py`` / ``template.js``
         # are distinctive enough to identify each finding's prompt.
+        #
+        # Payloads must conform to the analysis schema the dispatch
+        # passes to invoke_cc_simple — cc_dispatch's strict floor
+        # rejects responses carrying keys outside it (finding_id is
+        # transport-injected and exempted). _make_cc_result carries
+        # extra merge-level fields, so strip them here.
+        def _schema_conformant(d):
+            drop = {"exploit_code", "patch_code", "tool", "rule_id"}
+            return {k: v for k, v in d.items() if k not in drop}
+
         cc_results = {
-            "db.py": json.dumps(_make_cc_result("f-001", exploitable=True)),
+            "db.py": json.dumps(
+                _schema_conformant(_make_cc_result("f-001", exploitable=True))
+            ),
             "template.js": json.dumps(
-                _make_cc_result("f-002", exploitable=False, score=0.1)
+                _schema_conformant(
+                    _make_cc_result("f-002", exploitable=False, score=0.1)
+                )
             ),
         }
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
+             patch("core.llm.cc_adapter.resolve_claude_cli", return_value="/usr/bin/claude"), \
              patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
@@ -312,7 +324,7 @@ class TestOrchestrate:
         cc_results = [json.dumps(sloppy)]
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
+             patch("core.llm.cc_adapter.resolve_claude_cli", return_value="/usr/bin/claude"), \
              patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
@@ -348,7 +360,7 @@ class TestOrchestrate:
         report_path.write_text(json.dumps(report))
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"):
+             patch("core.llm.cc_adapter.resolve_claude_cli", return_value="/usr/bin/claude"):
             result = orchestrate(
                 prep_report_path=report_path,
                 repo_path=tmp_path,
@@ -375,7 +387,7 @@ class TestOrchestrate:
             return result
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
+             patch("core.llm.cc_adapter.resolve_claude_cli", return_value="/usr/bin/claude"), \
              patch("core.sandbox.run_untrusted_networked", side_effect=mock_run):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -855,7 +867,7 @@ class TestSelfConsistency:
                 "reasoning": "This is a false positive because the input is sanitised.",
             }
         }
-        _check_self_consistency(results)
+        _check_self_contradiction(results)
         assert results["f-001"]["self_contradictory"] is True
 
     def test_flags_not_exploitable_contradiction(self):
@@ -866,7 +878,7 @@ class TestSelfConsistency:
                 "reasoning": "The code is safe and cannot be exploited in practice.",
             }
         }
-        _check_self_consistency(results)
+        _check_self_contradiction(results)
         assert results["f-001"]["self_contradictory"] is True
 
     def test_no_flag_when_consistent(self):
@@ -877,7 +889,7 @@ class TestSelfConsistency:
                 "reasoning": "Buffer overflow with attacker-controlled input, trivially exploitable.",
             }
         }
-        _check_self_consistency(results)
+        _check_self_contradiction(results)
         assert "self_contradictory" not in results["f-001"]
 
     def test_no_flag_when_not_exploitable_consistent(self):
@@ -888,14 +900,14 @@ class TestSelfConsistency:
                 "reasoning": "This is a false positive, the code is unreachable.",
             }
         }
-        _check_self_consistency(results)
+        _check_self_contradiction(results)
         assert "self_contradictory" not in results["f-001"]
 
     def test_skips_errors(self):
         results = {
             "f-001": {"error": "timeout"},
         }
-        _check_self_consistency(results)
+        _check_self_contradiction(results)
         assert "self_contradictory" not in results["f-001"]
 
     def test_skips_empty_reasoning(self):
@@ -906,7 +918,7 @@ class TestSelfConsistency:
                 "reasoning": "",
             }
         }
-        _check_self_consistency(results)
+        _check_self_contradiction(results)
         assert "self_contradictory" not in results["f-001"]
 
 
@@ -997,7 +1009,7 @@ class TestWeakenedDefenses:
         cc_result = json.dumps(_make_cc_result("finding-001"))
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("packages.llm_analysis.orchestrator.shutil.which",
+             patch("core.llm.cc_adapter.resolve_claude_cli",
                    return_value="/usr/bin/claude"), \
              patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok([cc_result])):

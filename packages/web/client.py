@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Secure HTTP Client for Web Testing
 
@@ -10,19 +9,33 @@ Handles HTTP requests with safety features:
 - Authentication handling
 """
 
+import contextlib
 import ipaddress
 import socket
 import time
-from typing import Dict, Optional, Any
-from urllib.parse import urlparse, urljoin
+from types import TracebackType
+from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import requests
+import urllib3
+from typing_extensions import Self
 
 from core.logging import get_logger
 from core.security.redaction import redact_secrets
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _MAX_REDIRECTS = 10
+
+# What closing a Response/Session can legitimately raise: socket/SSL
+# teardown (OSError family) plus the requests/urllib3 error trees a
+# hostile server can force mid-stream. TypeError/AttributeError here
+# would be a wiring bug and must propagate.
+_CLOSE_ERRORS = (
+    OSError,
+    requests.RequestException,
+    urllib3.exceptions.HTTPError,
+)
 
 # Cap on buffered response body. A hostile in-scope endpoint can
 # serve multi-GB responses (or chunked-encoding slowloris) and OOM
@@ -58,11 +71,32 @@ class WebClient:
             'User-Agent': 'RAPTOR Security Scanner (Authorized Testing)',
         })
 
+        # Loopback / private-IP scan targets are on the local segment
+        # by definition — routing them through a corporate proxy
+        # (requests honours proxy env; host NO_PROXY rarely covers
+        # loopback) breaks every request. Disable proxy-env pickup
+        # for those targets; internet targets keep trust_env so
+        # mandatory-proxy hosts can reach them.
+        _host = (urlparse(self.base_url).hostname or '').lower()
+        _local = _host in ('localhost',)
+        if not _local:
+            try:
+                _ip = ipaddress.ip_address(_host)
+                _local = _ip.is_loopback or _ip.is_private
+            except ValueError:
+                pass
+        if _local:
+            self.session.trust_env = False
+            logger.info(
+                "Web client: %s is a loopback/private target — "
+                "proxy env bypassed for this session", _host,
+            )
+
         # Request history — bounded ring buffer. Pre-cap, long scans
         # accumulated full request/response dicts (hundreds of MB on
         # large targets) until process exit.
         from collections import deque
-        self.request_history: "deque[Dict[str, Any]]" = deque(
+        self.request_history: deque[dict[str, Any]] = deque(
             maxlen=_MAX_REQUEST_HISTORY,
         )
 
@@ -78,28 +112,29 @@ class WebClient:
         """Check whether URL stays within the configured base origin."""
         return self._origin(url) == self._origin(self.base_url)
 
-    def _validate_resolved_ip(self, url: str) -> None:
-        """Resolve URL hostname and reject non-global IPs (SSRF/DNS-rebinding defence).
+    def _resolve_and_validate(self, url: str):
+        """Resolve URL hostname, reject non-global IPs, return pinned addrs.
 
-        Called before every outgoing request so that a hostname which
-        initially resolved to a public IP but later rebinds to
-        169.254.169.254, 127.0.0.1, 10.x.x.x, etc. is caught.
+        Returns (hostname, port, addr_list) where addr_list is the
+        validated getaddrinfo result, or None if validation is disabled
+        or the URL uses a literal IP.  The caller pins socket.getaddrinfo
+        to addr_list for the actual request, eliminating the DNS-rebinding
+        TOCTOU (resolve-then-connect with a second resolution).
         """
         if not self.block_private_ips:
-            return
+            return None
         parsed = urlparse(url)
         hostname = parsed.hostname
         if not hostname:
-            return
+            return None
         try:
-            ipaddress.ip_address(hostname)
             ip_obj = ipaddress.ip_address(hostname)
             if not ip_obj.is_global:
                 raise ValueError(
                     f"Blocked request to non-global IP {hostname} — "
                     f"set block_private_ips=False to scan internal targets"
                 )
-            return
+            return None
         except ValueError as exc:
             if "non-global" in str(exc):
                 raise
@@ -121,6 +156,34 @@ class WebClient:
                     f"blocked to prevent SSRF (set block_private_ips=False "
                     f"to scan internal targets)"
                 )
+        return (hostname, port, addrs)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _pinned_dns(pinned):
+        """Pin socket.getaddrinfo to pre-validated results for one request.
+
+        Eliminates the DNS-rebinding TOCTOU: requests/urllib3 internally
+        calls getaddrinfo, which would re-resolve the hostname. By
+        returning our already-validated addresses, the connection goes
+        to the IP we checked — not a rebinded one.
+        """
+        if pinned is None:
+            yield
+            return
+        hostname, _port, addrs = pinned
+        _original = socket.getaddrinfo
+
+        def _patched(host, p, *args, **kwargs):
+            if host == hostname:
+                return addrs
+            return _original(host, p, *args, **kwargs)
+
+        socket.getaddrinfo = _patched
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = _original
 
     def _build_url(self, path: str) -> str:
         """Build a request URL and reject paths that leave the target origin."""
@@ -129,7 +192,7 @@ class WebClient:
             raise ValueError(f"URL outside configured target scope: {url}")
         return url
 
-    def _resolve_redirect(self, current_url: str, response: requests.Response) -> Optional[str]:
+    def _resolve_redirect(self, current_url: str, response: requests.Response) -> str | None:
         """Resolve and scope-check a redirect Location header."""
         location = response.headers.get('Location')
         if not location:
@@ -173,16 +236,17 @@ class WebClient:
         request_kwargs = dict(kwargs)
 
         for _ in range(_MAX_REDIRECTS + 1):
-            self._validate_resolved_ip(current_url)
-            response = self.session.request(
-                current_method,
-                current_url,
-                timeout=self.timeout,
-                allow_redirects=False,
-                verify=self.verify_ssl,
-                stream=True,  # so we can size-cap before reading
-                **request_kwargs,
-            )
+            pinned = self._resolve_and_validate(current_url)
+            with self._pinned_dns(pinned):
+                response = self.session.request(
+                    current_method,
+                    current_url,
+                    timeout=self.timeout,
+                    allow_redirects=False,
+                    verify=self.verify_ssl,
+                    stream=True,  # so we can size-cap before reading
+                    **request_kwargs,
+                )
             response.history = history[:]
 
             # Bound the buffered response body. requests' default is
@@ -213,10 +277,8 @@ class WebClient:
             # consumed) `.content` / `.text` remain accessible
             # via the object — caller can still inspect
             # `response.history[i].headers` etc. without issue.
-            try:
+            with contextlib.suppress(*_CLOSE_ERRORS):
                 response.close()
-            except Exception:
-                pass
 
             history.append(response)
             current_url = next_url
@@ -267,10 +329,8 @@ class WebClient:
                         _MAX_RESPONSE_BYTES,
                         self._redact_for_logging(response.url or "<unknown>"),
                     )
-                    try:
+                    with contextlib.suppress(*_CLOSE_ERRORS):
                         response.close()
-                    except Exception:  # noqa: BLE001
-                        pass
                     break
             response._content = b"".join(chunks)
         except requests.exceptions.RequestException:
@@ -278,8 +338,8 @@ class WebClient:
             # from the cap-enforcer.
             response._content = b"".join(chunks) if chunks else b""
 
-    def get(self, path: str, params: Optional[Dict] = None,
-            headers: Optional[Dict] = None) -> requests.Response:
+    def get(self, path: str, params: dict | None = None,
+            headers: dict | None = None) -> requests.Response:
         """Send GET request."""
         self._rate_limit_wait()
 
@@ -306,9 +366,9 @@ class WebClient:
             logger.error("Request failed: %s", self._redact_for_logging(e))
             raise
 
-    def post(self, path: str, data: Optional[Dict] = None,
-             json_data: Optional[Dict] = None,
-             headers: Optional[Dict] = None) -> requests.Response:
+    def post(self, path: str, data: dict | None = None,
+             json_data: dict | None = None,
+             headers: dict | None = None) -> requests.Response:
         """Send POST request."""
         self._rate_limit_wait()
 
@@ -343,15 +403,15 @@ class WebClient:
         self.session.headers['Authorization'] = f'Bearer {token}'
         logger.info("Bearer token authentication configured")
 
-    def get_cookies(self) -> Dict[str, str]:
+    def get_cookies(self) -> dict[str, str]:
         """Get current session cookies."""
         return dict(self.session.cookies)
 
-    def set_cookies(self, cookies: Dict[str, str]) -> None:
+    def set_cookies(self, cookies: dict[str, str]) -> None:
         """Set session cookies."""
         self.session.cookies.update(cookies)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get request statistics."""
         if not self.request_history:
             return {}
@@ -379,13 +439,16 @@ class WebClient:
         ``WebClient`` per target accumulate one urllib3 connection
         pool (sockets + SSL contexts) per scan until process exit.
         """
-        try:
+        with contextlib.suppress(*_CLOSE_ERRORS):
             self.session.close()
-        except Exception:  # noqa: BLE001 — close() must not raise
-            pass
 
-    def __enter__(self) -> "WebClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()

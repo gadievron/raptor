@@ -7,6 +7,19 @@ from pathlib import Path
 from typing import List, Set
 
 
+def _coerce_int(value: object, default: int) -> int:
+    """Best-effort int conversion for values parsed from Joern JSON.
+
+    Real Joern emits numeric fields, but REPL output drifts across
+    versions — a null or non-numeric string must not abort the whole
+    flow parse.
+    """
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class JoernCPG:
     """Handle to a built Code Property Graph on disk."""
@@ -35,7 +48,7 @@ class FlowStep:
         return cls(
             file=d.get("file", ""),
             function=d.get("function", ""),
-            line=int(d.get("line", 0)),
+            line=_coerce_int(d.get("line", 0), 0),
             code=d.get("code", ""),
             variable=d.get("variable", ""),
         )
@@ -64,12 +77,14 @@ class TaintFlow:
     @classmethod
     def from_dict(cls, d: dict) -> TaintFlow:
         steps = [FlowStep.from_dict(s) for s in d.get("steps", [])]
-        funcs = {s.function for s in steps}
+        # Unattributed steps (empty function) must not count as a
+        # distinct function — mirrors the runner's flow parser.
+        funcs = {s.function for s in steps if s.function}
         return cls(
             source_method=d.get("source_method", ""),
             source_param=d.get("source_param", ""),
             sink_call=d.get("sink_call", ""),
-            sink_arg_idx=int(d.get("sink_arg_idx", -1)),
+            sink_arg_idx=_coerce_int(d.get("sink_arg_idx", -1), -1),
             steps=steps,
             is_inter_procedural=len(funcs) > 1,
         )
@@ -128,4 +143,8 @@ class JoernResult:
             "flows": [f.to_dict() for f in self.flows],
             "errors": self.errors,
             "elapsed_ms": self.elapsed_ms,
+            # Methods invisible to taint analysis (lost reaching-def
+            # coverage) — the first thing to check when a sweep comes
+            # back thin.
+            "dark_methods": self.dark_methods,
         }

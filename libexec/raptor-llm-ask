@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Send a prompt to an arbitrary LLM model and print the response.
 
 Developer tool for debugging model behaviour, comparing outputs across
@@ -14,27 +16,24 @@ The prompt is built from positional arguments (joined by spaces) plus any
 a pipe, stdin is the prompt.
 """
 import argparse
-import faulthandler
 import json
 import logging
-import os
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
-# ─── trust-marker check ───
-if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
         "  Run via 'bin/raptor' instead.\n"
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
-# ─── end trust-marker check ───
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
@@ -45,8 +44,9 @@ def main() -> int:
         description="Send a prompt to an LLM and print the response",
     )
     parser.add_argument(
-        "--model", required=True,
-        help="Model to query (e.g. gemini-2.5-pro, claude-opus-4-7)",
+        "--model", default=None,
+        help="Model to query (e.g. gemini-2.5-pro, claude-opus-4-7). "
+             "Omit to use the configured default model.",
     )
     parser.add_argument(
         "--system", default=None,
@@ -134,12 +134,42 @@ def main() -> int:
         print(f"error: could not create LLM client: {exc}", file=sys.stderr)
         return 1
 
+    if args.model:
+        try:
+            model_config = client.config.config_for_model(args.model)
+        except (ValueError, AttributeError) as exc:
+            print(f"error: could not resolve model {args.model!r}: {exc}",
+                  file=sys.stderr)
+            return 1
+    else:
+        # No --model: the configured default (models.json primary /
+        # env autodetect / claudecode last resort) — same resolution
+        # every pipeline consumer gets from a bare LLMConfig().
+        model_config = client.config.primary_model
+        if model_config is None:
+            print(
+                "error: no model configured — pass --model <name> or "
+                "configure one in ~/.config/raptor/models.json",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Bedrock is dispatcher-only (this process holds the AWS
+    # credentials; the SDK client itself never does). Pipeline runs
+    # get the dispatcher from raptor.py; this standalone CLI is its
+    # own parent, so it self-serves an in-process one (shared gate
+    # with the audit pipeline's standalone entry — no-op unless a
+    # resolved model is dispatcher-only and no route exists).
     try:
-        model_config = client.config.config_for_model(args.model)
-    except (ValueError, AttributeError) as exc:
-        print(f"error: could not resolve model {args.model!r}: {exc}",
+        from core.llm.dispatcher.lifecycle import (
+            ensure_route_for_model_configs,
+        )
+        ensure_route_for_model_configs(
+            [model_config], label="raptor-llm-ask",
+        )
+    except Exception as exc:  # noqa: BLE001 — provider errors below
+        print(f"warning: could not start LLM dispatcher: {exc}",
               file=sys.stderr)
-        return 1
 
     kwargs = {"model_config": model_config}
     if args.temperature is not None:

@@ -120,3 +120,34 @@ class TestDetectLanguage:
 
     def test_empty_directory_defaults(self, tmp_path):
         assert detect_language(str(tmp_path)) == "python"
+
+
+class TestParseLanguagesFor:
+    """parse_languages_for pins the joern-parse frontend from the
+    curated per-profile joern_parse_language values."""
+
+    def test_c_target(self, tmp_path):
+        from packages.joern.lang_config import parse_languages_for
+
+        (tmp_path / "a.c").write_text("int main() {}", encoding="utf-8")
+        assert parse_languages_for(str(tmp_path)) == {"c"}
+
+    def test_python_target(self, tmp_path):
+        from packages.joern.lang_config import parse_languages_for
+
+        (tmp_path / "a.py").write_text("x = 1", encoding="utf-8")
+        assert parse_languages_for(str(tmp_path)) == {"pythonsrc"}
+
+    def test_majority_language_wins(self, tmp_path):
+        from packages.joern.lang_config import parse_languages_for
+
+        for i in range(3):
+            (tmp_path / f"f{i}.go").write_text("package main", encoding="utf-8")
+        (tmp_path / "u.py").write_text("x = 1", encoding="utf-8")
+        assert parse_languages_for(str(tmp_path)) == {"gosrc"}
+
+    def test_every_profile_declares_a_frontend(self):
+        from packages.joern.lang_config import _PROFILES
+
+        for name, profile in _PROFILES.items():
+            assert profile.joern_parse_language, name

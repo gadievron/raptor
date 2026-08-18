@@ -13,9 +13,14 @@ The slash command is for **research and ops**, not a routing API. The actual rou
 
 ```
 /scorecard                              # default: list all cells with derived columns
-/scorecard list [flags]                 # filtered / sorted views (--recency N adds a recency view + impact footer)
+/scorecard list [flags]                 # filtered / sorted views (--freshness N weights recent behaviour)
+/scorecard summary                      # aggregate rollup
+/scorecard recommend                    # actionable suggestions
 /scorecard compare <model-a> <model-b>  # side-by-side on shared decision_classes
 /scorecard samples <decision_class>     # disagreement-reasoning samples (the "why was it wrong?" view)
+/scorecard chain-closure                # exploit-chain closure view
+/scorecard mark ...                     # record an explicit operator-feedback event on a cell
+/scorecard tool-evidence ...            # record a tool-evidence event
 /scorecard pin <decision_class> --model <m> --as <short-circuit|fall-through|auto>
 /scorecard unpin <decision_class> --model <m>
 /scorecard reset [<decision_class>] [--model <m>] [--older-than-days <n>] [--all]
@@ -23,7 +28,7 @@ The slash command is for **research and ops**, not a routing API. The actual rou
 
 **On a bare `/scorecard` (no args), run `libexec/raptor-llm-scorecard` directly — the CLI now defaults to `list`. Do NOT deliberate or interpret; treat the input as a natural-language question only when the user actually types one.** (Keeps `/scorecard` instant instead of pausing on an LLM round-trip.)
 
-`list` flags: `--by-savings` `--by-miss-rate` `--untrusted` `--learning` `--prefix <prefix>` (filter by decision_class prefix) `--since <Nd|Nh>` `--recency <days>` (weight the policy/wilson/calls columns toward recent behaviour).
+`list` flags: `--by-savings` `--by-miss-rate` `--by-cost` `--untrusted` `--learning` `--prefix <prefix>` (filter by decision_class prefix) `--event-type <type>` `--since <Nd|Nh>` `--freshness <days>` (weight recent behaviour more heavily, halving an observation's weight every N days).
 
 A `calls` column shows per-model usage volume. Models appear here once used — even before any reliability outcome is scored — via the run-end usage flush; a `_usage` decision_class row is the pure usage signal (no reliability data yet).
 
@@ -37,7 +42,7 @@ The CLI takes canonical model names. When the user types something shorter, reso
 |---|---|
 | `haiku` | `claude-haiku-4-5` |
 | `sonnet` | `claude-sonnet-4-6` |
-| `opus` | `claude-opus-4-7` (or whatever's in `LLMConfig.primary_model`) |
+| `opus` | `claude-opus-4-6` (or whatever's in `LLMConfig.primary_model`) |
 | `flash` / `flash-lite` | `gemini-2.5-flash-lite` |
 | `4o-mini` | `gpt-4o-mini` |
 | `mistral-small` | `mistral-small-latest` |
@@ -70,7 +75,7 @@ Format: `<consumer>:<rule_or_subject>`. Examples:
 | hypothesis | `hypothesis:taint_flow` *(future)* |
 | crash | `crash:control_flow_hijack:x86_64` *(future)* |
 
-Prefix-filter on `--consumer <prefix>` to scope a query to one consumer's data.
+Prefix-filter on `--prefix <prefix>` to scope a query to one consumer's data.
 
 For codeql, the rule_id already encodes the language (`py/...`, `cpp/...`, `js/...`) so there's no separate language axis on the cell — `codeql:py/sql-injection` IS the per-language bucket.
 
@@ -82,7 +87,7 @@ When the user asks anything about a cell or model, follow these rules. Don't dra
 - **Wilson 95% upper-bound on miss-rate is the trust metric, not the point estimate.** A cell with 0/10 wrong has a Wilson UB of ~26%, not 0%. Always report Wilson UB when comparing or claiming reliability.
 - **Policy = derived, not stored:** `auto` cells get policy from Wilson + n; `force_*` cells override. Always show the policy, not just the raw counts.
 - **`calls_saved` = `cheap_short_circuit.correct` count.** Each is a full-tier call avoided. Multiply by the operator's per-call cost delta to estimate $. Do not invent a $ number unless the user gave one.
-- **"Trust" measures cheap-vs-full agreement, not correctness.** The scorecard's full ANALYSE comparison is "more authoritative" but it's still a model. Genuine ground truth requires the operator-feedback event-type producer (not yet wired). If the user asks "is this model actually correct?", flag the limitation explicitly.
+- **"Trust" measures cheap-vs-full agreement, not correctness.** The scorecard's full ANALYSE comparison is "more authoritative" but it's still a model. Genuine ground truth comes from operator feedback recorded via the `mark` subcommand (no automated producer, by design). If the user asks "is this model actually correct?", flag the limitation explicitly.
 - **No cross-model transfer.** Stats reset per-model. Don't assume Haiku's track record on a rule says anything about Flash-Lite's.
 - **Trust isn't permanent: 5% of trusted calls re-validate.** `scorecard_shadow_rate` keeps fresh signal flowing. The CLI's `policy` column shows the cell's underlying classification, not the per-call sampled outcome — operators inspecting the data don't need to think about this.
 - **No per-codebase scoping.** Cells aggregate across every codebase the operator has scanned. If the user is asking about a specific project, say the data may include observations from other projects (cross-project pooling is the design intent — usually a feature, sometimes a confounder).
@@ -108,9 +113,9 @@ When users ask the kinds of natural-language questions below, here's how to driv
 
 | User asks | What to run |
 |---|---|
-| "Which model is most reliable on Python codebases?" | `list --consumer codeql` filtered to `py/...` rules; group by model; report Wilson UB averages weighted by n. Note: only meaningful where models overlap. |
+| "Which model is most reliable on Python codebases?" | `list --prefix codeql` filtered to `py/...` rules; group by model; report Wilson UB averages weighted by n. Note: only meaningful where models overlap. |
 | "Where is fast-tier saving the most?" | `list --by-savings`. Top rows are the cells where short-circuit is paying off. |
-| "What rules should I disable fast-tier for?" | `list --untrusted`. These cells already auto-fall-through. Operator can pin them with `pin --as force_fall_through` if they want to lock the decision. |
+| "What rules should I disable fast-tier for?" | `list --untrusted`. These cells already auto-fall-through. Operator can pin them with `pin --as fall-through` if they want to lock the decision. |
 | "Why is Haiku wrong on `js/path-injection`?" | `samples codeql:js/path-injection --model claude-haiku-4-5`. Read through the reasoning pairs. |
 | "How does Haiku compare to Flash-Lite?" | `compare claude-haiku-4-5 gemini-2.5-flash-lite`. Only decision_classes seen by both appear. |
 | "Should I switch from Haiku to Flash-Lite?" | Run `compare`. Look for systematic miss-rate differences. Caveat: requires significant overlap in observations; flag if shared cells have small n. |
@@ -123,7 +128,7 @@ After showing scorecard data, look for actionable follow-ups and offer them — 
 
 - A trustworthy cell on a rule that fires often is the operator's biggest fast-tier win. Surface the `calls_saved` figure as a positive.
 - A cell that's been in `learning` mode for >30 days might be near-trustworthy with one more run. Suggest re-running the scan.
-- A `fall-through` cell with high `n` represents wasted cheap-tier calls (we always run both during fall-through). Offer `pin --as force_fall_through` to skip the cheap call entirely for that cell — saves the cheap-tier cost on every future scan.
+- A `fall-through` cell with high `n` represents wasted cheap-tier calls (we always run both during fall-through). Offer `pin --as fall-through` to skip the cheap call entirely for that cell — saves the cheap-tier cost on every future scan.
 - A model that's overruled often across many decision_classes might be the wrong choice for fast-tier. Suggest comparing alternatives.
 
 ## Limitations to surface
@@ -131,9 +136,9 @@ After showing scorecard data, look for actionable follow-ups and offer them — 
 Always be explicit about these — operators reading the scorecard at face value will misread it otherwise:
 
 - **`0/0` cells mean "no observations yet", not "this model is perfect at this event type."** Even with all producers wired, cells stay zero until the relevant condition triggers — e.g. `multi_model_consensus` only records on DISPUTED findings (100%-agreement panels correctly produce no events); `judge_review` only fires when a judge is configured; `tool_evidence` requires an external validator to disagree with the model. Read `0/0` as absent signal, not validation.
-- **"Correct" means "matched full ANALYSE", not "matched ground truth."** Both models can share blind spots. The operator-feedback hook (when wired) is what closes that loop.
+- **"Correct" means "matched full ANALYSE", not "matched ground truth."** Both models can share blind spots. Operator feedback (`mark`) is what closes that loop.
 - **Statistical model is Wilson 95% upper bound, not exact Bayesian.** It's standard for proportion CIs; calibrated for small n (better than naïve point estimate); not the only valid choice.
-- **Cross-project data mixes:** the scorecard is global by design (lessons carry across projects). For a project-scoped view, prefix-filter on `--consumer codeql` and use `--since` to scope by recency.
+- **Cross-project data mixes:** the scorecard is global by design (lessons carry across projects). For a project-scoped view, prefix-filter on `--prefix codeql` and use `--since` to scope by recency.
 
 ---
 

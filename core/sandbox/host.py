@@ -4,24 +4,60 @@ Keeps a long-lived sandboxed daemon alive so multiple spawn/probe
 calls share ONE sandbox + Python startup instead of paying it per
 call.
 
-Rendezvous: two FIFOs at ``<target>/rpc_in.fifo`` and
-``<target>/rpc_out.fifo``.  Parent ``mkfifo``s them BEFORE
-launching the sandbox; both sides open them by path.  Same
-underlying inodes via the mount-ns bind of the target directory.
-FIFOs (rather than AF_UNIX sockets) because seccomp:full blocks
-``socket()`` — env parity with parse_result requires the daemon
-to run under the same profile the target does.
+Rendezvous: none — the RPC channel is a pair of inherited pipe fds.
+The parent creates two pipe pairs (``os.pipe()``; CLOEXEC by default
+per PEP 446) and hands the two DAEMON-side ends to the sandbox spawn
+via ``pass_fds`` — subprocess clears CLOEXEC on exactly those fds in
+the spawned child, so they survive the exec chain (unshare → pid-1
+shim → daemon) while every other parent fd stays closed.  Their fd
+numbers ride on the daemon's argv (``--rpc-in-fd N --rpc-out-fd M``);
+the daemon opens nothing by path.  No filesystem name exists for the
+channel, so a hostile target inside the sandbox has nothing to squat,
+replace, symlink-swap, or open — the forged-verdict / injected-request
+races that path-named FIFOs in the sandbox-writable target directory
+allowed are impossible by construction.
+
+Pipes (rather than AF_UNIX sockets) because seccomp:full blocks
+``socket()`` — env parity with parse_result requires the daemon to
+run under the same profile the target does.  The seccomp filter is a
+blocklist that leaves ``pipe``/``pipe2`` alone, and the daemon's own
+use of the channel needs only ``read``/``write``/``close`` at
+runtime, all of which pass the filter.
+
+Once the startup ping proves the daemon is alive, the parent closes
+its copies of the daemon-side ends — from then on EOF on the read
+end means the daemon (or its whole sandbox chain) died.  This
+replaces the FIFO-open timeout dance the path-based rendezvous
+needed.  ``pass_fds`` also routes the spawn down the
+subprocess+preexec path (context.py's ``spawn_eligible`` gate —
+the mount-ns fork chain doesn't plumb inherited fds); net-ns,
+Landlock, seccomp and the pid-ns shim all still apply.
 
 Threading: ``core.sandbox.run`` is blocking, so a background
 thread holds the sandbox open.  The parent-side handle uses the
-FIFOs for RPC while the thread parks in the sandbox call for the
-host's lifetime.  ``close()`` terminates cleanly.
+pipe fds for RPC while the thread parks in the sandbox call for
+the host's lifetime.  ``close()`` terminates cleanly.
+
+Wiring checklist — this docstring is the successor to the pre-wiring
+design note; the module still has zero production callers.  Before
+the first caller (the /exploit knowledge loop, which treats this
+channel's verdicts as ground truth) wires in:
+
+- Inherited-pipe-fd transport replacing the FIFO rendezvous — LANDED
+  (this revision).
+- ``_safe_eval`` node-allowlist trim in the daemon — LANDED.
+- Hostile-peer e2e (``core/sandbox/tests/test_host_rpc.py``): no
+  rendezvous path artifacts under the target dir, forged-verdict
+  write and request-stream read from a daemon-spawned child both
+  fail with EBADF, daemon death surfaces as EOF, ``close()`` leaks
+  no fds.  These exist and must stay green.
 
 The companion daemon script lives at ``core/sandbox/_daemon.py``
 — pure stdlib, no external deps.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -30,7 +66,7 @@ import struct
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -64,15 +100,21 @@ class SandboxHost:
         _thread: threading.Thread,
         _write_fd: int,
         _read_fd: int,
-        _fifo_in: str,
-        _fifo_out: str,
+        _daemon_fds: tuple[int, int] | None,
         _lock: threading.Lock,
     ) -> None:
         self._thread = _thread
         self._write_fd = _write_fd
         self._read_fd = _read_fd
-        self._fifo_in = _fifo_in
-        self._fifo_out = _fifo_out
+        # Parent-held copies of the daemon-side pipe ends. Kept open
+        # only until the startup ping proves the daemon inherited its
+        # own copies, then closed so EOF tracks daemon death.
+        self._daemon_fds = _daemon_fds
+        # The fd numbers as they appear inside the daemon's fd table
+        # (pass_fds preserves numbers). Retained after the parent
+        # copies are closed — diagnostics and the hostile-peer tests
+        # use them.
+        self._daemon_fd_numbers = tuple(_daemon_fds or ())
         self._lock = _lock
         self._closed = False
 
@@ -85,14 +127,14 @@ class SandboxHost:
         cls,
         *,
         target: Path,
-        output: Optional[Path] = None,
-        readable_paths: Optional[list[str]] = None,
-        writable_paths: Optional[list[str]] = None,
-        etc_overlay: Optional[dict] = None,
-        env: Optional[dict] = None,
+        output: Path | None = None,
+        readable_paths: list[str] | None = None,
+        writable_paths: list[str] | None = None,
+        etc_overlay: dict | None = None,
+        env: dict | None = None,
         startup_timeout: float = 30.0,
-    ) -> "SandboxHost":
-        """Spawn the daemon inside a sandbox and connect via FIFOs.
+    ) -> SandboxHost:
+        """Spawn the daemon inside a sandbox and connect via pipe fds.
 
         Callers are responsible for assembling ``readable_paths`` and
         ``env`` with any domain-specific paths (e.g. vendored
@@ -103,14 +145,14 @@ class SandboxHost:
 
         daemon = _resolve_daemon_script()
         target_path = Path(target).resolve()
-        fifo_in = str(target_path / "rpc_in.fifo")
-        fifo_out = str(target_path / "rpc_out.fifo")
-        for _p in (fifo_in, fifo_out):
-            try:
-                os.unlink(_p)
-            except OSError:
-                pass
-            os.mkfifo(_p, 0o600)
+
+        # Two pipe pairs. os.pipe() fds are CLOEXEC/non-inheritable by
+        # default (PEP 446); pass_fds below clears CLOEXEC on the two
+        # daemon-side ends in the spawned child ONLY, so the parent's
+        # copies never leak into any other subprocess this process
+        # spawns.
+        in_r, in_w = os.pipe()      # rpc_in: parent writes → daemon reads
+        out_r, out_w = os.pipe()    # rpc_out: daemon writes → parent reads
 
         readable = list(readable_paths or [])
         readable.append(str(daemon))
@@ -121,8 +163,8 @@ class SandboxHost:
             try:
                 r = sandbox_run(
                     ["python3", "-S", str(daemon),
-                     "--fifo-in", fifo_in,
-                     "--fifo-out", fifo_out],
+                     "--rpc-in-fd", str(in_r),
+                     "--rpc-out-fd", str(out_w)],
                     target=str(target_path),
                     output=str(output or target_path),
                     block_network=True,
@@ -135,6 +177,12 @@ class SandboxHost:
                     capture_output=True,
                     text=False,
                     timeout=None,
+                    # Inherit exactly the daemon-side pipe ends across
+                    # the sandbox spawn. sandbox().run() audits each
+                    # entry (rejects sockets, allows pipes) and the
+                    # subprocess backend keeps the fd NUMBERS stable,
+                    # so the argv above stays valid inside the daemon.
+                    pass_fds=(in_r, out_w),
                 )
                 result_holder["returncode"] = r.returncode
                 result_holder["stderr"] = (r.stderr or b"").decode(
@@ -148,77 +196,61 @@ class SandboxHost:
         )
         thread.start()
 
-        _open_state: dict[str, Any] = {
-            "write_fd": None, "read_fd": None, "error": None,
-        }
-
-        def _opener() -> None:
-            try:
-                _open_state["write_fd"] = os.open(fifo_in, os.O_WRONLY)
-                _open_state["read_fd"] = os.open(fifo_out, os.O_RDONLY)
-            except OSError as e:
-                _open_state["error"] = e
-
-        opener_thread = threading.Thread(
-            target=_opener, name="sandbox-host-fifo-opener", daemon=True,
-        )
-        opener_thread.start()
-        opener_thread.join(timeout=startup_timeout)
-        if opener_thread.is_alive() or _open_state["error"] is not None:
-            if not thread.is_alive():
-                raise HostRPCError(
-                    f"daemon died before FIFO open: "
-                    f"err={result_holder.get('error')} "
-                    f"stderr={result_holder.get('stderr', '')[-800:]!r}"
-                )
-            raise HostRPCError(
-                f"FIFO open timed out ({startup_timeout}s) — "
-                f"opener_alive={opener_thread.is_alive()} "
-                f"error={_open_state['error']}"
-            )
-        write_fd = _open_state["write_fd"]
-        read_fd = _open_state["read_fd"]
-
         host = cls(
             _thread=thread,
-            _write_fd=write_fd,
-            _read_fd=read_fd,
-            _fifo_in=fifo_in,
-            _fifo_out=fifo_out,
+            _write_fd=in_w,
+            _read_fd=out_r,
+            _daemon_fds=(in_r, out_w),
             _lock=threading.Lock(),
         )
         try:
-            pong = host._rpc({"cmd": "ping"}, timeout=10.0)
+            pong = host._rpc({"cmd": "ping"}, timeout=startup_timeout)
             if not pong.get("ok"):
                 raise HostRPCError(f"daemon ping failed: {pong}")
-            log.info("sandbox_host started (daemon pid=%s)", pong.get("pid"))
-        except Exception:
+        except Exception as e:
             host.close()
+            if not thread.is_alive():
+                raise HostRPCError(
+                    f"daemon died during startup: "
+                    f"rc={result_holder.get('returncode')} "
+                    f"err={result_holder.get('error')} "
+                    f"stderr={result_holder.get('stderr', '')[-800:]!r}"
+                ) from e
             raise
+        log.info("sandbox_host started (daemon pid=%s)", pong.get("pid"))
+        # The daemon answered, so the spawn happened and the daemon owns
+        # its copies of the pipe ends. Drop the parent's copies now so
+        # the read end delivers EOF the moment the daemon (or its
+        # sandbox chain) exits.
+        host._release_daemon_fds()
         return host
 
+    def _release_daemon_fds(self) -> None:
+        """Close the parent's copies of the daemon-side pipe ends."""
+        fds, self._daemon_fds = self._daemon_fds, None
+        for fd in fds or ():
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
     def close(self) -> None:
-        """Terminate the daemon and clean up FIFOs."""
+        """Terminate the daemon and close the pipe fds."""
         if self._closed:
             return
         self._closed = True
-        try:
+        # Release the daemon-side copies first: if the daemon is
+        # already dead, the close RPC below then fails fast with
+        # EPIPE instead of waiting out its timeout.
+        self._release_daemon_fds()
+        # _rpc wraps channel failures in HostRPCError; a malformed
+        # reply from a dying daemon surfaces as ValueError (json).
+        with contextlib.suppress(HostRPCError, ValueError):
             self._rpc({"cmd": "close"}, timeout=5.0)
-        except Exception:  # noqa: BLE001
-            pass
         for fd in (self._write_fd, self._read_fd):
-            try:
+            with contextlib.suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
         self._thread.join(timeout=5.0)
         if self._thread.is_alive():
             log.warning("sandbox_host worker thread did not exit within 5s")
-        for _p in (self._fifo_in, self._fifo_out):
-            try:
-                os.unlink(_p)
-            except OSError:
-                pass
 
     # ------------------------------------------------------------------
     # RPC verbs
@@ -256,7 +288,7 @@ class SandboxHost:
         per_recv_timeout: float = 3.0,
         total_wait_seconds: float = 5.0,
         flag_string: str = "",
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> dict:
         """Interactive step-driver probe."""
         rpc_timeout = timeout if timeout is not None else (
@@ -279,7 +311,7 @@ class SandboxHost:
         per_recv_timeout: float = 2.0,
         close_after: bool = True,
         total_wait_seconds: float = 3.0,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> dict:
         """stdin_conversation-shaped step-driver."""
         rpc_timeout = timeout if timeout is not None else (
@@ -352,11 +384,11 @@ def one_shot_call(
     cmd: str,
     payload: dict,
     target: Path,
-    output: Optional[Path] = None,
-    readable_paths: Optional[list[str]] = None,
-    writable_paths: Optional[list[str]] = None,
-    etc_overlay: Optional[dict] = None,
-    env: Optional[dict] = None,
+    output: Path | None = None,
+    readable_paths: list[str] | None = None,
+    writable_paths: list[str] | None = None,
+    etc_overlay: dict | None = None,
+    env: dict | None = None,
     timeout: float = 60.0,
 ) -> dict:
     """Spawn the daemon in ``--one-shot`` mode, execute exactly one
@@ -365,7 +397,7 @@ def one_shot_call(
     Used as the fallback substrate when the persistent SandboxHost
     can't start.  Same sandbox posture, same daemon code, same
     protocol — the only difference is the daemon reads one frame from
-    stdin and exits instead of holding open FIFOs.
+    stdin and exits instead of holding the inherited RPC fds.
 
     Callers must assemble ``readable_paths`` and ``env`` with any
     domain-specific paths BEFORE calling.
@@ -397,7 +429,7 @@ def one_shot_call(
             text=False,
             timeout=timeout,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HostRPCError(
             f"one-shot daemon spawn failed: {type(e).__name__}: {e}"
         ) from e

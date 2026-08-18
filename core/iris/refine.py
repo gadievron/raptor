@@ -187,6 +187,11 @@ def refine_loop(
             n_refuted=feedback.n_refuted,
             n_errors=len(feedback.tool_errors),
             n_bypass=len(all_bypass_findings),
+            # Key lists ride the round record so the store's merge
+            # step can drop refuted specs instead of resurrecting
+            # them from the add/upgrade-only merge next run.
+            confirmed_keys=list(feedback.confirmed_keys),
+            refuted_keys=list(feedback.refuted_keys),
         )
         history.append(record)
 
@@ -249,7 +254,14 @@ def refine_loop(
                 if gaps:
                     fb_dict["cwe_gaps"] = gaps
             except Exception:
-                pass
+                # Best-effort prompt enrichment: the feedback dict is
+                # complete without cwe_gaps, and the quality summary
+                # runs over arbitrary spec/outcome data — any failure
+                # here must not abort the refinement round.
+                logger.debug(
+                    "iris.refine: cwe-quality feedback enrichment "
+                    "failed", exc_info=True,
+                )
 
             expanded = _inject_bypass_candidates(
                 candidates, all_bypass_findings,

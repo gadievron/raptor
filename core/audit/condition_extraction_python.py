@@ -15,8 +15,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any
 
 from .condition_classifier import classify_condition
 from .condition_extraction import GuardCondition, SinkGuard
@@ -28,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Common Python sinks (subset for fast matching)
-_PY_SINKS: FrozenSet[str] = frozenset({
+_PY_SINKS: frozenset[str] = frozenset({
     "eval", "exec", "compile",
     "os.system", "os.popen",
     "subprocess.call", "subprocess.run", "subprocess.Popen",
@@ -63,7 +62,7 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
-def _matches_sink(name: str, sink_names: FrozenSet[str]) -> Optional[str]:
+def _matches_sink(name: str, sink_names: frozenset[str]) -> str | None:
     """Check if call name matches a sink. Returns matched name."""
     if not name:
         return None
@@ -86,18 +85,9 @@ def _matches_sink(name: str, sink_names: FrozenSet[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _FunctionContext:
-    """Context for condition extraction within one function."""
-    func_name: str
-    func_node: ast.AST
-    decorators: List[str] = field(default_factory=list)
-    constants: Dict[str, Any] = field(default_factory=dict)
-
-
 def _extract_decorators(
     func_node: ast.AST,
-) -> List[str]:
+) -> list[str]:
     """Extract decorator names from a function definition."""
     decorators = []
     if isinstance(func_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -114,28 +104,27 @@ def _extract_decorators(
     return decorators
 
 
-def _resolve_module_constants(tree: ast.Module) -> Dict[str, Any]:
+def _resolve_module_constants(tree: ast.Module) -> dict[str, Any]:
     """Extract simple module-level constant assignments.
 
     Resolves: MAX_SIZE = 1024, DEBUG = False, etc.
     """
-    constants: Dict[str, Any] = {}
+    constants: dict[str, Any] = {}
     for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.Assign):
-            if (len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Constant)):
-                name = node.targets[0].id
-                # Only track simple constants (str, int, bool, None)
-                if isinstance(node.value.value, (str, int, float, bool, type(None))):
-                    constants[name] = node.value.value
+        if isinstance(node, ast.Assign) and (len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant)):
+            name = node.targets[0].id
+            # Only track simple constants (str, int, bool, None)
+            if isinstance(node.value.value, (str, int, float, bool, type(None))):
+                constants[name] = node.value.value
     return constants
 
 
 def _find_enclosing_function(
     node: ast.AST,
-    parents: Dict[int, ast.AST],
-) -> Optional[ast.AST]:
+    parents: dict[int, ast.AST],
+) -> ast.AST | None:
     """Find the nearest enclosing function definition."""
     cur = parents.get(id(node))
     while cur is not None:
@@ -145,9 +134,9 @@ def _find_enclosing_function(
     return None
 
 
-def _build_parent_map(tree: ast.Module) -> Dict[int, ast.AST]:
+def _build_parent_map(tree: ast.Module) -> dict[int, ast.AST]:
     """Build a parent map for the AST."""
-    parents: Dict[int, ast.AST] = {}
+    parents: dict[int, ast.AST] = {}
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             parents[id(child)] = node
@@ -156,15 +145,15 @@ def _build_parent_map(tree: ast.Module) -> Dict[int, ast.AST]:
 
 def _find_enclosing_ifs(
     node: ast.AST,
-    parents: Dict[int, ast.AST],
-    func_node: Optional[ast.AST],
+    parents: dict[int, ast.AST],
+    func_node: ast.AST | None,
     max_depth: int = 5,
-) -> List[Tuple[ast.AST, str, str]]:
+) -> list[tuple[ast.AST, str, str]]:
     """Find all enclosing if/with/match statements up to function boundary.
 
     Returns (if_node, condition_text, polarity) from innermost to outermost.
     """
-    results: List[Tuple[ast.AST, str, str]] = []
+    results: list[tuple[ast.AST, str, str]] = []
     target_line = getattr(node, "lineno", 0)
 
     cur = parents.get(id(node))
@@ -174,7 +163,7 @@ def _find_enclosing_ifs(
             polarity = _if_polarity(cur, target_line)
             results.append((cur, cond_text, polarity))
 
-        elif isinstance(cur, ast.With) or isinstance(cur, ast.AsyncWith):
+        elif isinstance(cur, (ast.With, ast.AsyncWith)):
             # Context managers as resource guards
             items_text = ", ".join(
                 ast.unparse(item.context_expr) for item in cur.items
@@ -200,15 +189,15 @@ def _if_polarity(if_node: ast.If, target_line: int) -> str:
     """
     # Check if target is in the if-body
     for stmt in if_node.body:
-        if hasattr(stmt, "lineno") and hasattr(stmt, "end_lineno"):
-            if stmt.lineno <= target_line <= (stmt.end_lineno or stmt.lineno):
-                return "required"
+        if (hasattr(stmt, "lineno") and hasattr(stmt, "end_lineno")
+                and stmt.lineno <= target_line <= (stmt.end_lineno or stmt.lineno)):
+            return "required"
 
     # Check if target is in the else-body
     for stmt in if_node.orelse:
-        if hasattr(stmt, "lineno") and hasattr(stmt, "end_lineno"):
-            if stmt.lineno <= target_line <= (stmt.end_lineno or stmt.lineno):
-                return "excluded"
+        if (hasattr(stmt, "lineno") and hasattr(stmt, "end_lineno")
+                and stmt.lineno <= target_line <= (stmt.end_lineno or stmt.lineno)):
+            return "excluded"
 
     # Early-return guard pattern: if-body is just return/raise,
     # target is after the if — condition is negated
@@ -228,13 +217,13 @@ def _if_polarity(if_node: ast.If, target_line: int) -> str:
 
 def _try_resolve_condition(
     cond_text: str,
-    constants: Dict[str, Any],
-) -> Tuple[bool, Dict[str, str]]:
+    constants: dict[str, Any],
+) -> tuple[bool, dict[str, str]]:
     """Try to resolve a condition to concrete values using module constants.
 
     Returns (resolvable, concrete_values).
     """
-    concrete: Dict[str, str] = {}
+    concrete: dict[str, str] = {}
     resolvable = False
 
     for name, value in constants.items():
@@ -247,11 +236,11 @@ def _try_resolve_condition(
 
 def _find_preceding_guard_clauses_ast(
     call_node: ast.AST,
-    parents: Dict[int, ast.AST],
-    func_node: Optional[ast.AST],
-    constants: Dict[str, Any],
+    parents: dict[int, ast.AST],
+    func_node: ast.AST | None,
+    constants: dict[str, Any],
     max_depth: int = 5,
-) -> List[GuardCondition]:
+) -> list[GuardCondition]:
     """Find if-statements before the call that are guard clauses.
 
     A guard clause: if-body is only return/raise, no else branch.
@@ -263,7 +252,7 @@ def _find_preceding_guard_clauses_ast(
     call_line = getattr(call_node, "lineno", 0)
 
     # Find the enclosing body (list of statements) that contains the call
-    body: Optional[List[ast.stmt]] = None
+    body: list[ast.stmt] | None = None
     if isinstance(func_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         body = func_node.body
     else:
@@ -281,7 +270,7 @@ def _find_preceding_guard_clauses_ast(
     if body is None:
         return []
 
-    results: List[GuardCondition] = []
+    results: list[GuardCondition] = []
     for stmt in body:
         if len(results) >= max_depth:
             break
@@ -325,10 +314,10 @@ def _find_preceding_guard_clauses_ast(
 def extract_sink_guards_python(
     source: str,
     filepath: str,
-    sink_names: Optional[FrozenSet[str]] = None,
-    sink_lines: Optional[List[int]] = None,
+    sink_names: frozenset[str] | None = None,
+    sink_lines: list[int] | None = None,
     max_guard_depth: int = 5,
-) -> List[SinkGuard]:
+) -> list[SinkGuard]:
     """Deep Python AST condition extraction.
 
     Provides richer results than the tree-sitter layer:
@@ -360,16 +349,16 @@ def extract_sink_guards_python(
     constants = _resolve_module_constants(tree)
 
     # Find all call nodes that match sinks
-    call_sites: List[Tuple[ast.Call, str]] = []
+    call_sites: list[tuple[ast.Call, str]] = []
 
     if sink_lines is not None:
         # Find calls at specified lines
         sink_lines_set = set(sink_lines)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and hasattr(node, "lineno"):
-                if node.lineno in sink_lines_set:
-                    name = _call_name(node)
-                    call_sites.append((node, name or "<unknown>"))
+            if (isinstance(node, ast.Call) and hasattr(node, "lineno")
+                    and node.lineno in sink_lines_set):
+                name = _call_name(node)
+                call_sites.append((node, name or "<unknown>"))
     else:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
@@ -379,7 +368,7 @@ def extract_sink_guards_python(
                     call_sites.append((node, matched))
 
     # Extract guards for each call site
-    results: List[SinkGuard] = []
+    results: list[SinkGuard] = []
 
     for call_node, sink_api in call_sites:
         func_node = _find_enclosing_function(call_node, parents)
@@ -387,7 +376,7 @@ def extract_sink_guards_python(
         if isinstance(func_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             func_name = func_node.name
 
-        guards: List[GuardCondition] = []
+        guards: list[GuardCondition] = []
 
         # 1. Decorator guards on the enclosing function
         if func_node is not None:

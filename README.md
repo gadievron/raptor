@@ -46,6 +46,14 @@ It is not polished software. It was built in free time, held together with enthu
 
 RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot. We really wanted to call it RAPTOR.
 
+### How it's built
+
+RAPTOR is mostly AI-generated code. The humans set direction, review
+output, and make design decisions; the AI writes the implementation.
+Mechanical verification (tests, static analysis, corpus calibration) keeps
+the quality bar where it needs to be regardless of who — or what — wrote
+the code.
+
 ---
 
 ## Prerequisites
@@ -267,12 +275,6 @@ Z3 is pre-installed in the devcontainer. For manual installs: `pip install z3-so
 
 ---
 
-## orjson (optional)
-
-When `orjson` is installed (`pip install orjson`), RAPTOR uses it for all JSON parsing and serialisation. The speedup matters on large inventories and finding sets. Without it, everything works identically via stdlib `json` — the switch is transparent.
-
----
-
 ## Running offline and in air-gapped pipelines
 
 RAPTOR's custom rules under `engine/semgrep/rules/` are fully local and run without network access.
@@ -302,10 +304,10 @@ CodeQL needs network access only during initial setup to download the CLI and qu
 
 ## Custom rules
 
-RAPTOR ships 185 custom static analysis rules, adversarially tested to eliminate false positives:
+RAPTOR ships 192 custom static analysis rules, adversarially tested to eliminate false positives:
 
 - **Semgrep (123 rules)** — taint-tracking and pattern rules for Python, Go, Java, and JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE, LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure TLS, and hardcoded secrets.
-- **Coccinelle (54 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer, free of stack array, mmap'd memory, use-after-close), integer bugs (overflow, sign extension, double sizeof), resource leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion, format string injection, TOCTOU races, and more.
+- **Coccinelle (61 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer, free of stack array, mmap'd memory, use-after-close), integer bugs (overflow, sign extension, double sizeof), resource leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion, format string injection, TOCTOU races, and more.
 - **CodeQL (8 queries)** — interprocedural taint tracking for C++ (format string injection, integer truncation, use-after-move, iterator invalidation) and Java (XXE, insecure deserialisation, log injection, Spring SSRF).
 
 Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`, `engine/codeql/queries/`. These complement the registry packs (`p/security-audit`, `p/owasp-top-ten`, `p/0xdea`, `p/trailofbits`) which provide ~950 additional rules — overlap is minimal.
@@ -489,6 +491,7 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/python-cli.md` | Python CLI reference for scripting and CI |
 | `docs/concepts.md` | Core concepts: two-layer model, finding lifecycle, choosing a command |
 | `docs/agentic.md` | Autonomous workflow: `/agentic` pipeline, enrichment flags, multi-model |
+| `docs/sage.md` | SAGE persistent memory: setup, HMAC key, CPU/GPU, use cases |
 | `docs/dependencies.md` | External tools, versions, and licences |
 | `tiers/personas/README.md` | Expert persona reference |
 

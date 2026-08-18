@@ -12,20 +12,19 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from core.llm.tool_use.types import (  # noqa: E402
+from core.llm.tool_use.types import (
     Message,
     TextBlock,
     ToolCall,
     ToolResult,
 )
-from core.trajectories import (  # noqa: E402
+from core.trajectories import (
     TRAJECTORY_FILENAME,
     TrajectoryRecord,
     serialize_messages,
     trajectory_path,
     write_trajectory,
 )
-
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -56,18 +55,18 @@ def _msg_user_tool_result(tool_use_id: str, content: str,
 
 
 def _record(run_id: str = "run-0001", **overrides) -> TrajectoryRecord:
-    base = dict(
-        run_id=run_id,
-        finding_id="FND-77",
-        model_name="claude-haiku-4-5",
-        cwe="CWE-787",
-        terminated_by="terminal_tool",
-        iterations=3,
-        tool_calls_made=4,
-        cost_usd=0.12,
-        steps=[],
-        timestamp="2026-06-03T14:05:32+00:00",
-    )
+    base = {
+        "run_id": run_id,
+        "finding_id": "FND-77",
+        "model_name": "claude-haiku-4-5",
+        "cwe": "CWE-787",
+        "terminated_by": "terminal_tool",
+        "iterations": 3,
+        "tool_calls_made": 4,
+        "cost_usd": 0.12,
+        "steps": [],
+        "timestamp": "2026-06-03T14:05:32+00:00",
+    }
     base.update(overrides)
     return TrajectoryRecord(**base)
 
@@ -326,3 +325,37 @@ def test_e2e_engine_run_trajectory(tmp_path):
 
     # Step 3: terminal submission
     assert data["steps"][3]["tool_calls"][0]["name"] == "submit_exploit"
+
+
+# --------------------------------------------------------------------------
+# permissions — trajectory files and run dirs are owner-only
+# --------------------------------------------------------------------------
+
+
+def test_write_creates_owner_only_file_and_dirs(tmp_path):
+    import stat
+
+    old_umask = os.umask(0o022)  # a permissive umask must not widen dirs
+    try:
+        out = write_trajectory(_record(), base=tmp_path)
+    finally:
+        os.umask(old_umask)
+
+    file_mode = stat.S_IMODE(out.stat().st_mode)
+    assert file_mode == 0o600, f"file mode {oct(file_mode)}, expected 0o600"
+    # <base>/trajectories and <base>/trajectories/<run_id> were both
+    # created by this write — both must be 0o700.
+    for d in (out.parent, out.parent.parent):
+        dir_mode = stat.S_IMODE(d.stat().st_mode)
+        assert dir_mode == 0o700, f"{d} mode {oct(dir_mode)}, expected 0o700"
+
+
+def test_write_leaves_existing_directory_modes_alone(tmp_path):
+    import stat
+
+    root = tmp_path / "trajectories"
+    root.mkdir(mode=0o755)
+    root.chmod(0o755)
+    write_trajectory(_record(), base=tmp_path)
+    mode = stat.S_IMODE(root.stat().st_mode)
+    assert mode == 0o755, "pre-existing dir was migrated; only new creations change"

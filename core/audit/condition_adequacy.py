@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any
 
 from .condition_extraction import GuardCondition, SinkGuard
 
@@ -40,16 +40,12 @@ class AdequacyResult:
 
     sink_api: str
     verdict: Adequacy
-    required_categories: FrozenSet[str]
-    present_categories: FrozenSet[str]
-    missing_categories: FrozenSet[str]
-    notes: List[str] = field(default_factory=list)
+    required_categories: frozenset[str]
+    present_categories: frozenset[str]
+    missing_categories: frozenset[str]
+    notes: list[str] = field(default_factory=list)
 
-    @property
-    def is_adequate(self) -> bool:
-        return self.verdict in (Adequacy.SUFFICIENT, Adequacy.PARTIAL)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "sink_api": self.sink_api,
             "verdict": self.verdict.value,
@@ -70,13 +66,13 @@ class SinkSpec:
     """What constitutes adequate protection for a sink class."""
 
     # Categories that MUST be present for the guard to be sufficient
-    required: FrozenSet[str]
+    required: frozenset[str]
     # Categories that help but are not strictly required
-    helpful: FrozenSet[str] = frozenset()
+    helpful: frozenset[str] = frozenset()
     # Categories that are irrelevant for this sink class
-    irrelevant: FrozenSet[str] = frozenset()
+    irrelevant: frozenset[str] = frozenset()
     # Extra validation: regex that must appear in at least one guard's text
-    text_pattern: Optional[re.Pattern] = None
+    text_pattern: re.Pattern | None = None
     # Human note about what "sufficient" means for this sink
     note: str = ""
 
@@ -162,20 +158,16 @@ _ALLOC_SPEC = SinkSpec(
     note="integer overflow check on size argument required before allocation",
 )
 
-# --- Null dereference sinks ---
-_DEREF_SPEC = SinkSpec(
-    required=frozenset({"null"}),
-    helpful=frozenset(),
-    irrelevant=frozenset({"auth", "bounds", "config", "type", "resource"}),
-    note="null/nil check on the pointer is the only relevant guard",
-)
+# Null dereference has no sink-API name to key on (dereference is an
+# operator, not a call), so no deref spec can be registered in the
+# name-keyed table below — that bug class is not assessable here.
 
 
 # ---------------------------------------------------------------------------
 # Sink → spec mapping
 # ---------------------------------------------------------------------------
 
-_SINK_SPECS: Dict[str, SinkSpec] = {}
+_SINK_SPECS: dict[str, SinkSpec] = {}
 
 
 def _register(names: tuple, spec: SinkSpec) -> None:
@@ -257,7 +249,7 @@ _register((
 
 def assess_guard_adequacy(
     sink_api: str,
-    guards: List[GuardCondition],
+    guards: list[GuardCondition],
 ) -> AdequacyResult:
     """Assess whether a guard set is adequate for a specific sink.
 
@@ -266,7 +258,11 @@ def assess_guard_adequacy(
     """
     spec = _lookup_spec(sink_api)
     if spec is None:
-        present = frozenset(g.category for g in guards)
+        # Same semantics as the spec-found path: "unknown" carries no
+        # category signal, so it is excluded from reporting here too.
+        present = frozenset(
+            g.category for g in guards if g.category != "unknown"
+        )
         return AdequacyResult(
             sink_api=sink_api,
             verdict=Adequacy.UNKNOWN,
@@ -279,7 +275,7 @@ def assess_guard_adequacy(
     present_cats = frozenset(g.category for g in guards if g.category != "unknown")
     required = spec.required
     missing = required - present_cats
-    notes: List[str] = []
+    notes: list[str] = []
 
     if spec.note:
         notes.append(spec.note)
@@ -334,7 +330,7 @@ def assess_guard_adequacy(
     )
 
 
-def _lookup_spec(sink_api: str) -> Optional[SinkSpec]:
+def _lookup_spec(sink_api: str) -> SinkSpec | None:
     """Look up the spec for a sink API, trying exact then suffix match."""
     if sink_api in _SINK_SPECS:
         return _SINK_SPECS[sink_api]
@@ -361,11 +357,11 @@ class SinkAsymmetry:
     sink_api: str
     guarded_line: int
     unguarded_line: int
-    guarded_categories: FrozenSet[str]
-    missing_categories: FrozenSet[str]
+    guarded_categories: frozenset[str]
+    missing_categories: frozenset[str]
     confidence: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "sink_file": self.sink_file,
             "sink_function": self.sink_function,
@@ -378,7 +374,7 @@ class SinkAsymmetry:
         }
 
 
-def compare_sink_guards(guards: List[SinkGuard]) -> List[SinkAsymmetry]:
+def compare_sink_guards(guards: list[SinkGuard]) -> list[SinkAsymmetry]:
     """Find asymmetries between calls to the same sink within one function.
 
     When the same sink API is called multiple times in a function, and
@@ -386,12 +382,12 @@ def compare_sink_guards(guards: List[SinkGuard]) -> List[SinkAsymmetry]:
     of a missed check.
     """
     # Group by (file, function, sink_api)
-    groups: Dict[Tuple[str, str, str], List[SinkGuard]] = {}
+    groups: dict[tuple[str, str, str], list[SinkGuard]] = {}
     for sg in guards:
         key = (sg.sink_file, sg.sink_function, sg.sink_api)
         groups.setdefault(key, []).append(sg)
 
-    results: List[SinkAsymmetry] = []
+    results: list[SinkAsymmetry] = []
 
     for (filepath, func_name, api), group in groups.items():
         if len(group) < 2:
@@ -452,8 +448,8 @@ def compare_sink_guards(guards: List[SinkGuard]) -> List[SinkAsymmetry]:
 
 
 def assess_file_guards(
-    guards: List[SinkGuard],
-) -> Tuple[List[AdequacyResult], List[SinkAsymmetry]]:
+    guards: list[SinkGuard],
+) -> tuple[list[AdequacyResult], list[SinkAsymmetry]]:
     """Run full adequacy analysis on all guards extracted from a file.
 
     Returns:

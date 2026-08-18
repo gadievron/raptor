@@ -27,7 +27,7 @@ Run `python3 raptor.py --help` for the mode list, or
 | `binary` | Black-box binary investigation and evidence collection |
 | `fuzz` | Binary fuzzing with AFL++ |
 | `web` | Web application security testing |
-| `agentic` | Full autonomous workflow (Semgrep + CodeQL + LLM analysis) |
+| `agentic` | Full autonomous workflow (Semgrep + LLM analysis; CodeQL when `--codeql` is passed) |
 | `codeql` | CodeQL-only deep analysis |
 | `analyze` | LLM-powered analysis of existing SARIF files |
 | `describe` | Pre-flight inspection: target type, tool readiness, cost estimate |
@@ -40,13 +40,20 @@ Run `python3 raptor.py --help` for the mode list, or
 These sandbox flags apply to every mode. Pass them **after** the mode name:
 
 ```
---sandbox {full,debug,network-only,none}   Force a sandbox profile (default: full)
+--sandbox {debug,frida,full,network-only,none,strict,target_run}
+                                           Force a sandbox profile (default: full)
 --no-sandbox                               Alias for --sandbox none
 --audit                                    Log what enforcement would have blocked
 --audit-verbose                            With --audit, log every traced syscall
---trust-repo                               Mark the target repo as trusted
---version                                  Show RAPTOR version and exit
+--audit-budget N                           With --audit, override the record cap (default 10000)
+--sandbox-readable-path PATH               Extend the sandbox read allowlist (repeatable)
+--sandbox-tool-path DIR                    Make an operator-installed tool dir visible
+                                           inside the sandbox (repeatable; read-only)
 ```
+
+`--trust-repo` (mark the target repo as trusted) is mode-specific: it exists
+on `agentic` and `sca`, not on every mode. `--version` is top-level only —
+`python3 raptor.py --version`, before any mode name.
 
 
 ## Examples
@@ -56,7 +63,7 @@ These sandbox flags apply to every mode. Pass them **after** the mode name:
 python3 raptor.py agentic --repo /path/to/code
 
 # Static analysis only
-python3 raptor.py scan --repo /path/to/code --policy-groups secrets,owasp
+python3 raptor.py scan --repo /path/to/code --policy-groups secrets,injection
 
 # Agentic with pre-mapping and post-validation
 python3 raptor.py agentic --repo /path/to/code --understand --validate
@@ -84,25 +91,27 @@ python3 raptor.py binary investigate /path/to/binary
 python3 raptor.py sca --repo /path/to/code
 
 # Pre-flight target description
-python3 raptor.py describe --repo /path/to/code
+python3 raptor.py describe --target /path/to/code
 
 # Check local tool setup
 python3 raptor.py doctor
 
 # Dynamic instrumentation
-python3 raptor.py frida --target /path/to/binary
+python3 raptor.py frida --target /path/to/binary --template api-trace
 
-# CI pipeline (fast mode, no exploits, non-zero exit on critical findings)
+# CI pipeline (no exploits; exit code 0 = completed, not "no findings")
 python3 raptor.py agentic \
   --repo . \
-  --policy-groups owasp,secrets \
+  --policy-groups secrets,injection \
   --max-findings 5 \
-  --mode fast \
   --no-exploits
 ```
 
 
 ## Environment Variables
+
+The common exports for direct CLI use. Full registry:
+[Environment Variables](environment.md).
 
 ```bash
 # LLM provider (at least one recommended for analysis modes)
@@ -120,7 +129,6 @@ export AWS_REGION="eu-west-1"
 export AWS_BEARER_TOKEN_BEDROCK="..."
 
 # Optional overrides
-export RAPTOR_ROOT="/path/to/raptor"
 export RAPTOR_OUT_DIR="/custom/output/path"
 export RAPTOR_CALLER_DIR="/original/cwd"
 ```

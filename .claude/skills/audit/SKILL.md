@@ -15,9 +15,9 @@ This skill is the in-session execution path for `/audit`, where Claude Code is t
 - Context slice: function source + 1-hop callers + 1-hop callees + checklist metadata.
 - Checklist item fields: `name`, `kind` (`"function"`/`"global"`/`"macro"`/`"class"`), `line_start`, `line_end`, `signature`, `checked_by`, `metadata` (`visibility`, `params`, `return_type`, `attributes`). The field is `kind`, not `type`. Source: `core/inventory/extractors.CodeItem`.
 - Findings format: standard `findings.json` (same as `/scan`, fed to `/validate` unchanged).
-- Annotations: markdown per source file, structured metadata in HTML comments.
+- Review record: journal entries in `review-journal.jsonl`, written via `raptor-audit record`. (Per-function markdown annotations are the operator's layer — written only via `/annotate`, never by the LLM.)
 - Prerequisite: `/understand --map` must have run first. If `context-map.json` is missing from the output directory (or project siblings), run it before starting the review loop — load and follow `.claude/skills/code-understanding/map.md` for the execution steps.
-- Scoping: `--scope <dir>` restricts gap selection to a subdirectory (e.g. `ipc/`, `net/ipv4/`). All annotations and coverage records still write to the project-level output dir, so successive scoped runs accumulate into one audit trail.
+- Scoping: `--scope <dir>` restricts gap selection to a subdirectory (e.g. `ipc/`, `net/ipv4/`). All journal entries and coverage records still write to the project-level output dir, so successive scoped runs accumulate into one audit trail.
 
 ## [DOMAIN] Study the Codebase Before Auditing
 
@@ -48,7 +48,7 @@ The `+` separator in multi-identifier mode triggers correlation — the LLM exam
 2. **LLM generates hypotheses; tools validate.** Never directly classify code as vulnerable — that gets 37% accuracy. Form a hypothesis, generate a mechanical test, run it, evaluate the result.
 3. **Pure self-critique is prohibited.** All iteration MUST include tool feedback. "Review again" without running a tool is forbidden. Generate a new Semgrep rule, CodeQL query, or SMT check instead. Run all tool invocations through `libexec/raptor-audit sweep` (or the Python API `packages.semgrep.runner` / `packages.coccinelle.runner`) — never call `semgrep` or `spatch` directly via Bash. This ensures results are logged to the audit trail automatically.
 4. **Tool evidence is the verdict.** If a tool confirms a hypothesis, the finding includes the tool's output as proof. If a tool refutes it, the hypothesis is discarded — no "but I still think..."
-5. **Annotations record what was tested, not opinions.** Each annotation lists the hypotheses tested, the tools run, and their results. A reviewer can re-run the generated rules to verify.
+5. **Journal entries record what was tested, not opinions.** Each `raptor-audit record` entry lists the hypotheses tested, the tools run, and their results. A reviewer can re-run the generated rules to verify. Never write these via `/annotate` — annotations are human-only.
 6. **One status per function.** Call `libexec/raptor-audit record` exactly once per reviewed function. Status is `clean` (no issues), `dormant` (real bug but currently unreachable/dead code), `suspicious` (concern but not confirmed), `finding` (tool-confirmed reachable vulnerability), or `error` (review blocked). Use `dormant` — not `clean` — when a function has a genuine bug that is unreachable today (dead code, no callers, commented out). A dormant bug becomes a finding when reachability changes.
 7. **Findings need concrete evidence.** A finding must cite: the vulnerable code (file:line), what assumption is violated, and the tool output that confirms it. No "this could be dangerous if..."
 8. **Checker synthesis for patterns.** When a confirmed finding suggests a repeatable pattern (e.g., "unchecked return used as index"), generate a codebase-wide Semgrep or Coccinelle rule and run it. One hypothesis → sweep the whole codebase.
@@ -58,9 +58,9 @@ The `+` separator in multi-identifier mode triggers correlation — the LLM exam
 ## [GATES] Must-Pass Gates
 
 - **G1 [HYPOTHESIS-FIRST]**: Every suspicion MUST be framed as a testable hypothesis before any finding is emitted. "X looks dangerous" is not a hypothesis. "If input Y reaches sink Z without check W, CWE-N applies" is.
-- **G2 [TOOL-GROUNDED]**: Every finding MUST have at least one mechanical validation (Semgrep match, CodeQL path, Coccinelle hit, SMT sat result, or compilation test). Ungrounded findings are annotation-only (`suspicious`), never `finding`.
+- **G2 [TOOL-GROUNDED]**: Every finding MUST have at least one mechanical validation (Semgrep match, CodeQL path, Coccinelle hit, SMT sat result, or compilation test). Ungrounded findings are journal-only (`suspicious`), never `finding`.
 - **G3 [NO-SELF-CRITIQUE-LOOP]**: Iteration without tool feedback is prohibited. If re-reviewing, generate a NEW tool invocation.
-- **G4 [EVIDENCE-IN-ANNOTATION]**: The annotation body MUST include tool names and results, not just prose.
+- **G4 [EVIDENCE-IN-JOURNAL]**: The journal entry body MUST include tool names and results, not just prose.
 - **G5 [READ-FIRST]**: Code must be read with the Read tool before any hypothesis is formed about it.
 - **G6 [ASSUMPTION-TRUST]**: For every function, identify what it trusts (inputs, return values, global state, caller guarantees) and ask what happens when each trust is violated.
 - **G7 [REACHABILITY]**: Findings must be reachable. The `orchestrator` chokepoint mechanically enforces this:
@@ -73,7 +73,7 @@ The `+` separator in multi-identifier mode triggers correlation — the LLM exam
 - Status values in JSON: snake_case (`clean`, `dormant`, `suspicious`, `finding`, `error`)
 - Status in human output: Title Case (`Clean`, `Suspicious`, `Finding`, `Error`)
 - No red/green indicators (perspective-dependent)
-- Annotations are markdown prose — no JSON in annotation bodies
+- Journal entry bodies are markdown prose — no JSON in bodies
 - Findings in `findings.json` use standard RAPTOR schema
 
 ## [STRATEGIES]
@@ -128,7 +128,7 @@ The context is strategy-aware: a function taking `(char *buf, size_t len)` gets 
 - 37.6% MORE critical vulnerabilities after 5 iterations of self-refinement without tool feedback (IEEE-ISTAS 2025). Tool grounding is mandatory, not optional.
 - A confirmed pattern should always generate a codebase-wide sweep rule (Mode 2 / KNighter pattern).
 - Coverage records accumulate across runs. The gap list shrinks each time.
-- Annotations persist in the project directory across runs. They're the audit trail.
+- The review journal persists in the project directory across runs — it's the audit trail. Operator annotations (human-only, via `/annotate`) persist alongside it.
 - After each batch, run `critique` to find gaps before moving on.
 
 ## [RESUME] Scaling and Context Management
@@ -162,7 +162,7 @@ On start, check for an existing run before doing study/map again:
 libexec/raptor-audit gaps --out "$OUTPUT_DIR"
 ```
 
-If gaps exist and `domain-model.json` + `context-map.json` are already present, skip study and map — go straight to the review loop. Coverage records, annotations, and findings from prior sessions are already on disk.
+If gaps exist and `domain-model.json` + `context-map.json` are already present, skip study and map — go straight to the review loop. Coverage records, journal entries, and findings from prior sessions are already on disk.
 
 ### 3. Agent delegation
 

@@ -25,10 +25,12 @@ Threat model:
     permissive policy — by the time we observe its behaviour, the
     binary has already executed. Defense against malicious binary
     updates lives upstream (signed installers, package-hash
-    verification). The cache itself is mode-0600 with sha256 self-
-    integrity check; tampering by an attacker who can write
-    ``~/.cache/raptor/`` is bounded by the attacker's existing
-    same-UID access.
+    verification). The cache itself is mode-0600; on load the cached
+    ``binary_sha256`` is re-checked against the on-disk binary (a
+    staleness / corruption guard, not an integrity seal — the
+    observational fields carry no digest of their own). Tampering by
+    an attacker who can write ``~/.cache/raptor/`` is bounded by the
+    attacker's existing same-UID access.
 
 API:
     calibrate_binary(bin_path, probe_args, *, env_keys=()) → SandboxProfile
@@ -50,14 +52,13 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
 
 from core.atomic_fs import write_text_atomically
 from core.hash import sha256_file as _sha256_file
-
 
 logger = logging.getLogger(__name__)
 
@@ -135,12 +136,12 @@ class SandboxProfile:
     binary_sha256: str
     env_signature: str
     captured_at: str
-    probe_args: List[str] = field(default_factory=list)
-    paths_read: List[str] = field(default_factory=list)
-    paths_written: List[str] = field(default_factory=list)
-    paths_stat: List[str] = field(default_factory=list)
-    proxy_hosts: List[str] = field(default_factory=list)
-    connect_targets: List[ConnectTarget] = field(default_factory=list)
+    probe_args: list[str] = field(default_factory=list)
+    paths_read: list[str] = field(default_factory=list)
+    paths_written: list[str] = field(default_factory=list)
+    paths_stat: list[str] = field(default_factory=list)
+    proxy_hosts: list[str] = field(default_factory=list)
+    connect_targets: list[ConnectTarget] = field(default_factory=list)
     cache_version: int = _CACHE_VERSION
 
     def to_json(self) -> str:
@@ -152,10 +153,13 @@ class SandboxProfile:
         return json.dumps(d, indent=2)
 
     @classmethod
-    def from_json(cls, raw: str) -> "SandboxProfile":
+    def from_json(cls, raw: str) -> SandboxProfile:
         d = json.loads(raw)
         if not isinstance(d, dict):
-            raise ValueError(f"SandboxProfile JSON must be an object, got {type(d).__name__}")
+            raise TypeError(
+                f"SandboxProfile JSON must be an object, "
+                f"got {type(d).__name__}"
+            )
         connects = [
             ConnectTarget(**t) for t in d.get("connect_targets", [])
         ]
@@ -220,11 +224,11 @@ def _now_iso() -> str:
 
 def _spawn_probe(
     bin_path: Path,
-    probe_args: List[str],
+    probe_args: list[str],
     *,
     timeout: float,
-    extra_env: Optional[dict] = None,
-) -> Tuple["SandboxProfile", int]:
+    extra_env: dict | None = None,
+) -> tuple[SandboxProfile, int]:
     """Run the probe under sandbox(observe=True, audit-log proxy).
 
     Returns (partial_profile_with_observed_data, return_code). The
@@ -268,7 +272,10 @@ def _spawn_probe(
             timeout=timeout,
         )
         nonce = result.sandbox_info.get("observe_nonce")
-        observed = parse_observe_log(scratch_path, expected_nonce=nonce)
+        observed = parse_observe_log(
+            scratch_path, expected_nonce=nonce,
+            sandbox_info=result.sandbox_info,
+        )
 
         # Hostnames from the proxy event log (which records the
         # CONNECT target by name regardless of allow/deny). De-dup
@@ -280,11 +287,18 @@ def _spawn_probe(
             if isinstance(ev, dict) and ev.get("host")
         })
 
-        # Map observe ConnectTarget → our local dataclass.
-        connects = [
-            ConnectTarget(ip=t.ip, port=t.port, family=t.family)
-            for t in observed.connect_targets
-        ]
+        # Map observe ConnectTarget → our local dataclass. De-dup +
+        # sort like every other observational list so to_json's
+        # "identical JSON modulo timestamp" promise holds for repeat
+        # probes (frozen dataclass is hashable; sort by field tuple
+        # since order=True isn't set).
+        connects = sorted(
+            {
+                ConnectTarget(ip=t.ip, port=t.port, family=t.family)
+                for t in observed.connect_targets
+            },
+            key=lambda t: (t.family, t.ip, t.port),
+        )
 
         # Build the partial profile. Identity fields filled by
         # caller; we don't have them here.
@@ -419,16 +433,15 @@ def load_or_calibrate(
         env_sig = _env_signature(env_keys)
         fp = _fingerprint(bin_sha, env_sig)
         cached = _load_from_cache(fp)
-        if cached is not None:
-            # Re-verify the on-disk binary still matches. The
-            # fingerprint already includes the sha; this check
-            # catches the (rare) case where the cache file was
-            # truncated/corrupted to a sha that happens to look
-            # right but content drifted.
-            if (cached.binary_sha256 == bin_sha
-                    and cached.cache_version == _CACHE_VERSION):
-                return cached
-            # Cache stale: fall through and recalibrate.
+        # Re-verify the on-disk binary still matches. The fingerprint
+        # already includes the sha; this check catches the (rare)
+        # case where the cache file was truncated/corrupted to a sha
+        # that happens to look right but content drifted. Stale cache
+        # falls through and recalibrates.
+        if (cached is not None
+                and cached.binary_sha256 == bin_sha
+                and cached.cache_version == _CACHE_VERSION):
+            return cached
 
     return calibrate_binary(
         bin_real, probe_args=probe_args,
@@ -463,7 +476,7 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
                        path, exc)
 
 
-def _load_from_cache(fingerprint: str) -> Optional[SandboxProfile]:
+def _load_from_cache(fingerprint: str) -> SandboxProfile | None:
     path = _cache_path_for(fingerprint)
     if not path.exists():
         return None

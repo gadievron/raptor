@@ -19,6 +19,8 @@ out/
 .env*
 .claude/*.local.json
 .claude/raptor.env
+# Per-dispatch runtime state (webfetch anchor files + fetch logs)
+.claude/run/
 
 # Compiled test fixtures (rebuilt on demand)
 core/analysis/tests/fixtures/*.o
@@ -37,3 +39,7 @@ tuning.json
 .sage/
 *.sage.key
 *.gcov
+
+# Rendered per-checkout AppArmor profile (make apparmor-profile output;
+# the tracked source is the .template)
+core/sandbox/helpers/raptor-coord-launcher.apparmor

@@ -15,11 +15,11 @@ from __future__ import annotations
 import gzip
 import io
 import tarfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any
 from unittest.mock import MagicMock
-
 
 from core.json import JsonCache
 from packages.sca.dockerfile_from import (
@@ -30,7 +30,6 @@ from packages.sca.dockerfile_from import (
 )
 from packages.sca.models import Dependency, PinStyle
 
-
 # ---------------------------------------------------------------------------
 # Helpers (lifted from test_dockerfile_from)
 # ---------------------------------------------------------------------------
@@ -38,12 +37,12 @@ from packages.sca.models import Dependency, PinStyle
 
 @dataclass
 class _Resp:
-    parsed: Dict[str, Any]
+    parsed: dict[str, Any]
     content_type: str
-    digest: Optional[str]
+    digest: str | None
 
 
-def _layer(file_payloads: Dict[str, bytes]) -> bytes:
+def _layer(file_payloads: dict[str, bytes]) -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w") as tf:
         for path, content in file_payloads.items():
@@ -147,10 +146,10 @@ def test_scan_dockerfiles_propagates_stage_name(tmp_path):
     )
     layer = _layer({
         "var/lib/dpkg/status": (
-            "Package: openssl\n"
-            "Status: install ok installed\n"
-            "Version: 3.0.11\n\n"
-        ).encode(),
+            b"Package: openssl\n"
+            b"Status: install ok installed\n"
+            b"Version: 3.0.11\n\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     manifest = _Resp(
@@ -218,8 +217,8 @@ def test_sbom_surfaces_source_extra_as_properties(tmp_path):
 def test_sbom_skips_none_valued_source_extra_fields(tmp_path):
     """A None-valued field (e.g. final-stage stage_name) is skipped
     from the property list — the SBOM doesn't carry ``None`` strings."""
-    from packages.sca.sbom import build_bom
     from packages.sca.models import Confidence
+    from packages.sca.sbom import build_bom
     dep = Dependency(
         ecosystem="Debian", name="x", version="1.0",
         declared_in=tmp_path / "Dockerfile",
@@ -247,8 +246,8 @@ def test_disk_cache_populated_after_first_fetch(tmp_path):
     cache = JsonCache(root=tmp_path / "cache")
     layer = _layer({
         "var/lib/dpkg/status": (
-            "Package: x\nStatus: install ok installed\nVersion: 1\n\n"
-        ).encode(),
+            b"Package: x\nStatus: install ok installed\nVersion: 1\n\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     manifest = _Resp(
@@ -261,7 +260,7 @@ def test_disk_cache_populated_after_first_fetch(tmp_path):
             }],
         },
         content_type="application/vnd.oci.image.manifest.v1+json",
-        digest="sha256:" + "m" * 64,
+        digest="sha256:" + "d" * 64,
     )
     client = _client(
         manifests={"11": manifest}, blobs={layer_digest: layer},
@@ -269,11 +268,14 @@ def test_disk_cache_populated_after_first_fetch(tmp_path):
 
     sbom = fetch_image_sbom("debian:11", client=client, disk_cache=cache)
     assert sbom is not None
-    # Cache hit on the digest — second-run lookup pre-population.
+    # Cache hit on the registry-namespaced digest key — second-run
+    # lookup pre-population.
     from core.json.cache import TTL_FOREVER
-    cached = cache.get("sha256:" + "m" * 64, ttl_seconds=TTL_FOREVER)
+    cached = cache.get(
+        "sbom/docker.io/sha256:" + "d" * 64, ttl_seconds=TTL_FOREVER,
+    )
     assert cached is not None
-    assert cached["digest"] == "sha256:" + "m" * 64
+    assert cached["digest"] == "sha256:" + "d" * 64
     assert any(p["name"] == "x" for p in cached["packages"])
 
 
@@ -284,9 +286,9 @@ def test_disk_cache_short_circuits_second_fetch(tmp_path):
     cache = JsonCache(root=tmp_path / "cache")
     layer = _layer({
         "var/lib/dpkg/status": (
-            "Package: cached\nStatus: install ok installed\n"
-            "Version: 1\n\n"
-        ).encode(),
+            b"Package: cached\nStatus: install ok installed\n"
+            b"Version: 1\n\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     manifest = _Resp(
@@ -299,7 +301,7 @@ def test_disk_cache_short_circuits_second_fetch(tmp_path):
             }],
         },
         content_type="application/vnd.oci.image.manifest.v1+json",
-        digest="sha256:" + "m" * 64,
+        digest="sha256:" + "d" * 64,
     )
     client = _client(
         manifests={"11": manifest}, blobs={layer_digest: layer},
@@ -351,8 +353,8 @@ def test_disk_cache_corruption_falls_back_to_fresh_fetch(tmp_path):
 
     layer = _layer({
         "var/lib/dpkg/status": (
-            "Package: ok\nStatus: install ok installed\nVersion: 1\n\n"
-        ).encode(),
+            b"Package: ok\nStatus: install ok installed\nVersion: 1\n\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     manifest = _Resp(
@@ -385,8 +387,8 @@ def test_no_cache_argument_means_no_persistence(tmp_path):
     (tmp_path / "Dockerfile").write_text("FROM debian:11\n")
     layer = _layer({
         "var/lib/dpkg/status": (
-            "Package: x\nStatus: install ok installed\nVersion: 1\n\n"
-        ).encode(),
+            b"Package: x\nStatus: install ok installed\nVersion: 1\n\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     manifest = _Resp(

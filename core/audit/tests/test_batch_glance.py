@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 from core.audit.batch_glance import (
     format_batch_prompt,
-    parse_batch_response,
     make_batch_review_fn,
+    parse_batch_response,
 )
 
 
@@ -24,16 +24,25 @@ def _ctx(file: str, func: str, source: str = "pass") -> dict:
 
 class TestFormatBatchPrompt:
     def test_includes_all_functions(self) -> None:
+        # Enveloped shape: (user, system) — per-function source in
+        # untrusted blocks whose origin carries file:function:lines,
+        # count/instructions in the system text.
         contexts = [_ctx("a.py", "f1"), _ctx("b.py", "f2")]
-        prompt = format_batch_prompt(contexts)
-        assert "a.py:f1" in prompt
-        assert "b.py:f2" in prompt
-        assert "2 functions" in prompt
+        user, system = format_batch_prompt(contexts)
+        assert "a.py:f1" in user
+        assert "b.py:f2" in user
+        assert "2 functions" in system
 
     def test_includes_count_instruction(self) -> None:
         contexts = [_ctx("a.py", f"f{i}") for i in range(5)]
-        prompt = format_batch_prompt(contexts)
-        assert "exactly 5 objects" in prompt
+        _user, system = format_batch_prompt(contexts)
+        assert "exactly 5 objects" in system
+
+    def test_source_travels_in_untrusted_block(self) -> None:
+        contexts = [_ctx("a.py", "f1", source="do_thing()")]
+        user, _system = format_batch_prompt(contexts)
+        assert "do_thing()" in user
+        assert 'kind="source-code"' in user
 
 
 class TestParseBatchResponse:

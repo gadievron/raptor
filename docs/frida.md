@@ -65,9 +65,8 @@ Spawning a binary you can execute does not need `ptrace_scope=0`:
 raptor frida --target ./vulnerable --template api-trace --duration 60
 ```
 
-`raptor doctor` reports the current `ptrace_scope` in its host snapshot,
-and `metadata.json` from each run records it -- useful for "why did
-attach fail" forensics.
+`metadata.json` from each run records the current `ptrace_scope` --
+useful for "why did attach fail" forensics.
 
 ### macOS
 

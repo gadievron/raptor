@@ -10,7 +10,9 @@ where the end-to-end test will live.
 from __future__ import annotations
 
 import sys as _sys
+
 import pytest as _pytest
+
 pytestmark = _pytest.mark.skipif(
     _sys.platform != "linux",
     reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
@@ -28,7 +30,15 @@ import time  # noqa: E402
 
 import pytest  # noqa: E402
 
+from core.sandbox import evidence as evidence_mod  # noqa: E402
 from core.sandbox import tracer  # noqa: E402
+
+
+def _denials_jsonl(run_dir):
+    """Evidence-relocated denials path: <run_dir>/.audit/<name>."""
+    return evidence_mod.evidence_write_path(
+        run_dir, tracer._DENIALS_FILENAME,
+    )
 
 
 # Skip the whole module on archs the tracer doesn't support (currently
@@ -53,7 +63,6 @@ class TestLibcCacheSentinel:
         call_count = [0]
         def fake_find(name):
             call_count[0] += 1
-            return None
         monkeypatch.setattr("ctypes.util.find_library", fake_find)
 
         first = tracer._get_libc()
@@ -262,6 +271,27 @@ class TestDenialTypeMapping:
     def test_unknown_syscall_defaults_to_seccomp(self):
         assert tracer._denial_type("unknown_99999") == "seccomp"
 
+    @pytest.mark.parametrize("name", [
+        "stat", "lstat", "newfstatat", "access",
+        "faccessat", "faccessat2",
+    ])
+    def test_stat_family_typed_as_path_syscall(self, name):
+        # Observe-mode stat-family syscalls map to the file-path
+        # "write" bucket (same convention as read-only opens — "write"
+        # here means "file-path syscall"), not the "seccomp" fallback
+        # reserved for blocklist hits.
+        assert tracer._denial_type(name) == "write"
+
+    def test_every_tabled_stat_syscall_is_mapped(self):
+        # The mechanism: no syscall the tables register as
+        # stat-family may hit the seccomp fallback.
+        stat_family = {"stat", "lstat", "newfstatat", "access",
+                       "faccessat", "faccessat2"}
+        for info in tracer._ARCH_INFO.values():
+            for name in info["syscall_table"].values():
+                if name in stat_family:
+                    assert name in tracer._NAME_TO_TYPE
+
 
 class TestRegisterDecode:
     """Decoder is arch-agnostic: takes a raw user_regs_struct buffer +
@@ -341,7 +371,7 @@ class TestJsonlRecordWrite:
         )
         assert ok is True
 
-        path = tmp_path / tracer._DENIALS_FILENAME
+        path = _denials_jsonl(tmp_path)
         assert path.exists()
         records = [json.loads(line) for line in path.read_text().splitlines() if line]
         assert len(records) == 1
@@ -363,7 +393,7 @@ class TestJsonlRecordWrite:
             tracer._write_record(tmp_path, "openat", 257,
                                  [i, 0, 0, 0, 0, 0], target_pid=1)
 
-        path = tmp_path / tracer._DENIALS_FILENAME
+        path = _denials_jsonl(tmp_path)
         records = [json.loads(line) for line in path.read_text().splitlines() if line]
         assert len(records) == 3
         # First arg differs per record; assert against args[0] specifically.
@@ -379,10 +409,12 @@ class TestJsonlRecordWrite:
 
     def test_o_nofollow_refuses_symlink(self, tmp_path):
         # Mirror the same defense record_denial uses — symlink at the
-        # JSONL path must NOT be followed.
+        # JSONL path (inside the .audit/ evidence dir) must NOT be
+        # followed.
         target = tmp_path / "evil-target"
         target.write_text("ATTACKER OWNED\n")
-        link = tmp_path / tracer._DENIALS_FILENAME
+        link = _denials_jsonl(tmp_path)
+        link.parent.mkdir(mode=0o700)
         os.symlink(target, link)
 
         ok = tracer._write_record(tmp_path, "openat", 257,
@@ -534,7 +566,7 @@ class TestSeizeAndDetachLifecycle:
             assert interrupted is True
 
             # Reap the stop event.
-            wpid, status = os.waitpid(child.pid, 0)
+            _wpid, status = os.waitpid(child.pid, 0)
             assert os.WIFSTOPPED(status), \
                 f"expected stop after INTERRUPT, got status={status:#x}"
 
@@ -578,7 +610,9 @@ class TestMultiProcessSupport:
         # one of these, the test fails AND the comment in _ptrace_seize
         # needs updating.
         from core.sandbox.tracer import (
-            _PTRACE_O_TRACEFORK, _PTRACE_O_TRACEVFORK, _PTRACE_O_TRACECLONE,
+            _PTRACE_O_TRACECLONE,
+            _PTRACE_O_TRACEFORK,
+            _PTRACE_O_TRACEVFORK,
         )
         assert _PTRACE_O_TRACEFORK == 0x00000002
         assert _PTRACE_O_TRACEVFORK == 0x00000004
@@ -598,8 +632,11 @@ class TestMultiProcessSupport:
         # These are stable kernel UAPI; if they ever change the
         # tracer dispatch is silently broken.
         from core.sandbox.tracer import (
-            _PTRACE_EVENT_FORK, _PTRACE_EVENT_VFORK, _PTRACE_EVENT_CLONE,
-            _PTRACE_EVENT_EXIT, _PTRACE_EVENT_SECCOMP,
+            _PTRACE_EVENT_CLONE,
+            _PTRACE_EVENT_EXIT,
+            _PTRACE_EVENT_FORK,
+            _PTRACE_EVENT_SECCOMP,
+            _PTRACE_EVENT_VFORK,
         )
         assert _PTRACE_EVENT_FORK == 1
         assert _PTRACE_EVENT_VFORK == 2
@@ -719,7 +756,7 @@ class TestRecordWithPath:
 
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer._DENIALS_FILENAME).read_text().splitlines()
+            _denials_jsonl(tmp_path).read_text().splitlines()
             if line
         ]
         r = records[0]
@@ -740,7 +777,7 @@ class TestRecordWithPath:
         assert ok is True
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer._DENIALS_FILENAME).read_text().splitlines()
+            _denials_jsonl(tmp_path).read_text().splitlines()
             if line
         ]
         r = records[0]

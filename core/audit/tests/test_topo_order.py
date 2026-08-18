@@ -292,3 +292,116 @@ class TestResolveSCCSummaries:
         assert len(result) == 3
         for member in ("a", "b", "c"):
             assert member in result
+
+
+# ---------------------------------------------------------------------------
+# Iterative Tarjan robustness — must not recurse, must match the
+# classic recursive formulation exactly.
+# ---------------------------------------------------------------------------
+
+
+def _recursive_reference_sccs(adj):
+    """Reference implementation: the original recursive Tarjan.
+
+    Kept verbatim (modulo the counter cell) so the iterative rewrite
+    can be pinned against it on small graphs where recursion is safe.
+    """
+    index_counter = [0]
+    stack = []
+    on_stack = set()
+    indices = {}
+    lowlinks = {}
+    result = []
+
+    all_nodes = set(adj)
+    for targets in adj.values():
+        all_nodes.update(targets)
+
+    def strongconnect(v):
+        indices[v] = lowlinks[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+
+        for w in adj.get(v, []):
+            if w not in indices:
+                strongconnect(w)
+                lowlinks[v] = min(lowlinks[v], lowlinks[w])
+            elif w in on_stack:
+                lowlinks[v] = min(lowlinks[v], indices[w])
+
+        if lowlinks[v] == indices[v]:
+            members = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                members.append(w)
+                if w == v:
+                    break
+            frozen = frozenset(members)
+            is_cycle = len(frozen) > 1 or (
+                len(frozen) == 1 and v in adj.get(v, [])
+            )
+            result.append(SCC(members=frozen, is_cycle=is_cycle))
+
+    for node in sorted(all_nodes):
+        if node not in indices:
+            strongconnect(node)
+
+    return result
+
+
+class TestDetectSCCsIterative:
+    def test_deep_linear_chain_completes(self):
+        """A call chain longer than the recursion limit must not
+        raise RecursionError (the recursive formulation died here)."""
+        n = 100_000
+        adj = {f"n{i:06d}": [f"n{i + 1:06d}"] for i in range(n)}
+        sccs = detect_sccs(adj)
+        assert len(sccs) == n + 1
+        assert all(len(s) == 1 and not s.is_cycle for s in sccs)
+        # Reverse topological: the chain's tail comes out first.
+        assert sccs[0].members == frozenset({f"n{n:06d}"})
+
+    def test_deep_chain_of_two_cycles(self):
+        """Deep recursion through SCC back-edges, not just tree edges."""
+        n = 30_000
+        adj = {}
+        for i in range(n):
+            adj[f"a{i:06d}"] = [f"b{i:06d}"]
+            adj[f"b{i:06d}"] = [f"a{i:06d}"] + (
+                [f"a{i + 1:06d}"] if i + 1 < n else []
+            )
+        sccs = detect_sccs(adj)
+        assert len(sccs) == n
+        assert all(len(s) == 2 and s.is_cycle for s in sccs)
+
+    def test_matches_recursive_reference_on_random_graphs(self):
+        """Randomised equivalence: identical SCC membership, cycle
+        flags, AND emission order versus the recursive original."""
+        import random
+
+        rng = random.Random(0xA0D17)
+        for _ in range(200):
+            n = rng.randint(1, 14)
+            nodes = [f"f{i}" for i in range(n)]
+            adj = {}
+            for v in nodes:
+                if rng.random() < 0.85:
+                    degree = rng.randint(0, min(n, 4))
+                    # Duplicates and self-loops are intentionally
+                    # possible — real call graphs carry both.
+                    adj[v] = [rng.choice(nodes) for _ in range(degree)]
+            assert detect_sccs(adj) == _recursive_reference_sccs(adj)
+
+    def test_matches_reference_on_structured_graphs(self):
+        cases = [
+            {},
+            {"a": []},
+            {"a": ["a"]},
+            {"a": ["b"], "b": ["c"], "c": ["a"], "d": ["c", "e"], "e": ["d"]},
+            {"a": ["b", "b", "a"], "b": ["a"]},
+            {"a": ["b"], "c": ["d"]},  # disconnected components
+        ]
+        for adj in cases:
+            assert detect_sccs(adj) == _recursive_reference_sccs(adj)

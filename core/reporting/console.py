@@ -88,9 +88,17 @@ def render_console_table(
     for j, cap in max_widths.items():
         widths[j] = min(widths[j], cap)
 
+    def _truncate_to_width(s: str, w: int) -> str:
+        cur = 0
+        for i, ch in enumerate(s):
+            cur = _display_width(s[: i + 1])
+            if cur > w:
+                return s[:i]
+        return s
+
     def fmt_row(cols):
         return "  │ " + " │ ".join(
-            _pad_to_width(str(c), widths[j])[:widths[j]]
+            _pad_to_width(_truncate_to_width(str(c), widths[j]), widths[j])
             for j, c in enumerate(cols)
         ) + " │"
 

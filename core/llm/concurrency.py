@@ -25,13 +25,96 @@ T = TypeVar("T")
 
 MAX_WORKERS_CAP = 32
 
+# Concurrency ceiling when the primary model is served by the
+# claudecode transport. RPM-derived counts assume an API connection
+# per worker; here every worker is a full ``claude`` CLI subprocess
+# (multi-second boot, hundreds of MB RSS), and N parallel first
+# requests with an identical prompt prefix race the server-side
+# prompt cache — each pays the full cache WRITE instead of one
+# writing and N-1 reading (measured ~19k tokens / ~$0.25 per miss vs
+# ~$0.02 per hit). A small pool keeps the pipeline parallel while the
+# cache warms after call one. ``RAPTOR_CC_MAX_WORKERS`` overrides;
+# ``tuning.json``'s ``max_llm_workers`` still beats both.
+CC_MAX_WORKERS_DEFAULT = 4
+
+
+def _claudecode_worker_cap() -> int:
+    import os
+    raw = os.environ.get("RAPTOR_CC_MAX_WORKERS", "")
+    try:
+        cap = int(raw) if raw else CC_MAX_WORKERS_DEFAULT
+    except ValueError:
+        logger.warning(
+            "RAPTOR_CC_MAX_WORKERS=%r is not an integer — using %d",
+            raw, CC_MAX_WORKERS_DEFAULT,
+        )
+        cap = CC_MAX_WORKERS_DEFAULT
+    return max(1, min(cap, MAX_WORKERS_CAP))
+
+
+# Concurrency ceiling when the primary model routes via Bedrock.
+# RPM-derived counts assume the account's quota belongs to this run;
+# on Bedrock the quota is per-account-per-region and SHARED — most
+# visibly with the operator's own interactive Claude Code session on
+# the same account, which a 32-worker analysis burst can 429-starve.
+# ``RAPTOR_BEDROCK_MAX_WORKERS`` overrides; ``tuning.json``'s
+# ``max_llm_workers`` still beats both.
+BEDROCK_MAX_WORKERS_DEFAULT = 8
+
+
+def _bedrock_worker_cap() -> int:
+    import os
+    raw = os.environ.get("RAPTOR_BEDROCK_MAX_WORKERS", "")
+    try:
+        cap = int(raw) if raw else BEDROCK_MAX_WORKERS_DEFAULT
+    except ValueError:
+        logger.warning(
+            "RAPTOR_BEDROCK_MAX_WORKERS=%r is not an integer — using %d",
+            raw, BEDROCK_MAX_WORKERS_DEFAULT,
+        )
+        cap = BEDROCK_MAX_WORKERS_DEFAULT
+    return max(1, min(cap, MAX_WORKERS_CAP))
+
+
+def _is_bedrock_primary(model: str) -> bool:
+    """True when *model* is served by the Bedrock provider — same
+    detection shape as :func:`_is_claudecode_primary`."""
+    try:
+        from core.llm.config import _get_default_primary_model
+        mc = _get_default_primary_model()
+    except Exception:  # noqa: BLE001 — config probing is best-effort
+        return False
+    if mc is None or mc.provider != "bedrock":
+        return False
+    return model in ("default", mc.model_name)
+
+
+def _is_claudecode_primary(model: str) -> bool:
+    """True when *model* is served by the claudecode transport.
+
+    The pinned model name is a real backend id (indistinguishable
+    from an API-served one), so the transport is detected via the
+    configured primary provider — same import ``resolve_model_name``
+    already uses for ``"default"``.
+    """
+    try:
+        from core.llm.config import _get_default_primary_model
+        mc = _get_default_primary_model()
+    except Exception:  # noqa: BLE001 — config probing is best-effort
+        return False
+    if mc is None or mc.provider != "claudecode":
+        return False
+    return model in ("default", "session-default", mc.model_name)
+
 
 def derive_max_workers(model: str) -> int:
     """Derive a safe ``max_workers`` from the model's RPM limit.
 
     If ``max_llm_workers`` in ``tuning.json`` is set to a number,
     that value is used (still clamped to [1, 32]).  Otherwise
-    returns ``rpm // 2`` (headroom for retries) clamped to [1, 32].
+    returns ``rpm // 2`` (headroom for retries) clamped to [1, 32]
+    — and additionally clamped to the claudecode subprocess ceiling
+    when the primary model is served by the CLI transport.
     Falls back to 1 when RPM is unknown.
 
     ``"default"`` is resolved to the actual primary model inside
@@ -45,21 +128,101 @@ def derive_max_workers(model: str) -> int:
 
     rpm = rpm_for(model)
     if rpm <= 0:
+        # RPM unknown. For the claudecode transport this is the COMMON
+        # case, not the exception: the session-default sentinel (and any
+        # backend id the limits table doesn't know) resolves to rpm=0,
+        # and the old blanket "fall back to 1" serialized the entire
+        # review loop even though the transport comfortably sustains
+        # its subprocess ceiling. Use the claudecode worker cap as the
+        # floor there; every other unknown model keeps the conservative
+        # serial fallback.
+        if _is_claudecode_primary(model):
+            return _claudecode_worker_cap()
         return 1
-    return max(1, min(rpm // 2, MAX_WORKERS_CAP))
+    workers = max(1, min(rpm // 2, MAX_WORKERS_CAP))
+    if _is_claudecode_primary(model):
+        workers = min(workers, _claudecode_worker_cap())
+    if _is_bedrock_primary(model):
+        # Bedrock quota is per-account-per-region and shared (most
+        # visibly with the operator's live Claude Code session) —
+        # RPM headroom alone over-provisions.
+        workers = min(workers, _bedrock_worker_cap())
+    return workers
+
+
+def warm_claudecode_probe() -> str | None:
+    """Warm the cc-probe cache at run start (best-effort, non-fatal).
+
+    ``derive_max_workers`` and model pinning both key on the
+    backend-resolved model identity, which is only knowable from a
+    real ``claude -p`` call (``probe_cc_session_model``). When the
+    probe cache is cold, every consumer falls back to the
+    session-default sentinel for the whole run. One tiny probe call
+    here (disk-cached for 24h, so usually a no-op) resolves it
+    before any workers are derived or dispatched.
+
+    Guards:
+
+    * skipped under pytest (``PYTEST_CURRENT_TEST``) — tests must
+      never trigger a live LLM call;
+    * skipped when ``RAPTOR_CC_PROBE_WARM=0`` (operator opt-out);
+    * skipped when the primary model is not served by the claudecode
+      transport (nothing to probe);
+    * any failure is swallowed and logged at DEBUG — a dead probe
+      must not fail the run (the transport's own error paths report
+      real dispatch failures).
+
+    Returns the resolved model id, or ``None`` when skipped/failed.
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+    if os.environ.get("RAPTOR_CC_PROBE_WARM", "") == "0":
+        return None
+    try:
+        if not _is_claudecode_primary("default"):
+            return None
+        from core.llm.cc_probe import probe_cc_session_model
+        model = probe_cc_session_model()
+        if model:
+            logger.debug("cc-probe warm: resolved model %s", model)
+        return model
+    except Exception:  # warm is strictly best-effort
+        logger.debug("cc-probe warm failed", exc_info=True)
+        return None
 
 
 def _tuning_path() -> Path:
     return Path(__file__).resolve().parents[2] / "tuning.json"
 
 
+def _strip_json_line_comments(text: str) -> str:
+    """Strip ``//`` line comments while respecting double-quoted strings."""
+    lines = []
+    for line in text.split("\n"):
+        in_str = False
+        i = 0
+        while i < len(line):
+            c = line[i]
+            if c == "\\" and in_str:
+                i += 2
+                continue
+            if c == '"':
+                in_str = not in_str
+            elif c == "/" and not in_str and i + 1 < len(line) and line[i + 1] == "/":
+                line = line[:i]
+                break
+            i += 1
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _read_tuning() -> dict:
     try:
-        import re
         text = _tuning_path().read_text()
-        clean = re.sub(r"//.*", "", text)
+        clean = _strip_json_line_comments(text)
         return json.loads(clean)
-    except Exception:
+    except Exception:  # noqa: BLE001 — tuning.json is optional
         return {}
 
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Run raptor-sca with run-lifecycle integration.
 
 Called by ``bin/raptor-sca`` (user-facing CLI) or directly by the LLM.
@@ -27,37 +29,32 @@ Target resolution for scan (per CLAUDE.md DEFAULT TARGET DIRECTORY):
 from __future__ import annotations
 
 import argparse
-import faulthandler
-import signal
 import sys
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
-        "  Users: run 'bin/raptor-sca <args>' instead.\n"
+        "  Run via 'bin/raptor-sca' instead.\n"
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
-from pathlib import Path
+from pathlib import Path  # noqa: E402
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import core.startup.process_init  # noqa: E402,F401
-
-from core.run.metadata import complete_run, fail_run, start_run     # noqa: E402
-from core.run.output import get_output_dir                           # noqa: E402
-from packages.sca import cli as sca_cli                              # noqa: E402
-from packages.sca.cli import _configure_logging, _print_summary      # noqa: E402
-from packages.sca.cli import SUBCOMMANDS as _SUBCOMMANDS              # noqa: E402
+from core.run.metadata import complete_run, fail_run, start_run  # noqa: E402
+from core.run.output import get_output_dir  # noqa: E402
+from packages.sca import cli as sca_cli  # noqa: E402
+from packages.sca.cli import SUBCOMMANDS as _SUBCOMMANDS  # noqa: E402
+from packages.sca.cli import _configure_logging, _print_summary  # noqa: E402
 
 _HELP = """\
 raptor-sca — dependency security scanner
@@ -188,13 +185,11 @@ def _run_analyse(argv):
 
     start_run(output_dir, "sca", target=str(target))
 
-    if args.trust_repo:
-        try:
-            from core.security.cc_trust import set_trust_override
-            set_trust_override(True)
-        except ImportError:
-            pass
-
+    # ``options_from_args`` resolves the repo-trust umbrella
+    # (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
+    # marker > off) and propagates the resolved value to the
+    # process-wide ``cc_trust`` / ``codeql_trust`` overrides. Do NOT
+    # set the overrides from the raw flag here.
     from packages.sca._scan_args import options_from_args
     options = options_from_args(args)
 
@@ -223,7 +218,11 @@ def _run_analyse(argv):
 
     # CI-gate threshold evaluation — only fires when --fail-on-* set.
     from packages.sca.thresholds import (
-        cfg_from_args, evaluate as eval_thresholds, print_result,
+        cfg_from_args,
+        print_result,
+    )
+    from packages.sca.thresholds import (
+        evaluate as eval_thresholds,
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:

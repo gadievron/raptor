@@ -1,15 +1,32 @@
-"""Tests for core.analysis.taint_approx."""
+"""Tests for core.analysis.taint_approx.
+
+The tree-walk tests use fake nodes and are hermetic (no tree-sitter
+needed); extraction tests require the real C grammar and skip when
+``tree_sitter_c`` is not installed.
+"""
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
-from core.analysis.taint_approx import CTaintApprox, extract_taint_approx_c
-
-ts_c = pytest.importorskip("tree_sitter_c")
+from core.analysis.taint_approx import (
+    CTaintApprox,
+    _find_function_declarator,
+    _find_identifier,
+    _resolve_callee,
+    _scan_calls,
+    _scan_opaque_assignments,
+    _walk_top_level,
+    extract_taint_approx_c,
+)
 
 
 class TestExtractTaintApproxC:
+    @pytest.fixture(autouse=True)
+    def _require_c_grammar(self):
+        pytest.importorskip("tree_sitter_c")
     def test_direct_param_to_dangerous_sink(self):
         code = """
 void parse_header(char *buf, int len) {
@@ -153,6 +170,104 @@ void handler(char *data) {
         assert 0 in approx.direct_flows
         callee_names = [c for c, _ in approx.direct_flows[0]]
         assert "obj.process" in callee_names
+
+
+DEEP = sys.getrecursionlimit() * 3
+
+
+class _FakeNode:
+    """Minimal stand-in for a tree-sitter node."""
+
+    def __init__(self, type_: str, children=None, text=b"", is_named=True):
+        self.type = type_
+        self.children = children or []
+        self.text = text
+        self.is_named = is_named
+
+
+def _deep_chain(depth: int, inner: _FakeNode, wrapper: str) -> _FakeNode:
+    node = inner
+    for _ in range(depth):
+        node = _FakeNode(wrapper, [node])
+    return node
+
+
+class TestIterativeWalks:
+    """The tree walks are iterative: a target file with deep nesting
+    must not abort the prep pass with RecursionError."""
+
+    def test_walk_top_level_survives_deep_nesting(self):
+        root = _deep_chain(DEEP, _FakeNode("identifier"), "compound_statement")
+        results: dict[str, CTaintApprox] = {}
+        _walk_top_level(root, results)          # must not raise
+        assert results == {}
+
+    def test_scan_calls_survives_deep_nesting(self):
+        root = _deep_chain(DEEP, _FakeNode("identifier"), "binary_expression")
+        approx = CTaintApprox(function="f", params=["p"])
+        _scan_calls(root, {"p"}, {"p": 0}, approx)   # must not raise
+        assert approx.direct_flows == {}
+
+    def test_scan_opaque_assignments_survives_deep_nesting(self):
+        root = _deep_chain(DEEP, _FakeNode("identifier"), "binary_expression")
+        approx = CTaintApprox(function="f", params=["p"])
+        _scan_opaque_assignments(root, {"p"}, approx)  # must not raise
+        assert not approx.has_opaque_flow
+
+    def test_find_identifier_survives_deep_nesting(self):
+        leaf = _FakeNode("identifier", text=b"needle")
+        root = _deep_chain(DEEP, leaf, "pointer_declarator")
+        assert _find_identifier(root) == "needle"
+
+    def test_find_function_declarator_survives_deep_nesting(self):
+        leaf = _FakeNode("function_declarator")
+        root = _deep_chain(DEEP, leaf, "pointer_declarator")
+        assert _find_function_declarator(root) is leaf
+
+    def test_resolve_callee_unwraps_deep_parens(self):
+        leaf = _FakeNode("identifier", text=b"fnptr")
+        root = _deep_chain(DEEP, leaf, "parenthesized_expression")
+        assert _resolve_callee(root) == ["fnptr"]
+
+    def test_walk_top_level_still_finds_functions(self):
+        # Pre-order behaviour pin: functions nested under translation
+        # unit children are analysed; the walk does not descend into a
+        # function_definition body.
+        decl = _FakeNode("function_declarator", [
+            _FakeNode("identifier", text=b"outer"),
+            _FakeNode("parameter_list"),
+        ])
+        fn = _FakeNode("function_definition", [decl])
+        root = _FakeNode("translation_unit", [fn])
+        results: dict[str, CTaintApprox] = {}
+        _walk_top_level(root, results)
+        assert list(results) == ["outer"]
+
+
+class TestEndToEndDeepFile:
+    def test_deeply_nested_c_file_does_not_abort(self):
+        pytest.importorskip("tree_sitter_c")
+        depth = 2000
+        body = "{\n" * depth + "}\n" * depth
+        code = (
+            "void deep(char *buf) " + body +
+            "\nvoid after(char *src, int n) { memcpy(dst, src, n); }\n"
+        )
+        results = extract_taint_approx_c(code)   # must not raise
+        # The later, well-formed function is still analysed.
+        assert "after" in results
+        assert results["after"].has_any_dangerous()
+
+    def test_normal_extraction_unchanged(self):
+        pytest.importorskip("tree_sitter_c")
+        code = (
+            "void parse(char *buf, int len) {\n"
+            "    memcpy(dst, buf, len);\n"
+            "}\n"
+        )
+        results = extract_taint_approx_c(code)
+        assert results["parse"].params == ["buf", "len"]
+        assert 0 in results["parse"].dangerous_flows
 
 
 class TestCTaintApprox:

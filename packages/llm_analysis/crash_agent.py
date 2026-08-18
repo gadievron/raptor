@@ -10,8 +10,11 @@ import sys
 from pathlib import Path
 
 from core.json import save_json
-from typing import Dict, Optional
-
+from core.llm.client import LLMClient, _is_auth_error
+from core.llm.config import LLMConfig
+from core.llm.detection import detect_llm_availability
+from core.llm.methodology import load_methodology
+from core.llm.providers import ClaudeCodeProvider
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
@@ -22,11 +25,7 @@ from core.security.prompt_envelope import (
     build_prompt,
 )
 from packages.binary_analysis import CrashContext
-from core.llm.methodology import load_methodology
-from core.llm.client import LLMClient, _is_auth_error
-from core.llm.config import LLMConfig
-from core.llm.detection import detect_llm_availability
-from core.llm.providers import ClaudeCodeProvider
+from packages.llm_analysis.cc_dispatch import _safe_id
 
 logger = get_logger()
 
@@ -90,7 +89,7 @@ def _build_crash_analysis_bundle(
     signal_name_fn,
     format_registers_fn,
     *,
-    sage_prior_recall: Optional[str] = None,
+    sage_prior_recall: str | None = None,
 ) -> PromptBundle:
     """Build the crash-analysis prompt as a role-separated PromptBundle.
 
@@ -317,7 +316,7 @@ def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
             kind="crash-input-ascii",
             origin=str(crash_context.input_file),
         ))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         blocks.append(UntrustedBlock(
             content=f"Error reading input file: {exc}",
             kind="crash-input-read-error",
@@ -356,7 +355,7 @@ class CrashAnalysisAgent:
                  record_witnesses: bool = True,
                  execute_exploits: bool = False,
                  execute_timeout: int = 5,
-                 execute_sanitizers: Optional[list] = None):
+                 execute_sanitizers: list | None = None):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -452,7 +451,7 @@ class CrashAnalysisAgent:
                 print("\n⚠️  No LLM available — producing structured findings for manual review", file=sys.stderr)
             print()
 
-    def analyse_crash(self, crash_context: CrashContext, *, sage_prior_recall: Optional[str] = None) -> bool:
+    def analyse_crash(self, crash_context: CrashContext, *, sage_prior_recall: str | None = None) -> bool:
         """
         Analyse a crash using LLM.
 
@@ -523,7 +522,8 @@ class CrashAnalysisAgent:
             # consuming partially-empty / malformed analyses
             # straight into crash_context. Add the same gate.
             from core.llm.response_validation import (
-                attempt_quality_retry, validate_structured_response,
+                attempt_quality_retry,
+                validate_structured_response,
             )
             validated = validate_structured_response(analysis, analysis_schema)
             # Single-retry uplift before consuming. Threshold 0.3 (not
@@ -604,7 +604,7 @@ class CrashAnalysisAgent:
                 logger.debug("  Reasoning preview: %s", reasoning_preview)
 
             # Save analysis
-            analysis_file = self.out_dir / "analysis" / f"{crash_context.crash_id}.json"
+            analysis_file = self.out_dir / "analysis" / f"{_safe_id(crash_context.crash_id)}.json"
             analysis_file.parent.mkdir(parents=True, exist_ok=True)
             
             # Include input file information
@@ -617,12 +617,12 @@ class CrashAnalysisAgent:
             try:
                 with open(crash_context.input_file, 'rb') as f:
                     input_data = f.read()
-                    input_info["input_content_hex"] = input_data.hex()
+                    input_info["input_content_hex"] = input_data[:500].hex()
                     # Include ASCII representation for readability
                     input_info["input_content_ascii"] = input_data.decode('ascii', errors='replace')[:500]  # Truncate long inputs
                     if len(input_data) > 500:
                         input_info["input_content_ascii"] += "... (truncated)"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 input_info["input_content_error"] = str(e)
             
             save_json(analysis_file, {
@@ -636,7 +636,7 @@ class CrashAnalysisAgent:
 
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("✗ LLM analysis failed: %s", e)
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
@@ -700,7 +700,7 @@ class CrashAnalysisAgent:
                         try:
                             exploit_data = json.loads(exploit_data[0])
                             logger.info("Successfully parsed string as JSON")
-                        except Exception as e:
+                        except Exception as e:  # noqa: BLE001
                             logger.error("Failed to parse string as JSON: %s", e)
                             return False
                     else:
@@ -723,12 +723,12 @@ class CrashAnalysisAgent:
                 crash_context.exploit_code = exploit_code
 
                 # Save exploit with full response for debugging
-                exploit_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit.cpp"
+                exploit_file = self.out_dir / "exploits" / f"{_safe_id(crash_context.crash_id)}_exploit.cpp"
                 exploit_file.parent.mkdir(parents=True, exist_ok=True)
                 exploit_file.write_text(exploit_code, encoding="utf-8")
 
                 # Save full response for analysis
-                response_file = self.out_dir / "exploits" / f"{crash_context.crash_id}_exploit_response.txt"
+                response_file = self.out_dir / "exploits" / f"{_safe_id(crash_context.crash_id)}_exploit_response.txt"
                 response_content = f"""REASONING:
 {reasoning}
 
@@ -787,7 +787,7 @@ FULL LLM RESPONSE:
                 logger.warning("   ✗ LLM response did not contain valid code")
                 return False
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("   ✗ Exploit generation failed: %s", e)
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.", file=sys.stderr)
@@ -818,7 +818,7 @@ FULL LLM RESPONSE:
         # (e.g. ``src/foo.c:42``). Empty string when addr2line
         # couldn't resolve the address; ``None`` falls through the
         # language gate without skipping.
-        target_file_path: Optional[str] = None
+        target_file_path: str | None = None
         if crash_context.source_location:
             target_file_path = crash_context.source_location.rsplit(":", 1)[0]
 
@@ -894,7 +894,7 @@ FULL LLM RESPONSE:
         ``"heap_overflow"`` set by the LLM analysis step) via a
         small lookup table.
         """
-        target_file_path: Optional[str] = None
+        target_file_path: str | None = None
         if crash_context.source_location:
             target_file_path = crash_context.source_location.rsplit(":", 1)[0]
 
@@ -914,6 +914,7 @@ FULL LLM RESPONSE:
         finding_cwe = crash_type_to_cwe.get(crash_context.crash_type)
 
         from dataclasses import asdict
+
         from packages.llm_analysis.intent_match import intent_match
 
         verdict = intent_match(
@@ -1042,7 +1043,7 @@ FULL LLM RESPONSE:
             )
 
     @staticmethod
-    def _resolve_execute_outcome(value: Optional[str]):
+    def _resolve_execute_outcome(value: str | None):
         """Map the string form on CrashContext back to WitnessOutcome.
 
         ``CrashContext.execute_outcome`` is a string (enum ``.value``)
@@ -1073,7 +1074,7 @@ FULL LLM RESPONSE:
         }
         return signal_names.get(signal, f"Signal {signal}")
 
-    def _format_registers(self, registers: Dict[str, str]) -> str:
+    def _format_registers(self, registers: dict[str, str]) -> str:
         """Format registers for display."""
         if not registers:
             return "No register information available"

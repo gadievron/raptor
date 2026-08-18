@@ -6,12 +6,12 @@ This module transforms RAPTOR from a fixed pipeline into an intelligent agent
 that makes decisions based on fuzzing state and learned knowledge.
 """
 
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.config import env_flag
 from core.logging import get_logger
 
 logger = get_logger()
@@ -71,12 +71,10 @@ class FuzzingState:
 
     # Strategy metrics
     current_strategy: str = "default"
-    strategies_tried: List[str] = field(default_factory=list)
     successful_strategies: Dict[str, int] = field(default_factory=dict)
 
     # Goal state
     target_goal: Optional[str] = None
-    goal_progress: float = 0.0
 
     # Binary characteristics
     binary_path: Optional[Path] = None
@@ -182,7 +180,7 @@ class FuzzingPlanner:
         # Record decision in history
         self.decision_history.append({
             "time": state.current_time,
-            "action": action,
+            "action": action.value,
             "reasoning": reasoning,
             "state_snapshot": {
                 "crashes": state.total_crashes,
@@ -340,10 +338,8 @@ class FuzzingPlanner:
             logger.info("Current strategy has %s past successes - continuing", success_count)
 
         # High-confidence SAGE cross-run priors → mechanical AFL flag hints (reviewer value loop).
-        if (
-            self.sage_strategy_rows
-            and os.environ.get("RAPTOR_SAGE_AFL_PRIOR", "1").strip().lower()
-            not in ("0", "false", "no")
+        if self.sage_strategy_rows and env_flag(
+            "RAPTOR_SAGE_AFL_PRIOR", default=True
         ):
             try:
                 from core.sage.hooks import (

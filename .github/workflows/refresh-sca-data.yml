@@ -21,9 +21,12 @@ on:
     - cron: '0 6 * * 1'
   workflow_dispatch: {}
 
-# Default GITHUB_TOKEN gets contents+PR write so create-pull-request
-# can land the auto-PR. We keep the workflow's permissions block
-# minimal — no other steps need write.
+# Default GITHUB_TOKEN gets contents+PR write so the publish steps can
+# push the refresh branch and open the auto-PR. Permissions are job-wide
+# by GitHub's model (no per-step grants), so the token is kept out of
+# reach of the internet-data refresh step two ways: checkout runs with
+# persist-credentials:false (nothing in .git/config), and only the two
+# publish steps receive the token via env.
 permissions:
   contents: write
   pull-requests: write
@@ -49,13 +52,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        # NOTE: action refs use floating tags below (`@v6`,
-        # `@v7`). Per design/sca.md §1045, our own workflows should
-        # hash-pin third-party actions; ``raptor-sca fix --cve-only
-        # --hash-pin --hash-pin-write`` resolves these to commit SHAs.
-        # Re-running it after each minor version bump is the
-        # operator's job.
+        # Action refs are hash-pinned per design/sca.md §1045;
+        # ``raptor-sca fix --cve-only --hash-pin --hash-pin-write``
+        # re-resolves them after each minor version bump.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The refresh step below executes repo code over unauthenticated
+          # internet data; keep the write token out of .git/config so that
+          # step can't reach it. The push authenticates explicitly via the
+          # gh credential helper (see Commit + push).
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -117,6 +123,11 @@ jobs:
         run: |
           set -eu
           BRANCH="auto/sca-data-refresh"
+          # persist-credentials:false (see Checkout) kept the token out of
+          # .git/config for the refresh step. Install gh CLI's credential
+          # helper, which reads the token from env at push time without
+          # ever embedding it in any URL stored in .git/config.
+          gh auth setup-git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"

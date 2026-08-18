@@ -52,7 +52,6 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from ..models import Confidence, Dependency, PinStyle
@@ -71,7 +70,7 @@ _KEYVAL_RE = re.compile(r"^\s*([A-Za-z0-9_\-]+)\s*=\s*(.+?)\s*$")
 
 
 @register(filenames=[".gitmodules"])
-def parse(path: Path) -> List[Dependency]:
+def parse(path: Path) -> list[Dependency]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
@@ -86,7 +85,7 @@ def parse(path: Path) -> List[Dependency]:
 
     repo_root = _find_repo_root(path)
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for section_name, fields in sections:
         url = fields.get("url", "").strip()
         sm_path = fields.get("path", "").strip()
@@ -107,16 +106,16 @@ def parse(path: Path) -> List[Dependency]:
     return out
 
 
-def _parse_sections(text: str) -> List[Tuple[str, Dict[str, str]]]:
+def _parse_sections(text: str) -> list[tuple[str, dict[str, str]]]:
     """Walk the INI file, return ``[(section_name, {field: value}), ...]``.
 
     The grammar is git-config syntax: ``[submodule "name"]`` headers
     followed by indented or unindented ``key = value`` pairs. We
     skip comments (``#`` / ``;``) and tolerate stray blank lines.
     """
-    out: List[Tuple[str, Dict[str, str]]] = []
-    current_name: Optional[str] = None
-    current_fields: Dict[str, str] = {}
+    out: list[tuple[str, dict[str, str]]] = []
+    current_name: str | None = None
+    current_fields: dict[str, str] = {}
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith(("#", ";")):
@@ -138,7 +137,7 @@ def _parse_sections(text: str) -> List[Tuple[str, Dict[str, str]]]:
     return out
 
 
-def _find_repo_root(gitmodules_path: Path) -> Optional[Path]:
+def _find_repo_root(gitmodules_path: Path) -> Path | None:
     """Walk up from the .gitmodules path looking for a ``.git``
     directory or file. Submodules can have ``.git`` as a file
     (containing ``gitdir: ../<path>``) — handled separately."""
@@ -151,9 +150,25 @@ def _find_repo_root(gitmodules_path: Path) -> Optional[Path]:
         cur = cur.parent
 
 
+def _is_unsafe_path_fragment(fragment: str) -> bool:
+    """True when a ``.gitmodules``-derived path fragment (submodule
+    name or ``ref:`` target) could steer the resolution outside
+    ``.git/modules``: ``..`` segments, absolute prefixes (POSIX or
+    Windows drive-letter — pathlib ``/`` adopts an absolute right
+    operand wholesale), backslashes, or NUL bytes."""
+    if not fragment or "\\" in fragment or "\x00" in fragment:
+        return True
+    if fragment.startswith("/"):
+        return True
+    if ":" in fragment.split("/", 1)[0]:
+        # Windows drive-letter / scheme-like prefix.
+        return True
+    return ".." in fragment.split("/")
+
+
 def _resolve_submodule_sha(
     repo_root: Path, submodule_name: str,
-) -> Optional[str]:
+) -> str | None:
     """Best-effort resolution of the submodule's committed SHA.
 
     For modern git layouts the submodule's own internal repo lives
@@ -164,9 +179,26 @@ def _resolve_submodule_sha(
     don't try to recover those exotic cases — read fails, return
     None, the dep is recorded with version=None.
 
+    Both the section-header name and the ``ref:`` indirection come
+    straight from attacker-controllable file content — a hostile
+    ``[submodule "../../evil"]`` header or an absolute-path ref
+    must not steer reads outside ``.git/modules``. Fragments with
+    ``..`` segments, absolute prefixes, or backslashes are refused
+    up-front, and every candidate is additionally required to
+    RESOLVE under ``.git/modules`` (catching symlink escapes too).
+
     Returns the 40-char hex SHA on success, None otherwise.
     """
-    candidate = repo_root / ".git" / "modules" / submodule_name / "HEAD"
+    if _is_unsafe_path_fragment(submodule_name):
+        logger.debug(
+            "sca.parsers.gitmodules: refusing submodule name %r "
+            "(path traversal defence)", submodule_name,
+        )
+        return None
+    modules_root = repo_root / ".git" / "modules"
+    candidate = modules_root / submodule_name / "HEAD"
+    if not _is_contained(candidate, modules_root):
+        return None
     if not candidate.is_file():
         return None
     try:
@@ -176,7 +208,15 @@ def _resolve_submodule_sha(
     # HEAD may carry a direct SHA or a ``ref: refs/heads/<branch>``.
     if contents.startswith("ref:"):
         ref = contents[4:].strip()
-        ref_path = repo_root / ".git" / "modules" / submodule_name / ref
+        if _is_unsafe_path_fragment(ref):
+            logger.debug(
+                "sca.parsers.gitmodules: refusing ref %r in %s "
+                "(path traversal defence)", ref, candidate,
+            )
+            return None
+        ref_path = modules_root / submodule_name / ref
+        if not _is_contained(ref_path, modules_root):
+            return None
         if not ref_path.is_file():
             return None
         try:
@@ -189,7 +229,19 @@ def _resolve_submodule_sha(
     return _validate_sha(contents)
 
 
-def _validate_sha(text: str) -> Optional[str]:
+def _is_contained(candidate: Path, bound: Path) -> bool:
+    """True when ``candidate`` RESOLVES under ``bound`` — the final
+    backstop behind the fragment checks (``resolve()`` follows
+    symlinks, so a symlinked modules entry pointing outside the
+    repo is caught here)."""
+    try:
+        candidate.resolve().relative_to(bound.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _validate_sha(text: str) -> str | None:
     """Return the SHA if it looks like a 40-char hex git SHA. Tolerates
     a short SHA prefix (>=7 chars) but doesn't expand — treats only
     full-length SHAs as canonical."""
@@ -201,8 +253,8 @@ def _validate_sha(text: str) -> Optional[str]:
 
 def _build_dep(
     *, section_name: str, url: str, sm_path: str,
-    sha: Optional[str], declared_in: Path,
-) -> Optional[Dependency]:
+    sha: str | None, declared_in: Path,
+) -> Dependency | None:
     ecosystem, name, purl = _classify_url(url, sha)
     if name is None:
         return None
@@ -234,8 +286,8 @@ def _build_dep(
 
 
 def _classify_url(
-    url: str, sha: Optional[str],
-) -> Tuple[str, Optional[str], str]:
+    url: str, sha: str | None,
+) -> tuple[str, str | None, str]:
     """Classify a submodule URL into (ecosystem, name, purl).
 
     GitHub URLs get a ``pkg:github/<owner>/<repo>`` purl; others
@@ -247,8 +299,7 @@ def _classify_url(
     host = (parsed.hostname or "").lower()
     repo_path = parsed.path.lstrip("/")
     # Strip a trailing ``.git`` for a cleaner name + purl.
-    if repo_path.endswith(".git"):
-        repo_path = repo_path[: -len(".git")]
+    repo_path = repo_path.removesuffix(".git")
     if not repo_path:
         return _GENERIC_ECOSYSTEM, None, ""
 
@@ -265,7 +316,7 @@ def _classify_url(
     return _GENERIC_ECOSYSTEM, f"{host}/{repo_path}", _generic_purl(host, repo_path, sha)
 
 
-def _generic_purl(host: str, repo_path: str, sha: Optional[str]) -> str:
+def _generic_purl(host: str, repo_path: str, sha: str | None) -> str:
     purl = f"pkg:generic/{host}/{repo_path}"
     if sha:
         purl += f"@{sha}"

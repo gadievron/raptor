@@ -65,12 +65,14 @@ def write_sbom_json(
     target_name: Optional[str] = None,
     serial_number: Optional[str] = None,
     image_fingerprints: Optional[Dict[str, Any]] = None,
+    project_license: Optional[str] = None,
 ) -> int:
     """Atomically write the merged SBOM+VEX document; return component count."""
     bom = build_bom(deps=deps, vuln_findings=vuln_findings,
                     target_name=target_name,
                     serial_number=serial_number,
-                    image_fingerprints=image_fingerprints)
+                    image_fingerprints=image_fingerprints,
+                    project_license=project_license)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
@@ -87,6 +89,7 @@ def build_bom(
     generated_at: Optional[datetime] = None,
     serial_number: Optional[str] = None,
     image_fingerprints: Optional[Dict[str, Any]] = None,
+    project_license: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return the CycloneDX 1.5 BOM dict (in serialisation order).
 
@@ -95,6 +98,11 @@ def build_bom(
     consumers (Dependency-Track keys on it to detect BOM
     re-uploads vs new BOMs). Defaults to a freshly-generated
     UUID per call. Tests inject a fixed UUID for determinism.
+
+    ``project_license`` — the scanned project's own manifest-declared
+    license. Attached to ``metadata.component`` (the thing this BOM
+    describes), never to any dep's ``components[]`` entry — a dep's
+    license only ever comes from data that describes that dep.
     """
     generated_at = generated_at or datetime.now(timezone.utc)
     if serial_number is None:
@@ -118,10 +126,13 @@ def build_bom(
         }],
     }
     if target_name:
-        bom["metadata"]["component"] = {
+        component: Dict[str, Any] = {
             "type": "application",
             "name": target_name,
         }
+        if project_license:
+            component["licenses"] = _license_block(project_license)
+        bom["metadata"]["component"] = component
     bom["components"] = components
     if vulnerabilities:
         bom["vulnerabilities"] = vulnerabilities

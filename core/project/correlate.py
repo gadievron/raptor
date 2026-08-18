@@ -52,9 +52,9 @@ def get_finding_status(finding: Dict) -> str:
     if "is_true_positive" in finding or "is_exploitable" in finding:
         if finding.get("is_true_positive") is False:
             return "false_positive"
-        if finding.get("is_exploitable"):
+        if finding.get("is_exploitable") is True:
             return "exploitable"
-        if finding.get("is_true_positive"):
+        if finding.get("is_true_positive") is True:
             return "confirmed"
     return finding.get("final_status") or finding.get("status") or ""
 

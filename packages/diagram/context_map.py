@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import html
 import re
-
-from core.json import load_json
 from pathlib import Path
 from typing import Any
 
-from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+from core.json import load_json
+
+from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize_id as _sid
 
 _C0_RE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -25,10 +26,6 @@ def _addr(v: Any) -> str:
     if isinstance(v, int):
         return hex(v)
     return str(v)
-
-
-def _node_id(prefix: str, index: int) -> str:
-    return f"{prefix}{index:03d}"
 
 
 def _text(value: Any) -> str:
@@ -167,7 +164,7 @@ def generate(data: dict[str, Any]) -> str:
     )
     candidate_function_nodes: dict[str, dict[str, Any]] = {}
     entry_by_address = {
-        str(ep.get("address")): _sid(ep.get("id", "EP-?"))
+        _addr(ep.get("address")): _sid(ep.get("id", "EP-?"))
         for ep in entry_points
         if ep.get("address")
     }
@@ -214,7 +211,7 @@ def generate(data: dict[str, Any]) -> str:
     for fn in candidate_function_nodes.values():
         fn_id = _sid(fn.get("id", "BFN-?"))
         name = _text(_first_text(fn, "name", "id") or "?")
-        address = _text(fn.get("address", ""))
+        address = _text(_addr(fn.get("address")))
         label = _text(f"{name}\\n{address}".strip())
         lines.append(f'    {fn_id}["{label}"]')
 
@@ -355,8 +352,12 @@ def generate_forward_reachable_blocks(
         diagram = _render_one_entry_forward(ep, fr)
         if not diagram:
             continue
-        ep_id = ep.get("id", "EP-?")
-        host = fr.get("host", "?")
+        # Both values come raw from the context-map JSON; route through
+        # _text (html-unescape + C0 strip + sanitize) so a crafted
+        # id/host can't break the section heading out of its line or
+        # smuggle control characters into diagrams.md.
+        ep_id = _text(ep.get("id", "EP-?"))
+        host = _text(fr.get("host", "?"))
         title = f"{ep_id}: {host}"
         out.append((title, diagram))
     return out
@@ -375,7 +376,7 @@ def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     host_id = "HOST"
     lines.append("")
     lines.append("    %% Host (entry point's enclosing function)")
-    lines.append(f'    {host_id}["{_sanitize(host)}"]')
+    lines.append(f'    {host_id}["{_text(host)}"]')
 
     internal_names = list(fr.get("internal_names") or [])
     external_names = list(fr.get("external_names") or [])
@@ -390,7 +391,7 @@ def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     for i, name in enumerate(internal_names):
         nid = f"INT{i:03d}"
         int_ids.append(nid)
-        lines.append(f'    {nid}["{_sanitize(name)}"]')
+        lines.append(f'    {nid}["{_text(name)}"]')
         lines.append(f"    {host_id} --> {nid}")
 
     # External nodes — parallelogram shape, distinct from
@@ -403,7 +404,7 @@ def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     for i, name in enumerate(external_names):
         nid = f"EXT{i:03d}"
         ext_ids.append(nid)
-        lines.append(f'    {nid}[/"{_sanitize(name)}"\\]')
+        lines.append(f'    {nid}[/"{_text(name)}"\\]')
         lines.append(f"    {host_id} --> {nid}")
 
     # Truncation note — closure walk hit max_depth, the listed

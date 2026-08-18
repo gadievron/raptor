@@ -6,26 +6,27 @@ function metadata to scanner findings.
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
+
+from core.paths import strip_file_uri, to_repo_relative
 
 
 def normalise_path(path: str, repo_root: str) -> str:
     """Normalise a file path relative to the repo root.
 
     Handles absolute paths, relative paths, file:// URIs, and ./ prefixes.
+    Best-effort semantics: never returns ``None`` — an out-of-root
+    absolute path comes back as a ``../..``-style relative (it simply
+    fails to match any checklist key). Delegates to
+    :func:`core.paths.to_repo_relative`.
     """
-    if path.startswith("file://"):
-        path = path[7:]  # len("file://") == 7
-    if os.path.isabs(path):
-        try:
-            path = os.path.relpath(path, repo_root)
-        except ValueError:
-            pass
-    return os.path.normpath(path)
+    result = to_repo_relative(path, repo_root, outside_root="relative")
+    assert result is not None  # "relative" mode never returns None
+    return result
 
 
-def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
-                    repo_root: str = "") -> Optional[Dict[str, Any]]:
+def lookup_function(checklist: dict[str, Any], file_path: str, line: int,
+                    repo_root: str = "") -> dict[str, Any] | None:
     """Find the function containing a given file:line in the checklist.
 
     Args:
@@ -59,7 +60,7 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
     if not checklist or not file_path or line is None:
         return None
 
-    after_scheme = file_path[7:] if file_path.startswith("file://") else file_path
+    after_scheme = strip_file_uri(file_path)
     if os.path.isabs(after_scheme) and not repo_root:
         raise ValueError(
             f"lookup_function: absolute file_path={file_path!r} "
@@ -103,8 +104,10 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
                 return func
 
             # Fuzzy match: only for functions without line_end
-            if func_end is None:
-                if best_fuzzy is None or func_start > best_fuzzy.get("line_start", 0):
-                    best_fuzzy = func
+            if func_end is None and (
+                best_fuzzy is None
+                or func_start > best_fuzzy.get("line_start", 0)
+            ):
+                best_fuzzy = func
 
     return best_fuzzy

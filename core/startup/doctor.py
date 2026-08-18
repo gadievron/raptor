@@ -79,6 +79,12 @@ def _build_install_hints(missing_tool_names: List[str]) -> dict:
             continue
         binary = dep.get("binary")
         if not binary:
+            # Python-module dependency — a library, not a CLI, so the
+            # advice is a plain pip install of the dep's declared PyPI
+            # name (module and distribution names differ, e.g.
+            # z3 vs z3-solver), not the pipx/PM registry.
+            if dep.get("module") and dep.get("pip"):
+                out[name] = f"pip install {dep['pip']}"
             continue
         try:
             out[binary] = format_install_advice(binary)

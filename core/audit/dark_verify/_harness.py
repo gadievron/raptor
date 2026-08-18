@@ -17,7 +17,6 @@ from typing import Any
 
 from ._types import DarkWitnessSpec
 
-
 # ---------------------------------------------------------------------------
 # Helpers shared across harness generators
 # ---------------------------------------------------------------------------
@@ -321,6 +320,7 @@ def generate_ts_harness(
 
     return textwrap.dedent(f"""\
         import * as path from 'path';
+        process.chdir({json.dumps(target_str)});
         let mod: any;
         try {{
             mod = require(path.resolve({json.dumps(target_str)}, {json.dumps(require_path)}));
@@ -370,8 +370,7 @@ def generate_ruby_harness(
     require_path = lc.get("require_path", "")
     if not require_path:
         rel = spec.file
-        if rel.endswith(".rb"):
-            rel = rel[:-3]
+        rel = rel.removesuffix(".rb")
         require_path = rel
 
     target_str = str(target_root.resolve())
@@ -450,7 +449,16 @@ def generate_rust_harness(
     spec: DarkWitnessSpec,
     target_root: Path,
 ) -> str:
-    """Render a fixed-template Rust harness."""
+    """Render a fixed-template Rust harness.
+
+    rustc accepts exactly one crate root, so the harness pulls the target
+    source in via ``include!`` rather than being compiled alongside it.
+    Contract with ``_execute_rust``: the executor copies the target file to
+    ``target_source.rs`` next to the harness in the work dir — ``include!``
+    resolves relative to the including file, and token-splicing means a
+    target file with its own item/mod tree still lands in a valid position
+    at the crate root.
+    """
     lc = spec.lang_config
     setup_lines = lc.get("setup_lines", [])
     arg_exprs = lc.get("arg_expressions", [str(a) for a in spec.args])
@@ -460,6 +468,8 @@ def generate_rust_harness(
     args_str = ", ".join(arg_exprs)
 
     parts = []
+    parts.append('// Target source spliced in by _execute_rust (single crate root).\n')
+    parts.append('include!("target_source.rs");\n')
     if use_path:
         parts.append(f'use {use_path};\n')
     parts.append('\nfn main() {\n')
@@ -469,13 +479,13 @@ def generate_rust_harness(
     if return_type and return_type != "()":
         parts.append(f'    let result = {spec.function}({args_str});\n')
         parts.append(
-            '    println!("{{\\"status\\":\\"returned\\","'
+            '    println!("{{\\"status\\":\\"returned\\",'
             '\\"value\\":\\"{:?}\\"}}", result);\n'
         )
     else:
         parts.append(f'    {spec.function}({args_str});\n')
         parts.append(
-            '    println!("{{\\"status\\":\\"returned\\","'
+            '    println!("{{\\"status\\":\\"returned\\",'
             '\\"value\\":\\"void\\"}}");\n'
         )
     parts.append('}\n')
@@ -567,8 +577,7 @@ def generate_lua_harness(
     require_path = lc.get("require_path", "")
     if not require_path:
         rel = spec.file
-        if rel.endswith(".lua"):
-            rel = rel[:-4]
+        rel = rel.removesuffix(".lua")
         require_path = rel.replace("/", ".")
 
     args_str = _format_args_scripting(spec.args, nil_kw="nil")

@@ -3,7 +3,10 @@
 Importing this module enables:
 
 - ``faulthandler``: dumps all thread stacks on SIGUSR1 (Linux/macOS)
-  and on fatal signals (SIGSEGV, SIGBUS, SIGABRT, SIGFPE).
+  and on fatal signals (SIGSEGV, SIGBUS, SIGABRT, SIGFPE). Only when
+  ``sys.stderr`` has a real file descriptor — under a captured /
+  in-memory stderr (e.g. some test harnesses), ``init()`` silently
+  does nothing.
 - Future: structured logging setup, locale normalisation, etc.
 
 Usage in libexec scripts (one import, no function call needed)::

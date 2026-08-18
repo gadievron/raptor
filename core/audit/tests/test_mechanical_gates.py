@@ -670,3 +670,15 @@ class TestFormatTypeConstraints:
 
     def test_empty(self):
         assert format_type_constraints([]) == ""
+
+
+class TestRustRefTypeDetection:
+    def test_ref_str_skipped(self):
+        src = "fn process(name: &str) -> () {}\n"
+        results = extract_type_constraints(src, "test.rs", "process")
+        assert all(r["param"] != "name" for r in results)
+
+    def test_ref_u8_slice_skipped(self):
+        src = "fn process(buf: &[u8]) -> () {}\n"
+        results = extract_type_constraints(src, "test.rs", "process")
+        assert all(r["param"] != "buf" for r in results)

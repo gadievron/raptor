@@ -16,26 +16,31 @@ unavailable).
 from __future__ import annotations
 
 import sys as _sys
+
 import pytest as _pytest
+
 pytestmark = _pytest.mark.skipif(
     _sys.platform != "linux",
     reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
 )
 
 
-import json  # noqa: E402
-import os  # noqa: E402
-import platform  # noqa: E402
-import signal  # noqa: E402
-import time  # noqa: E402
+import contextlib
+import json
+import os
+import platform
+import signal
+import time
 
-import pytest  # noqa: E402
+import pytest
 
-from core.sandbox import probes  # noqa: E402
-from core.sandbox import ptrace_probe  # noqa: E402
-from core.sandbox._spawn import run_sandboxed  # noqa: E402
-from core.sandbox import tracer as tracer_mod  # noqa: E402
-
+from core.sandbox import evidence as evidence_mod
+from core.sandbox import (
+    probes,
+    ptrace_probe,
+)
+from core.sandbox import tracer as tracer_mod
+from core.sandbox._spawn import run_sandboxed
 
 pytestmark = [
     pytest.mark.skipif(
@@ -100,8 +105,8 @@ class TestAuditPreflightDecision:
                 env=None, cwd=None, timeout=5,
                 audit_mode=False, audit_run_dir=None,
             )
-        except Exception:
-            pass  # mount-ns failure on this host is fine
+        except Exception:  # noqa: BLE001, S110 — any host-specific mount-ns failure is fine here
+            pass
         assert called == [], (
             f"ptrace probe was called with audit_mode=False — wasted work. "
             f"Got {len(called)} calls."
@@ -112,8 +117,7 @@ class TestAuditPreflightDecision:
         # should be True. We can't easily inspect a local variable
         # of run_sandboxed, but we CAN observe the side effect:
         # seccomp filter gets built with audit_mode=True.
-        from core.sandbox import seccomp
-        from core.sandbox import state
+        from core.sandbox import seccomp, state
 
         # Force probe positive.
         state._ptrace_available_cache = True
@@ -122,11 +126,12 @@ class TestAuditPreflightDecision:
         original = seccomp._make_seccomp_preexec
 
         def spy(profile, block_udp=False, audit_mode=False,
-                observe_mode=False):
+                observe_mode=False, allow_unix_sockets=False):
             captured_audit_mode.append(audit_mode)
             return original(profile, block_udp=block_udp,
                             audit_mode=audit_mode,
-                            observe_mode=observe_mode)
+                            observe_mode=observe_mode,
+                            allow_unix_sockets=allow_unix_sockets)
         monkeypatch.setattr("core.sandbox._spawn._make_seccomp_preexec", spy)
 
         run_dir = tmp_path / "run"
@@ -142,8 +147,8 @@ class TestAuditPreflightDecision:
                 env=None, cwd=None, timeout=5,
                 audit_mode=True, audit_run_dir=str(run_dir),
             )
-        except Exception:
-            pass  # mount-ns failure ok; we just want the spy data
+        except Exception:  # noqa: BLE001, S110 — mount-ns failure ok; we just want the spy data
+            pass
 
         assert captured_audit_mode == [True], (
             f"expected seccomp built with audit_mode=True, "
@@ -154,8 +159,7 @@ class TestAuditPreflightDecision:
         # When audit_mode=True BUT probe says no (Yama scope 3 etc.),
         # _audit_engaged is False — seccomp built with audit_mode=False
         # so the target survives without a tracer attached.
-        from core.sandbox import seccomp
-        from core.sandbox import state
+        from core.sandbox import seccomp, state
 
         # Force probe negative.
         state._ptrace_available_cache = False
@@ -164,11 +168,12 @@ class TestAuditPreflightDecision:
         original = seccomp._make_seccomp_preexec
 
         def spy(profile, block_udp=False, audit_mode=False,
-                observe_mode=False):
+                observe_mode=False, allow_unix_sockets=False):
             captured_audit_mode.append(audit_mode)
             return original(profile, block_udp=block_udp,
                             audit_mode=audit_mode,
-                            observe_mode=observe_mode)
+                            observe_mode=observe_mode,
+                            allow_unix_sockets=allow_unix_sockets)
         monkeypatch.setattr("core.sandbox._spawn._make_seccomp_preexec", spy)
 
         run_dir = tmp_path / "run"
@@ -184,7 +189,7 @@ class TestAuditPreflightDecision:
                 env=None, cwd=None, timeout=5,
                 audit_mode=True, audit_run_dir=str(run_dir),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 — host-specific spawn failure is irrelevant to the spy assertion
             pass
 
         # SECCOMP_ACT_TRACE without a tracer = SIGSYS-kill. Degrade
@@ -296,7 +301,8 @@ class TestAuditModeBasicFlow:
         )
 
         # Tracer wrote some openat records to the JSONL file.
-        jsonl = run_dir / tracer_mod._DENIALS_FILENAME
+        jsonl = (run_dir / evidence_mod.AUDIT_SUBDIR
+                 / tracer_mod._DENIALS_FILENAME)
         assert jsonl.exists(), \
             "tracer didn't write any audit records — handshake broken?"
 
@@ -371,7 +377,8 @@ for _ in range(3):
             f"stderr={result.stderr[:300]!r}"
         )
 
-        jsonl = run_dir / tracer_mod._DENIALS_FILENAME
+        jsonl = (run_dir / evidence_mod.AUDIT_SUBDIR
+                 / tracer_mod._DENIALS_FILENAME)
         assert jsonl.exists()
         records = [
             json.loads(line) for line in
@@ -455,7 +462,7 @@ class TestAuditModeTracerDeath:
                 # exercise EXITKILL.
                 while True:
                     time.sleep(1)
-            except BaseException:
+            except BaseException:  # noqa: BLE001 — post-fork guard: everything must become an exit code
                 os._exit(3)
 
         # === test process ===
@@ -512,11 +519,9 @@ class TestAuditModeTracerDeath:
                     return
                 time.sleep(0.05)
             # Sleeper still alive after 5s — EXITKILL didn't take.
-            try:
+            with contextlib.suppress(Exception):
                 os.kill(sleeper_pid, signal.SIGKILL)
                 os.waitpid(sleeper_pid, 0)
-            except Exception:
-                pass
             pytest.fail(
                 "EXITKILL didn't cascade — sleeper survived tracer "
                 "death for >5s (would eventually SIGSYS-die on next "
@@ -527,14 +532,10 @@ class TestAuditModeTracerDeath:
             for pid in (seizer_pid, sleeper_pid):
                 if pid is None:
                     continue
-                try:
+                with contextlib.suppress(Exception):
                     os.kill(pid, signal.SIGKILL)
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     os.waitpid(pid, os.WNOHANG)
-                except Exception:
-                    pass
             raise
 
 
@@ -572,7 +573,8 @@ class TestSandboxAuditProfile:
 
         # Tracer JSONL fired into output dir (which is what context.py
         # passes as audit_run_dir).
-        jsonl = out / tracer_mod._DENIALS_FILENAME
+        jsonl = (out / evidence_mod.AUDIT_SUBDIR
+                 / tracer_mod._DENIALS_FILENAME)
         assert jsonl.exists(), \
             "audit profile didn't produce tracer JSONL"
         records = [
@@ -622,6 +624,7 @@ class TestAuditModeDegradesWhenPtraceBlocked:
         assert result.returncode == 0
 
         # No JSONL: tracer didn't run.
-        jsonl = run_dir / tracer_mod._DENIALS_FILENAME
+        jsonl = (run_dir / evidence_mod.AUDIT_SUBDIR
+                 / tracer_mod._DENIALS_FILENAME)
         assert not jsonl.exists(), \
             "ptrace-degraded audit mode shouldn't have produced JSONL"

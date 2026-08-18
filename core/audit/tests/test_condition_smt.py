@@ -1,19 +1,21 @@
 """Tests for condition_smt — constant-to-SMT bridge for guard sufficiency."""
 
 
+from core.audit.condition_extraction import GuardCondition, SinkGuard
 from core.audit.condition_smt import (
+    _SECURITY_FIELDS,
+    _extract_lock_object,
     check_all_sufficiency,
+    check_early_release,
     check_guard_sufficiency,
     check_lock_discipline,
+    check_lock_domain,
     check_off_by_one,
     check_path_feasibility,
     check_signed_mismatch,
     constraints_for_guard,
     extract_bounds_constraints,
-    _extract_lock_object,
 )
-from core.audit.condition_extraction import GuardCondition, SinkGuard
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -236,6 +238,7 @@ class TestContractCompliance:
 
     def test_suppress_evidence_raises(self):
         import pytest
+
         from core.audit.safety_contract import ContractViolation, SuppressEvidence
         with pytest.raises(ContractViolation):
             SuppressEvidence(
@@ -511,7 +514,9 @@ class TestCheckRaceProtection:
             "    return v;\n"
             "}\n"
         )
-        r = check_race_protection(src)
+        # lock_sock/release_sock are pack-tier vocabulary now.
+        from core.audit.vocab_packs import load_pack
+        r = check_race_protection(src, load_pack("linux_kernel"))
         assert r.protected is True
 
     def test_rcu_accessor_in_rcu_scope(self):
@@ -681,3 +686,302 @@ class TestCheckLockDiscipline:
         )
         r = check_lock_discipline(src)
         assert not r.violation_found
+
+
+# ---------------------------------------------------------------------------
+# Go early-release hardening (Lever 4)
+# ---------------------------------------------------------------------------
+
+
+class TestGoEarlyReleaseHardening:
+    """Lever 4: widened read pattern and defer handling."""
+
+    def test_method_call_read(self):
+        """val := obj.GetField() should be captured."""
+        src = (
+            "package main\n"
+            "func foo(mu *sync.Mutex, s *State) {\n"
+            "    mu.Lock()\n"
+            "    val := s.GetField()\n"
+            "    mu.Unlock()\n"
+            "    fmt.Println(val)\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert "val" in r.variable
+
+    def test_multi_return_read(self):
+        """val, err := obj.Method() should be captured."""
+        src = (
+            "package main\n"
+            "func foo(mu *sync.Mutex, s *State) {\n"
+            "    mu.Lock()\n"
+            "    val, err := s.Load()\n"
+            "    mu.Unlock()\n"
+            "    if err != nil { return }\n"
+            "    use(val)\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert "val" in r.variable
+
+    def test_defer_use_after_function_body(self):
+        """defer Unlock: variable used after all lock-protected code."""
+        src = (
+            "package main\n"
+            "func foo(mu *sync.Mutex, s *State) int {\n"
+            "    mu.Lock()\n"
+            "    defer mu.Unlock()\n"
+            "    val := s.counter\n"
+            "    // long computation\n"
+            "    time.Sleep(time.Second)\n"
+            "    return val\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert not r.early_release_found
+
+    def test_defer_with_post_unlock_use(self):
+        """defer Unlock + variable used well after function return boundary."""
+        src = (
+            "package main\n"
+            "func process(mu *sync.Mutex, s *State) {\n"
+            "    mu.Lock()\n"
+            "    defer mu.Unlock()\n"
+            "    val := s.data\n"
+            "}\n"
+            "\n"
+            "func other(val int) {\n"
+            "    use(val)\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert not r.early_release_found
+
+    def test_explicit_unlock_still_detected(self):
+        """Explicit Unlock → variable used after: still flagged."""
+        src = (
+            "package main\n"
+            "func foo(mu *sync.Mutex, s *State) {\n"
+            "    mu.Lock()\n"
+            "    val := s.counter\n"
+            "    mu.Unlock()\n"
+            "    fmt.Println(val)\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+
+    def test_no_race_when_unused(self):
+        """Variable read under lock but not used after unlock."""
+        src = (
+            "package main\n"
+            "func foo(mu *sync.Mutex, s *State) {\n"
+            "    mu.Lock()\n"
+            "    val := s.counter\n"
+            "    mu.Unlock()\n"
+            "    unrelated()\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert not r.early_release_found
+
+
+# ---------------------------------------------------------------------------
+# Per-field lock domain (Lever 5)
+# ---------------------------------------------------------------------------
+
+
+class TestCorrelatedFieldAccess:
+    """Lever 5: security-relevant field correlation."""
+
+    def test_cred_and_mm_under_different_locks(self):
+        """Two security fields under different locks → mismatch."""
+        src = (
+            "void task_dump_owner(struct task_struct *task) {\n"
+            "    rcu_read_lock();\n"
+            "    cred = task->cred;\n"
+            "    uid = cred->uid;\n"
+            "    rcu_read_unlock();\n"
+            "    task_lock(task);\n"
+            "    mm = task->mm;\n"
+            "    dumpable = mm->dumpable;\n"
+            "    task_unlock(task);\n"
+            "}\n"
+        )
+        # task_lock and the cred/mm/dumpable fields are pack-tier now.
+        from core.audit.vocab_packs import load_pack
+        r = check_lock_domain(src, load_pack("linux_kernel"))
+        assert r.mismatch_found
+        assert "cred" in r.field or "mm" in r.field or "dumpable" in r.field
+
+    def test_same_security_field_same_lock(self):
+        """Same security field under same lock → no mismatch."""
+        src = (
+            "void safe(struct task_struct *task) {\n"
+            "    rcu_read_lock();\n"
+            "    cred = task->cred;\n"
+            "    uid = task->uid;\n"
+            "    rcu_read_unlock();\n"
+            "}\n"
+        )
+        r = check_lock_domain(src)
+        assert not r.mismatch_found
+
+    def test_non_security_fields_not_flagged(self):
+        """Non-security fields under different locks → no flag."""
+        src = (
+            "void read_stats(struct device *dev) {\n"
+            "    spin_lock(&dev->stats_lock);\n"
+            "    a = dev->rx_count;\n"
+            "    spin_unlock(&dev->stats_lock);\n"
+            "    spin_lock(&dev->tx_lock);\n"
+            "    b = dev->tx_count;\n"
+            "    spin_unlock(&dev->tx_lock);\n"
+            "}\n"
+        )
+        r = check_lock_domain(src)
+        assert not r.mismatch_found
+
+    def test_security_fields_constant(self):
+        """Seed set stays generic; kernel fields come from the pack."""
+        from core.audit.vocab_packs import load_pack
+
+        assert _SECURITY_FIELDS == frozenset({"uid", "euid", "gid", "egid"})
+        pack = load_pack("linux_kernel")
+        combined = _SECURITY_FIELDS | pack.security_fields
+        for f in ("cred", "uid", "mm", "dumpable", "seccomp"):
+            assert f in combined
+
+
+# ---------------------------------------------------------------------------
+# Guard-exit unlock classifier (shared by Go and C)
+# ---------------------------------------------------------------------------
+
+
+class TestGuardExitUnlock:
+    """Shared _find_scope_unlock classifier."""
+
+    def test_c_guard_exit_skipped(self):
+        """unlock+return is a guard exit; race uses the next unlock."""
+        src = (
+            "void process(struct foo *f) {\n"
+            "    spin_lock(&f->lock);\n"
+            "    if (f->error) {\n"
+            "        spin_unlock(&f->lock);\n"
+            "        return;\n"
+            "    }\n"
+            "    val = f->data;\n"
+            "    spin_unlock(&f->lock);\n"
+            "    val->next = NULL;\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert r.release_line == 8
+        assert r.use_line == 9
+
+    def test_c_goto_guard_exit_skipped(self):
+        """unlock+goto is a guard exit in C kernel code."""
+        src = (
+            "void process(struct foo *f) {\n"
+            "    spin_lock(&f->lock);\n"
+            "    if (f->error) {\n"
+            "        spin_unlock(&f->lock);\n"
+            "        goto out;\n"
+            "    }\n"
+            "    val = f->data;\n"
+            "    spin_unlock(&f->lock);\n"
+            "    val->next = NULL;\n"
+            "out:\n"
+            "    return;\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert r.release_line == 8
+
+    def test_c_no_guard_exit(self):
+        """First unlock IS the scope end when not followed by return."""
+        src = (
+            "void simple(struct foo *f) {\n"
+            "    spin_lock(&f->lock);\n"
+            "    val = f->data;\n"
+            "    spin_unlock(&f->lock);\n"
+            "    val->next = NULL;\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert r.release_line == 4
+
+    def test_go_guard_exit_skipped(self):
+        """Go: RUnlock+return guard exit skipped."""
+        src = (
+            "package main\n"
+            "func foo(mu *sync.Mutex, s *State) {\n"
+            "    mu.Lock()\n"
+            "    if s.err != nil {\n"
+            "        mu.Unlock()\n"
+            "        return\n"
+            "    }\n"
+            "    val := s.data\n"
+            "    mu.Unlock()\n"
+            "    fmt.Println(val)\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert r.release_line == 9
+        assert "val" in r.variable
+
+    def test_go_conditional_unlock(self):
+        """Go: conditional unlock (else branch) is the scope boundary.
+
+        Mirrors Rows.Scan: variable read under lock, guard-exit unlocks
+        skipped, conditional unlock in else branch, variable used after.
+        """
+        src = (
+            "package main\n"
+            "func scan(rs *Rows, dest []any) error {\n"
+            "    rs.closemu.RLock()\n"
+            "    if rs.lasterr != nil {\n"
+            "        rs.closemu.RUnlock()\n"
+            "        return rs.lasterr\n"
+            "    }\n"
+            "    cols := rs.lastcols\n"
+            "    if cond(dest) {\n"
+            "        rs.hold = true\n"
+            "    } else {\n"
+            "        rs.closemu.RUnlock()\n"
+            "    }\n"
+            "    use(cols)\n"
+            "    return nil\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert r.early_release_found
+        assert r.release_line == 12
+        assert "cols" in r.variable
+
+    def test_all_unlocks_are_guard_exits(self):
+        """When every unlock is a guard exit, no scope end found → clean."""
+        src = (
+            "package main\n"
+            "func guarded(mu *sync.Mutex, s *State) error {\n"
+            "    mu.Lock()\n"
+            "    if s.err != nil {\n"
+            "        mu.Unlock()\n"
+            "        return s.err\n"
+            "    }\n"
+            "    if s.closed {\n"
+            "        mu.Unlock()\n"
+            "        return ErrClosed\n"
+            "    }\n"
+            "    return nil\n"
+            "}\n"
+        )
+        r = check_early_release(src)
+        assert not r.early_release_found

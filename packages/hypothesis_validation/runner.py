@@ -128,7 +128,6 @@ _TOOL_SELECTION_SCHEMA = {
 
 _EVALUATION_SCHEMA = {
     "reasoning": "string — explanation grounded in the concrete tool output",
-    "matches_support_claim": "boolean — true if at least one match is consistent with the hypothesis",
     "refined_rule": "string — if inconclusive, a revised rule that might produce better evidence (empty string if no refinement possible)",
     "verdict": {
         "type": "string",
@@ -209,8 +208,15 @@ def validate(
             reasoning="LLM did not return a usable tool selection.",
         )
 
+    # LLM structured output may carry null / non-string values in any
+    # field; treat those as absent so validate() keeps its never-raises
+    # contract (a non-string here would blow up on `in` / .strip()).
     tool_name = selection.get("tool", "")
+    if not isinstance(tool_name, str):
+        tool_name = ""
     rule = selection.get("rule", "")
+    if not isinstance(rule, str):
+        rule = ""
     if tool_name not in by_name:
         return ValidationResult(
             verdict="inconclusive",
@@ -234,6 +240,14 @@ def validate(
         )
 
     adapter = by_name[tool_name]
+    # Preserve the selection rationale in the audit log, mirroring how the
+    # evaluate step's reasoning is captured into ValidationResult.
+    logger.debug(
+        "hypothesis_validation: LLM selected tool %r — %s (expected evidence: %s)",
+        tool_name,
+        selection.get("reasoning", ""),
+        selection.get("expected_evidence", ""),
+    )
     all_evidence: List[Evidence] = []
     verdict: Verdict = "inconclusive"
     reasoning = ""
@@ -271,7 +285,11 @@ def validate(
             )
 
         refined_rule = (eval_data or {}).get("refined_rule", "")
-        if not refined_rule or not refined_rule.strip() or refined_rule == rule:
+        if (
+            not isinstance(refined_rule, str)
+            or not refined_rule.strip()
+            or refined_rule == rule
+        ):
             break
 
         curr_step = IterationStep(
@@ -403,67 +421,6 @@ def _ask_llm_to_select_tool(
     return _extract_data(response)
 
 
-def _evaluate(
-    hypothesis: Hypothesis,
-    evidence: ToolEvidence,
-    llm_client: LLMClientProtocol,
-    *,
-    task_type: str,
-) -> tuple[Verdict, str]:
-    """Ask the LLM to evaluate evidence; constrain verdict by mechanical truth.
-
-    Even if the LLM returns "confirmed", we downgrade to inconclusive when
-    the tool failed or produced no matches. This is the architectural
-    invariant: verdicts derive from tool evidence, not LLM opinion. The
-    downgrade ladder lives in `verdict.verdict_from`; we call it here
-    rather than inlining so multi-adapter / iteration callers get the
-    same rules without copy-paste.
-    """
-    if not evidence.success:
-        return "inconclusive", f"Tool '{evidence.tool}' did not run successfully: {evidence.error}"
-
-    if not evidence.matches:
-        # Tool ran cleanly but found nothing. Default to refuted; LLM can
-        # still annotate why this might be inconclusive instead.
-        prompt = _build_evaluate_prompt(hypothesis, evidence)
-        try:
-            response = llm_client.generate_structured(
-                prompt=prompt,
-                schema=_EVALUATION_SCHEMA,
-                task_type=task_type,
-            )
-        except Exception:
-            return "refuted", f"Tool ran cleanly with no matches: {evidence.summary}"
-        data = _extract_data(response) or {}
-        claim = data.get("verdict", "refuted")
-        if claim not in ("confirmed", "refuted", "inconclusive"):
-            logger.warning(
-                "LLM returned invalid verdict %r for hypothesis %r "
-                "— falling back to refuted",
-                claim, hypothesis.text[:80],
-            )
-            claim = "refuted"
-        verdict = verdict_from(evidence, claim)
-        reasoning = data.get("reasoning", "") or evidence.summary
-        return verdict, reasoning
-
-    prompt = _build_evaluate_prompt(hypothesis, evidence)
-    try:
-        response = llm_client.generate_structured(
-            prompt=prompt,
-            schema=_EVALUATION_SCHEMA,
-            task_type=task_type,
-        )
-    except Exception:
-        return "inconclusive", f"LLM evaluation failed; matches present: {evidence.summary}"
-
-    data = _extract_data(response) or {}
-    claim = data.get("verdict", "inconclusive")
-    verdict = verdict_from(evidence, claim)
-    reasoning = data.get("reasoning", "") or evidence.summary
-    return verdict, reasoning
-
-
 def _evaluate_with_refinement(
     hypothesis: Hypothesis,
     evidence: ToolEvidence,
@@ -471,7 +428,14 @@ def _evaluate_with_refinement(
     *,
     task_type: str,
 ) -> tuple[Verdict, str, Optional[Dict[str, Any]]]:
-    """Like ``_evaluate`` but also returns the raw eval data for
+    """Ask the LLM to evaluate evidence; constrain verdict by mechanical truth.
+
+    Even if the LLM returns "confirmed", we downgrade when the tool
+    failed or produced no matches. This is the architectural invariant:
+    verdicts derive from tool evidence, not LLM opinion. The downgrade
+    ladder lives in `verdict.verdict_from`; we call it here rather than
+    inlining so multi-adapter / iteration callers get the same rules
+    without copy-paste. Also returns the raw eval data for
     ``refined_rule`` extraction."""
     if not evidence.success:
         return (
@@ -498,7 +462,7 @@ def _evaluate_with_refinement(
         logger.warning(
             "LLM returned invalid verdict %r for hypothesis %r "
             "— falling back to inconclusive",
-            claim, hypothesis.text[:80],
+            claim, hypothesis.claim[:80],
         )
         claim = "inconclusive"
     verdict = verdict_from(evidence, claim)

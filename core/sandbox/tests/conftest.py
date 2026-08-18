@@ -6,7 +6,32 @@ snapshot them before every test and restore afterwards as a safety net
 — individual tests are still free to mutate them deliberately.
 """
 
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
+
+
+@pytest.fixture
+def short_sock_dir():
+    """A directory short enough that AF_UNIX socket paths fit sun_path.
+
+    The kernel caps unix-socket paths at sizeof(sun_path) — ~104 bytes
+    on macOS/BSD, 108 on Linux. pytest's ``tmp_path`` on CI runners
+    routinely exceeds that once a socket name is appended (macOS:
+    ``/private/var/folders/.../pytest-of-runner/pytest-N/<test>N/``),
+    so ``bind()`` fails with "AF_UNIX path too long". Tests that bind
+    unix sockets must derive their socket paths from this fixture
+    instead of ``tmp_path``. Production has the equivalent guard:
+    core.sandbox.context falls back to the system tempdir when the
+    output-derived proxy socket path exceeds 104 bytes.
+    """
+    d = tempfile.mkdtemp(prefix="raptor-sk-", dir="/tmp")
+    try:
+        yield Path(d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
@@ -38,11 +63,14 @@ def _sandbox_state_guard():
         "_cli_sandbox_disabled", "_cli_sandbox_profile",
         "_cli_sandbox_audit", "_cli_sandbox_audit_verbose",
         "_cli_sandbox_audit_budget",
+        "_cli_sandbox_readable_paths", "_cli_sandbox_tool_paths",
         # Once-per-process warnings
         "_landlock_warned_unavailable", "_landlock_warned_abi_v4",
         "_landlock_warned_abi_v3", "_landlock_warned_abi_v2",
         "_sandbox_unavailable_warned", "_sandbox_landlock_only_warned",
         "_net_and_tcp_allowlist_warned",
+        "_degraded_tcp_deny_warned",
+        "_degraded_tcp_deny_unavailable_warned",
         "_seccomp_arch_missing_warned", "_mount_unavailable_warned",
         "_ptrace_unavailable_warned", "_audit_warned_no_spawn",
         "_engage_probe_indeterminate_warned",
@@ -78,6 +106,11 @@ def _sandbox_state_guard():
         # (where the cache otherwise stays at None and the function
         # short-circuits to False on platform check).
         "_seatbelt_available_cache",
+        # raptor-gidmap-allow helper probe result + warn-once flag.
+        # test_spawn_mount_ns.py::TestGidmapAllowProbe resets the cache
+        # to exercise the probe; without snapshot the poisoned value
+        # leaks into subsequent tests.
+        "_gidmap_allow_cache", "_gidmap_allow_warned_missing",
         "_unshare_path_cache", "_prlimit_path_cache",
         "_mount_path_cache", "_mkdir_path_cache",
     ]

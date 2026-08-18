@@ -44,7 +44,10 @@ verified" badge — visible to a reviewer, and both raise the
 attacker's bar above "no signing key needed." ``B`` / ``X`` /
 ``Y`` / ``R`` / ``E`` (problematic signature) statuses also
 count as signed for rate purposes — they're not invisible
-forgeries.
+forgeries. ``B`` (verification FAILED with a key available)
+additionally earns its own per-commit finding in every regime:
+it is the one status that is anomalous regardless of the repo's
+signing norm.
 
 ``%G?`` placeholder semantics (from git docs):
   G — good signature, key trusted in keyring
@@ -68,7 +71,6 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
 
@@ -132,12 +134,14 @@ _SIGNED_STATUSES = frozenset(("G", "U", "B", "X", "Y", "R", "E"))
 
 @dataclass(frozen=True)
 class WorkflowUnsignedCommit:
-    """One commit in the workflow-file history without a
-    signature. Emitted only in the ``norm-is-to-sign`` branch where
-    individual unsigned commits are anomalies."""
+    """One commit in the workflow-file history whose signature state
+    warrants a per-commit signal: ``N`` (no signature — emitted only
+    in the ``norm-is-to-sign`` branch where individual unsigned
+    commits are anomalies) or ``B`` (signature present but
+    verification failed — emitted in every regime)."""
 
     commit_sha: str
-    sig_status: str            # always "N" for emitted findings
+    sig_status: str            # "N" or "B" for emitted findings
     author_name: str
     author_email: str
     subject: str               # commit message first line
@@ -163,13 +167,13 @@ class WorkflowSigningFinding:
     dependency: Dependency
     severity: str
     confidence: Confidence
-    unsigned_commit: Optional[WorkflowUnsignedCommit] = None
-    stats: Optional[WorkflowSigningStats] = None
+    unsigned_commit: WorkflowUnsignedCommit | None = None
+    stats: WorkflowSigningStats | None = None
 
 
 def scan_target(
-    target: Path, manifests: List[Manifest],
-) -> List[WorkflowSigningFinding]:
+    target: Path, manifests: list[Manifest],
+) -> list[WorkflowSigningFinding]:
     """Walk recent workflow-file history; dispatch by signing rate.
 
     ``manifests`` is accepted for orchestrator-side symmetry; not
@@ -195,11 +199,18 @@ def scan_target(
     )
     host = _placeholder_host(target)
 
+    # B (signature present, verification FAILED) counts toward the
+    # signing rate like the other present-signature statuses, but it is
+    # the one status that is anomalous in every regime — a key was
+    # available and the check still failed — so it always gets its own
+    # per-commit signal regardless of which rate branch we take below.
+    findings = _bad_signature_findings(walked, host)
+
     if rate >= _NORM_RATE_THRESHOLD and unsigned > 0:
         # Norm is to sign — flag individual unsigned commits as
         # anomalies. Anomalous unsigned commits in a signing-norm
         # repo are the Megalodon-attack signature.
-        findings = _per_commit_anomaly_findings(walked, host)
+        findings.extend(_per_commit_anomaly_findings(walked, host))
         if unsigned > _MAX_PER_COMMIT_FINDINGS:
             findings.append(_summary_finding(stats, host))
         return findings
@@ -207,10 +218,12 @@ def scan_target(
     # Either no unsigned commits (perfect signing) or norm is
     # mixed-or-unsigned. Emit a single summary finding.
     if unsigned == 0:
-        return []  # 100% signed — no signal to surface
+        return findings  # 100% signed-ish — only bad-signature signals
     if rate == 0.0:
-        return [_governance_finding(stats, host)]
-    return [_summary_finding(stats, host)]
+        findings.append(_governance_finding(stats, host))
+        return findings
+    findings.append(_summary_finding(stats, host))
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -225,12 +238,18 @@ def _is_git_repo(target: Path) -> bool:
 
 def _git_log_signatures(
     target: Path, paths: tuple,
-) -> List[tuple]:
+) -> list[tuple]:
     """Return ``[(sha, sig_status, author_name, author_email, subject), ...]``
     for the most-recent ``_MAX_COMMITS_WALKED`` commits touching
     ``paths``. Empty list on any git failure."""
-    from core.git.clone import safe_git_command
+    from core.git.clone import safe_git_command, signature_probe_overrides
+    # This is one of the few deliberate signature-verification sites:
+    # ``%G?`` needs a working verifier, and the safe overrides pin all
+    # gpg programs to a no-op so the target repo's config can't choose
+    # one. The probe overrides re-enable verification through the
+    # PATH-resolved system binaries (appended last, so they win).
     cmd = safe_git_command(
+        *signature_probe_overrides(),
         "-C", str(target), "log",
         f"--max-count={_MAX_COMMITS_WALKED}",
         "--no-merges",
@@ -257,7 +276,7 @@ def _git_log_signatures(
             proc.returncode, proc.stderr,
         )
         return []
-    out: List[tuple] = []
+    out: list[tuple] = []
     for line in proc.stdout.splitlines():
         if not line.strip():
             continue
@@ -269,11 +288,11 @@ def _git_log_signatures(
 
 
 def _per_commit_anomaly_findings(
-    walked: List[tuple], host: Dependency,
-) -> List[WorkflowSigningFinding]:
+    walked: list[tuple], host: Dependency,
+) -> list[WorkflowSigningFinding]:
     """Norm-is-to-sign branch: emit one finding per unsigned commit
     in the walked window, capped at ``_MAX_PER_COMMIT_FINDINGS``."""
-    out: List[WorkflowSigningFinding] = []
+    out: list[WorkflowSigningFinding] = []
     for entry in walked:
         sha, sig_status, author_name, author_email, subject = entry
         if sig_status != "N":
@@ -288,6 +307,41 @@ def _per_commit_anomaly_findings(
                 reason=(
                     "unsigned commit anomalous against repo's "
                     "signing norm"
+                ),
+            ),
+            unsigned_commit=WorkflowUnsignedCommit(
+                commit_sha=sha,
+                sig_status=sig_status,
+                author_name=author_name,
+                author_email=author_email,
+                subject=subject,
+            ),
+        ))
+    return out
+
+
+def _bad_signature_findings(
+    walked: list[tuple], host: Dependency,
+) -> list[WorkflowSigningFinding]:
+    """One finding per ``B``-status commit (signature present but
+    verification FAILED). Unlike the rate-relative unsigned anomalies,
+    a bad signature is anomalous in any signing regime, so these are
+    emitted unconditionally. Shares the per-commit cap."""
+    out: list[WorkflowSigningFinding] = []
+    for entry in walked:
+        sha, sig_status, author_name, author_email, subject = entry
+        if sig_status != "B":
+            continue
+        if len(out) >= _MAX_PER_COMMIT_FINDINGS:
+            break
+        out.append(WorkflowSigningFinding(
+            dependency=host,
+            severity="medium",
+            confidence=Confidence(
+                "medium",
+                reason=(
+                    "signature present but verification failed — "
+                    "key available, check still failed"
                 ),
             ),
             unsigned_commit=WorkflowUnsignedCommit(
@@ -343,7 +397,11 @@ def _placeholder_host(target: Path) -> Dependency:
     a coherent declared_in path."""
     return Dependency(
         ecosystem="GitHub Actions",
-        name="<workflow-history>",
+        # Reads as an identifier in report titles ("Workflow unsigned
+        # commit: workflow-commit-history"), not as an unsubstituted
+        # template placeholder — angle brackets leaked verbatim into
+        # operator-facing output.
+        name="workflow-commit-history",
         version=None,
         declared_in=target / ".github",
         scope="main",

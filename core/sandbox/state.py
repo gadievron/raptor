@@ -54,16 +54,21 @@ _ptrace_available_cache = None
 # under (allow default) baseline succeeds. Set by check_seatbelt_
 # available() in probes.py. Linux hosts always cache False.
 _seatbelt_available_cache = None
+# raptor-gidmap-allow helper: None = unchecked, False = not available,
+# str = resolved absolute path to the binary (with CAP_SETGID confirmed).
+_gidmap_allow_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
 # `_user_limits_cache_decided_at` carries the wall-clock when the
-# cache was last populated FROM THE FAILURE PATH (parse error,
-# missing file, non-regular file). Pre-fix that path stored `{}` and
+# cache decision was made. FAILURE paths (parse error, missing file,
+# non-regular file) stamp time.time(): pre-fix they stored `{}` and
 # never re-read — operators correcting a malformed sandbox.json had
 # to restart every RAPTOR process to pick up the fix. `_FAIL_TTL_S`
-# bounds the negative cache so a corrected file is honoured within a
-# reasonable window. Successful loads keep no TTL; the assumption is
-# that the operator who edits the config will accept restarting (or
-# clearing the cache via tests / `state._user_limits_cache = None`).
+# bounds that negative cache so a corrected file is honoured within a
+# reasonable window. SUCCESSFUL parses stamp +inf — no TTL (session
+# cache; the operator who edits the config accepts restarting, or
+# clearing the cache via tests / `state._user_limits_cache = None`) —
+# which also keeps a valid config that yields no recognised keys
+# (empty dict) distinguishable from the empty-dict failure sentinel.
 _user_limits_cache = None
 _user_limits_cache_decided_at = 0.0
 # Resolved absolute paths to sandbox-setup binaries. We use absolute paths
@@ -96,6 +101,16 @@ _cli_sandbox_audit_verbose = False
 # default; positive integer = override. Per-category and per-PID
 # sub-caps scale proportionally inside AuditBudget.__init__.
 _cli_sandbox_audit_budget = None
+# Operator allowlist extensions — the self-service recovery levers for
+# read denials under read-restricting profiles. `--sandbox-readable-path`
+# extends readable_paths on every sandbox() in the process;
+# `--sandbox-tool-path` does the same for tool_paths (read allowlist +
+# mount-ns bind). These LOOSEN isolation, so the same prompt-injection
+# rule applies with extra force: only entry-point argparse sets them,
+# never env/config/repo content. None = no extension; list[str] of
+# validated absolute paths otherwise.
+_cli_sandbox_readable_paths = None
+_cli_sandbox_tool_paths = None
 
 # Degradation warnings are logged once per process, not once per sandbox()
 # context — kernel capability doesn't change at runtime and scan loops
@@ -111,6 +126,10 @@ _sandbox_unavailable_warned = False
 # the public sandbox() path that names the practical posture and remediation.
 _sandbox_landlock_only_warned = False
 _net_and_tcp_allowlist_warned = False
+# Degraded-mode Landlock TCP-connect deny (block_network without a
+# namespace backend): engaged / cannot-engage one-shot warnings.
+_degraded_tcp_deny_warned = False
+_degraded_tcp_deny_unavailable_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False
 _ptrace_unavailable_warned = False
@@ -118,6 +137,7 @@ _ptrace_unavailable_warned = False
 # transient load) and the gate proceeds leniently instead of failing loud.
 _engage_probe_indeterminate_warned = False
 _audit_warned_no_spawn = False
+_gidmap_allow_warned_missing = False
 # NOTE: B's mount-ns Landlock fallback logs at DEBUG (no warn-once
 # flag needed — workflow proceeds correctly at Landlock-only, same
 # posture as Ubuntu defaults). The speculative-C retry uses the
@@ -163,8 +183,9 @@ def warn_once(flag_name: str) -> bool:
             raise AttributeError(
                 f"warn_once: unknown flag {flag_name!r}. Add to "
                 f"core/sandbox/state.py module-level globals before "
-                f"using. (Likely a typo — most flag names follow "
-                f"the `_<feature>_warned_<reason>` pattern.)"
+                f"using. (Likely a typo — flag names embed 'warned', "
+                f"most as `_<feature>_<reason>_warned`, some as "
+                f"`_<feature>_warned_<reason>`.)"
             )
         if getattr(mod, flag_name):
             return False

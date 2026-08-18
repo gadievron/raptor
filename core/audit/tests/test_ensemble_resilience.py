@@ -10,15 +10,13 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import MagicMock, patch
 
-
 from core.audit.corpus.run_corpus import (
-    _checkpoint_write,
     _checkpoint_read,
+    _checkpoint_write,
 )
-
 
 # ── Checkpoint round-trip ──────────────────────────────────────────
 
@@ -138,7 +136,7 @@ class TestMaxWorkersPropagation:
 class TestEnsembleCheckpointResume:
     """Verify ensemble skips completed passes when checkpoints exist."""
 
-    def _fake_results(self, mode: str) -> List[Dict[str, Any]]:
+    def _fake_results(self, mode: str) -> list[dict[str, Any]]:
         return [{
             "function_id": "a.c:foo",
             "bug_class": "integer",
@@ -158,8 +156,14 @@ class TestEnsembleCheckpointResume:
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=16)
+    # Phase-2 classification is a REAL paid LLM pass; the cached fake
+    # results contain a finding, which reaches it. Stub it — the leak
+    # was caught by the run-end paid-call attribution.
+    @patch("core.audit.corpus.run_corpus._run_phase2_classify",
+           return_value=0.0)
     def test_both_cached_skips_passes(
-        self, mock_derive, mock_audit, mock_start, mock_stop, tmp_path,
+        self, mock_phase2, mock_derive, mock_audit, mock_start, mock_stop,
+        tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
 
@@ -170,7 +174,7 @@ class TestEnsembleCheckpointResume:
         _checkpoint_write(sec_ckpt, self._fake_results("security"))
         _checkpoint_write(bf_ckpt, self._fake_results("bug_first"))
 
-        results, dirs = _run_ensemble_audit(
+        results, _dirs = _run_ensemble_audit(
             [], {}, out_dir=base,
         )
 
@@ -184,8 +188,14 @@ class TestEnsembleCheckpointResume:
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=16)
+    # Phase-2 classification is a REAL paid LLM pass; the cached fake
+    # results contain a finding, which reaches it. Stub it — the leak
+    # was caught by the run-end paid-call attribution.
+    @patch("core.audit.corpus.run_corpus._run_phase2_classify",
+           return_value=0.0)
     def test_one_cached_runs_only_missing(
-        self, mock_derive, mock_audit, mock_start, mock_stop, tmp_path,
+        self, mock_phase2, mock_derive, mock_audit, mock_start, mock_stop,
+        tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
 
@@ -197,7 +207,7 @@ class TestEnsembleCheckpointResume:
         bf_out = Path(str(base) + "-bf")
         mock_audit.return_value = (self._fake_results("bug_first"), [bf_out])
 
-        results, dirs = _run_ensemble_audit(
+        _results, _dirs = _run_ensemble_audit(
             [], {}, out_dir=base,
         )
 

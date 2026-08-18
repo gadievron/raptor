@@ -8,8 +8,7 @@ recursive walk's cycle detection / depth bound / cache behaviour.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
-
+from typing import Any
 
 from core.http import HttpError
 from core.json import JsonCache
@@ -41,9 +40,9 @@ class _StubHttp:
       - A callable taking the URL and returning a dict
     """
 
-    def __init__(self, responses: Dict[str, Any]) -> None:
+    def __init__(self, responses: dict[str, Any]) -> None:
         self._responses = responses
-        self.calls: List[str] = []
+        self.calls: list[str] = []
 
     def get_json(self, url: str, *args, **kwargs) -> Any:
         self.calls.append(url)
@@ -174,11 +173,12 @@ def test_pypi_does_not_re_emit_direct_deps_as_transitive():
     assert all(d.name != "b" for d in result.deps_added)
 
 
-def test_pypi_strips_extras_only_entries():
-    """``foo ; extra == 'test'`` — only pulled in when the extra is
-    requested. Skipping is conservative: we don't see the dep, but
-    the operator's resolver wouldn't either unless they asked for the
-    extra."""
+def test_pypi_includes_extras_only_entries():
+    """``foo ; extra == 'test'`` — included, per the module's
+    always-true marker semantics: the walk cannot know which extras
+    the target environment installed, and skipping meant an installed
+    extras-gated transitive with a CVE was invisible. Over-inclusion
+    is the scanner-safe direction."""
     meta = {"info": {"requires_dist": [
         "real-dep>=1.0.0",
         "extras-only-dep>=1.0.0 ; extra == 'test'",
@@ -186,9 +186,12 @@ def test_pypi_strips_extras_only_entries():
     http = _StubHttp({
         "/pypi/x/1.0/json": meta,
         "/pypi/real-dep/1.0.0/json": {"info": {"requires_dist": []}},
+        "/pypi/extras-only-dep/1.0.0/json": {"info": {"requires_dist": []}},
     })
     result = walk_transitive([_direct("PyPI", "x", "1.0")], http=http)
-    assert {d.name for d in result.deps_added} == {"real-dep"}
+    assert {d.name for d in result.deps_added} == {
+        "real-dep", "extras-only-dep",
+    }
 
 
 def test_pypi_two_levels_deep():
@@ -408,3 +411,110 @@ def test_walk_emits_dep_with_breadcrumb_to_host_manifest():
     result = walk_transitive([direct], http=http)
     transitive = next(d for d in result.deps_added if d.name == "b")
     assert transitive.declared_in == Path("/proj/requirements.txt")
+
+
+# ---------------------------------------------------------------------------
+# walk_transitive — total-visit + per-node fan-out caps
+# ---------------------------------------------------------------------------
+
+def test_walk_visit_cap_truncates_and_records():
+    """A deep chain hits ``max_visits``; the result records the drop
+    instead of silently presenting partial coverage as complete."""
+    chain = ["a", "b", "c", "d", "e", "f", "g", "h"]
+    responses = {}
+    for i, n in enumerate(chain):
+        nxt = chain[i + 1] if i + 1 < len(chain) else None
+        responses[f"/pypi/{n}/1.0/json"] = {"info": {
+            "requires_dist": [f"{nxt}>=1.0"] if nxt else [],
+        }}
+    http = _StubHttp(responses)
+    result = walk_transitive(
+        [_direct("PyPI", "a", "1.0")], http=http,
+        max_depth=99, max_visits=3,
+    )
+    assert result.visits == 3
+    assert result.truncated is True
+    assert result.visits_capped >= 1
+    # Only the lookups inside the budget produced deps.
+    assert {d.name for d in result.deps_added} == {"b", "c", "d"}
+
+
+def test_walk_fanout_cap_truncates_and_records():
+    """A node declaring more children than ``max_fanout`` only
+    contributes the first ``max_fanout``; the drop is recorded."""
+    children = [f"c{i}" for i in range(10)]
+    responses = {
+        "/pypi/a/1.0/json": {"info": {
+            "requires_dist": [f"{c}>=1.0" for c in children],
+        }},
+    }
+    for c in children:
+        responses[f"/pypi/{c}/1.0/json"] = {"info": {"requires_dist": []}}
+    http = _StubHttp(responses)
+    result = walk_transitive(
+        [_direct("PyPI", "a", "1.0")], http=http, max_fanout=3,
+    )
+    assert result.truncated is True
+    assert result.fanout_capped == 7
+    assert {d.name for d in result.deps_added} == {"c0", "c1", "c2"}
+
+
+def test_walk_within_caps_reports_complete_coverage():
+    """No cap fired → ``truncated=False`` and zero capped counts, so
+    consumers can distinguish bounded from complete walks."""
+    responses = {
+        "/pypi/a/1.0/json": {"info": {"requires_dist": ["b>=1.0"]}},
+        "/pypi/b/1.0/json": {"info": {"requires_dist": []}},
+    }
+    http = _StubHttp(responses)
+    result = walk_transitive([_direct("PyPI", "a", "1.0")], http=http)
+    assert result.truncated is False
+    assert result.visits_capped == 0
+    assert result.fanout_capped == 0
+
+
+def test_walk_default_caps_are_bounded():
+    """The defaults must stay proportionate to the walk's purpose —
+    an approximation pass, not a full closure."""
+    from packages.sca.registry_metadata_walk import (
+        DEFAULT_MAX_FANOUT,
+        DEFAULT_MAX_VISITS,
+    )
+    assert 0 < DEFAULT_MAX_VISITS <= 500
+    assert 0 < DEFAULT_MAX_FANOUT <= 100
+
+
+# ---------------------------------------------------------------------------
+# degenerate dep names must never abort the scan
+# ---------------------------------------------------------------------------
+
+
+def test_degenerate_dep_name_does_not_abort_walk(tmp_path):
+    """A hostile dep literally named ``..`` (or ``.``, or ``""``) used
+    to raise ValueError out of JsonCache and abort the whole scan; the
+    cache-key components are now encoded past the degenerate-segment
+    refusal."""
+    http = _StubHttp({
+        "/pypi/a/1.0/json": {"info": {"requires_dist": []}},
+    })
+    cache = JsonCache(root=tmp_path / "cache")
+    for name in ("..", ".", ""):
+        result = walk_transitive(
+            [_direct("PyPI", name, "1.0")], http=http, cache=cache,
+        )
+        assert result is not None  # walk completed — no abort
+
+
+def test_cache_key_component_injective_and_safe():
+    from packages.sca.registry_metadata_walk import _cache_key_component
+
+    # Degenerate segments neutralised.
+    assert _cache_key_component("..") == "%2E%2E"
+    assert _cache_key_component(".") == "%2E"
+    assert _cache_key_component("") == "(empty)"
+    # Injective: inputs that would collide under flattening stay apart.
+    assert _cache_key_component("a/b") != _cache_key_component("a_b")
+    assert _cache_key_component("%2E") != _cache_key_component(".")
+    assert _cache_key_component("(empty)") != _cache_key_component("")
+    # Plain names unchanged.
+    assert _cache_key_component("requests") == "requests"

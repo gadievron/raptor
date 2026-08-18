@@ -422,6 +422,8 @@ def format_block_context(plan: BlockReviewPlan) -> str:
     """
     parts = [
         f"\n### Block-level analysis (CC={plan.profile.cyclomatic_complexity}, "
+        f"{plan.profile.total_nodes} CFG nodes / "
+        f"{plan.profile.branch_nodes} branches, "
         f"{plan.profile.taint_relevant_branches} taint-relevant branches, "
         f"{plan.profile.path_to_sink_count} paths to sink)",
         "",

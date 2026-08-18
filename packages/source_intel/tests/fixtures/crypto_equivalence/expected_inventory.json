@@ -1,0 +1,1394 @@
+[
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_aead_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 281
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_aead_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 282
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_aead_setauthsize",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 283
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_aead_setkey",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 284
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_ahash_digest",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 287
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_ahash_final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 288
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_ahash_init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 289
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_ahash_setkey",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 290
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_ahash_update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 291
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_akcipher_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 292
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_akcipher_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 293
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_akcipher_sign",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 294
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_akcipher_verify",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 295
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_aead",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 296
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_ahash",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 297
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_akcipher",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 298
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_cipher",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 299
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_kpp",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 300
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_rng",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 301
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_shash",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 302
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_alloc_skcipher",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 303
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_shash_digest",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 329
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_shash_final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 330
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_shash_init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 331
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_shash_setkey",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 332
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_shash_update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 333
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_skcipher_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 340
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_skcipher_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 341
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "crypto_skcipher_setkey",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 342
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "get_random_bytes",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 344
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "get_random_long",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 345
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "get_random_u32",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 346
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "get_random_u64",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 347
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "getrandom",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 348
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "prandom_bytes",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 351
+ },
+ {
+  "api": "kernel",
+  "file": "corpus.c",
+  "fn": "prandom_u32",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 352
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "drand48",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 343
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "lrand48",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 349
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "mrand48",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 350
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "rand",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 353
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "random",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 354
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "srand",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 360
+ },
+ {
+  "api": "libc",
+  "file": "corpus.c",
+  "fn": "srandom",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 361
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_aead_chacha20poly1305_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 277
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_aead_chacha20poly1305_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 278
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_aead_chacha20poly1305_ietf_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 279
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_aead_chacha20poly1305_ietf_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 280
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_aead_xchacha20poly1305_ietf_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 285
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_aead_xchacha20poly1305_ietf_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 286
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_auth",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 304
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_auth_verify",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 305
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 306
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_detached",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 307
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_easy",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 308
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_keypair",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 309
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_open",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 310
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_open_detached",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 311
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_open_easy",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 312
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_box_seed_keypair",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 313
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_generichash",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 314
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_generichash_final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 315
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_generichash_init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 316
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_generichash_update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 317
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_hash_sha256",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 318
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_hash_sha512",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 319
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_pwhash",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 320
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_pwhash_str",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 321
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_pwhash_str_verify",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 322
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_secretbox",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 323
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_secretbox_detached",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 324
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_secretbox_easy",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 325
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_secretbox_open",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 326
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_secretbox_open_detached",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 327
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_secretbox_open_easy",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 328
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_sign",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 334
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_sign_detached",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 335
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_sign_keypair",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 336
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_sign_open",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 337
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_sign_seed_keypair",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 338
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "crypto_sign_verify_detached",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 339
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "randombytes",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 355
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "randombytes_buf",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 356
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "randombytes_buf_deterministic",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 357
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "randombytes_random",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 358
+ },
+ {
+  "api": "libsodium",
+  "file": "corpus.c",
+  "fn": "randombytes_uniform",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 359
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_cbc_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 188
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_ctr128_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 189
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 190
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_ecb_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 191
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 192
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_ofb128_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 193
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_set_decrypt_key",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 194
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "AES_set_encrypt_key",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 195
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "BF_cbc_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 196
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "BF_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 197
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "BF_ecb_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 198
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "BF_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 199
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "BF_set_key",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 200
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_cbc_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 201
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_ecb_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 202
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_encrypt1",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 203
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_encrypt2",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 204
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_encrypt3",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 205
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_ncbc_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 206
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_set_key",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 207
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "DES_set_odd_parity",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 208
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_CipherFinal",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 209
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_CipherFinal_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 210
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_CipherInit",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 211
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_CipherInit_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 212
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_CipherUpdate",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 213
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DecryptFinal",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 214
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DecryptFinal_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 215
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DecryptInit",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 216
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DecryptInit_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 217
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DecryptUpdate",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 218
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_Digest",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 219
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestFinal",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 220
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestFinal_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 221
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestInit",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 222
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestInit_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 223
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestSignFinal",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 224
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestSignInit",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 225
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestSignUpdate",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 226
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestUpdate",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 227
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestVerifyFinal",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 228
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestVerifyInit",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 229
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_DigestVerifyUpdate",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 230
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_EncryptFinal",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 231
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_EncryptFinal_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 232
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_EncryptInit",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 233
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_EncryptInit_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 234
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_EncryptUpdate",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 235
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_PKEY_decrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 236
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_PKEY_derive",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 237
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_PKEY_encrypt",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 238
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_PKEY_sign",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 239
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "EVP_PKEY_verify",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 240
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "HMAC",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 241
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "HMAC_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 242
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "HMAC_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 243
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "HMAC_Init_ex",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 244
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "HMAC_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 245
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "MD5",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 246
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "MD5_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 247
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "MD5_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 248
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "MD5_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 249
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RAND_add",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 250
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RAND_bytes",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 251
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RAND_priv_bytes",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 252
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RAND_pseudo_bytes",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 253
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RAND_seed",
+  "function": "driver",
+  "kind": "rng_source",
+  "line": 254
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RC4",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 255
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "RC4_set_key",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 256
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA1",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 257
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA1_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 258
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA1_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 259
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA1_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 260
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA224",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 261
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA224_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 262
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA224_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 263
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA224_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 264
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA256",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 265
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA256_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 266
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA256_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 267
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA256_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 268
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA384",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 269
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA384_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 270
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA384_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 271
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA384_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 272
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA512",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 273
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA512_Final",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 274
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA512_Init",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 275
+ },
+ {
+  "api": "openssl",
+  "file": "corpus.c",
+  "fn": "SHA512_Update",
+  "function": "driver",
+  "kind": "primitive_call",
+  "line": 276
+ }
+]

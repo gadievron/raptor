@@ -68,11 +68,12 @@ class TestHuntDispatchIntegration:
     def test_strategy_block_includes_verified_exemplars(
         self, tmp_path, monkeypatch,
     ):
-        """hunt_dispatch._build_strategy_block calls
-        exemplar_block_for_finding, which projects from the project's
-        labeled_attempts pool. With one pre-loaded VERIFIED record for
-        the CWE we're hunting, the block must include the verified-
-        outcomes envelope.
+        """hunt_dispatch serves its exemplar slot via
+        exemplar_slot_for_finding — L3 retrieval over the project's
+        labeled_attempts pool first, VerifiedOutcome projection as
+        fallback. With one pre-loaded VERIFIED record for the CWE
+        we're hunting, the block must include the verified-outcomes
+        envelope carrying the retrieved exemplar.
         """
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -98,7 +99,11 @@ class TestHuntDispatchIntegration:
             f"verified-outcomes envelope absent from hunt strategy "
             f"block; got block prefix: {block[:200]!r}"
         )
-        assert "sandbox" in block, "oracle label missing from rendered block"
+        # L3-retrieved exemplar names the finding + decisive evidence.
+        assert "UAF-E2E" in block, "pre-loaded finding_id missing"
+        assert "sanitizer_report" in block, (
+            "decisive evidence missing from rendered block"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -229,11 +234,22 @@ class TestDataflowValidationIntegration:
 
 
 class TestAnalysisPromptVerifiedExemplarBlock:
-    def test_build_verified_exemplar_block_accepts_view_outcomes(self):
+    def test_build_verified_exemplar_block_accepts_view_outcomes(
+        self, monkeypatch,
+    ):
         """The analysis prompt builder takes ``verified_outcomes`` and
-        renders them via render_verified_exemplars. Pass it
+        serves the slot via exemplar_slot_for_finding (supplied corpus
+        as the fallback when the L3 pool is empty). Pass it
         VerifiedOutcome objects constructed from the new module to
-        confirm the type contract."""
+        confirm the type contract. Fallback-served blocks carry no
+        exemplar ids."""
+        # Pin the L3 pool empty so the fallback path is what's tested.
+        import core.run.output as ro
+        monkeypatch.setattr(ro, "_resolve_active_project", lambda: None)
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [],
+        )
         outcome = VerifiedOutcome(
             finding_id="F-1",
             oracle=Oracle.SANDBOX,
@@ -246,7 +262,7 @@ class TestAnalysisPromptVerifiedExemplarBlock:
         from packages.llm_analysis.prompts.analysis import (
             _build_verified_exemplar_block,
         )
-        block = _build_verified_exemplar_block(
+        block, exemplar_ids = _build_verified_exemplar_block(
             rule_id="rule-x",
             cwe_id="CWE-416",
             file_path="src/x.c",
@@ -255,18 +271,20 @@ class TestAnalysisPromptVerifiedExemplarBlock:
         assert block, "exemplar block empty for matching outcome"
         assert "F-1" in block
         assert "sandbox" in block
+        assert exemplar_ids == ()
 
     def test_empty_outcomes_returns_empty_block(self):
         from packages.llm_analysis.prompts.analysis import (
             _build_verified_exemplar_block,
         )
-        block = _build_verified_exemplar_block(
+        block, exemplar_ids = _build_verified_exemplar_block(
             rule_id="rule-x",
             cwe_id="CWE-416",
             file_path="src/x.c",
             verified_outcomes=[],
         )
         assert block == ""
+        assert exemplar_ids == ()
 
 
 # ---------------------------------------------------------------------------

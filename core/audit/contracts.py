@@ -112,6 +112,41 @@ def format_contracts_for_prompt(
     return "\n".join(lines)
 
 
+def format_contract_violations_for_prompt(
+    violations: Sequence[ContractViolation],
+) -> str:
+    """Render mechanically detected contract violations for the LLM.
+
+    These are heuristic findings from ``enforce_callee_contracts`` —
+    the caller source showed no guard for a callee precondition.
+    Returns empty string if there is nothing to render.
+    """
+    if not violations:
+        return ""
+
+    lines = [
+        "### Contract violations (mechanically detected, verify)",
+        "",
+    ]
+
+    for v in violations:
+        cwe = f" [{v.cwe}]" if v.cwe else ""
+        lines.append(
+            f"- `{v.callee_function}()` precondition "
+            f"\"{v.violated_precondition}\" not guarded in "
+            f"`{v.caller_function}`{cwe} — {v.evidence}"
+        )
+
+    lines.extend([
+        "",
+        "These guards were not found by regex heuristics; confirm "
+        "whether the precondition is enforced another way (wrapper, "
+        "type invariant, earlier check) before treating one as a bug.",
+    ])
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Mechanical precondition checking (best-effort, regex-based)
 # ---------------------------------------------------------------------------
@@ -175,7 +210,14 @@ def _has_lock_before(callee: str, source: str) -> bool:
     if callee_pos < 0:
         return False
     preamble = source[:callee_pos]
-    return any(lp in preamble for lp in _LOCK_PATTERNS)
+    for lp in _LOCK_PATTERNS:
+        idx = preamble.find(lp)
+        if idx < 0:
+            continue
+        if idx > 0 and preamble[idx - 1].isalpha():
+            continue
+        return True
+    return False
 
 
 def _extract_param_from_precondition(precondition: str) -> str:

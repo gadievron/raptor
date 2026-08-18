@@ -31,13 +31,16 @@ Two paths for namespace setup:
   A. Direct unshare from this script. Works on hosts where the operator
      has disabled the LSM restriction
      (``kernel.apparmor_restrict_unprivileged_userns=0`` on Ubuntu, or the
-     distro's equivalent). Tried first.
+     distro's equivalent). Used only when no launcher binary is built.
 
   B. Via the privileged launcher binary at
      ``core/sandbox/helpers/raptor-coord-launcher``. The launcher creates
      the namespaces in a brief privileged window, drops every capability,
      and execs THIS script with ``RAPTOR_COORD_FROM_LAUNCHER=1`` set. The
-     script then proceeds as if it had done the unshare itself.
+     script then proceeds as if it had done the unshare itself. Tried
+     first whenever the launcher exists — a failed direct attempt on an
+     LSM-hardened host would poison the launcher fallback (see
+     _setup_namespaces for the AppArmor-confinement rationale).
 
 If both paths fail, the script writes a structured error to stdout and
 exits non-zero. The caller surfaces the message to the operator.
@@ -57,18 +60,18 @@ import sys
 # responsible for setting RAPTOR_DIR in the subprocess env.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-import base64  # noqa: E402
-import ctypes  # noqa: E402
-import ctypes.util  # noqa: E402
-import errno  # noqa: E402
-import fcntl  # noqa: E402
-import json  # noqa: E402
-import socket  # noqa: E402
-import struct  # noqa: E402
-import threading  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
-from typing import Any, Dict, Optional  # noqa: E402
+import base64
+import ctypes
+import ctypes.util
+import errno
+import fcntl
+import json
+import socket
+import struct
+import threading
+import time
+from pathlib import Path
+from typing import Any
 
 CLONE_NEWUSER = 0x10000000
 CLONE_NEWNET = 0x40000000
@@ -76,6 +79,14 @@ CLONE_NEWNET = 0x40000000
 HELPER_PATH = (
     Path(__file__).resolve().parent / "helpers" / "raptor-coord-launcher"
 )
+
+# Shared child-timeout default. ``_run_child`` uses it as the sandbox.run
+# timeout when a spec omits ``timeout_s``; ``main()`` uses it for the
+# post-exploit join bound on the target thread. They MUST be the same
+# value: the leaked-subprocess window is bounded by ``timeout_s + 1.0s``
+# only when the join waits at least as long as the sandbox timeout that
+# SIGKILLs the child.
+_DEFAULT_CHILD_TIMEOUT_S = 10.0
 
 
 # ----------------------------------------------------------------------
@@ -185,6 +196,14 @@ def _setup_via_launcher_reexec() -> None:
         if k.startswith("RAPTOR_COORD_"):
             env[k] = v
     env["RAPTOR_COORD_REEXEC_GUARD"] = "1"
+    # Argument contract with the launcher (see the header comment in
+    # helpers/raptor-coord-launcher.c): argv must be exactly
+    # [launcher, interpreter, script] — the launcher refuses any other
+    # argc, pins the script to its own checkout's netns_coordinator.py,
+    # and requires the interpreter/script to be owned by root or by the
+    # launcher binary's owner with no group/other write bits. Passing
+    # anything beyond [sys.executable, __file__] here trips the contract
+    # and the launcher exits 3 before its privileged setup.
     os.execve(
         str(HELPER_PATH),
         [str(HELPER_PATH), sys.executable, __file__],
@@ -254,13 +273,18 @@ def _setup_namespaces() -> str:
 
 class _ChildResult:
     __slots__ = (
-        "returncode", "stdout", "stderr", "wallclock_s",
-        "sandbox_info", "error", "_lock",
+        "_lock",
+        "error",
+        "returncode",
+        "sandbox_info",
+        "stderr",
+        "stdout",
+        "wallclock_s",
     )
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.returncode: Optional[int] = None
+        self.returncode: int | None = None
         self.stdout: bytes = b""
         self.stderr: bytes = b""
         self.wallclock_s: float = 0.0
@@ -270,10 +294,10 @@ class _ChildResult:
         # reads it to classify the target's execution; without it we'd
         # collapse every run to NO_OBVIOUS_EFFECT regardless of what
         # actually happened.
-        self.sandbox_info: Optional[Dict[str, Any]] = None
-        self.error: Optional[str] = None
+        self.sandbox_info: dict[str, Any] | None = None
+        self.error: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "returncode": self.returncode,
@@ -285,71 +309,92 @@ class _ChildResult:
             }
 
 
-def _run_child(role: str, spec: Dict[str, Any], result: _ChildResult) -> None:
+def _run_child(role: str, spec: dict[str, Any], result: _ChildResult) -> None:
     """Run one sandbox.run command as a child of THIS process. The fork
     inside sandbox.run inherits our user-ns + net-ns, which is the
     architectural point — target and exploit land in the same netns
     without setns and without an external fd."""
-    # Import inside the function so a missing import surfaces as a
-    # structured error rather than a hard ImportError at module load time.
-    from core.sandbox import run as sandbox_run
-
-    cmd = spec["cmd"]
-    env = spec.get("env", {})
-    try:
-        timeout = float(spec.get("timeout_s", 10.0))
-    except (TypeError, ValueError):
-        timeout = 10.0
-    profile = spec.get("profile", "target_run")
-    block_network = bool(spec.get("block_network", True))
-    allowed_tcp_ports = spec.get("allowed_tcp_ports") or None
-    restrict_reads = bool(spec.get("restrict_reads", False))
-    stdin_b64 = spec.get("stdin_b64")
-    stdin_bytes = base64.b64decode(stdin_b64) if stdin_b64 else None
-
-    # Additional sandbox hardening params forwarded from the RPC so
-    # the coordinator path applies the same substrate posture as the
-    # stdin/argv adapters. Silently absent on legacy specs — kwargs
-    # only get set when the RPC populates them.
-    #
-    # Narrow types at the RPC boundary: ``list(writable_paths)`` on a
-    # bare string yields per-char paths (12-char path → 12 tiny
-    # Landlock entries); ``dict(etc_overlay)`` on a list-of-pairs
-    # silently succeeds with wrong keys. A caller typo should fail
-    # loudly here rather than at Landlock-rule installation.
-    target_path = spec.get("target")
-    output_path = spec.get("output")
-    writable_paths = spec.get("writable_paths")
-    if writable_paths is not None and not isinstance(writable_paths, list):
-        raise TypeError(
-            f"spec['writable_paths'] must be list, got {type(writable_paths).__name__}",
-        )
-    readable_paths = spec.get("readable_paths")
-    if readable_paths is not None and not isinstance(readable_paths, list):
-        raise TypeError(
-            f"spec['readable_paths'] must be list, got {type(readable_paths).__name__}",
-        )
-    exclude_tmp_baseline = spec.get("exclude_tmp_baseline")
-    etc_overlay = spec.get("etc_overlay")
-    if etc_overlay is not None and not isinstance(etc_overlay, dict):
-        raise TypeError(
-            f"spec['etc_overlay'] must be dict, got {type(etc_overlay).__name__}",
-        )
-    strict_env = spec.get("strict_env")
-    env_caller_filtered = spec.get("env_caller_filtered")
-    observe = spec.get("observe")
-
     t0 = time.monotonic()
     try:
-        kwargs = dict(
-            profile=profile,
-            block_network=block_network,
-            inherit_netns=True,
-            env=env if env else None,
-            capture_output=True,
-            timeout=timeout,
-            restrict_reads=restrict_reads,
-        )
+        # Import inside the try so a missing import surfaces as a
+        # structured error rather than a hard ImportError at module
+        # load time (or a raw traceback on the coordinator's stderr).
+        from core.sandbox import run as sandbox_run
+
+        cmd = spec["cmd"]
+        env = spec.get("env", {})
+        try:
+            timeout = float(spec.get("timeout_s", _DEFAULT_CHILD_TIMEOUT_S))
+        except (TypeError, ValueError):
+            timeout = _DEFAULT_CHILD_TIMEOUT_S
+        profile = spec.get("profile", "target_run")
+        block_network = bool(spec.get("block_network", True))
+        allowed_tcp_ports = spec.get("allowed_tcp_ports") or None
+        # Same boundary narrowing as the path/overlay fields below:
+        # ``list("80")`` yields ``['8', '0']`` — two bogus one-char
+        # "ports" — instead of failing. Must be a list/tuple of ints.
+        if allowed_tcp_ports is not None:
+            if not isinstance(allowed_tcp_ports, (list, tuple)):
+                raise TypeError(
+                    f"spec['allowed_tcp_ports'] must be list or tuple of "
+                    f"ints, got {type(allowed_tcp_ports).__name__}",
+                )
+            for port in allowed_tcp_ports:
+                if not isinstance(port, int) or isinstance(port, bool):
+                    raise TypeError(
+                        f"spec['allowed_tcp_ports'] entries must be ints, "
+                        f"got {type(port).__name__}",
+                    )
+        restrict_reads = bool(spec.get("restrict_reads", False))
+        stdin_b64 = spec.get("stdin_b64")
+        stdin_bytes = base64.b64decode(stdin_b64) if stdin_b64 else None
+
+        # Additional sandbox hardening params forwarded from the RPC so
+        # the coordinator path applies the same substrate posture as the
+        # stdin/argv adapters. Silently absent on legacy specs — kwargs
+        # only get set when the RPC populates them.
+        #
+        # Narrow types at the RPC boundary: ``list(writable_paths)`` on a
+        # bare string yields per-char paths (12-char path → 12 tiny
+        # Landlock entries); ``dict(etc_overlay)`` on a list-of-pairs
+        # silently succeeds with wrong keys. A caller typo should fail
+        # loudly here rather than at Landlock-rule installation — and
+        # the failure must travel through ``result.error`` so the
+        # JSON-on-stdout protocol survives (a raised TypeError outside
+        # this try killed the coordinator with a raw traceback for the
+        # exploit spec, and silently killed the thread for the target
+        # spec, leaving returncode=None with no error string).
+        target_path = spec.get("target")
+        output_path = spec.get("output")
+        writable_paths = spec.get("writable_paths")
+        if writable_paths is not None and not isinstance(writable_paths, list):
+            raise TypeError(
+                f"spec['writable_paths'] must be list, got {type(writable_paths).__name__}",
+            )
+        readable_paths = spec.get("readable_paths")
+        if readable_paths is not None and not isinstance(readable_paths, list):
+            raise TypeError(
+                f"spec['readable_paths'] must be list, got {type(readable_paths).__name__}",
+            )
+        exclude_tmp_baseline = spec.get("exclude_tmp_baseline")
+        etc_overlay = spec.get("etc_overlay")
+        if etc_overlay is not None and not isinstance(etc_overlay, dict):
+            raise TypeError(
+                f"spec['etc_overlay'] must be dict, got {type(etc_overlay).__name__}",
+            )
+        strict_env = spec.get("strict_env")
+        env_caller_filtered = spec.get("env_caller_filtered")
+        observe = spec.get("observe")
+
+        kwargs = {
+            "profile": profile,
+            "block_network": block_network,
+            "inherit_netns": True,
+            "env": env if env else None,
+            "capture_output": True,
+            "timeout": timeout,
+            "restrict_reads": restrict_reads,
+        }
         if allowed_tcp_ports is not None:
             kwargs["allowed_tcp_ports"] = list(allowed_tcp_ports)
         if stdin_bytes is not None:
@@ -448,7 +493,7 @@ def _emit_error(reason: str, message: str) -> None:
     sys.stdout.flush()
 
 
-def _emit_response(response: Dict[str, Any]) -> None:
+def _emit_response(response: dict[str, Any]) -> None:
     json.dump(response, sys.stdout)
     sys.stdout.write("\n")
     sys.stdout.flush()
@@ -496,7 +541,9 @@ def main() -> None:
     try:
         wait_port = int(request.get("wait_listen_port", 0))
         wait_timeout = float(request.get("wait_listen_timeout_s", 5.0))
-        target_timeout = float(target_spec.get("timeout_s", 5.0))
+        target_timeout = float(
+            target_spec.get("timeout_s", _DEFAULT_CHILD_TIMEOUT_S)
+        )
     except (TypeError, ValueError) as exc:
         _emit_error(
             "bad_request",

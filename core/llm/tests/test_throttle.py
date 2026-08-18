@@ -97,6 +97,63 @@ class TestAdaptiveThrottle:
         assert d["signal_count"] == 1
 
 
+class TestCrossThreadRestore:
+    def test_restore_from_worker_thread_wakes_async_waiter(self):
+        """``_maybe_restore`` runs from ``acquire_sync`` worker threads
+        and property accessors while async ``acquire()`` waiters wait
+        on the asyncio event. ``asyncio.Event.set()`` is not
+        thread-safe — a direct off-loop set can leave waiters unwoken
+        (and raises under loop debug mode, which this test enables to
+        make the misuse deterministic). The restore must route through
+        the owning loop."""
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            loop.set_debug(True)
+            t = AdaptiveThrottle(4, cooldown_s=0.0, auto_register=False)
+            event = t._ensure_event()
+            # Simulate a throttled state with the event cleared (all
+            # slots taken at the reduced level).
+            event.clear()
+            with t._lock:
+                t._effective = 2
+                t._last_signal = time.monotonic() - 10.0
+            # Register a real async waiter FIRST — asyncio.Event.set()
+            # only touches the loop when waiters exist, so the
+            # thread-unsafe path is exercised only with one waiting.
+            waiter = asyncio.ensure_future(event.wait())
+            await asyncio.sleep(0)
+            # Cooldown elapsed -> restore fires from a WORKER thread.
+            await loop.run_in_executor(None, t._maybe_restore)
+            await asyncio.wait_for(waiter, timeout=2.0)
+            assert t._effective == 4
+
+        asyncio.run(scenario())
+
+    def test_restore_on_loop_thread_still_sets_event(self):
+        async def scenario():
+            t = AdaptiveThrottle(4, cooldown_s=0.0, auto_register=False)
+            event = t._ensure_event()
+            event.clear()
+            with t._lock:
+                t._effective = 2
+                t._last_signal = time.monotonic() - 10.0
+            t._maybe_restore()
+            assert event.is_set()
+            assert t._effective == 4
+
+        asyncio.run(scenario())
+
+    def test_restore_without_event_is_noop(self):
+        """Sync-only usage never creates the event — restore must not
+        blow up."""
+        t = AdaptiveThrottle(4, cooldown_s=0.0, auto_register=False)
+        with t._lock:
+            t._effective = 2
+            t._last_signal = time.monotonic() - 10.0
+        t._maybe_restore()
+        assert t.effective_workers == 4
+
+
 class TestAsyncAcquire:
     def test_acquire_limits_concurrency(self):
         t = AdaptiveThrottle(2, auto_register=False)
@@ -235,7 +292,7 @@ class TestBroadcastRegistry:
             try:
                 for _ in range(50):
                     t.signal_rate_limit()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — collect any worker failure for the main thread to assert on
                 errors.append(e)
 
         threads = [threading.Thread(target=signal_many) for _ in range(4)]
@@ -357,6 +414,26 @@ class TestTuningReaders:
         val = read_throttle_cooldown_s()
         assert isinstance(val, float)
         assert val > 0
+
+
+class TestStripJsonLineComments:
+    def test_preserves_url_in_value(self):
+        from core.llm.concurrency import _strip_json_line_comments
+
+        text = '{"url": "http://example.com//path"}'
+        assert _strip_json_line_comments(text) == text
+
+    def test_strips_line_comment(self):
+        from core.llm.concurrency import _strip_json_line_comments
+
+        text = '{"key": 1} // this is a comment'
+        assert _strip_json_line_comments(text) == '{"key": 1} '
+
+    def test_preserves_double_slash_inside_string(self):
+        from core.llm.concurrency import _strip_json_line_comments
+
+        text = '{"path": "a//b"}'
+        assert _strip_json_line_comments(text) == text
 
 
 class TestRunParallel:

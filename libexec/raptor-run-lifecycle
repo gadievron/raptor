@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Run lifecycle — records start and stop timestamps/status.
 
 Usage:
@@ -6,25 +8,23 @@ Usage:
   raptor-run-lifecycle complete <output_dir>
   raptor-run-lifecycle fail <output_dir> [message]
   raptor-run-lifecycle cancel <output_dir>
+  raptor-run-lifecycle interrupt <output_dir> [message]
 
 start: resolves output directory, writes .raptor-run.json with status=running
 complete: updates status=completed
 fail: updates status=failed with optional error message
 cancel: updates status=cancelled
+interrupt: updates status=interrupted (supervisor stop; resumable —
+  e.g. `raptor-audit resume <output_dir>` for audit runs)
 
 This script only writes metadata. Coverage, cleanup, and reporting
 are handled by their respective tools.
 """
-import faulthandler
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -34,13 +34,57 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.run.metadata import complete_run, fail_run, start_run  # noqa: E402
+from core.run.output import TargetMismatchError, get_output_dir  # noqa: E402
 
-from core.run.output import get_output_dir, TargetMismatchError
-from core.run.metadata import start_run, complete_run, fail_run
+
+def _journal_project_dir(out_dir: Path) -> Path | None:
+    """Project-level directory a run's journal should merge into.
+
+    ``.active`` is a symlink to the project's ``<name>.json`` FILE
+    (``ProjectManager.set_active``), so the project directory is the
+    JSON's ``output_dir`` field — the same derivation
+    ``_setup_checklist_symlink`` uses. Pre-fix this resolved the
+    symlink and required ``is_dir()``, which is always False for a
+    file target: the merge was dead code and the project index was
+    never updated.
+
+    Only returns the active project's dir when *out_dir* actually
+    lives under it — a standalone run completed while some project is
+    active must not pollute that project's index. Falls back to the
+    run's parent when it carries the project store markers (matches
+    ``_snapshot_run_coverage``'s ``proj = run_dir.parent``, which is
+    where the coverage snapshot reads the index back from).
+    """
+    try:
+        out_res = out_dir.resolve()
+    except OSError:
+        return None
+    try:
+        from core.json import load_json
+        from core.startup import PROJECTS_DIR, get_active_name
+        name = get_active_name()
+        if name:
+            data = load_json(PROJECTS_DIR / f"{name}.json")
+            if isinstance(data, dict) and data.get("output_dir"):
+                candidate = Path(data["output_dir"])
+                if candidate.is_dir():
+                    proj_res = candidate.resolve()
+                    if proj_res in out_res.parents:
+                        return proj_res
+    except Exception:  # noqa: BLE001 — fall through to the marker probe
+        pass
+    parent = out_res.parent
+    if (parent / "checklist.json").exists() or (
+        parent / "coverage.json"
+    ).exists():
+        return parent
+    return None
 
 
 def _merge_journal_index(out_dir: Path) -> None:
@@ -52,14 +96,8 @@ def _merge_journal_index(out_dir: Path) -> None:
     journal_path = out_dir / "review-journal.jsonl"
     if not journal_path.is_file():
         return
-    active = Path(".active")
-    if not active.is_symlink() and not active.exists():
-        return
-    try:
-        project_dir = active.resolve()
-    except OSError:
-        return
-    if not project_dir.is_dir():
+    project_dir = _journal_project_dir(out_dir)
+    if project_dir is None:
         return
     try:
         from core.audit.journal import merge_into_index
@@ -67,7 +105,7 @@ def _merge_journal_index(out_dir: Path) -> None:
         if merged:
             print(f"  journal: {merged} entries merged into project index",
                   file=sys.stderr)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — merge is best-effort
         print(f"  journal merge skipped: {exc}", file=sys.stderr)
 
 
@@ -118,11 +156,9 @@ def main():
                  "to start when scorecard estimate exceeds the cap",
         )
         # `sys.argv[2:]` so the `start` subcommand isn't re-parsed.
-        try:
-            args = parser.parse_args(sys.argv[2:])
-        except SystemExit:
-            # argparse already printed a clean usage message to stderr.
-            raise
+        # On bad args argparse raises SystemExit after printing a
+        # clean usage message to stderr.
+        args = parser.parse_args(sys.argv[2:])
 
         # `--target` takes precedence over the positional form so a
         # script that explicitly passes `--target X` always wins.
@@ -138,48 +174,30 @@ def main():
             sys.exit(1)
 
         start_run(out_dir, args.command, target=target_path)
-        print(f"OUTPUT_DIR={out_dir}")
 
         # Pre-flight cost gate (scorecard-derived). When
         # --max-cost-usd is set, compare against the scorecard
-        # estimate. Goes to stderr so stdout stays single-line
-        # OUTPUT_DIR= for callers that parse it.
+        # estimate. Shared implementation lives in raptor.py so the
+        # two entry points cannot drift; the estimate line goes to
+        # stderr so stdout stays single-line OUTPUT_DIR= for callers
+        # that parse it. The gate runs BEFORE the sentinel prints:
+        # callers treat OUTPUT_DIR= as "the run started, write here",
+        # so a gate refusal (exit 1, run marked failed) must not hand
+        # them a directory to write into.
         if args.max_cost_usd is not None and target_path:
             try:
-                from core.run.target_types import load as _load_catalog
-                from core.run.estimator import (
-                    estimate_from_scorecard, format_estimate,
-                )
-                from core.llm.model_data import PROVIDER_DEFAULT_MODELS
-                _entry = _load_catalog(Path(target_path))
-                _n = _entry.typical_findings_count if _entry else 0
-                if _n > 0:
-                    _model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
-                    _est = estimate_from_scorecard(_model, _n)
-                    if _est is not None:
-                        _line = format_estimate(_est)
-                        if _line:
-                            sys.stderr.write(_line + "\n")
-                        if _est.cost_high > args.max_cost_usd:
-                            sys.stderr.write(
-                                f"✗ Pre-flight cost gate: scorecard "
-                                f"estimate upper bound "
-                                f"(${_est.cost_high:.2f}) exceeds "
-                                f"--max-cost-usd cap "
-                                f"(${args.max_cost_usd:.2f}). "
-                                f"Raise the cap or re-run without "
-                                f"--max-cost-usd.\n"
-                            )
-                            try:
-                                fail_run(out_dir,
-                                         "pre-flight cost gate exceeded")
-                            except Exception:  # noqa: BLE001
-                                pass
-                            sys.exit(1)
+                from raptor import _preflight_cost_gate
+                if _preflight_cost_gate(
+                    str(target_path), args.max_cost_usd, out_dir,
+                    estimate_stream=sys.stderr,
+                ):
+                    sys.exit(1)
             except SystemExit:
                 raise
             except Exception as e:  # noqa: BLE001
                 sys.stderr.write(f"  (estimate skipped: {e})\n")
+
+        print(f"OUTPUT_DIR={out_dir}")
 
     elif action == "complete":
         if len(sys.argv) < 3:
@@ -207,7 +225,7 @@ def main():
             # every fresh /audit entry from the just-finished run.
             _merge_journal_index(Path(sys.argv[2]))
             complete_run(Path(sys.argv[2]), manifest=manifest)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -218,7 +236,7 @@ def main():
         message = sys.argv[3] if len(sys.argv) > 3 else "unknown error"
         try:
             fail_run(Path(sys.argv[2]), message)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -229,13 +247,31 @@ def main():
         try:
             from core.run.metadata import cancel_run
             cancel_run(Path(sys.argv[2]))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif action == "interrupt":
+        if len(sys.argv) < 3:
+            print("Usage: raptor-run-lifecycle interrupt <output_dir> [message]",
+                  file=sys.stderr)
+            sys.exit(1)
+        message = sys.argv[3] if len(sys.argv) > 3 else None
+        try:
+            # Merge the journal into the project index FIRST (same
+            # ordering rationale as `complete`): an interrupted run's
+            # verdicts are real reviews and must reach the project
+            # index so sibling runs (and the eventual resume) see them.
+            _merge_journal_index(Path(sys.argv[2]))
+            from core.run.metadata import interrupt_run
+            interrupt_run(Path(sys.argv[2]), message)
+        except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
     else:
         print(f"Unknown action: {action}", file=sys.stderr)
-        print("Actions: start, complete, fail, cancel", file=sys.stderr)
+        print("Actions: start, complete, fail, cancel, interrupt", file=sys.stderr)
         sys.exit(1)
 
 

@@ -9,11 +9,18 @@ set -euo pipefail
 
 # Resolve symlinks to find the real script location
 SCRIPT="$0"
+_symhops=0
 while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
     DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
+unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -d "$RAPTOR_DIR/core" ]; then
@@ -51,11 +58,18 @@ esac
 # point), so we resolve the strip-list path relative to this script.
 # POSIX symlink resolution — BSD readlink (macOS) lacks -f.
 _raptor_self="${BASH_SOURCE[0]}"
+_symhops=0
 while [ -L "$_raptor_self" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
     _raptor_link_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
     _raptor_self="$(readlink "$_raptor_self")"
     [[ "$_raptor_self" != /* ]] && _raptor_self="$_raptor_link_dir/$_raptor_self"
 done
+unset _symhops
 _raptor_self_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
 . "$_raptor_self_dir/../core/security/_dangerous_env_strip.sh"
 unset _raptor_self _raptor_link_dir _raptor_self_dir
@@ -367,6 +381,21 @@ fi
 # of claude are wrapper scripts that exec node with the right
 # args), these are the vars that influence its startup before
 # `--noprofile --norc` would help.
+# Subagent model bridge: Claude Code's internal subagents (Agent/Task
+# tool) don't automatically follow the session's model — with
+# CLAUDE_CODE_SUBAGENT_MODEL unset they fall back to a default (or an
+# agent definition's pinned model) that alternate backends may not
+# serve. Observed: on a Bedrock role authorised only for the session
+# model, a subagent defaulting to another model got a 403 on its first
+# call. When the operator pinned the session model via ANTHROPIC_MODEL
+# and made no explicit subagent choice, make subagents follow the
+# session. Operators who want a different (e.g. cheaper) subagent
+# model just export CLAUDE_CODE_SUBAGENT_MODEL themselves — we never
+# override an explicit choice.
+if [[ -n "${ANTHROPIC_MODEL:-}" && -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]]; then
+    export CLAUDE_CODE_SUBAGENT_MODEL="$ANTHROPIC_MODEL"
+fi
+
 if [[ -n "$INITIAL_PROMPT" ]]; then
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
         claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"

@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from typing import List, Optional
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -43,6 +42,14 @@ _CACHE_KEY_PREFIX = "maven-versions"
 _DEFAULT_TTL = 24 * 3600
 
 
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — a raw coordinate containing ``/`` or ``..`` could
+    otherwise alias another artifact's cache file after JsonCache path
+    sanitisation. Old raw-name entries re-fetch once."""
+    return urllib.parse.quote(value, safe="")
+
+
 class MavenClient:
     """List versions from Maven Central's solrsearch API."""
 
@@ -51,7 +58,7 @@ class MavenClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -75,19 +82,19 @@ class MavenClient:
         )
         self._auth_header = over.auth_header if over else None
 
-    def _request_headers(self) -> Optional[dict]:
+    def _request_headers(self) -> dict | None:
         if self._auth_header:
             return {"Authorization": self._auth_header}
         return None
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         if ":" not in name:
             logger.debug("sca.registries.maven: name %r missing group:artifact",
                           name)
             return []
         group, artifact = name.split(":", 1)
 
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -119,7 +126,7 @@ class MavenClient:
         return versions
 
 
-def _extract_versions(data: dict) -> List[str]:
+def _extract_versions(data: dict) -> list[str]:
     """Pull versions from the Maven Central solr response.
 
     Shape (abridged):
@@ -138,7 +145,7 @@ def _extract_versions(data: dict) -> List[str]:
     if not isinstance(docs, list):
         return []
     seen: set = set()
-    out: List[str] = []
+    out: list[str] = []
     for d in docs:
         if not isinstance(d, dict):
             continue
@@ -175,7 +182,7 @@ def _add_pom_methods():
     Separated for readability — these methods serve the
     transitive-drop detector, not the version-listing path."""
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         """Aggregate-shape adapter — returns ``{releases: {<ver>: []}}``
         keyed off ``list_versions`` so the transitive-drop
         detector's ``_latest_stable_version`` finds the latest."""
@@ -187,7 +194,7 @@ def _add_pom_methods():
             "info": {"version": versions[0]},
         }
 
-    def get_pom(self, coord: str, version: str) -> Optional[dict]:
+    def get_pom(self, coord: str, version: str) -> dict | None:
         """Fetch + parse a POM XML file from Maven Central.
 
         ``coord`` is ``groupId:artifactId``. Returns a dict with
@@ -200,7 +207,8 @@ def _add_pom_methods():
         if ":" not in coord:
             return None
         group, artifact = coord.split(":", 1)
-        cache_key = f"maven-pom:{coord}:{version}"
+        cache_key = (f"maven-pom:{_key_component(coord)}:"
+                     f"{_key_component(version)}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -239,7 +247,7 @@ def _add_pom_methods():
 
         ns = "{http://maven.apache.org/POM/4.0.0}"
         deps_node = root.find(f"{ns}dependencies")
-        deps: List[dict] = []
+        deps: list[dict] = []
         if deps_node is not None:
             for d in deps_node.findall(f"{ns}dependency"):
                 gid = (d.findtext(f"{ns}groupId") or "").strip()

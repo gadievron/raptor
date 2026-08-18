@@ -42,7 +42,18 @@ scan  →  dedup  →  prep  →  analyse (per finding)
 ```
 
 1. **Scan** -- Semgrep by default; CodeQL in parallel when enabled (`--codeql`).
-   External SARIF can be imported with `--sarif` instead of scanning.
+   C/C++ CodeQL databases build in buildless mode by default (no repo
+   build scripts execute); pass `--traced-build` to opt into
+   full-fidelity traced extraction on a repo you trust (see
+   [CodeQL](codeql.md)).
+   Two opt-in channels ride the Semgrep stage on C/C++ targets (so both
+   are skipped under `--codeql-only`): `--compiler-scan` runs gcc
+   `-fanalyzer` / clang `--analyze` per translation unit (capped by
+   `--compiler-scan-max-tus`, default 2000), and `--expanded-semgrep`
+   re-runs the ruleset over preprocessor-expanded views of macro-heavy
+   TUs.
+   External SARIF can be imported with `--sarif` instead of scanning
+   (repeatable; add `--also-scan` to merge with a fresh scan).
 2. **Dedup** -- collapse duplicate and overlapping findings so the same bug is
    not analysed twice.  Skip with `--skip-dedup`.
 3. **Prep** -- read the code around each finding, pull surrounding context, and
@@ -192,22 +203,17 @@ oracle runs unfiltered.
 | `--binary <path>` | Explicit debug binary (repeatable for hybrid targets).  Bypasses the git-tracked filter and suppresses auto-detect. |
 | `--binary-auto` | Louder auto-detect with `--target-kind` support |
 | `--binary-edges` | Extract call edges via r2 to rescue functions the source graph thought were dead.  Slow (~10--30s per binary, then cached). |
+| `--no-binary-oracle` | Disable binary-oracle filtering entirely for this run.  Use for library-only targets, runs where every finding should stay unfiltered, or build-mismatch over-suppression.  Overrides `--binary`/`--binary-auto` with a warning if combined. |
 | `--allow-unreachable` | Admit findings on functions marked `NOT_CALLED` (for CTF challenges, vendor snippets, deliberate dead-code review) |
 
 Persistent per-project binaries set via `/project binary add` are picked up
 automatically.
 
-> **Note:** `--no-binary-oracle` is not currently wired into the `/agentic`
-> argument parser -- the code references it via `getattr` with a default of
-> `False`.  To run unfiltered, either target code with no locally-built binary
-> or use `--binary` to pin exactly which binary feeds the oracle.
-> `--no-binary-oracle` works on `/codeql`.
-
 
 ## Output
 
-Everything lands in the run's output directory (`out/agentic_<timestamp>/` or
-the active project directory).
+Everything lands in the run's output directory (`out/agentic_<target>_<timestamp>/`
+or the active project directory).
 
 | File | Contents |
 |------|----------|

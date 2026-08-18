@@ -1,14 +1,16 @@
 """Composer (PHP) ``composer.json`` lifecycle-hook scanner.
 
 Composer's ``scripts`` block declares hooks that fire at well-defined
-points in the dependency-management lifecycle.  The install-time
-ones are the supply-chain attack surface:
+points in the dependency-management lifecycle.  The ones that fire
+automatically from routine composer commands are the supply-chain
+attack surface:
 
   * ``pre-install-cmd``, ``post-install-cmd``
   * ``pre-update-cmd``, ``post-update-cmd``
   * ``pre-package-install``, ``post-package-install``
   * ``pre-package-update``, ``post-package-update``
   * ``pre-autoload-dump``, ``post-autoload-dump``
+  * ``pre-status-cmd``, ``post-status-cmd``
 
 Each entry can be a string (single shell command), a list of
 strings (multiple commands), or a PHP method reference

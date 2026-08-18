@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from packages.sca.platform_matrix import (
@@ -11,6 +12,10 @@ from packages.sca.platform_matrix.glibc_db import (
     LibcVersion,
     lookup_distro_libc,
     lookup_runner_libc,
+)
+from packages.sca.platform_matrix.matrix import (
+    ProjectPlatformMatrix,
+    _walk_devcontainer,
 )
 
 
@@ -131,6 +136,57 @@ def test_discover_devcontainer_tolerates_comments(
     matrix = discover_platform_matrix(tmp_path)
     libcs = {p.libc for p in matrix}
     assert LibcVersion("glibc", (2, 36)) in libcs
+
+
+# ---------------------------------------------------------------------------
+# _walk_devcontainer: unknown-libc visibility
+# ---------------------------------------------------------------------------
+
+def _write_devcontainer(tmp_path: Path, image: str) -> Path:
+    p = tmp_path / "devcontainer.json"
+    p.write_text('{"image": "%s"}' % image, encoding="utf-8")
+    return p
+
+
+def test_devcontainer_unknown_libc_logs_debug(tmp_path: Path, caplog) -> None:
+    path = _write_devcontainer(tmp_path, "totally-unknown-image:v1")
+    matrix = ProjectPlatformMatrix()
+    with caplog.at_level(logging.DEBUG,
+                         logger="packages.sca.platform_matrix.matrix"):
+        _walk_devcontainer(path, matrix)
+    assert any(
+        "unknown libc" in rec.getMessage()
+        for rec in caplog.records
+    ), "devcontainer walker should log unknown-libc at DEBUG"
+
+
+def test_devcontainer_unknown_libc_still_registers_pairs(
+    tmp_path: Path,
+) -> None:
+    """Logging is visibility-only — an unknown image must still
+    register the same pair set (both arches, libc=None)."""
+    path = _write_devcontainer(tmp_path, "totally-unknown-image:v1")
+    matrix = ProjectPlatformMatrix()
+    _walk_devcontainer(path, matrix)
+    assert len(matrix) == 2
+    assert {p.arch for p in matrix} == {"x86_64", "aarch64"}
+    assert all(p.libc is None for p in matrix)
+
+
+def test_devcontainer_known_image_does_not_log_unknown(
+    tmp_path: Path, caplog,
+) -> None:
+    path = _write_devcontainer(tmp_path, "debian:bookworm")
+    matrix = ProjectPlatformMatrix()
+    with caplog.at_level(logging.DEBUG,
+                         logger="packages.sca.platform_matrix.matrix"):
+        _walk_devcontainer(path, matrix)
+    resolved = [p for p in matrix if p.libc is not None]
+    if resolved:            # glibc DB knows bookworm
+        assert not any(
+            "unknown libc" in rec.getMessage()
+            for rec in caplog.records
+        )
 
 
 def test_discover_gha_runs_on_ubuntu(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted, SandboxSetupError
+
 # _run_trusted: read-only tools (--version checks) — no namespace overhead.
 # Build-detection work compiles/executes untrusted content: each call site
 # passes target=output=<repo_path> so Landlock engages alongside seccomp +
@@ -18,9 +18,12 @@ from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted, Sandb
 from dataclasses import dataclass, field
 from pathlib import Path
 from shlex import quote
-from typing import Dict, List, Optional, Tuple
+from typing import ClassVar
 
 from core.logging import get_logger
+from core.sandbox import SandboxSetupError
+from core.sandbox import run as _sandbox_run
+from core.sandbox import run_trusted as _run_trusted
 
 logger = get_logger()
 
@@ -31,15 +34,15 @@ class BuildSystem:
     type: str  # maven, gradle, npm, etc.
     command: str  # Build command to use
     working_dir: Path  # Directory to run command in
-    env_vars: Dict[str, str]  # Env vars we inject as-is (RAPTOR-chosen constants)
+    env_vars: dict[str, str]  # Env vars we inject as-is (RAPTOR-chosen constants)
     confidence: float  # 0.0 - 1.0
-    detected_files: List[str]  # Files that indicated this build system
-    cleanup_paths: List[Path] = field(default_factory=list)  # Temp files/dirs to remove after CodeQL
+    detected_files: list[str]  # Files that indicated this build system
+    cleanup_paths: list[Path] = field(default_factory=list)  # Temp files/dirs to remove after CodeQL
     # Env var NAMES to auto-detect at build time. Each name must have
     # a corresponding detector in core.build.toolchain.DETECTORS. The
     # detected value (if non-None) is merged into the build
     # subprocess's env alongside env_vars. See ~/design/env-handling.md.
-    env_detect: List[str] = field(default_factory=list)
+    env_detect: list[str] = field(default_factory=list)
 
 
 class BuildDetector:
@@ -51,7 +54,7 @@ class BuildDetector:
     """
 
     # Build system patterns per language
-    BUILD_SYSTEMS = {
+    BUILD_SYSTEMS: ClassVar[dict] = {
         "java": {
             "maven": {
                 "files": ["pom.xml"],
@@ -238,7 +241,7 @@ class BuildDetector:
         if not self.repo_path.exists():
             raise ValueError(f"Repository path does not exist: {repo_path}")
 
-    def detect_build_system(self, language: str) -> Optional[BuildSystem]:
+    def detect_build_system(self, language: str) -> BuildSystem | None:
         """
         Detect build system for given language.
 
@@ -274,7 +277,7 @@ class BuildDetector:
         logger.info("  Command: %s", best.command)
         return best
 
-    def _check_build_system(self, language: str, build_type: str, config: Dict) -> Optional[BuildSystem]:
+    def _check_build_system(self, language: str, build_type: str, config: dict) -> BuildSystem | None:
         """
         Check if a specific build system is present.
 
@@ -398,11 +401,10 @@ class BuildDetector:
         if build_type in ["npm", "yarn", "pnpm"]:
             # Check if build script exists in package.json
             package_json = self.repo_path / "package.json"
-            if package_json.exists():
-                if not self._has_build_script(package_json):
-                    # Use fallback command (just install)
-                    command = config.get("command_fallback", command)
-                    logger.debug("No build script in package.json, using install only")
+            if package_json.exists() and not self._has_build_script(package_json):
+                # Use fallback command (just install)
+                command = config.get("command_fallback", command)
+                logger.debug("No build script in package.json, using install only")
 
         return BuildSystem(
             type=build_type,
@@ -414,7 +416,7 @@ class BuildDetector:
             env_detect=config.get("env_detect", []),
         )
 
-    def _discover_ancestor_includes(self, max_depth: int = 3) -> List[str]:
+    def _discover_ancestor_includes(self, max_depth: int = 3) -> list[str]:
         """Find ``include/`` directories at ancestors of ``self.repo_path``.
 
         Used by the synthesised-compile fallback to rescue subdir
@@ -433,7 +435,7 @@ class BuildDetector:
         a malicious target would otherwise leak the operator's
         filesystem layout into the compile script.
         """
-        found: List[str] = []
+        found: list[str] = []
         try:
             current = self.repo_path.resolve(strict=False)
         except OSError:
@@ -482,7 +484,7 @@ class BuildDetector:
             return False
         return False
 
-    def detect_missing_config_headers(self) -> List[Tuple[str, Path]]:
+    def detect_missing_config_headers(self) -> list[tuple[str, Path]]:
         """Detect referenced ``*config.h``-shaped headers that don't
         exist on disk anywhere reachable.
 
@@ -501,7 +503,7 @@ class BuildDetector:
         detection wall time.
         """
         import re
-        missing: List[Tuple[str, Path]] = []
+        missing: list[tuple[str, Path]] = []
         # Build the set of header names that DO exist on disk —
         # repo_path + ancestor includes we'd consider.
         existing_header_names = set()
@@ -572,7 +574,7 @@ class BuildDetector:
             return False
         for raw in head.splitlines():
             line = raw.lstrip().lower()
-            if line.startswith("cmake_minimum_required") or line.startswith("project("):
+            if line.startswith(("cmake_minimum_required", "project(")):
                 return True
         return False
 
@@ -585,11 +587,11 @@ class BuildDetector:
                 return False
             scripts = data.get("scripts", {})
             return "build" in scripts
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — malformed manifest degrades to no-build-script
             logger.debug("Error parsing package.json: %s", e)
             return False
 
-    def detect_all_build_systems(self, languages: List[str]) -> Dict[str, Optional[BuildSystem]]:
+    def detect_all_build_systems(self, languages: list[str]) -> dict[str, BuildSystem | None]:
         """
         Detect build systems for multiple languages.
 
@@ -636,6 +638,29 @@ class BuildDetector:
         }
 
         validation_cmd = validation_commands.get(build_system.type)
+
+        # Gradle wrapper: when detection kept the project's own ./gradlew
+        # as the build command, probing system `gradle` is wrong —
+        # wrapper-only projects (the common Gradle layout, no system
+        # gradle installed) would fail validation with "gradle not found
+        # in PATH" although the actual build command works. Do NOT
+        # execute the wrapper here: it is untrusted repo code and
+        # _run_trusted is reserved for system tools. Validate what the
+        # wrapper actually needs instead: the script itself (exists +
+        # executable) and a JVM on PATH.
+        if build_system.type == "gradle" and str(build_system.command).strip().startswith("./gradlew"):
+            wrapper_dir = (
+                Path(build_system.working_dir)
+                if build_system.working_dir else self.repo_path
+            )
+            gradlew = wrapper_dir / "gradlew"
+            if not gradlew.is_file() or not os.access(gradlew, os.X_OK):
+                logger.warning(
+                    "✗ gradle wrapper %s missing or not executable", gradlew,
+                )
+                return False
+            validation_cmd = ["java", "-version"]
+
         if not validation_cmd:
             # Unknown build-tool type. Pre-fix we returned True
             # ("Assume it's OK if we can't validate") — but the
@@ -698,17 +723,20 @@ class BuildDetector:
                 logger.warning("✗ %s validation failed", build_system.type)
             return success
         except FileNotFoundError:
-            logger.warning("✗ %s not found in PATH", build_system.type)
+            logger.warning(
+                "✗ %s not found in PATH (probe: %s)",
+                build_system.type, validation_cmd[0],
+            )
             return False
         except subprocess.TimeoutExpired:
             logger.warning("✗ %s validation timed out", build_system.type)
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — any probe failure means unvalidated
             logger.warning("✗ Error validating %s: %s", build_system.type, e)
             return False
 
     # Languages that require compilation for CodeQL database creation.
-    COMPILED_LANGUAGES = {"cpp", "java", "csharp", "swift", "rust"}
+    COMPILED_LANGUAGES: ClassVar[set[str]] = {"cpp", "java", "csharp", "swift", "rust"}
 
     # Validates individual compiler flag tokens.
     # No $, backticks, semicolons, pipes, quotes, etc.
@@ -730,12 +758,33 @@ class BuildDetector:
     # injection-shaped flag is correctly rejected.
     _SAFE_FLAG_TOKEN = re.compile(r'\A-?[A-Za-z0-9._/+=-]+\Z')
 
+    # Flag-NAME allowlist for synthesised builds. The metacharacter
+    # check alone let any flag name through — the CC prompt promises
+    # "-I/-D/-include/-std only", but a prompt-injected model reply
+    # could smuggle code-execution flags (-fplugin=, -B, -specs=,
+    # --wrapper) that are metacharacter-clean. Names here are every
+    # shape the heuristic detectors and the prompt contract emit.
+    # Unknown names are DROPPED AND LOGGED, not fatal: a build missing
+    # an exotic flag degrades visibly, and operators who genuinely
+    # need one have the trusted escape hatch — /project set
+    # build-command[.<lang>] supplies the whole build command and
+    # bypasses flag synthesis entirely.
+    _SAFE_FLAG_NAME = re.compile(
+        r'\A(?:'
+        r'-I.+|-D[A-Za-z_].*'           # include dirs / defines
+        r'|-include|-std=.+'            # forced header / language std
+        r'|-sourcepath|-cp|-classpath'  # javac shapes
+        r'|[^-].*'                      # positional value of a pair flag
+        r')\Z'
+    )
+
     def _validate_flags(self, flags: list) -> list:
         """Validate and normalise compiler flags.
 
         Accepts both single tokens ("-DFOO") and space-separated pairs
         ("-include header.h"). Splits pairs into individual tokens.
-        Rejects anything with shell/Make metacharacters.
+        Two gates, both required: no shell/Make metacharacters
+        (character level) AND a known flag name (_SAFE_FLAG_NAME).
         """
         safe = []
         for flag in flags:
@@ -743,13 +792,20 @@ class BuildDetector:
                 continue
             # Split space-separated flags like "-include header.h"
             tokens = flag.split()
-            if all(self._SAFE_FLAG_TOKEN.match(t) for t in tokens):
-                safe.extend(tokens)
-            else:
+            if not all(self._SAFE_FLAG_TOKEN.match(t) for t in tokens):
                 logger.warning("Rejected unsafe compiler flag: %s", flag)
+                continue
+            if not all(self._SAFE_FLAG_NAME.match(t) for t in tokens):
+                logger.warning(
+                    "Dropped compiler flag outside the synthesis "
+                    "allowlist: %s (operators needing it: "
+                    "/project set build-command)", flag,
+                )
+                continue
+            safe.extend(tokens)
         return safe
 
-    def synthesise_build_command(self, language: str) -> Optional[BuildSystem]:
+    def synthesise_build_command(self, language: str) -> BuildSystem | None:
         """Synthesise a build command for compiled languages without a build system.
 
         Generates a Python build script that compiles each source file via
@@ -890,17 +946,29 @@ class BuildDetector:
                 cc_failures = self._dry_run(script_path, language=language)
                 if cc_failures is None:
                     logger.info("  CC retry didn't run — keeping heuristic")
+                    # The script on disk currently contains the UNMEASURED
+                    # CC flags — restore the heuristic script so the build
+                    # command matches what the log just promised.
+                    self._write_build_script(
+                        script_path, build_dir,
+                        source_files, compiler, include_flags, define_flags,
+                    )
                 else:
                     cc_ok = len(source_files) - len(cc_failures)
                     if cc_ok > heuristic_ok:
                         logger.info("  CC improved: %d → %d compiled", heuristic_ok, cc_ok)
                         build_type = "synthesised-cc"
+                        # Keep the CC-flag script already on disk — it just
+                        # measured better. Pre-fix this branch fell through
+                        # to an unconditional heuristic rewrite, discarding
+                        # the improvement while build_type still claimed
+                        # "synthesised-cc".
                     else:
                         logger.info("  CC didn't improve, using heuristic")
-                    self._write_build_script(
-                        script_path, build_dir,
-                        source_files, compiler, include_flags, define_flags,
-                    )
+                        self._write_build_script(
+                            script_path, build_dir,
+                            source_files, compiler, include_flags, define_flags,
+                        )
                     confidence = 0.5
             else:
                 confidence = 0.5
@@ -957,7 +1025,7 @@ class BuildDetector:
         include_flags = self._validate_flags(include_flags)
         return source_files, compiler, include_flags, []
 
-    def _java_synthesised_classpath(self) -> List[str]:
+    def _java_synthesised_classpath(self) -> list[str]:
         """When we fall through to raw javac (no pom.xml/build.gradle/
         build.xml), any external JARs the code depends on typically
         live under `repo/lib/*.jar` by informal convention. Build a
@@ -1017,7 +1085,7 @@ class BuildDetector:
         # core.config.DANGEROUS_ENV_VARS for why CLASSPATH is stripped).
         # Joined with `os.pathsep` inside the generated script so we
         # don't need to know the host's separator at generation time.
-        java_classpath_jars: List[str] = (
+        java_classpath_jars: list[str] = (
             self._java_synthesised_classpath() if is_java else []
         )
 
@@ -1031,7 +1099,7 @@ Compiles each source file individually via subprocess.run (no shell).
 CodeQL traces the compiler invocations through its preload tracer.
 Tolerates individual compilation failures.
 """
-import os, subprocess, sys
+import os, subprocess, sys, threading
 
 # Strip dynamic-loader injection vars from the env we pass to each
 # compile subprocess. CodeQL's tracer wraps the build script with
@@ -1120,19 +1188,31 @@ for i, src in enumerate(FILES):
     # Use Popen + bounded read(N) so each compile's stderr is
     # capped at 256 KB — enough for a useful diagnostic
     # excerpt, hard upper bound. Drain remaining bytes via
-    # /dev/null so the child can finish without SIGPIPE.
+    # the reader loop so the child can finish without SIGPIPE.
+    #
+    # The bounded read + drain run in a helper THREAD: read()
+    # blocks until N bytes or EOF, so doing it inline before
+    # wait(timeout) let a hung compiler that held stderr open
+    # (while writing little) pin the script at the read forever
+    # — the documented kill-after-timeout below never fired.
+    # With the reader threaded, wait(timeout) is always reached;
+    # on kill the reader sees EOF and exits.
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, env=_BUILD_ENV)
     _STDERR_CAP = 256 * 1024
-    captured = b""
-    if proc.stderr is not None:
-        captured = proc.stderr.read(_STDERR_CAP)
+    _cap = {{"data": b""}}
+    def _read_stderr(p=proc, out=_cap):
+        if p.stderr is None:
+            return
+        out["data"] = p.stderr.read(_STDERR_CAP)
         # Drain any remainder so the child unblocks on its
         # next stderr write rather than hanging on a full
         # pipe buffer (PIPE_BUF is 64 KB on Linux; without
         # the drain, a child writing > 256 KB sleeps in
         # write(2) waiting for a reader).
-        while proc.stderr.read(64 * 1024):
+        while p.stderr.read(64 * 1024):
             pass
+    _reader = threading.Thread(target=_read_stderr, daemon=True)
+    _reader.start()
     # Per-file compile timeout. Pre-fix `proc.wait()` had no
     # bound — a runaway compile (gcc on a pathological template
     # instantiation, javac on infinite annotation processing,
@@ -1143,7 +1223,12 @@ for i, src in enumerate(FILES):
     # compile (the slowest C++ template compiles in real
     # codebases run ~30s); a hung compile gets killed and
     # counted as a failure so the rest of the pass continues.
-    _COMPILE_TIMEOUT_S = 120
+    # RAPTOR_COMPILE_TIMEOUT_S overrides for tests / unusual
+    # toolchains.
+    try:
+        _COMPILE_TIMEOUT_S = int(os.environ.get("RAPTOR_COMPILE_TIMEOUT_S", "120"))
+    except ValueError:
+        _COMPILE_TIMEOUT_S = 120
     try:
         proc.wait(timeout=_COMPILE_TIMEOUT_S)
     except subprocess.TimeoutExpired:
@@ -1157,6 +1242,8 @@ for i, src in enumerate(FILES):
             f"\\n[compile timeout {{_COMPILE_TIMEOUT_S}}s on {{src!r}}]\\n".encode()
         )
         continue
+    _reader.join(timeout=5)
+    captured = _cap["data"]
     if proc.returncode == 0:
         ok += 1
     else:
@@ -1184,7 +1271,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         script_path.chmod(0o500)
         return script_path
 
-    def _dry_run(self, script_path, language: Optional[str] = None) -> Optional[list]:
+    def _dry_run(self, script_path, language: str | None = None) -> list | None:
         """Run the build script and return compilation failures.
 
         Returns:
@@ -1253,9 +1340,27 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 tail = stderr_lines[-1] if stderr_lines else "(no stderr)"
                 logger.warning("Build script crashed: %s", tail)
                 return None
+            if result.returncode != 0 and not any(
+                marker in result.stderr
+                for marker in (": error:", ": fatal error:")
+            ):
+                # Nonzero exit with no Python traceback AND no compiler
+                # diagnostics: signal death (OOM-kill → returncode -9,
+                # empty stderr), interpreter mismatch, wrapper failure.
+                # Nothing was measured — falling through to the stderr
+                # parse would return [] and the caller would log
+                # "all files compiled successfully" with confidence 0.7,
+                # exactly the collapsed case the None sentinel exists to
+                # prevent.
+                logger.warning(
+                    "Build script exited %d without compiler diagnostics "
+                    "— treating as 'didn't run'",
+                    result.returncode,
+                )
+                return None
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
-        except (subprocess.TimeoutExpired, Exception) as e:
+        except (subprocess.TimeoutExpired, Exception) as e:  # noqa: BLE001 — any spawn failure maps to the None sentinel
             logger.warning("Build script never ran (%r) — treating as 'didn't run'", e)
             return None
 
@@ -1270,7 +1375,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                     failures.append({"file": src_file, "error": error})
         return failures
 
-    def _cc_suggest_flags(self, failures: list, language: str) -> Optional[dict]:
+    def _cc_suggest_flags(self, failures: list, language: str) -> dict | None:
         """Ask CC to suggest -I and -D flags to fix compilation failures.
 
         Security model:
@@ -1319,8 +1424,8 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             f"- {f['file']}: {f['error']}" for f in failures[:15]
         )
 
-        from core.security.prompt_envelope import UntrustedBlock, build_prompt
         from core.security.prompt_defense_profiles import CONSERVATIVE
+        from core.security.prompt_envelope import UntrustedBlock, build_prompt
 
         compiler = "gcc" if language == "cpp" else "javac"
         system = (
@@ -1363,7 +1468,12 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 
         try:
             logger.info("  Asking Claude Code for additional compiler flags...")
-            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command, strip_json_fences
+            from core.llm.cc_adapter import (
+                CCDispatchConfig,
+                build_cc_command,
+                cc_subprocess_env,
+                strip_json_fences,
+            )
             config = CCDispatchConfig(
                 claude_bin=claude_bin,
                 tools="Read,Grep,Glob",
@@ -1382,9 +1492,16 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             # custom-endpoint setups. The downstream client is
             # ``claude`` either way, so the policy is identical.
             from core.llm.cc_proxy_hosts import proxy_hosts_for_cc_dispatch
+            # env: backend overlay (CLAUDE_CODE_*/ANTHROPIC_*/AWS_*) so a
+            # Bedrock/Vertex-backed CLI child can authenticate; the
+            # sandbox's proxy env still overrides HTTPS_PROXY.
             result = _sandbox_run(
                 build_cc_command(config),
                 target=repo_path, output=repo_path,
+                # mint_aws_credentials: sandboxed child (see
+                # cc_adapter._mint_child_aws_credentials) — an IAM-role
+                # Bedrock host leaves it credential-starved otherwise.
+                env=cc_subprocess_env(mint_aws_credentials=True),
                 use_egress_proxy=True,
                 proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="codeql-build-detect",
@@ -1471,7 +1588,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 
         except subprocess.TimeoutExpired:
             logger.info("  CC flag suggestion timed out (180s)")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — CC suggestion is best-effort enrichment
             logger.debug("CC flag suggestion failed: %s", e)
 
         return None

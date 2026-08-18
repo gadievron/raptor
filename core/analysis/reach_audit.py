@@ -25,14 +25,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+
+from core.paths import path_to_module
 
 logger = logging.getLogger(__name__)
 
 # Verdicts that mean "not reachable in this deployment" (dead).
 _DEAD_VERDICTS = frozenset({
     "module_aborts", "lexical_dead", "build_excluded",
-    "no_path_from_entry", "not_called",
+    "no_path_from_entry", "not_called", "binary_oracle_absent",
 })
 # Verdicts that mean "reachable / has a live path".
 _LIVE_VERDICTS = frozenset({
@@ -62,33 +63,33 @@ def set_joern_server(server) -> None:
 @dataclass
 class _ClassifyCtx:
     """Per-target inputs shared by the precedence stages."""
-    inventory: Dict[str, object]
+    inventory: dict[str, object]
     file_path: str
     name: str
     line: int
     module: str
     target: object          # reachability.InternalFunction
-    class_name: Optional[str] = None   # enclosing class, for method qualnames
+    class_name: str | None = None   # enclosing class, for method qualnames
 
 
 # --- precedence stages: each (ctx, R) -> verdict string | None -------------
 # R is the core.analysis.reachability module (the accessors). A stage returns
 # its verdict when it fires, else None to fall through to the next stage.
 
-def _stage_module_aborts(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_module_aborts(ctx: _ClassifyCtx, R) -> str | None:
     abort = R.module_aborts_on_load(ctx.inventory, ctx.file_path)
     if abort and ctx.line and ctx.line > int(abort.get("line") or 0):
         return "module_aborts"
     return None
 
 
-def _stage_lexical_dead(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_lexical_dead(ctx: _ClassifyCtx, R) -> str | None:
     if R.is_lexically_dead(ctx.inventory, ctx.file_path, ctx.name, ctx.line):
         return "lexical_dead"
     return None
 
 
-def _stage_binary_oracle_absent(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_binary_oracle_absent(ctx: _ClassifyCtx, R) -> str | None:
     if R.binary_oracle_absent(
         ctx.inventory, ctx.file_path, ctx.name, ctx.line,
     ):
@@ -96,7 +97,7 @@ def _stage_binary_oracle_absent(ctx: "_ClassifyCtx", R) -> Optional[str]:
     return None
 
 
-def _stage_frida_runtime_trace(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_frida_runtime_trace(ctx: _ClassifyCtx, R) -> str | None:
     """Promote if frida observed the function at runtime."""
     if R.frida_runtime_trace_present(
         ctx.inventory, ctx.file_path, ctx.name, ctx.line,
@@ -105,7 +106,7 @@ def _stage_frida_runtime_trace(ctx: "_ClassifyCtx", R) -> Optional[str]:
     return None
 
 
-def _stage_binary_call_edge(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_binary_call_edge(ctx: _ClassifyCtx, R) -> str | None:
     if R.binary_call_edge_present(
         ctx.inventory, ctx.file_path, ctx.name, ctx.line,
     ):
@@ -113,25 +114,25 @@ def _stage_binary_call_edge(ctx: "_ClassifyCtx", R) -> Optional[str]:
     return None
 
 
-def _stage_build_excluded(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_build_excluded(ctx: _ClassifyCtx, R) -> str | None:
     if R.build_excluded(ctx.inventory, ctx.file_path):
         return "build_excluded"
     return None
 
 
-def _stage_framework(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_framework(ctx: _ClassifyCtx, R) -> str | None:
     if R.is_framework_callable(ctx.inventory, ctx.target):
         return "framework_callable"
     return None
 
 
-def _stage_registered(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_registered(ctx: _ClassifyCtx, R) -> str | None:
     if R.is_registered_via_call(ctx.inventory, ctx.target):
         return "registered_via_call"
     return None
 
 
-def _stage_entry(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_entry(ctx: _ClassifyCtx, R) -> str | None:
     er = R.entry_reachability(ctx.inventory, ctx.target)
     if er == "reachable":
         return "reachable"
@@ -150,7 +151,7 @@ def _stage_entry(ctx: "_ClassifyCtx", R) -> Optional[str]:
     return None
 
 
-def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
+def _stage_one_hop(ctx: _ClassifyCtx, R) -> str | None:
     # A method called only via ``this.m()`` / ``self.m()`` resolves through the
     # method-match index under its CLASS-qualified name (``mod.Class.m``); the
     # bare ``mod.m`` form misses it and reads not_called. Try the class-qualified
@@ -192,7 +193,7 @@ def _joern_has_callers(function_name: str) -> bool:
     try:
         from core.analysis.reachability_gates import _joern_find_callers
         return bool(_joern_find_callers(function_name, _joern_server))
-    except Exception:
+    except Exception:  # noqa: BLE001 — advisory cross-check: any failure means "no extra callers"
         return False
 
 
@@ -240,8 +241,8 @@ PRECEDENCE = (
 
 
 def _lookup_class_name(
-    inventory: Dict[str, object], file_path: str, name: str, line: int,
-) -> Optional[str]:
+    inventory: dict[str, object], file_path: str, name: str, line: int,
+) -> str | None:
     """The enclosing class of the ``(file_path, name)`` item, if any — used to
     build a method's class-qualified name for the 1-hop check. Scans the target
     file's items only (matching the other (inventory, file_path) accessors)."""
@@ -261,7 +262,7 @@ def _lookup_class_name(
 
 
 def classify_reachability(
-    inventory: Dict[str, object],
+    inventory: dict[str, object],
     file_path: str,
     name: str,
     line: int,
@@ -278,8 +279,8 @@ def classify_reachability(
     grounding for "which language needs better framework-catalog
     coverage" questions without burdening any consumer.
     """
-    from core.analysis import reachability as R
     from core.analysis import reach_verdict_log
+    from core.analysis import reachability as R
     ctx = _ClassifyCtx(
         inventory=inventory, file_path=file_path, name=name, line=line,
         module=module,
@@ -306,7 +307,7 @@ class AuditReport:
     live_ok: int = 0              # labelled live, classified live/uncertain
     not_found: int = 0            # labelled fn not in inventory (extraction
                                   # gap, NOT a reachability misclassification)
-    per_verdict: Dict[str, int] = field(default_factory=dict)
+    per_verdict: dict[str, int] = field(default_factory=dict)
     false_suppress_detail: list = field(default_factory=list)
     missed_detail: list = field(default_factory=list)
     not_found_detail: list = field(default_factory=list)
@@ -317,20 +318,13 @@ class AuditReport:
         return self.caught_dead / dead if dead else 1.0
 
 
-def _path_to_module(rel_path: str) -> Optional[str]:
-    from pathlib import PurePosixPath
-    p = PurePosixPath(rel_path.replace("\\", "/"))
-    if not p.suffix:
-        return None
-    parts = list(p.with_suffix("").parts)
-    return ".".join(parts) if parts else None
 
 
 def audit_corpus(
     target_dir: str,
-    labels: Dict[Tuple[str, str], str],
+    labels: dict[tuple[str, str], str],
     *,
-    inventory: Optional[Dict[str, object]] = None,
+    inventory: dict[str, object] | None = None,
 ) -> AuditReport:
     """Classify each labelled ``(rel_path, func_name) → "dead"|"live"`` and
     tally coverage + false-suppress. ``inventory`` may be supplied (tests
@@ -339,12 +333,13 @@ def audit_corpus(
     """
     if inventory is None:
         import tempfile
+
         from core.inventory.builder import build_inventory
         with tempfile.TemporaryDirectory() as td:
             inventory = build_inventory(target_dir, td)
 
     # Index items by (rel_path, name) → line, for label lookup.
-    line_of: Dict[Tuple[str, str], int] = {}
+    line_of: dict[tuple[str, str], int] = {}
     for f in inventory.get("files", []):
         if not isinstance(f, dict):
             continue
@@ -356,7 +351,7 @@ def audit_corpus(
 
     report = AuditReport()
     for (rel, name), label in labels.items():
-        module = _path_to_module(rel)
+        module = path_to_module(rel)
         if not module:
             continue
         if (rel, name) not in line_of:

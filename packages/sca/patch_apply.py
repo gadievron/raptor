@@ -10,6 +10,18 @@ can't roll back, and applying changes to a non-versioned tree is a
 foot-gun (operator can't easily diff what changed). The error
 message points the operator at the patch file so they can apply
 manually if they understand the trade-off.
+
+Sandbox posture: the target's ``.git/config`` is attacker-
+controllable on an untrusted clone — git evaluates
+``core.fsmonitor`` / ``core.sshCommand`` / ``core.gitProxy`` etc.
+at startup and will exec arbitrary commands per their value. The
+``git apply`` therefore routes through
+``core.sandbox.context.run_untrusted`` — same containment posture
+as harden's ``--self-test`` git calls (network blocked at the
+namespace level, reads restricted, no $HOME, strict env with the
+trust markers stripped, writes limited to the target checkout) —
+so a malicious ``.git/config`` can only escalate to "code exec
+inside the sandbox".
 """
 
 from __future__ import annotations
@@ -17,6 +29,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -61,15 +74,35 @@ def apply_patch_to_target(
         return 4
 
     try:
-        from core.config import RaptorConfig
-        from core.sandbox.preexec import set_pdeathsig
-        proc = subprocess.run(
-            ["git", "apply", str(patch_path)],
-            cwd=str(target),
-            capture_output=True, text=True, timeout=timeout,
-            env=RaptorConfig.get_safe_env(),
-            preexec_fn=set_pdeathsig(),
-        )
+        from core.sandbox.context import run_untrusted
+
+        # The patch lives in the run's out_dir, which is outside the
+        # sandbox's readable set — read it here and feed via stdin
+        # (``git apply -``) so the sandbox never needs read access to
+        # out_dir. Same technique as harden's ``--self-test`` apply.
+        patch_text = patch_path.read_text(encoding="utf-8")
+        # Scratch dir for the sandbox's fake $HOME / temp files —
+        # keeping ``output=`` off the target means no ``.home/``
+        # litter lands in the operator's tree. Writes are scoped to
+        # the target checkout (worktree + ``.git``) via
+        # ``writable_paths``; run_untrusted pins the network off and
+        # supplies the strict, trust-marker-stripped environment
+        # itself. The default ('full') profile keeps the caller-
+        # visible failure contract identical: a spawn failure is
+        # still an OSError/SubprocessError mapping to rc 5 below,
+        # never an abort that skips the exit-code translation.
+        with tempfile.TemporaryDirectory(
+                prefix="raptor-sca-apply-") as sandbox_out:
+            proc = run_untrusted(
+                ["git", "apply", "-"],
+                target=str(target),
+                output=sandbox_out,
+                writable_paths=[str(target)],
+                cwd=str(target),
+                input=patch_text,
+                capture_output=True, text=True, timeout=timeout,
+                caller_label="sca-patch-apply/git-apply",
+            )
     except (subprocess.SubprocessError, OSError) as e:
         print(f"{caller_label} --apply: git apply failed: {e}",
               file=sys.stderr)

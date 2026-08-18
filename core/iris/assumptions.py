@@ -168,10 +168,18 @@ def assumption_from_dict(d: dict[str, Any]) -> SafetyAssumption:
         raw_enforced = []
 
     raw_params = d.get("params_affected") or []
-    if isinstance(raw_params, str):
+    if isinstance(raw_params, (int, float)):
+        raw_params = [raw_params]
+    elif isinstance(raw_params, str):
         raw_params = [raw_params]
     elif not isinstance(raw_params, list):
         raw_params = []
+    params_affected: list[int] = []
+    for p in raw_params:
+        try:
+            params_affected.append(int(p))
+        except (TypeError, ValueError):
+            continue
 
     return SafetyAssumption(
         target=d.get("target", ""),
@@ -180,7 +188,7 @@ def assumption_from_dict(d: dict[str, Any]) -> SafetyAssumption:
         category=cat,
         enforced_by=raw_enforced,
         bug_class=d.get("bug_class", ""),
-        params_affected=raw_params,
+        params_affected=params_affected,
         confidence=d.get("confidence", 0.5),
         evidence_tier=tier,
         source=d.get("source", ""),

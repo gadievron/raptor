@@ -30,9 +30,10 @@ Complements scanning by building ground-truth knowledge of how code actually wor
 | **Map** | `--map` | Build high-level context: entry points, trust model, data paths |
 | **Trace** | `--trace <entry>` | Follow one flow source → sink with full call chain |
 | **Hunt** | `--hunt <pattern>` | Find all variants of a pattern across the codebase |
+| **Study** | `--study <subject>` | Deep-read a subsystem — extract invariants, contracts, assumptions |
 | **Teach** | `--teach` | Explain unfamiliar code, frameworks, or patterns in depth |
 
-Modes can be combined. Map → Trace → Hunt is the natural attack progression.
+Modes can be combined. Map → Study → Trace → Hunt is the natural attack progression.
 
 ---
 

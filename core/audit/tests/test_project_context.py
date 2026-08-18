@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 
 from core.audit.project_context import (
+    VALID_CATEGORIES,
     Learning,
     ProjectContext,
-    VALID_CATEGORIES,
     add_learning,
     load_project_context,
     save_project_context,
@@ -252,7 +252,7 @@ class TestPersistProjectLearnings:
         run_dir = tmp_path / "project" / "run1"
         run_dir.mkdir(parents=True)
         session_obs = [
-            {"text": "memcpy often called without bounds", "source": "a.c:copy_buf", "tool_confirmed": True},
+            {"text": "memcpy often called without bounds", "source": "a.c:copy_buf", "kind": "tool_confirmation"},
             {"text": "unconfirmed guess", "source": "b.c:fn"},
         ]
         result = OrchestratorResult()
@@ -297,7 +297,7 @@ class TestPersistProjectLearnings:
         run_dir = tmp_path / "project" / "run3"
         run_dir.mkdir(parents=True)
         session_obs = [
-            {"text": "pattern X", "source": "a.c:f", "tool_confirmed": True},
+            {"text": "pattern X", "source": "a.c:f", "kind": "tool_confirmation"},
         ]
         result = OrchestratorResult()
         _persist_project_learnings(run_dir, session_obs, result)
@@ -306,3 +306,38 @@ class TestPersistProjectLearnings:
         ctx = load_project_context(run_dir)
         texts = [lrn.text for lrn in ctx.learnings]
         assert texts.count("pattern X") == 1
+
+
+class TestObservationRoundTrip:
+    """The observation shape _accumulate_observations produces must be
+    the shape _persist_project_learnings consumes."""
+
+    def test_tool_confirmation_persists_as_pattern_learning(self, tmp_path):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _accumulate_observations,
+            _persist_project_learnings,
+        )
+
+        run_dir = tmp_path / "project" / "run-rt"
+        run_dir.mkdir(parents=True)
+
+        outcome = ReviewOutcome(
+            file="a.c", function="copy_buf", status="finding",
+            body="overflow", hypothesis="memcpy without bounds check",
+            evidence_tool="semgrep:unbounded-memcpy",
+        )
+        session_obs: list = []
+        _accumulate_observations(
+            session_obs, outcome, {"file": "a.c", "name": "copy_buf"},
+            sweep_pre_status="suspicious",
+        )
+        assert session_obs, "producer should emit a tool confirmation"
+
+        _persist_project_learnings(run_dir, session_obs, OrchestratorResult())
+        ctx = load_project_context(run_dir)
+        assert any(
+            lrn.category == "pattern" and "memcpy" in lrn.text
+            for lrn in ctx.learnings
+        )

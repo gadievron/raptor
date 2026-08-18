@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from core.audit.evidence_grade import Confidence
 from core.audit.layer_resolution import (
@@ -278,6 +279,39 @@ class TestPersistence:
     def test_write_empty_observations(self, tmp_path):
         result = write_observation_records([], tmp_path)
         assert result is None
+
+    def test_successful_write_logs_count_and_path(self, tmp_path, caplog):
+        records = [
+            ObservationRecord(
+                file="a.c", function="f",
+                status=ObservationStatus.OBSERVED,
+                observation_runs=1,
+            ),
+            ObservationRecord(
+                file="b.c", function="g",
+                status=ObservationStatus.UNOBSERVED,
+                observation_runs=2,
+            ),
+        ]
+
+        with caplog.at_level(logging.INFO, logger="core.audit.layer_resolution"):
+            path = write_observation_records(records, tmp_path)
+
+        assert path == tmp_path / "observation-status.json"
+        data = json.loads(path.read_text())
+        assert len(data) == 2
+
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any(
+            "2" in m and "observation record" in m and str(path) in m
+            for m in msgs
+        ), f"expected write log line, got: {msgs}"
+
+    def test_empty_records_no_write_no_log(self, tmp_path, caplog):
+        with caplog.at_level(logging.INFO, logger="core.audit.layer_resolution"):
+            assert write_observation_records([], tmp_path) is None
+        assert not (tmp_path / "observation-status.json").exists()
+        assert not caplog.records
 
 
 class TestFormatSummary:

@@ -9,6 +9,7 @@ origin before spawning the external binary.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,6 +214,12 @@ class FfufRunner:
                 f"ffuf binary not found on PATH: {config.binary}. "
                 "Install ffuf or pass --ffuf-bin."
             )
+        # Exec via the REAL path: go-install / package-manager setups
+        # put a symlink on PATH; the mount-ns visibility check
+        # realpaths cmd[0] and the tool_paths bind must carry the
+        # RESOLVED parent, or the run silently drops to the
+        # Landlock-only fallback tier (selftest-05 scanner precedent).
+        binary_path = os.path.realpath(binary_path)
 
         target_host = (urlparse(self.base_url).hostname or "").lower()
         if not target_host:
@@ -221,6 +228,9 @@ class FfufRunner:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         output_file = self.out_dir / "ffuf_results.json"
         cmd = self.build_command(config, output_file)
+        # build_command uses the operator-facing name; swap in the
+        # resolved real path for the exec.
+        cmd[0] = binary_path
         redacted_cmd = self._redact_command(cmd)
         logger.info("Running sandboxed ffuf: %s", ' '.join(redacted_cmd))
 

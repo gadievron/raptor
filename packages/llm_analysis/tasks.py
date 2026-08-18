@@ -8,7 +8,7 @@ the mechanics (threading, progress, cost, errors).
 import json
 import logging
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import ModelDefenseProfile, system_with_priming
@@ -131,7 +131,7 @@ def _budget_for_task(task, model) -> int:
     return context_budget_for_model(name or "fallback", sys_tokens)
 
 
-def _is_sca_finding(f: Dict) -> bool:
+def _is_sca_finding(f: dict) -> bool:
     """Canonical "is this an SCA finding?" check.
 
     Recognises three identification methods because the SCA pipeline
@@ -155,7 +155,7 @@ def _is_sca_finding(f: Dict) -> bool:
     )
 
 
-def _is_sca_vuln_finding(f: Dict) -> bool:
+def _is_sca_vuln_finding(f: dict) -> bool:
     """Narrower companion to ``_is_sca_finding``: only ``sca:
     vulnerable_dependency`` findings, NOT hygiene / license /
     supply-chain.
@@ -179,7 +179,7 @@ def _is_sca_vuln_finding(f: Dict) -> bool:
     )
 
 
-def _sca_exploit_priority(f: Dict) -> float:
+def _sca_exploit_priority(f: dict) -> float:
     """Score an SCA finding for exploit-target ranking (higher = better target)."""
     sca = f.get("sca", {})
     score = 0.0
@@ -204,54 +204,6 @@ def _sca_exploit_priority(f: Dict) -> float:
             pass
     return score
 
-
-def _build_sca_exploit_prompt(finding: Dict) -> str:
-    """Build an exploit-oriented prompt for an SCA vulnerability finding."""
-    sca = finding.get("sca", {})
-    lines = [
-        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
-        f"Advisory: {finding.get('finding_id', 'unknown')}",
-        f"Severity: {finding.get('severity', 'unknown')}",
-        f"Description: {finding.get('description', 'N/A')}",
-    ]
-    if sca.get("cvss_score") is not None:
-        lines.append(f"CVSS: {sca['cvss_score']}")
-    if sca.get("in_kev"):
-        lines.append("KEV: YES — known exploited in the wild")
-    if sca.get("epss") is not None:
-        try:
-            lines.append(f"EPSS: {float(sca['epss']):.1%}")
-        except (ValueError, TypeError):
-            lines.append(f"EPSS: {sca['epss']}")
-    lines.append(f"Reachability: {sca.get('reachability', 'not_evaluated')}")
-    if sca.get("fixed_version"):
-        lines.append(f"Fixed in: {sca['fixed_version']}")
-    lines.append(f"Declared in: {finding.get('file_path', 'unknown')}")
-    lines.append("")
-    lines.append("Generate a proof-of-concept exploit that demonstrates this "
-                 "vulnerability is exploitable in a project that imports this "
-                 "dependency. Focus on the specific advisory and version.")
-    return "\n".join(lines)
-
-
-def _build_sca_patch_prompt(finding: Dict) -> str:
-    """Build a patch prompt for an SCA vulnerability finding."""
-    sca = finding.get("sca", {})
-    lines = [
-        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
-        f"Advisory: {finding.get('finding_id', 'unknown')}",
-        f"Severity: {finding.get('severity', 'unknown')}",
-        f"Description: {finding.get('description', 'N/A')}",
-    ]
-    if sca.get("fixed_version"):
-        lines.append(f"Fixed version: {sca['fixed_version']}")
-    lines.append(f"Manifest: {finding.get('file_path', 'unknown')}")
-    lines.append("")
-    lines.append("Generate a minimal patch that upgrades this dependency to "
-                 "the fixed version. Show the exact manifest change needed. "
-                 "If no fixed version exists, suggest a workaround or "
-                 "alternative package.")
-    return "\n".join(lines)
 
 
 class ExploitTask(DispatchTask):
@@ -287,9 +239,7 @@ class ExploitTask(DispatchTask):
                 sca = f.get("sca", {})
                 reachability = sca.get("reachability", "")
                 in_kev = sca.get("in_kev", False)
-                if reachability in self._SCA_REACHABILITY_FOR_EXPLOIT:
-                    selected.append(f)
-                elif in_kev and reachability != "not_reachable":
+                if reachability in self._SCA_REACHABILITY_FOR_EXPLOIT or in_kev and reachability != "not_reachable":
                     selected.append(f)
         # Highest-priority SCA findings first so a budget-cutoff
         # truncation upstream catches the most-actionable rows.
@@ -306,8 +256,6 @@ class ExploitTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        if _is_sca_finding(finding):
-            return _build_sca_exploit_prompt(finding)
         # Phase D: inject source_intel structural evidence for
         # memory-corruption findings so the exploit generator sees the
         # same structural context the analysis step saw (allocations,
@@ -359,11 +307,36 @@ class PatchTask(DispatchTask):
     temperature = 0.3
     budget_cutoff = 0.85
 
-    def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE):
+    def __init__(
+        self,
+        profile: ModelDefenseProfile = CONSERVATIVE,
+        checkers_dir: Any | None = None,
+    ):
         self.profile = profile
         self._tls = threading.local()
+        # Optional run-dir ``checkers/`` path so the gate can replay
+        # synthesized checkers; None degrades to registry-cache-only
+        # detector resolution.
+        self.checkers_dir = checkers_dir
+        # Populated by select_items; finalize's patch gate needs the
+        # full finding dicts, which its result records don't carry.
+        self._findings_by_id: dict[str, Any] = {}
+        # Finding ids whose stored ``patch_gate`` was produced by THIS
+        # task's gate run. The merge step consults this side-channel
+        # (not the result dict, which is LLM-derived and forgeable) to
+        # decide whether a record's gate annotations are trustworthy
+        # or the patch still needs gating (inline CC-schema patches).
+        self.gated_ids: set[str] = set()
 
     def select_items(self, findings, prior_results):
+        # Index the full finding dicts for finalize's patch gate —
+        # finalize only receives result records, which lack the
+        # file/line/repo context the gate anchors on. select_items
+        # always runs before dispatch (dispatch.py dispatch_task), so
+        # the index is in place by finalize time.
+        self._findings_by_id = {
+            f.get("finding_id", ""): f for f in findings
+        }
         selected = []
         for f in findings:
             fid = f.get("finding_id", "")
@@ -384,8 +357,6 @@ class PatchTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        if _is_sca_finding(finding):
-            return _build_sca_patch_prompt(finding)
         # Phase D: inject source_intel structural evidence so the
         # patch generator sees the structural context (allocations,
         # hazards, sanitizer-shaped sites) when crafting a fix.
@@ -421,7 +392,70 @@ class PatchTask(DispatchTask):
                 if content:
                     prior_results[fid]["patch_code"] = content
                     prior_results[fid]["has_patch"] = True
+                    # Mechanical patch gate — same annotate-only
+                    # posture as agent.generate_patch: a gate crash
+                    # degrades to a warning and the patch is kept.
+                    gate = self._gate_patch(fid, content)
+                    if gate is not None:
+                        prior_results[fid]["patch_gate"] = gate
+                        r["patch_gate"] = gate
+                        self.gated_ids.add(fid)
         return results
+
+    def _gate_patch(self, fid: str, content: str) -> dict | None:
+        """Run the mechanical patch gate over one accepted patch.
+
+        Returns the ``GateResult.to_dict()`` annotations, or None when
+        the gate itself failed (never blocks the save). Findings in
+        this flow carry ``repo_path`` (stamped by the orchestrator
+        before dispatch); flows that genuinely lack file or span
+        context get honest ``skipped`` annotations from the gate
+        rather than a guessed scope anchor.
+        """
+        finding = self._findings_by_id.get(fid) or {}
+        try:
+            from pathlib import Path
+
+            from packages.llm_analysis.patch_gate import run_patch_gate
+
+            repo_path = finding.get("repo_path") or ""
+            file_path = finding.get("file_path") or ""
+            try:
+                start_line = int(finding.get("start_line") or 0)
+            except (TypeError, ValueError):
+                start_line = 0
+            try:
+                end_line = int(finding.get("end_line") or start_line)
+            except (TypeError, ValueError):
+                end_line = start_line
+            if not repo_path:
+                # No repo anchor at all — only the format check is
+                # meaningful; run_patch_gate handles the empty
+                # file_path case the same way.
+                file_path = ""
+                repo_path = "."
+            checkers_dir = (
+                Path(self.checkers_dir) if self.checkers_dir else None
+            )
+            gate = run_patch_gate(
+                content,
+                repo_path=Path(repo_path),
+                file_path=file_path,
+                start_line=start_line,
+                end_line=end_line,
+                rule_id=finding.get("rule_id") or "",
+                tool=finding.get("tool") or "",
+                checkers_dir=checkers_dir,
+            )
+            logger.info(
+                "   · Patch gate (%s): format=%s scope=%s detector=%s "
+                "control=%s",
+                fid, gate.format, gate.scope, gate.detector, gate.control,
+            )
+            return gate.to_dict()
+        except Exception as e:  # noqa: BLE001 — gate is annotate-only
+            logger.warning("   · Patch gate skipped for %s: %s", fid, e)
+            return None
 
 
 class ConsensusTask(DispatchTask):
@@ -500,7 +534,7 @@ class ConsensusTask(DispatchTask):
         - 1 consensus model: flag disagreement but preserve primary verdict
         - 2+ consensus models: majority across primary + all consensus
         """
-        consensus_by_finding: Dict[str, List[Dict]] = {}
+        consensus_by_finding: dict[str, list[dict]] = {}
         for r in results:
             fid = r.get("finding_id")
             if fid and "error" not in r:
@@ -665,7 +699,7 @@ class JudgeTask(DispatchTask):
 
     def finalize(self, results, prior_results):
         """Apply judge verdicts: preserve primary (single), majority (multi)."""
-        judge_by_finding: Dict[str, List[Dict]] = {}
+        judge_by_finding: dict[str, list[dict]] = {}
         for r in results:
             fid = r.get("finding_id")
             if fid and "error" not in r:
@@ -728,7 +762,7 @@ class AggregationTask(DispatchTask):
     budget_cutoff = 0.95
 
     def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE,
-                 findings: Optional[List[Dict[str, Any]]] = None):
+                 findings: list[dict[str, Any]] | None = None):
         self.profile = profile
         # Original findings indexed by id so build_prompt can pull
         # SI evidence per memory-corruption finding — gives the
@@ -777,6 +811,8 @@ class AggregationTask(DispatchTask):
         from core.security.prompt_envelope import (
             TaintedString,
             UntrustedBlock,
+        )
+        from core.security.prompt_envelope import (
             build_prompt as _build_prompt,
         )
         from packages.llm_analysis.source_intel_inject import (
@@ -900,8 +936,8 @@ class GroupAnalysisTask(DispatchTask):
     model_role = "analysis"
     temperature = 0.3
 
-    def __init__(self, results_by_id: Optional[Dict[str, Dict]] = None,
-                 findings: Optional[List[Dict[str, Any]]] = None,
+    def __init__(self, results_by_id: dict[str, dict] | None = None,
+                 findings: list[dict[str, Any]] | None = None,
                  profile: ModelDefenseProfile = CONSERVATIVE):
         self.results_by_id = results_by_id or {}
         # Index original findings by finding_id so build_prompt can
@@ -920,8 +956,10 @@ class GroupAnalysisTask(DispatchTask):
 
     def build_prompt(self, group):
         from core.security.prompt_envelope import (
-            UntrustedBlock,
             TaintedString,
+            UntrustedBlock,
+        )
+        from core.security.prompt_envelope import (
             build_prompt as _build_prompt,
         )
         from packages.llm_analysis.source_intel_inject import (
@@ -1005,9 +1043,9 @@ class GroupAnalysisTask(DispatchTask):
 
 
 class RetryTask(AnalysisTask):
-    """Stage F: self-consistency check + retry contradictions and low confidence.
+    """Stage F: self-contradiction check + retry contradictions and low confidence.
 
-    Runs _check_self_consistency to flag contradictions, then selects findings
+    Runs _check_self_contradiction to flag contradictions, then selects findings
     that are self-contradictory OR have ambiguous scores (0.3-0.7).
 
     For contradictions: provides feedback context ("you said X but marked Y").
@@ -1018,16 +1056,16 @@ class RetryTask(AnalysisTask):
     LOW = 0.3
     HIGH = 0.7
 
-    def __init__(self, results_by_id: Optional[Dict[str, Dict]] = None,
+    def __init__(self, results_by_id: dict[str, dict] | None = None,
                  profile: ModelDefenseProfile = CONSERVATIVE,
                  *, allow_unreachable: bool = False):
         super().__init__(profile=profile, allow_unreachable=allow_unreachable)
         self.results_by_id = results_by_id or {}
 
     def select_items(self, findings, prior_results):
-        # Run self-consistency check to flag contradictions
-        from packages.llm_analysis.orchestrator import _check_self_consistency
-        _check_self_consistency(prior_results)
+        # Run self-contradiction check to flag contradictions
+        from packages.llm_analysis.orchestrator import _check_self_contradiction
+        _check_self_contradiction(prior_results)
 
         selected = []
         for f in findings:
@@ -1143,7 +1181,7 @@ class RetryTask(AnalysisTask):
                 # telemetry), `_quality` (response validation),
                 # `cross_family_check` (CrossFamilyCheckTask
                 # verdict + checker_model + trigger),
-                # `contradictions` (self-consistency check
+                # `contradictions` (self-contradiction check
                 # output). Downstream consumers (judge,
                 # consensus, reporting) lost the audit trail
                 # for any finding that hit the retry loop.

@@ -6,7 +6,6 @@ text contradicts the boolean verdict fields.
 
 import logging
 import re
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +43,15 @@ _SIGNAL_PATTERNS = {
 }
 
 
-def check_self_consistency(results_by_id: Dict[str, Dict]) -> int:
+def check_self_contradiction(results_by_id: dict[str, dict]) -> int:
     """Check for contradictions between LLM reasoning and verdict fields.
+
+    Naming note: previously ``check_self_consistency`` — renamed because
+    it collided with audit's ``run_self_consistency`` (Wang-et-al
+    a-priori N-sample majority vote in core/audit/multi_review.py).
+    This is a DIFFERENT QA mechanism: a-posteriori single-response
+    contradiction detection feeding targeted resampling (RetryTask).
+
 
     Two kinds of contradictions:
 
@@ -123,7 +129,7 @@ def check_self_consistency(results_by_id: Dict[str, Dict]) -> int:
         else:
             # Pre-fix this branch was missing — once a finding had
             # `self_contradictory=True` set, it persisted across
-            # re-runs of `_check_self_consistency` even when a
+            # re-runs of `_check_self_contradiction` even when a
             # successful retry resolved the contradiction. The
             # downstream consensus / judge logic still saw the
             # stale flag and treated the (now-clean) finding as

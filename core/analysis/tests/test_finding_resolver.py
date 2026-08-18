@@ -9,12 +9,15 @@ whole arc's correctness witness in one assertion.
 """
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 from core.analysis.cfg_builder import PyCFGNode
 from core.analysis.finding_resolver import (
     ResolutionFailure,
     ResolvedFinding,
+    _ParsedFinding,
+    _read_finding_source,
     resolve_finding,
 )
 from core.analysis.sanitizer_cut import (
@@ -364,6 +367,57 @@ class TestFailureModes:
 
 
 # ---------------------------------------------------------------------------
+# Path containment — engine-supplied file paths guarded before any read
+# ---------------------------------------------------------------------------
+
+
+class TestTraversalGuard:
+    """Traversal via ``..`` segments is refused before any read."""
+
+    def test_dotdot_segment_refused(self, tmp_path):
+        _write(tmp_path, "secret.py", STRAIGHT_LINE_SAFE_SRC)
+        finding = _raptor_native(f"{tmp_path}/sub/../secret.py", 1, 3)
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolutionFailure)
+        assert "'..'" in result.reason
+
+    def test_relative_dotdot_refused(self):
+        result = resolve_finding(_raptor_native("../../etc/target.py", 1, 3))
+        assert isinstance(result, ResolutionFailure)
+        assert "'..'" in result.reason
+        # Refused by the guard, not by a failed read.
+        assert "cannot read" not in result.reason
+
+    def test_dotdot_refused_for_cpp_branch(self):
+        finding = _raptor_native("../escape.c", 1, 3, language="c")
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolutionFailure)
+        assert "'..'" in result.reason
+
+    def test_sarif_uri_with_dotdot_refused(self):
+        result = resolve_finding(_sarif_result("../../x.py", 1, 3))
+        assert isinstance(result, ResolutionFailure)
+        assert "'..'" in result.reason
+
+    def test_absolute_path_still_allowed(self, tmp_path):
+        src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
+        result = resolve_finding(_raptor_native(str(src), 1, 3))
+        assert isinstance(result, ResolvedFinding)
+        assert result.enclosing_function == "handle"
+
+    def test_null_byte_path_fails_closed(self):
+        result = _read_finding_source("bad\x00path.py")
+        assert isinstance(result, ResolutionFailure)
+
+    def test_dotdot_filename_prefix_not_refused(self, tmp_path):
+        # A file merely NAMED with a leading '..' prefix is not a
+        # traversal segment.
+        src = _write(tmp_path, "..hidden.py", STRAIGHT_LINE_SAFE_SRC)
+        result = _read_finding_source(str(src))
+        assert result == STRAIGHT_LINE_SAFE_SRC
+
+
+# ---------------------------------------------------------------------------
 # Nested-function resolution
 # ---------------------------------------------------------------------------
 
@@ -407,5 +461,23 @@ class TestFormatDetection:
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
         finding = _semgrep_finding(str(src_file), 1, 3)
         # Semgrep has check_id + extra.
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolvedFinding)
+
+
+# ---------------------------------------------------------------------------
+# Column plumbing removed — source_col / sink_col are not part of the model
+# ---------------------------------------------------------------------------
+
+
+class TestDeadColumnPlumbingRemoved:
+    def test_parsed_finding_has_no_column_fields(self):
+        names = {f.name for f in dataclasses.fields(_ParsedFinding)}
+        assert "source_col" not in names
+        assert "sink_col" not in names
+
+    def test_native_finding_with_legacy_col_keys_still_resolves(self, tmp_path):
+        src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
+        finding = _raptor_native(str(src), 1, 3, source_col=5, sink_col=11)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)

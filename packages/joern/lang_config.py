@@ -1,4 +1,4 @@
-"""Per-language Joern tuning: EngineConfig params, sink patterns, heap sizing.
+"""Per-language Joern tuning: EngineConfig params, sink patterns, frontends.
 
 Each language has different CPG characteristics — dynamic dispatch depth,
 argument expansion, and dangerous-sink naming conventions. Using the same
@@ -20,7 +20,6 @@ class LangProfile:
     max_args_to_allow: int
     max_output_args_expansion: int
     sinks: tuple[str, ...]
-    heap_mb_per_10k_sloc: int = 2048
     joern_parse_language: str = ""
 
 
@@ -38,7 +37,6 @@ PYTHON = LangProfile(
         "render_template_string", "from_string",
         "urlopen",
     ),
-    heap_mb_per_10k_sloc=1024,
     joern_parse_language="pythonsrc",
 )
 
@@ -57,7 +55,6 @@ C_CPP = LangProfile(
         "fopen", "freopen", "open", "creat",
         "connect", "bind", "send", "sendto", "sendmsg", "write",
     ),
-    heap_mb_per_10k_sloc=3072,
     joern_parse_language="c",
 )
 
@@ -77,7 +74,6 @@ JAVA = LangProfile(
         "evaluate", "eval", "createExpression",
         "merge", "process",
     ),
-    heap_mb_per_10k_sloc=3072,
     joern_parse_language="javasrc",
 )
 
@@ -97,7 +93,6 @@ JAVASCRIPT = LangProfile(
         "createReadStream", "createWriteStream",
         "deserialize", "unserialize",
     ),
-    heap_mb_per_10k_sloc=1024,
     joern_parse_language="jssrc",
 )
 
@@ -114,7 +109,6 @@ GO = LangProfile(
         "Get", "Post", "Do", "NewRequest",
         "Unmarshal", "Decode", "NewDecoder",
     ),
-    heap_mb_per_10k_sloc=1024,
     joern_parse_language="gosrc",
 )
 
@@ -137,10 +131,51 @@ _PROFILES: dict[str, LangProfile] = {
 
 DEFAULT = PYTHON
 
+# Sink names for the bulk pre-sweep query (standard_sinks.sc). One
+# cross-language list: the sweep runs once at CPG build time before
+# the target language routing kicks in, so it mixes the C/C++ and
+# dynamic-language surfaces. This is the single authority — the .sc
+# template renders it through its __SINK_NAMES__ slot (the script
+# used to hardcode a drifting copy).
+STANDARD_SWEEP_SINKS: tuple[str, ...] = (
+    # Command execution
+    "system", "popen", "exec", "execve", "execvp", "execl", "execlp",
+    "execle", "fexecve", "posix_spawn", "posix_spawnp",
+    # Memory operations
+    "memcpy", "memmove", "memset", "strcpy", "strncpy", "strcat",
+    "strncat", "sprintf", "snprintf", "vsprintf", "vsnprintf",
+    # Format strings
+    "printf", "fprintf", "syslog",
+    # File operations
+    "fopen", "freopen", "open",
+    # SQL / injection surfaces
+    "query", "execute", "raw",
+    # Deserialization
+    "loads", "load", "unserialize", "pickle",
+)
+
+
+def scala_string_list(names: tuple[str, ...]) -> str:
+    """Render a name tuple as the body of a Scala List(...) literal."""
+    return ", ".join(f'"{n}"' for n in names)
+
 
 def profile_for(language: str) -> LangProfile:
     """Return the tuning profile for a language, defaulting to Python."""
     return _PROFILES.get(language.lower(), DEFAULT)
+
+
+def parse_languages_for(target_path: str) -> set[str] | None:
+    """``joern-parse --language`` value for the target's dominant
+    language, or ``None`` to let joern-parse auto-detect.
+
+    Pins the frontend deterministically from the same extension census
+    the rest of the tuning uses, instead of trusting joern-parse's own
+    guess — the curated ``joern_parse_language`` values exist for
+    exactly this.
+    """
+    lang = profile_for(detect_language(str(target_path))).joern_parse_language
+    return {lang} if lang else None
 
 
 def detect_language(target_path: str) -> str:

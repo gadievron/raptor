@@ -3,7 +3,7 @@
 SMT is the right tool when the hypothesis is "this path is reachable
 under these constraints" or "these branch conditions are mutually
 exclusive". The LLM expresses constraints as line-separated text in
-the syntax that packages/codeql/smt_path_validator accepts:
+the syntax that core/smt_solver/path_feasibility accepts:
 
     size > 0
     offset + length <= buffer_size
@@ -28,7 +28,6 @@ path). The `target` argument is informational only.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from core.smt_solver.path_feasibility import (
     PathCondition,
@@ -37,7 +36,6 @@ from core.smt_solver.path_feasibility import (
 )
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence
-
 
 _SYNTAX_EXAMPLE = """\
 # Each non-empty line is a single path condition. Conditions must all
@@ -60,12 +58,12 @@ def _z3_available() -> bool:
     try:
         from core.smt_solver import z3_available  # type: ignore
         return z3_available()
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional dependency probe; any failure means "not available"
         return False
 
 
 class SMTAdapter(ToolAdapter):
-    """Adapter wrapping packages/codeql/smt_path_validator for hypothesis validation.
+    """Adapter wrapping core/smt_solver/path_feasibility for hypothesis validation.
 
     Args:
         bv_profile: Optional BVProfile from core.smt_solver. Defaults to
@@ -110,7 +108,7 @@ class SMTAdapter(ToolAdapter):
         target: Path,
         *,
         timeout: int = 60,
-        env: Optional[Dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ) -> ToolEvidence:
         """Check satisfiability of LLM-generated path conditions.
 
@@ -137,7 +135,7 @@ class SMTAdapter(ToolAdapter):
             result: PathSMTResult = check_path_feasibility(
                 conditions, profile=profile,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — solver failure becomes tool-evidence error, never a crash
             return ToolEvidence(
                 tool=self.name, rule=rule, success=False,
                 error=f"SMT solver error: {e}",
@@ -153,7 +151,7 @@ class SMTAdapter(ToolAdapter):
         # "matches" — each model entry is a concrete input value. For unsat
         # (feasible=False), there are no matches; success=True with empty
         # matches means refuted.
-        matches: List[Dict] = []
+        matches: list[dict] = []
         if result.feasible and result.model:
             for var, value in sorted(result.model.items()):
                 matches.append({
@@ -192,7 +190,7 @@ class SMTAdapter(ToolAdapter):
         return BV_C_UINT64
 
 
-def _parse_conditions(rule: str) -> List[PathCondition]:
+def _parse_conditions(rule: str) -> list[PathCondition]:
     """Convert the LLM's line-separated constraint text into PathCondition objects.
 
     Format:
@@ -201,7 +199,7 @@ def _parse_conditions(rule: str) -> List[PathCondition]:
         ! text           — constraint that must NOT hold (negated)
         <blank>          — ignored
     """
-    conditions: List[PathCondition] = []
+    conditions: list[PathCondition] = []
     for idx, raw_line in enumerate(rule.splitlines()):
         line = raw_line.strip()
         if not line:

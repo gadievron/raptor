@@ -8,8 +8,8 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from core.audit.executor import ExecutorConfig, run_executor_sync
-from core.llm.concurrency import derive_max_workers
 from core.audit.task_graph import TaskGraph
+from core.llm.concurrency import derive_max_workers
 
 
 def _gap(file: str, name: str, priority: float = 0.5) -> dict[str, Any]:
@@ -310,8 +310,80 @@ class TestAsyncPath:
         finally:
             _shutdown_event.clear()
 
+    def test_stop_with_pending_glance_and_no_inflight(self, monkeypatch) -> None:
+        """Budget stop while glance tasks are queued and nothing is in
+        flight must exit cleanly, not crash on ``asyncio.wait(set())``.
+
+        Sequence: the lone ready task completes, its post-completion
+        dispatch queues two glance-tier dependents (below batch size),
+        THEN the stop flag flips — the main loop must not await an
+        empty inflight set."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [
+            _gap("a.py", "base", 0.9),
+            _gap("a.py", "g1", 0.5),
+            _gap("a.py", "g2", 0.5),
+        ]
+        # g1/g2 depend on base: ready only after base completes.
+        edges = [
+            _edge("a.py", "g1", "a.py", "base"),
+            _edge("a.py", "g2", "a.py", "base"),
+        ]
+        graph = TaskGraph.from_workqueue(wq, edges)
+        result = _FakeResult()
+
+        triage = {
+            "a.py:g1:1": FakeTriageResult(FakeBucket("glance")),
+            "a.py:g2:1": FakeTriageResult(FakeBucket("glance")),
+        }
+        shared = MagicMock()
+        shared.triage_results = triage
+
+        def fake_batch_review_fn(contexts, config):
+            raise AssertionError("no batch should run after the stop")
+
+        import core.audit.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "_get_batch_review_fn",
+                            lambda shared, config: fake_batch_review_fn)
+
+        stop = [False]
+
+        real_pop_ready = graph.pop_ready
+        pop_calls = [0]
+
+        def tracking_pop_ready(n):
+            tasks = real_pop_ready(n)
+            pop_calls[0] += 1
+            if pop_calls[0] == 2:
+                # The post-completion dispatch that queues g1/g2 into
+                # glance_pending — flip the stop right after it.
+                stop[0] = True
+            return tasks
+
+        graph.pop_ready = tracking_pop_ready
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=2),
+            review_one_fn=_mock_review_fn,
+            budget_check=lambda: stop[0],
+        )
+
+        assert stats.budget_stopped
+        assert stats.completed == 1  # only "base"; g1/g2 dropped
+
     def test_parallel_progress_checkpoint(self, tmp_path) -> None:
         import json
+
         import core.audit.executor as executor_mod
 
         meta = {"status": "running", "extra": {}}
@@ -431,6 +503,111 @@ class TestCycleRepass:
 
         assert stats.completed == 2
         assert stats.repass_completed == 0
+
+
+class TestBatchWiringThroughConfig:
+    """The batch path engages when ``config.llm_client`` is set —
+    pinned end-to-end through the REAL ``_get_batch_review_fn`` and
+    ``make_batch_review_fn`` (no monkeypatched dispatch), because the
+    wiring was dead in production for want of the attribute."""
+
+    @staticmethod
+    def _glance_shared(n: int):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        shared = MagicMock()
+        shared.triage_results = {
+            f"a.py:f{i}:1": FakeTriageResult(FakeBucket("glance"))
+            for i in range(n)
+        }
+        return shared
+
+    @staticmethod
+    def _config(client):
+        cfg = MagicMock()
+        cfg.llm_client = client
+        cfg.models = ["default"]
+        return cfg
+
+    def test_no_client_disables_batching(self) -> None:
+        from core.audit.executor import _get_batch_review_fn
+        cfg = MagicMock()
+        cfg.llm_client = None
+        assert _get_batch_review_fn(MagicMock(), cfg) is None
+
+    def test_client_enables_batching(self) -> None:
+        from core.audit.executor import _get_batch_review_fn
+        fn = _get_batch_review_fn(MagicMock(), self._config(MagicMock()))
+        assert callable(fn)
+
+    def test_default_model_sentinel_not_resolved(self) -> None:
+        # models=["default"] must not be passed to config_for_model.
+        from core.audit.executor import _get_batch_review_fn
+        client = MagicMock()
+        fn = _get_batch_review_fn(MagicMock(), self._config(client))
+        assert callable(fn)
+        client.config.config_for_model.assert_not_called()
+
+    def test_glance_tasks_take_one_llm_call(self, monkeypatch) -> None:
+        import json
+
+        n = 10
+        wq = [_gap("a.py", f"f{i}") for i in range(n)]
+        graph = TaskGraph.from_workqueue(wq, [])
+        result = _FakeResult()
+        shared = self._glance_shared(n)
+
+        client = MagicMock()
+        response = MagicMock()
+        response.content = json.dumps([
+            {"file": "a.py", "function": f"f{i}",
+             "status": "clean", "body": "safe"}
+            for i in range(n)
+        ])
+        response.model = "test-model"
+        response.cost = 0.01
+        client.generate.return_value = response
+        client.config.config_for_model.side_effect = AssertionError
+
+        import core.audit.orchestrator as orch_mod
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+                "source": "pass", "line_start": 1, "line_end": 2,
+            },
+        )
+
+        collector = MagicMock()
+        individual: list[str] = []
+
+        def tracking_review(gap, shared, config, review_fn, result_obj, **kw):
+            individual.append(gap["name"])
+            return _mock_review_fn(
+                gap, shared, config, review_fn, result_obj, **kw)
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, self._config(client), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=tracking_review,
+            collector=collector,
+        )
+
+        assert stats.completed == n
+        assert client.generate.call_count == 1, (
+            "ten glance functions must ride ONE LLM call"
+        )
+        assert individual == [], "no per-function fallback expected"
+        assert collector.submit.call_count == n
+        assert result.clean == n
 
 
 class TestAsyncGlanceBatch:
@@ -563,6 +740,94 @@ class TestAsyncGlanceBatch:
         assert stats.completed == 3
         assert len(batch_calls) >= 1
         assert sum(batch_calls) == 3
+
+
+class TestGlanceFallbackBudget:
+    """Budget exhaustion inside the glance-batch fallback path."""
+
+    @staticmethod
+    def _glance_setup(monkeypatch, n):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [_gap("a.py", f"f{i}") for i in range(n)]
+        graph = TaskGraph.from_workqueue(wq, [])
+        shared = MagicMock()
+        shared.triage_results = {
+            f"a.py:f{i}:1": FakeTriageResult(FakeBucket("glance"))
+            for i in range(n)
+        }
+
+        def failing_batch_review_fn(contexts, config):
+            raise ValueError("batch parse error")  # forces the fallback
+
+        import core.audit.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "_get_batch_review_fn",
+                            lambda shared, config: failing_batch_review_fn)
+
+        import core.audit.orchestrator as orch_mod
+        monkeypatch.setattr(
+            orch_mod, "_build_context",
+            lambda config, gap, *a, **kw: {
+                "file": gap["file"], "function": gap["name"],
+            },
+        )
+        return graph, shared
+
+    def test_sync_budget_exceeded_in_fallback_stops_gracefully(
+        self, monkeypatch,
+    ) -> None:
+        """A budget RuntimeError from the per-function fallback must set
+        budget_stopped/terminated_by, not propagate out of
+        run_executor_sync."""
+        graph, shared = self._glance_setup(monkeypatch, 3)
+        result = _FakeResult()
+
+        def budget_review(gap, shared, config, review_fn, result_obj, **kw):
+            raise RuntimeError("LLM budget exceeded")
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=budget_review,
+        )
+
+        assert stats.budget_stopped
+        assert result.terminated_by == "llm_budget_exceeded"
+        assert stats.completed == 0
+
+    def test_sync_non_budget_runtime_error_logged(
+        self, monkeypatch, caplog,
+    ) -> None:
+        """A non-budget RuntimeError in the fallback is logged as a
+        per-function failure and the batch continues."""
+        import logging
+
+        graph, shared = self._glance_setup(monkeypatch, 2)
+        result = _FakeResult()
+
+        def broken_review(gap, shared, config, review_fn, result_obj, **kw):
+            raise RuntimeError("segfault in helper")
+
+        with caplog.at_level(logging.WARNING, logger="core.audit.executor"):
+            stats = run_executor_sync(
+                graph, MagicMock(), shared, MagicMock(), result,
+                ExecutorConfig(max_workers=1),
+                review_one_fn=broken_review,
+            )
+
+        assert not stats.budget_stopped
+        assert stats.completed == 2  # marked complete despite failures
+        assert any(
+            "glance fallback failed" in r.message for r in caplog.records
+        )
 
 
 class TestExecutorStatsToDict:

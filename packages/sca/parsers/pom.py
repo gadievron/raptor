@@ -75,36 +75,11 @@ _SCOPE_MAP = {
 
 def parse(path: Path) -> List[Dependency]:
     """Return all dependencies declared in ``path``."""
-    if not _AVAILABLE:
-        logger.warning(
-            "sca.parsers.pom: skipping %s — 'defusedxml' not installed", path,
-        )
+    root = _load_root(path)
+    if root is None:
         return []
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.pom: read failed for %s: %s", path, e)
-        return []
-
-    try:
-        root = DET.fromstring(text)
-    except DET.ParseError as e:
-        logger.warning("sca.parsers.pom: XML parse failed for %s: %s", path, e)
-        return []
-    except DefusedXmlException as e:
-        # XXE / DTD / entity-expansion blocked by defusedxml. Treat as a
-        # hostile manifest: emit nothing and surface a warning so the
-        # operator sees the file was rejected.
-        logger.warning(
-            "sca.parsers.pom: defused XML protection rejected %s: %s",
-            path, e,
-        )
-        return []
-
-    _strip_namespaces(root)
 
     properties = _collect_properties(root)
-    project_license = _extract_license(root)
     deps: List[Dependency] = []
 
     # 1) Top-level <dependencies>/<dependency>
@@ -112,8 +87,6 @@ def parse(path: Path) -> List[Dependency]:
         d = _build_dep(dep_el, path, properties, scope_default="compile",
                        is_managed=False, is_plugin=False)
         if d is not None:
-            if project_license:
-                d.declared_license = project_license
             deps.append(d)
 
     # 2) <dependencyManagement>/<dependencies>/<dependency>
@@ -121,8 +94,6 @@ def parse(path: Path) -> List[Dependency]:
         d = _build_dep(dep_el, path, properties, scope_default="import",
                        is_managed=True, is_plugin=False)
         if d is not None:
-            if project_license:
-                d.declared_license = project_license
             deps.append(d)
 
     # 3) Plugin coordinates from <build>/<plugins> and pluginManagement.
@@ -181,6 +152,52 @@ def parse(path: Path) -> List[Dependency]:
     return deps
 
 
+def extract_project_license(path: Path) -> Optional[str]:
+    """License the POM declares for the PROJECT ITSELF.
+
+    ``<licenses>`` describes the project, not its deps — it feeds the
+    SBOM metadata/root component, never ``Dependency.declared_license``
+    (dep licenses come from registry enrichment, or stay None for the
+    policy's ``on_unknown`` path).
+    """
+    root = _load_root(path)
+    if root is None:
+        return None
+    return _extract_license(root)
+
+
+def _load_root(path: Path):
+    """Read + defused-parse + namespace-strip a POM; None on failure."""
+    if not _AVAILABLE:
+        logger.warning(
+            "sca.parsers.pom: skipping %s — 'defusedxml' not installed", path,
+        )
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        logger.warning("sca.parsers.pom: read failed for %s: %s", path, e)
+        return None
+
+    try:
+        root = DET.fromstring(text)
+    except DET.ParseError as e:
+        logger.warning("sca.parsers.pom: XML parse failed for %s: %s", path, e)
+        return None
+    except DefusedXmlException as e:
+        # XXE / DTD / entity-expansion blocked by defusedxml. Treat as a
+        # hostile manifest: emit nothing and surface a warning so the
+        # operator sees the file was rejected.
+        logger.warning(
+            "sca.parsers.pom: defused XML protection rejected %s: %s",
+            path, e,
+        )
+        return None
+
+    _strip_namespaces(root)
+    return root
+
+
 def _apply_inherited_view(
     deps: List[Dependency],
     properties: Dict[str, str],
@@ -221,6 +238,8 @@ def _apply_inherited_view(
             continue
         dep.version = resolved
         dep.pin_style = _classify_version(resolved)[0]
+        if dep.pin_style is PinStyle.RANGE:
+            dep.version_floor, dep.version_ceiling = _range_corridor(resolved)
         dep.parser_confidence = _confidence(True, resolved, dep.scope == "build")
         dep.purl = _build_purl(group, artifact, resolved)
 
@@ -247,6 +266,8 @@ def _resolve_local_dep_management(deps: List[Dependency]) -> None:
         if inherited:
             d.version = inherited
             d.pin_style = _classify_version(inherited)[0]
+            if d.pin_style is PinStyle.RANGE:
+                d.version_floor, d.version_ceiling = _range_corridor(inherited)
             d.parser_confidence = _confidence(True, inherited, False)
             if ":" in d.name:
                 g, a = d.name.split(":", 1)
@@ -366,6 +387,10 @@ def _build_dep(
 
     name = f"{group}:{artifact}"
     pin_style, version_for_record = _classify_version(version)
+    version_floor, version_ceiling = (
+        _range_corridor(version_for_record)
+        if pin_style is PinStyle.RANGE else (None, None)
+    )
     fully_resolved = group_ok and artifact_ok and version_ok
 
     raw_scope = (scope_text or scope_default).strip().lower()
@@ -392,6 +417,8 @@ def _build_dep(
         direct=not is_managed,
         purl=purl,
         parser_confidence=confidence,
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
@@ -400,6 +427,36 @@ def _text(el, tag: str) -> Optional[str]:
     if child is None:
         return None
     return child.text
+
+
+# Single-interval Maven range — ``[1.0,2.0)`` / ``(,1.0]`` / ``[1.5,)``.
+# Value classes exclude the structural delimiters so matching stays
+# linear-time on hostile input (same posture as nuget.py's bracket
+# grammar). Multi-interval unions (``(,1.0],[1.2,)``) don't match and
+# carry no corridor.
+_RANGE_RE = re.compile(
+    r"^([\[\(])([^,\[\]\(\)]*),([^,\[\]\(\)]*)([\]\)])$"
+)
+
+
+def _range_corridor(
+    version: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(floor, ceiling)`` corridor bounds from a single-interval
+    Maven range, or ``(None, None)`` for anything else.
+
+    harden records these so its upgrade candidate selection stays inside
+    the declared range instead of over-bumping past the upper bound and
+    relying on the rewriter's fail-closed backstop.
+    """
+    if not version:
+        return None, None
+    m = _RANGE_RE.match(version.strip())
+    if m is None:
+        return None, None
+    floor = m.group(2).strip() or None
+    ceiling = m.group(3).strip() or None
+    return floor, ceiling
 
 
 def _classify_version(version: Optional[str]) -> Tuple[PinStyle, Optional[str]]:

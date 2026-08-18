@@ -8,9 +8,13 @@ returns top-k as :class:`RetrievedExemplar` for the prompt's few-shot
 slot.
 
 Ranking criteria (from the plan):
-  * Verified-success filter — only ``outcome="success"`` records on a
-    decisive oracle outcome (sanitizer_report, flag_captured,
-    exit_signal).
+  * Trigger-or-beyond admission — sandbox records qualify when the
+    candidate drove the sandbox to a decisive outcome
+    (sanitizer_report, flag_captured, exit_signal) REGARDLESS of the
+    overall ``outcome`` field, excluding ``HARNESS_SIDE_CHANNEL``
+    cheats. CodeQL / web records still require ``outcome="success"``
+    (those oracles have no notion of partial progress). See
+    :func:`_is_verified_trigger_or_beyond`.
   * Exact-CWE filter — match the query CWE. Family fallback (e.g.
     787 → 119) deferred until measurement shows we need it.
   * Recency weight — exponential decay, default half-life 90 days.
@@ -18,10 +22,11 @@ Ranking criteria (from the plan):
   * Diversity bonus — prefer top-k spanning distinct findings rather
     than k copies of the same exploit shape.
 
-Not yet wired into the engine. The retriever is a pure read; the
-producer (labeled_attempt_bridge) is already writing records. Wiring
-into the engine happens in unit #4 (rendering as Exemplar in the
-prompt slot + exemplar_id feedback for A/B).
+Wired into the prompt slot via ``view.exemplar_slot_for_finding``
+(rendering by ``view.render_retrieved_exemplars``); the producer
+(labeled_attempt_bridge) writes records. Consumers record the served
+``exemplar_id`` values in their run evidence so A/B feedback can
+attribute contribution (``LabeledAttempt.exemplars_used``).
 """
 
 from __future__ import annotations
@@ -164,12 +169,12 @@ def _cwe_matches(record: LabeledAttempt, query_cwe: str) -> bool:
 
 
 def _record_age_days(record: LabeledAttempt, now: datetime) -> float:
-    """Age in days of a record's timestamp. Defensive: returns 0 when
-    the timestamp can't be parsed."""
+    """Age in days of a record's timestamp. Unparseable timestamps
+    return a large age so they sort last in recency rankings."""
     try:
         ts = datetime.fromisoformat(record.timestamp)
     except (ValueError, TypeError):
-        return 0.0
+        return 365_000.0
     # Normalise both to UTC for the diff.
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
@@ -212,7 +217,7 @@ def _describe_evidence(record: LabeledAttempt) -> str:
     sb = record.sandbox_evidence
     if sb is not None:
         bits = [f"observed={sb.observed_outcome}"]
-        verdict = sb.outcome_detail.get("engine_verdict_summary")
+        verdict = (sb.outcome_detail or {}).get("engine_verdict_summary")
         if verdict:
             bits.append(f"verdict={verdict}")
         return " · ".join(bits)

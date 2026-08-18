@@ -12,7 +12,9 @@ compared or coerced.  Real bugs this catches:
 - Cross-function: A returns None on error AND not-found, caller B
   does ``result or []``, downstream treats [] as authoritative
 
-Supports Python (AST + regex), Go and JS/TS (regex).
+Supports Python (AST + regex), Go (tree-sitter return-semantics with
+a regex fallback, plus a regex-only map-miss check) and JS/TS (regex
+patterns, with tree-sitter function attribution when available).
 """
 
 from __future__ import annotations
@@ -319,14 +321,21 @@ def _detect_go_sentinel(
 # Sub-detector (e): JS/TS sentinel confusion
 # ---------------------------------------------------------------------------
 
-_JS_FALSY_COERCION = [
-    re.compile(r"(\w+)\s*\|\|\s*(\[\]|\{\})"),
-    re.compile(r"(\w+)\s*\?\?\s*(\[\]|\{\})"),
-]
-
 _JS_OPTIONAL_CHAIN_DEFAULT = re.compile(
     r"(\w+)\?\.\w+\s*\|\|\s*(\[\]|\{\}|\"\")",
 )
+
+_JS_FALSY_COERCION = [
+    # Optional-chain access with a falsy default (x?.y || "") — the
+    # same collapse shape through a property read; also the only
+    # pattern here that catches the string-default variant. Ordered
+    # FIRST so the chained expression attributes to the chain root
+    # (the bare-identifier patterns below would otherwise match the
+    # same line as `y || []` and win with the wrong variable).
+    _JS_OPTIONAL_CHAIN_DEFAULT,
+    re.compile(r"(\w+)\s*\|\|\s*(\[\]|\{\})"),
+    re.compile(r"(\w+)\s*\?\?\s*(\[\]|\{\})"),
+]
 
 
 _JS_FUNC_RE = re.compile(

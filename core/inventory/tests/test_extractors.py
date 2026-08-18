@@ -165,6 +165,22 @@ class TestJavaRegexExtractor:
         funcs = JavaExtractor().extract("T.java", code)
         assert funcs[0].metadata.parameters == [("k", "String"), ("v", "int")]
 
+    def test_braces_inside_string_literal_ignored(self):
+        code = (
+            "public class T {\n"
+            '    public void log() {\n'
+            '        System.out.println("value={" + x + "}");\n'
+            '    }\n'
+            '    public void other() {\n'
+            '    }\n'
+            '}\n'
+        )
+        funcs = JavaExtractor().extract("T.java", code)
+        names = [f.name for f in funcs]
+        assert "log" in names
+        assert "other" in names
+        assert funcs[1].metadata.class_name == "T"
+
 
 class TestCRegexExtractor:
 

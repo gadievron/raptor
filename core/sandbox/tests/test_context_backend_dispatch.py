@@ -111,10 +111,9 @@ def test_dispatch_picks_linux_backend_on_linux(reset_caches):
         with sandbox(target="/tmp", output="/tmp") as run:
             try:
                 run(["/usr/bin/true"], capture_output=True)
-            except Exception:
-                # The fake _spawn doesn't simulate the full chain
-                # perfectly; we only care about WHICH backend was
-                # invoked, not the result.
+            except Exception:  # noqa: BLE001, S110 — the fake _spawn
+                # doesn't simulate the full chain perfectly; we only
+                # care about WHICH backend was invoked, not the result.
                 pass
 
     assert not macos_run.called, (
@@ -135,13 +134,12 @@ def test_use_seatbelt_false_when_seatbelt_unavailable(reset_caches):
         # Sandbox unavailable entirely → no backend; subprocess.run
         # path with rlimits only. Just verify no crash.
         from core.sandbox.context import sandbox
-        with sandbox() as run:
-            with mock.patch("subprocess.run") as sub_run:
-                sub_run.return_value = mock.MagicMock(
-                    returncode=0, stderr=b"", stdout=b"",
-                    sandbox_info={},
-                )
-                run(["/usr/bin/true"])
+        with sandbox() as run, mock.patch("subprocess.run") as sub_run:
+            sub_run.return_value = mock.MagicMock(
+                returncode=0, stderr=b"", stdout=b"",
+                sandbox_info={},
+            )
+            run(["/usr/bin/true"])
         assert sub_run.called
 
 
@@ -225,7 +223,7 @@ def test_audit_degrade_reason_macos_branch(reset_caches):
     with mock.patch.object(sys, "platform", "darwin"), \
          mock.patch.object(context, "check_seatbelt_available",
                             return_value=False):
-        reason, instr = context._audit_degrade_reason(
+        reason, _instr = context._audit_degrade_reason(
             None, None, None, None, {},
         )
         assert "sandbox-exec" in reason or "seatbelt" in reason.lower()
@@ -234,19 +232,30 @@ def test_audit_degrade_reason_macos_branch(reset_caches):
 
 
 def test_strict_profile_fails_closed_without_backend(reset_caches):
+    from core.sandbox.errors import SandboxSetupError
     with mock.patch.object(sys, "platform", "linux"), \
          mock.patch.object(context, "check_net_available", return_value=False):
         from core.sandbox.context import sandbox
-        with pytest.raises(RuntimeError, match="strict"):
-            with sandbox(profile="strict"):
-                pass
+        with pytest.raises(SandboxSetupError, match="strict") as exc_info, \
+             sandbox(profile="strict"):
+            pass
+        # The abort must carry actionable remediation, including the
+        # explicit-downgrade escape hatch — that is the point of the
+        # SandboxSetupError type over a bare RuntimeError.
+        assert exc_info.value.instructions
+        assert "--sandbox full" in exc_info.value.instructions
 
 
 def test_strict_profile_requires_mount_namespace_for_target_output(reset_caches):
+    from core.sandbox.errors import SandboxSetupError
     with mock.patch.object(sys, "platform", "linux"), \
          mock.patch.object(context, "check_net_available", return_value=True), \
          mock.patch.object(context, "check_mount_available", return_value=False):
         from core.sandbox.context import sandbox
-        with pytest.raises(RuntimeError, match="mount namespaces"):
-            with sandbox(profile="strict", target="/tmp", output="/tmp"):
-                pass
+        with pytest.raises(SandboxSetupError, match="mount-namespace") as exc_info, \
+             sandbox(profile="strict", target="/tmp", output="/tmp"):
+            pass
+        # Instructions come from mount_unavailable_reason() — host-
+        # specific fix first, explicit-downgrade escape hatch appended.
+        assert exc_info.value.instructions
+        assert "--sandbox full" in exc_info.value.instructions

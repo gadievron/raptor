@@ -19,6 +19,8 @@ from packages.llm_analysis.prompts.analysis import (
 )
 from packages.llm_analysis.prompts.exploit import (
     build_exploit_prompt_bundle,
+    build_exploit_prompt_bundle_from_finding,
+    build_sca_exploit_prompt_bundle,
 )
 
 
@@ -141,6 +143,65 @@ class TestExploitBundleBudget:
         user = _user_content(bundle)
         assert "CODE" in user
         assert "REACH" not in user
+
+
+# -------------------------------------------------------------------
+# SCA exploit bundle: budget_tokens forwarding
+# -------------------------------------------------------------------
+
+def _make_sca_finding(call_sites=""):
+    return {
+        "finding_id": "sca-001",
+        "rule_id": "sca:vulnerable_dependency",
+        "file_path": "requirements.txt",
+        "start_line": 5,
+        "level": "warning",
+        "sca": {
+            "ecosystem": "PyPI",
+            "name": "pytest",
+            "version": "7.0.0",
+            "fixed_version": "9.0.3",
+            "reachability": "likely_called",
+            "call_sites": call_sites,
+            "advisory": {
+                "id": "GHSA-6w46-j5rx-g56g",
+                "aliases": ["CVE-2025-71176"],
+                "summary": "pytest has vulnerable tmpdir handling",
+            },
+        },
+    }
+
+
+class TestScaExploitBudgetForwarding:
+    """The SCA branch must honour the per-model budget_tokens the live
+    caller passes, shedding oversized blocks like its sibling."""
+
+    def test_oversized_call_sites_shed_under_budget(self):
+        marker = "CALLSITE_MARKER_XYZ "
+        finding = _make_sca_finding(call_sites=marker * 4000)  # ~20k tokens
+
+        bundle = build_exploit_prompt_bundle_from_finding(
+            finding, budget_tokens=2000,
+        )
+        user_msg = _user_content(bundle)
+        assert marker not in user_msg  # largest block shed first
+        assert "CVE-2025-71176" in user_msg  # advisory fits and survives
+
+    def test_no_budget_keeps_all_blocks(self):
+        marker = "CALLSITE_MARKER_XYZ "
+        finding = _make_sca_finding(call_sites=marker * 4000)
+
+        bundle = build_exploit_prompt_bundle_from_finding(finding)
+        user_msg = _user_content(bundle)
+        assert marker in user_msg
+        assert "CVE-2025-71176" in user_msg
+
+    def test_direct_sca_builder_accepts_budget(self):
+        marker = "CALLSITE_MARKER_XYZ "
+        finding = _make_sca_finding(call_sites=marker * 4000)
+
+        bundle = build_sca_exploit_prompt_bundle(finding, budget_tokens=2000)
+        assert marker not in _user_content(bundle)
 
 
 # -------------------------------------------------------------------

@@ -34,6 +34,7 @@ from core.llm.dispatcher.auth import (
     BedrockTransformError,
     CredentialStore,
     build_rules,
+    seed_from_config,
 )
 from core.llm.dispatcher.server import LLMDispatcher, _TOKEN_HEADER
 
@@ -904,10 +905,13 @@ def test_credential_store_opaque_bearer_never_expired():
     assert store.bedrock_bearer_expired() is False
 
 
-def test_dispatcher_rejects_expired_bearer_preflight(tmp_path):
-    """Mantle path with an expired JWT bearer fails fast (401 + clear
-    operator guidance) BEFORE any network call.  Saves the round trip
-    and surfaces an actionable error instead of opaque AWS 401."""
+def test_dispatcher_rejects_expired_bearer_preflight(tmp_path, monkeypatch):
+    """Mantle path with an expired JWT bearer AND no resolvable SigV4
+    chain fails fast (401 + clear operator guidance) BEFORE any
+    network call.  Saves the round trip and surfaces an actionable
+    error instead of opaque AWS 401.  (With a resolvable chain the
+    dispatcher falls back to SigV4 instead — covered by
+    ``test_expired_bearer_falls_back_to_sigv4``.)"""
     import time as _t
     past = int(_t.time()) - 60
     store = CredentialStore()
@@ -915,6 +919,9 @@ def test_dispatcher_rejects_expired_bearer_preflight(tmp_path):
         bearer_token=_make_jwt_with_exp(past),
         region=_REGION,
         endpoint="https://example.invalid",
+    )
+    monkeypatch.setattr(
+        store, "_resolve_aws_credentials", lambda profile=None: None,
     )
     d = LLMDispatcher(
         run_id="bedrock-expired-mantle",
@@ -1194,3 +1201,267 @@ def test_aws_secrets_popped_from_env(monkeypatch):
     # Region is not a secret and stays readable.
     assert store._aws_region == _REGION
     assert os.environ.get("AWS_REGION") == _REGION
+
+
+def test_credential_store_prefers_raptor_bedrock_profile(monkeypatch):
+    """``RAPTOR_BEDROCK_PROFILE`` outranks the ambient ``AWS_PROFILE``
+    so the operator can pin which identity signs Bedrock requests on a
+    box whose ambient profile serves unrelated tooling."""
+    monkeypatch.setenv("AWS_PROFILE", "unrelated-infra")
+    monkeypatch.setenv("RAPTOR_BEDROCK_PROFILE", "bedrock-access")
+    store = CredentialStore()
+    assert store._aws_profile == "bedrock-access"
+
+
+def test_credential_store_falls_back_to_ambient_profile(monkeypatch):
+    """Without the RAPTOR-specific var, the ambient profile is used —
+    today's behavior, unchanged."""
+    monkeypatch.setenv("AWS_PROFILE", "ambient-profile")
+    monkeypatch.delenv("RAPTOR_BEDROCK_PROFILE", raising=False)
+    store = CredentialStore()
+    assert store._aws_profile == "ambient-profile"
+
+
+# ---------------------------------------------------------------------------
+# Per-model signing overrides (models.json aws_profile / region)
+# ---------------------------------------------------------------------------
+
+def test_override_lookup_exact_bare_and_wildcard():
+    store = CredentialStore()
+    store.set_aws_model_override(
+        "anthropic.claude-opus-4-8", profile="pinned", region="eu-west-1",
+    )
+    body = json.dumps({"model": "anthropic.claude-opus-4-8"}).encode()
+    assert store.aws_override_for_body(body) == {
+        "profile": "pinned", "region": "eu-west-1",
+    }
+    # Bare-id fallback: a prefixed request id peels to a registered key.
+    store2 = CredentialStore()
+    store2.set_aws_model_override("claude-opus-4-8", profile="pinned")
+    body2 = json.dumps({"model": "us.anthropic.claude-opus-4-8"}).encode()
+    assert store2.aws_override_for_body(body2) == {"profile": "pinned"}
+    # Wildcard: model-less registration applies to any model.
+    store3 = CredentialStore()
+    store3.set_aws_model_override("", region="us-west-2")
+    assert store3.aws_override_for_body(body) == {"region": "us-west-2"}
+    # No overrides registered → body is never parsed, {} returned.
+    store4 = CredentialStore()
+    assert store4.aws_override_for_body(b"not json") == {}
+
+
+def test_seed_from_config_registers_bedrock_override(tmp_path, monkeypatch):
+    cfg = tmp_path / "models.json"
+    cfg.write_text(json.dumps({"models": [
+        {"provider": "bedrock", "model": "us.anthropic.claude-opus-4-8",
+         "aws_profile": "bedrock-access", "region": "us-west-2"},
+    ]}))
+    monkeypatch.setenv("RAPTOR_CONFIG", str(cfg))
+    store = CredentialStore()
+    seed_from_config(store)
+    expected = {"profile": "bedrock-access", "region": "us-west-2"}
+    for model in (
+        "us.anthropic.claude-opus-4-8",   # verbatim
+        "anthropic.claude-opus-4-8",      # mantle-normalized
+        "claude-opus-4-8",                # bare
+    ):
+        body = json.dumps({"model": model}).encode()
+        assert store.aws_override_for_body(body) == expected, model
+
+
+def test_seed_from_config_modelless_entry_is_wildcard(tmp_path, monkeypatch):
+    cfg = tmp_path / "models.json"
+    cfg.write_text(json.dumps({"models": [
+        {"provider": "bedrock", "aws_profile": "bedrock-access"},
+    ]}))
+    monkeypatch.setenv("RAPTOR_CONFIG", str(cfg))
+    store = CredentialStore()
+    seed_from_config(store)
+    body = json.dumps({"model": "anthropic.claude-opus-4-8"}).encode()
+    assert store.aws_override_for_body(body) == {"profile": "bedrock-access"}
+
+
+def test_signer_region_override_changes_scope_and_host(monkeypatch):
+    """The override region flows into BOTH the signing scope and the
+    endpoint hostname — one value, they must agree.
+
+    Resolution is faked with an opaque credentials object: the logic
+    under test is the store's region plumbing, not botocore (which is
+    optional and absent on bare CI — the resolver would answer None
+    there and mask the assertion)."""
+    store = CredentialStore()
+    store.set_aws(access_key=_FAKE_AK, secret_key=_FAKE_SK, region=_REGION)
+    monkeypatch.setattr(
+        store, "_resolve_aws_credentials",
+        lambda profile=None: (object(), _REGION),
+    )
+    signer = store.aws_signer("mantle", region="eu-west-1")
+    assert signer is not None
+    _credentials, region, endpoint = signer
+    assert region == "eu-west-1"
+    assert endpoint == "https://bedrock-mantle.eu-west-1.api.aws"
+    # Default call unchanged.
+    _credentials, region2, endpoint2 = store.aws_signer("mantle")
+    assert region2 == _REGION
+    assert _REGION in endpoint2
+
+
+def test_signer_cache_is_per_profile(monkeypatch):
+    """Distinct profiles resolve independently; a failed profile is
+    cached as unusable without poisoning the default."""
+    store = CredentialStore()
+    store.set_aws(access_key=_FAKE_AK, secret_key=_FAKE_SK, region=_REGION)
+    calls = []
+
+    def _fake_resolve(profile=None):
+        calls.append(profile)
+        if profile == "broken":
+            return None
+        # Opaque credentials: the cache keying under test never looks
+        # inside them, and importing botocore here would couple this
+        # pure-RAPTOR test to an optional dependency.
+        return (object(), _REGION)
+
+    monkeypatch.setattr(store, "_resolve_aws_credentials", _fake_resolve)
+    assert store.aws_signer("mantle", profile="broken") is None
+    assert store.aws_signer("mantle") is not None
+    assert store.aws_signer("mantle", profile="broken") is None
+    # One resolution per distinct profile, cached afterwards.
+    assert calls == ["broken", None]
+
+
+@needs_botocore
+def test_per_model_profile_forces_sigv4_over_bearer(upstream, tmp_path):
+    """An entry-pinned profile signs with SigV4 even when a bearer
+    token is present — the pin chooses the identity; bearer has none."""
+    endpoint, captured = upstream
+    store = _bedrock_store(endpoint)
+    store.set_aws(bearer_token="ABSK-opaque-long-term")
+    store.set_aws_model_override(_MODEL, profile="pinned-prof")
+
+    import botocore.credentials
+
+    def _fake_resolve(profile=None):
+        assert profile == "pinned-prof"
+        return (botocore.credentials.Credentials(_FAKE_AK, _FAKE_SK),
+                _REGION)
+
+    store._resolve_aws_credentials = _fake_resolve
+    d = LLMDispatcher(
+        run_id="bedrock-override-profile",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {"model": _MODEL, "max_tokens": 8,
+             "messages": [{"role": "user", "content": "ping"}]},
+            path="/bedrock/mantle/v1/messages",
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    req = captured()
+    auth = req["headers"]["authorization"]
+    assert auth.startswith("AWS4-HMAC-SHA256 "), auth
+    assert f"Credential={_FAKE_AK}/" in auth
+
+
+@needs_botocore
+def test_expired_bearer_falls_back_to_sigv4(upstream, tmp_path):
+    """An expired JWT bearer with a resolvable SigV4 chain signs with
+    the chain (one warning) instead of hard-401ing while healthy
+    credentials sit unused."""
+    import time as _t
+    endpoint, captured = upstream
+    store = _bedrock_store(endpoint)
+    store.set_aws(bearer_token=_make_jwt_with_exp(int(_t.time()) - 60))
+    d = LLMDispatcher(
+        run_id="bedrock-expired-bearer-fallback",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {"model": _MODEL, "max_tokens": 8,
+             "messages": [{"role": "user", "content": "ping"}]},
+            path="/bedrock/mantle/v1/messages",
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    auth = captured()["headers"]["authorization"]
+    assert auth.startswith("AWS4-HMAC-SHA256 "), auth
+
+
+def test_expired_bearer_without_chain_still_401s(tmp_path, monkeypatch):
+    """No resolvable chain → the expired bearer keeps its hard 401
+    with the rotation guidance."""
+    import time as _t
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token=_make_jwt_with_exp(int(_t.time()) - 60),
+        region=_REGION,
+    )
+    monkeypatch.setattr(
+        store, "_resolve_aws_credentials", lambda profile=None: None,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-expired-bearer-hard",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {"model": _MODEL, "max_tokens": 8,
+             "messages": [{"role": "user", "content": "ping"}]},
+            path="/bedrock/mantle/v1/messages",
+        )
+        assert resp.status_code == 401
+        assert "expired" in resp.text
+    finally:
+        d.shutdown()
+
+
+def test_mantle_accepts_query_string_and_forwards_feature_headers():
+    """Claude Code's Mantle client POSTs ``/v1/messages?beta=true``
+    with per-request ``anthropic-beta`` negotiation. The query must
+    neither defeat the endpoint allowlist nor be dropped from the
+    upstream URL, and the feature headers must ride the prepared
+    request (pre-signing, so SigV4 covers them too)."""
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK", region=_REGION,
+        endpoint="https://example.invalid",
+    )
+    rule = build_rules(store)["bedrock"]
+    prepared = rule.prepare_request(
+        "POST", "/mantle/v1/messages?beta=true",
+        {"anthropic-beta": "context-1m-2025-08-07",
+         "anthropic-version": "2023-06-01"},
+        json.dumps({"model": _MODEL, "messages": []}).encode(),
+    )
+    assert prepared.url == (
+        "https://example.invalid/anthropic/v1/messages?beta=true"
+    )
+    assert prepared.headers["anthropic-beta"] == "context-1m-2025-08-07"
+    assert prepared.headers["anthropic-version"] == "2023-06-01"
+    assert prepared.headers["Authorization"] == "Bearer ABSK"
+
+
+def test_mantle_query_string_does_not_bypass_path_allowlist():
+    """``/v1/other?x=/v1/messages`` must still be rejected — the
+    allowlist compares the query-stripped path."""
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK", region=_REGION,
+        endpoint="https://example.invalid",
+    )
+    rule = build_rules(store)["bedrock"]
+    with pytest.raises(BedrockTransformError) as ei:
+        rule.prepare_request(
+            "POST", "/mantle/v1/other?x=/v1/messages", {}, b"{}",
+        )
+    assert ei.value.status == 400

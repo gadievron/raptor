@@ -1,18 +1,20 @@
 """Tests for the ``commit_provenance`` detector (Phase 7).
 
 The detector flags commits touching dependency manifests when ALL
-FOUR hold:
-  1. Author NAME claims a bot/automation identity
-  2. Author EMAIL does NOT match the canonical-bot pattern
-     (``<numeric-id>+<bot>[bot]@users.noreply.github.com``)
-  3. Signature status is ``N`` (unsigned) or ``E`` (unverifiable)
-  4. Author/committer date skew exceeds the threshold (default 90d)
+THREE hold:
+  1. Author identity claims a bot/automation identity
+  2. Signature status is ``N`` (unsigned) or ``E`` (unverifiable)
+  3. Author/committer date skew exceeds the threshold (default 90d)
 
-Suppression: when leg 1 holds AND leg 2 holds in the CANONICAL
-direction (canonical email DOES match), we treat the commit as a
-legitimate rebased bot commit (dependabot's normal behaviour) and
-suppress the finding.  Only the impersonation shape — bot name
-claimed without canonical email — earns a finding.
+The author EMAIL then splits the finding into two shapes, both
+emitted (downgrade, never suppress):
+  * email does NOT match the canonical-bot pattern
+    (``<numeric-id>+<bot>[bot]@users.noreply.github.com``) —
+    the low-effort forgery shape, high severity
+  * email DOES match the canonical pattern — usually a legitimate
+    rebased bot commit, but the email is unauthenticated free text
+    on an unsigned commit, so the finding stays visible at reduced
+    severity/confidence for provenance review
 
 Tests use real local git repos created via subprocess — the
 detector is git-log-driven so this exercises the actual code path.
@@ -35,6 +37,7 @@ def _have_git() -> bool:
     try:
         proc = subprocess.run(
             ["git", "--version"], capture_output=True, timeout=5,
+            check=False,
         )
         return proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -106,10 +109,12 @@ def _commit(
 # Positive cases — conjunction fires
 # ---------------------------------------------------------------------------
 
-def test_canonical_dependabot_email_does_not_fire(tmp_path: Path) -> None:
+def test_canonical_dependabot_email_downgrades(tmp_path: Path) -> None:
     """A real dependabot rebase has the canonical email shape AND
     will commonly show 100+ day skew — the legitimate-but-skewed
-    state.  Must NOT fire (FP suppression)."""
+    state. The author email is free text, so on an unsigned commit
+    the canonical shape can't justify suppression; the conjunction
+    still surfaces, at reduced severity/confidence."""
     _init_repo(tmp_path)
     _commit(
         tmp_path, filename="package.json", content='{"name": "x"}',
@@ -119,7 +124,9 @@ def test_canonical_dependabot_email_does_not_fire(tmp_path: Path) -> None:
         commit_date="2026-06-01T00:00:00+00:00",   # 151 days later
     )
     hits = commit_provenance.scan_target(tmp_path)
-    assert hits == []
+    assert len(hits) == 1
+    assert hits[0].severity == "medium"
+    assert hits[0].confidence.level == "low"
 
 
 def test_bot_name_with_non_canonical_email_fires(tmp_path: Path) -> None:
@@ -157,7 +164,7 @@ def test_bot_name_with_noreply_but_no_numeric_prefix_fires(
     assert hits
 
 
-def test_canonical_renovate_email_suppressed(tmp_path: Path) -> None:
+def test_canonical_renovate_email_downgrades(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(
         tmp_path, filename="package.json", content='{"name": "y"}',
@@ -167,10 +174,12 @@ def test_canonical_renovate_email_suppressed(tmp_path: Path) -> None:
         commit_date="2026-06-01T00:00:00+00:00",
     )
     hits = commit_provenance.scan_target(tmp_path)
-    assert hits == []
+    assert [(h.severity, h.confidence.level) for h in hits] == [
+        ("medium", "low"),
+    ]
 
 
-def test_canonical_github_actions_email_suppressed(tmp_path: Path) -> None:
+def test_canonical_github_actions_email_downgrades(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _commit(
         tmp_path, filename="requirements.txt", content="flask==2.0\n",
@@ -181,7 +190,9 @@ def test_canonical_github_actions_email_suppressed(tmp_path: Path) -> None:
         commit_date="2026-06-01T00:00:00+00:00",
     )
     hits = commit_provenance.scan_target(tmp_path)
-    assert hits == []
+    assert [(h.severity, h.confidence.level) for h in hits] == [
+        ("medium", "low"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +253,8 @@ def test_not_a_git_repo_returns_empty(tmp_path: Path) -> None:
 
 def test_mixed_history_only_impersonation_fires(tmp_path: Path) -> None:
     """A repo with 1 IMPERSONATION-shape commit and 1 normal commit
-    should emit ONE finding (the impersonation only).  Canonical-
-    email bot commits and human commits are both suppressed."""
+    should emit ONE finding (the impersonation only).  Human commits
+    never earn a finding."""
     _init_repo(tmp_path)
     _commit(
         tmp_path, filename="requirements.txt", content="a==1\n",
@@ -267,7 +278,7 @@ def test_mixed_history_only_impersonation_fires(tmp_path: Path) -> None:
 def test_custom_threshold_overrides_default(tmp_path: Path) -> None:
     """Operator can pass a tighter ``date_skew_days`` to surface
     smaller anomalies.  Uses impersonation-shape email so the
-    canonical-suppression path doesn't apply."""
+    full-severity path is exercised."""
     _init_repo(tmp_path)
     _commit(
         tmp_path, filename="package.json", content="{}",
@@ -281,3 +292,75 @@ def test_custom_threshold_overrides_default(tmp_path: Path) -> None:
     # Tightened to 7 days → finding.
     hits = commit_provenance.scan_target(tmp_path, date_skew_days=7)
     assert hits and hits[0].hit.skew_days == 14
+
+
+# ---------------------------------------------------------------------------
+# Signed path unchanged + downgraded-finding labelling
+# ---------------------------------------------------------------------------
+
+def _row(sig_status: str, email: str, name: str = "dependabot[bot]") -> dict:
+    return {
+        "sha": "a" * 40,
+        "sig_status": sig_status,
+        "author_name": name,
+        "author_email": email,
+        "author_date_iso": "2026-01-01T00:00:00+00:00",
+        "committer_date_iso": "2026-06-01T00:00:00+00:00",  # 151d skew
+        "subject": "chore: bump deps",
+        "paths_touched": ["package.json"],
+    }
+
+
+_CANONICAL_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
+
+
+def test_signed_bot_commit_earns_no_finding(tmp_path: Path) -> None:
+    """Signed (G/U) bot commits are out of scope regardless of email
+    shape — the signature IS the authenticated identity."""
+    host = commit_provenance._placeholder_dep(tmp_path)
+    for sig in ("G", "U"):
+        for email in (_CANONICAL_EMAIL, "attacker@evil.example"):
+            assert commit_provenance._classify(
+                _row(sig, email), host, 90,
+            ) is None
+
+
+def test_unsigned_canonical_email_is_downgraded_not_suppressed(
+    tmp_path: Path,
+) -> None:
+    """Unsigned + canonical bot email → a finding is still emitted,
+    at reduced severity/confidence, tagged with the canonical claim
+    shape."""
+    host = commit_provenance._placeholder_dep(tmp_path)
+    finding = commit_provenance._classify(_row("N", _CANONICAL_EMAIL), host, 90)
+    assert finding is not None
+    assert finding.severity == "medium"
+    assert finding.confidence.level == "low"
+    assert finding.claim_shape == "canonical"
+
+
+def test_downgraded_finding_is_clearly_labelled(tmp_path: Path) -> None:
+    """The SupplyChainFinding rendered from the downgraded shape names
+    the trusted-bot-email situation and tells the reviewer to verify
+    provenance — visibly different from the impersonation label."""
+    from packages.sca.supply_chain import _commit_provenance_to_finding
+
+    host = commit_provenance._placeholder_dep(tmp_path)
+    canonical = commit_provenance._classify(
+        _row("N", _CANONICAL_EMAIL), host, 90,
+    )
+    impersonation = commit_provenance._classify(
+        _row("N", "attacker@evil.example"), host, 90,
+    )
+    scf_canonical = _commit_provenance_to_finding(canonical)
+    scf_impersonation = _commit_provenance_to_finding(impersonation)
+
+    assert "impersonation" in scf_canonical.detail
+    assert "verify provenance" in scf_canonical.detail
+    assert "not suppressed" in scf_canonical.detail
+    assert scf_canonical.evidence["claim_shape"] == "canonical"
+    assert scf_canonical.severity == "medium"
+
+    assert scf_impersonation.severity == "high"
+    assert scf_impersonation.evidence["claim_shape"] == "impersonation"
+    assert scf_impersonation.detail != scf_canonical.detail

@@ -43,16 +43,19 @@ from .types import (
     compute_finding_signature,
 )
 from .view import (
+    ExemplarSlot,
     Oracle,
     OutcomeStatus,
     ScoredOutcome,
     VerifiedOutcome,
     collect_outcomes,
     exemplar_block_for_finding,
+    exemplar_slot_for_finding,
     from_barrier_synthesis,
     from_witness,
     rank_outcomes_for_finding,
     render_outcome_summary,
+    render_retrieved_exemplars,
     render_verified_exemplars,
 )
 
@@ -81,15 +84,18 @@ __all__ = [
     "set_failure_mode",
     "write",
     # View — VerifiedOutcome projection (consumer-facing prompt API)
+    "ExemplarSlot",
     "Oracle",
     "OutcomeStatus",
     "ScoredOutcome",
     "VerifiedOutcome",
     "collect_outcomes",
     "exemplar_block_for_finding",
+    "exemplar_slot_for_finding",
     "from_barrier_synthesis",
     "from_witness",
     "rank_outcomes_for_finding",
     "render_outcome_summary",
+    "render_retrieved_exemplars",
     "render_verified_exemplars",
 ]

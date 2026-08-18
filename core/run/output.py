@@ -8,7 +8,6 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple
 
 from core.config import RaptorConfig
 
@@ -17,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 class TargetMismatchError(ValueError):
     """Raised when the scan target differs from the active project's target."""
-    pass
 
 
 def unique_run_suffix(separator: str = "_") -> str:
@@ -65,7 +63,7 @@ def unique_run_suffix(separator: str = "_") -> str:
     )
 
 
-def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
+def _resolve_active_project() -> tuple[str, str, str] | None:
     """Resolve the current active project from the .active symlink.
 
     Returns (output_dir, name, target) or None if no project is active.
@@ -79,13 +77,13 @@ def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
             project = mgr.load(active_name)
             if project:
                 return project.output_dir, project.name, project.target
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — fall back to the default out/ dir
         logger.warning("active project resolution failed: %s", exc)
 
     return None
 
 
-def resolve_default_target() -> Optional[str]:
+def resolve_default_target() -> str | None:
     """CLAUDE.md DEFAULT TARGET DIRECTORY resolution: (1) active project,
     (2) ``RAPTOR_CALLER_DIR``, (3) None (caller asks the user).
 
@@ -105,13 +103,14 @@ def resolve_default_target() -> Optional[str]:
 
 
 def get_output_dir(command: str, target_name: str = "",
-                   explicit_out: Optional[str] = None,
-                   target_path: Optional[str] = None) -> Path:
+                   explicit_out: str | None = None,
+                   target_path: str | None = None) -> Path:
     """Resolve the output directory for a command run.
 
     Priority:
     1. explicit_out (from --out argument) — used as-is, no project check
-    2. Active project (.active symlink, then env var) — timestamped subdir
+    2. Active project (.active symlink — the single source of truth,
+       no env-var fallback) — timestamped subdir
     3. Default: RaptorConfig.get_out_dir() with command prefix + timestamp
 
     Args:
@@ -130,6 +129,26 @@ def get_output_dir(command: str, target_name: str = "",
         active = _resolve_active_project()
         if active:
             logger.warning("--out overrides active project '%s' output directory", active[1])
+            # --out is the sanctioned escape hatch for running against
+            # a different tree while a project is active (results do
+            # not land in the project dir), so a mismatch is not fatal
+            # here — but it must be VISIBLE, and project trust must
+            # not leak: core.project.trust gates every marker on the
+            # run target matching the project target, --out runs
+            # included.
+            _proj_dir, project_name, project_target = active
+            effective_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
+            if effective_target and project_target:
+                try:
+                    _check_target_mismatch(
+                        effective_target, project_name, project_target)
+                except TargetMismatchError:
+                    logger.warning(
+                        "--out run targets %s, outside active project "
+                        "'%s' (%s) — treated as standalone; project "
+                        "trust markers do not apply",
+                        effective_target, project_name, project_target,
+                    )
         return Path(explicit_out).resolve()
 
     active = _resolve_active_project()

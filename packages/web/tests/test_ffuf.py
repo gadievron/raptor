@@ -248,7 +248,9 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
     runner = FfufRunner("https://example.test", tmp_path)
     result = runner.run(FfufConfig(wordlist=wordlist, path_template="FUZZ"))
 
-    assert captured["cmd"][0] == "ffuf"
+    # cmd[0] is the resolved real path (exec-via-realpath), not the
+    # operator-facing name.
+    assert captured["cmd"][0] == "/usr/bin/ffuf"
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["text"] is True
     assert captured["kwargs"]["proxy_hosts"] == ["example.test"]
@@ -393,3 +395,39 @@ def test_scanner_cli_can_omit_optional_ffuf_match_and_filter_status(tmp_path: Pa
     assert config is not None
     assert config.match_status is None
     assert config.filter_status is None
+
+
+def test_run_execs_realpath_and_binds_resolved_tool_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Symlinked installs (go install / package manager shims): the
+    mount-ns visibility check realpaths cmd[0], so the exec must use
+    the REAL binary path and tool_paths must carry the RESOLVED
+    parent — otherwise the run silently drops to Landlock-only."""
+    wordlist = tmp_path / "words.txt"
+    wordlist.write_text("admin\n", encoding="utf-8")
+    real = tmp_path / "opt" / "ffuf" / "ffuf"
+    real.parent.mkdir(parents=True)
+    real.write_text("#!/bin/sh\n")
+    link = tmp_path / "bin" / "ffuf"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    monkeypatch.setattr(
+        "packages.web.ffuf.shutil.which", lambda _binary: str(link))
+
+    seen: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = list(cmd)
+        seen["kwargs"] = dict(kwargs)
+        output_path = Path(cmd[cmd.index("-o") + 1])
+        output_path.write_text(json.dumps({"results": []}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
+    runner = FfufRunner("https://example.test", tmp_path)
+    runner.run(FfufConfig(wordlist=wordlist))
+
+    assert seen["cmd"][0] == str(real.resolve())
+    assert seen["kwargs"]["tool_paths"] == [str(real.resolve().parent)]

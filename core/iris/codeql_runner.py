@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
+
+from core.run.scratch import scratch_dir
 
 from .refine import RefinementFeedback
 from .specs import TaintSpec, compile_codeql_config
@@ -116,37 +116,35 @@ def make_codeql_tool_runner(
         if not query_text.strip():
             return RefinementFeedback()
 
-        tmp_root = Path(tempfile.mkdtemp(prefix="raptor-iris-codeql-"))
-        try:
-            pack_dir = _write_temp_pack(query_text, language, tmp_root)
-            result = runner.run_custom_queries(
-                database_path=db_path,
-                query_path=pack_dir,
-                out_dir=out_dir,
-                language=language,
-            )
-
-            if not result.success or not result.sarif_path:
-                return RefinementFeedback(
-                    tool_errors=result.errors or ["codeql_analysis_failed"],
+        with scratch_dir("raptor-iris-codeql-") as tmp_root:
+            try:
+                pack_dir = _write_temp_pack(query_text, language, tmp_root)
+                result = runner.run_custom_queries(
+                    database_path=db_path,
+                    query_path=pack_dir,
+                    out_dir=out_dir,
+                    language=language,
                 )
 
-            matches = _parse_sarif_matches(result.sarif_path)
-            confirmed_keys = []
-            seen = set()
-            for match in matches:
-                key = _match_to_spec_key(match, specs)
-                if key and key not in seen:
-                    confirmed_keys.append(key)
-                    seen.add(key)
+                if not result.success or not result.sarif_path:
+                    return RefinementFeedback(
+                        tool_errors=result.errors or ["codeql_analysis_failed"],
+                    )
 
-            return RefinementFeedback(
-                confirmed_keys=confirmed_keys,
-            )
-        except Exception as exc:
-            logger.debug("IRIS CodeQL runner failed: %s", exc, exc_info=True)
-            return RefinementFeedback(tool_errors=[str(exc)])
-        finally:
-            shutil.rmtree(tmp_root, ignore_errors=True)
+                matches = _parse_sarif_matches(result.sarif_path)
+                confirmed_keys = []
+                seen = set()
+                for match in matches:
+                    key = _match_to_spec_key(match, specs)
+                    if key and key not in seen:
+                        confirmed_keys.append(key)
+                        seen.add(key)
+
+                return RefinementFeedback(
+                    confirmed_keys=confirmed_keys,
+                )
+            except Exception as exc:
+                logger.debug("IRIS CodeQL runner failed: %s", exc, exc_info=True)
+                return RefinementFeedback(tool_errors=[str(exc)])
 
     return _run

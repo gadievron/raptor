@@ -192,6 +192,21 @@ def test_unknown_rule_id_falls_back_to_generic_description() -> None:
     assert rules[0]["fullDescription"]["text"].startswith("RAPTOR /sca")
 
 
+def test_rule_index_matches_rules_array() -> None:
+    target = Path("/repo")
+    rows = [
+        _hygiene_row(kind="lockfile_missing"),
+        _vuln_row(advisory_id="GHSA-1"),
+        _hygiene_row(kind="lockfile_missing"),
+    ]
+    bom = build_sarif(target=target, rows=rows)
+    rules = bom["runs"][0]["tool"]["driver"]["rules"]
+    rule_ids = [r["id"] for r in rules]
+    for result in bom["runs"][0]["results"]:
+        idx = result["ruleIndex"]
+        assert rule_ids[idx] == result["ruleId"]
+
+
 def test_tags_include_security_and_kind_specific() -> None:
     target = Path("/repo")
     bom = build_sarif(target=target, rows=[_vuln_row()])

@@ -32,10 +32,10 @@ from __future__ import annotations
 import io
 import logging
 import zipfile
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from core.http import HttpClient, HttpError
-from core.json import JsonCache, TTL_FOREVER
+from core.json import TTL_FOREVER, JsonCache
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,13 @@ class _TransientResolutionError(Exception):
 # is still tiny — but the cap defends against absurdly-sized index
 # entries that might be hostile or buggy.
 _DEFAULT_MAX_WHEEL_BYTES = 200 * 1024 * 1024
+# Hard cap on the decompressed ``top_level.txt`` we'll materialise.
+# Real files are a handful of module names (bytes to a few KB); 1 MB
+# is generous. The wheel-size cap above only bounds the *claimed
+# compressed* size — a hostile central-directory entry can declare a
+# tiny compressed size with a huge (or lying) uncompressed
+# ``file_size``, so the read itself must be bounded too.
+_MAX_TOP_LEVEL_BYTES = 1 * 1024 * 1024
 # Initial Range fetch covers the End-Of-Central-Directory record (22
 # bytes minimum, up to ~65 KB with a tail comment) plus a generous
 # slice of the central directory itself. 64 KB is the conventional
@@ -65,9 +72,9 @@ _EOCD_MAX_LEN = 65557           # 22 fixed + 65535 max comment
 def resolve_modules(
     dist_name: str, version: str,
     *,
-    http: HttpClient, cache: Optional[JsonCache] = None,
+    http: HttpClient, cache: JsonCache | None = None,
     max_wheel_bytes: int = _DEFAULT_MAX_WHEEL_BYTES,
-) -> Optional[Tuple[str, ...]]:
+) -> tuple[str, ...] | None:
     """Resolve ``(dist_name, version)`` to a tuple of module names.
 
     Returns ``None`` when:
@@ -107,7 +114,7 @@ def resolve_modules(
 def _resolve_modules_uncached(
     dist_name: str, version: str, *,
     http: HttpClient, max_wheel_bytes: int,
-) -> Optional[Tuple[str, ...]]:
+) -> tuple[str, ...] | None:
     pypi_url = f"https://pypi.org/pypi/{dist_name}/{version}/json"
     try:
         meta = http.get_json(pypi_url, retries=0)
@@ -129,7 +136,30 @@ def _resolve_modules_uncached(
             ]
             if not top_level_paths:
                 return None
-            raw = zf.read(top_level_paths[0])
+            # Bound the decompressed read. ``zf.read`` would allocate
+            # whatever uncompressed size the (attacker-declared) header
+            # claims; check the declared size AND read at most cap+1
+            # bytes so a lying header can't expand past the cap either
+            # way. Over-cap is treated the same as "no top_level data".
+            info = zf.getinfo(top_level_paths[0])
+            if info.file_size > _MAX_TOP_LEVEL_BYTES:
+                logger.debug(
+                    "python_modules: top_level.txt for %s %s declares "
+                    "%d bytes (> %d cap); treating as no data",
+                    dist_name, version, info.file_size,
+                    _MAX_TOP_LEVEL_BYTES,
+                )
+                return None
+            with zf.open(info) as member:
+                raw = member.read(_MAX_TOP_LEVEL_BYTES + 1)
+            if len(raw) > _MAX_TOP_LEVEL_BYTES:
+                logger.debug(
+                    "python_modules: top_level.txt for %s %s exceeds "
+                    "%d-byte cap despite smaller declared size; "
+                    "treating as no data",
+                    dist_name, version, _MAX_TOP_LEVEL_BYTES,
+                )
+                return None
     except (HttpError, _RangeNotSupported) as e:
         logger.debug("python_modules: wheel parse failed for %s %s: %s",
                      dist_name, version, e)
@@ -144,11 +174,11 @@ def _resolve_modules_uncached(
 
 def _pick_smallest_wheel(
     urls: Iterable[dict], max_bytes: int,
-) -> Optional[Tuple[str, int]]:
+) -> tuple[str, int] | None:
     """Pick the smallest wheel under the size cap from a PyPI ``urls``
     list. Returns ``(url, size)`` or ``None`` if no wheel qualifies.
     """
-    candidates: List[Tuple[int, str]] = []
+    candidates: list[tuple[int, str]] = []
     for entry in urls:
         if entry.get("packagetype") != "bdist_wheel":
             continue
@@ -166,7 +196,7 @@ def _pick_smallest_wheel(
     return (url, size)
 
 
-def _parse_top_level(raw: bytes) -> Optional[Tuple[str, ...]]:
+def _parse_top_level(raw: bytes) -> tuple[str, ...] | None:
     """Each non-empty, non-comment line in ``top_level.txt`` is a
     module name. Returns ``None`` for an empty file (caller falls
     back to PEP 503 guess)."""
@@ -219,10 +249,8 @@ class _RangedHTTPFile:
         else:
             raise ValueError(f"invalid whence: {whence}")
         # Clamp into [0, size]; zipfile probes EOF with negative seeks.
-        if self._pos < 0:
-            self._pos = 0
-        if self._pos > self._size:
-            self._pos = self._size
+        self._pos = max(self._pos, 0)
+        self._pos = min(self._pos, self._size)
         return self._pos
 
     def read(self, n: int = -1) -> bytes:

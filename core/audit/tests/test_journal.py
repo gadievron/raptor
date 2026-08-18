@@ -322,3 +322,87 @@ class TestLoadIndex:
         assert entry.model == "test-model"
         assert entry.strategies == ["aliasing"]
         assert entry.domain_model_hash == "hash123"
+
+
+class TestMechanicalEchoRows:
+    """Post-loop pattern-scan findings are journalled as $0
+    ``[mechanical]`` echo rows — one per finding. They are not LLM
+    reviews and must not inflate naive verdict counts; the single
+    counting rule lives in ``is_mechanical_echo``."""
+
+    def _entry(self, **kw):
+        from core.coverage.journal import ReviewJournalEntry, now_iso
+        base = dict(
+            ts=now_iso(), run_id="r", file="a.c", function="f",
+            verdict="suspicious", source_hash="",
+        )
+        base.update(kw)
+        return ReviewJournalEntry(**base)
+
+    def test_strategy_tag_marks_echo(self):
+        from core.coverage.journal import is_mechanical_echo
+        e = self._entry(strategies=["post-loop-mechanical"])
+        assert is_mechanical_echo(e) is True
+
+    def test_body_marker_marks_echo(self):
+        from core.coverage.journal import is_mechanical_echo
+        e = self._entry(body="[mechanical] pattern-scan finding")
+        assert is_mechanical_echo(e) is True
+
+    def test_llm_review_is_not_echo(self):
+        from core.coverage.journal import is_mechanical_echo
+        e = self._entry(
+            body="STEP 1 — UNDERSTAND ...", cost_usd=0.31,
+            strategies=["crypto", "general"],
+        )
+        assert is_mechanical_echo(e) is False
+
+    def test_accepts_raw_dicts(self):
+        from core.coverage.journal import is_mechanical_echo
+        assert is_mechanical_echo(
+            {"strategies": ["post-loop-mechanical"], "body": ""},
+        ) is True
+        assert is_mechanical_echo(
+            {"strategies": ["crypto"], "body": "reviewed"},
+        ) is False
+
+    def test_review_stats_exclude_echo_rows(self, tmp_path):
+        # The operator CLI's stats summary counts echo rows separately.
+        import importlib.util
+        from pathlib import Path as _P
+
+        from core.coverage.journal import append_entry
+        append_entry(tmp_path, self._entry(
+            verdict="clean", cost_usd=1.5, model="m",
+        ))
+        append_entry(tmp_path, self._entry(
+            verdict="suspicious",
+            body="[mechanical] taint-spec echo",
+            strategies=["post-loop-mechanical"],
+        ))
+        from importlib.machinery import SourceFileLoader
+        cli_path = str(
+            _P(__file__).resolve().parents[3] / "libexec" / "raptor-review",
+        )
+        loader = SourceFileLoader("raptor_review_cli", cli_path)
+        spec = importlib.util.spec_from_loader("raptor_review_cli", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+
+        import io
+        from contextlib import redirect_stdout
+
+        class _Args:
+            out = str(tmp_path)
+            project = None
+            raw = False
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            mod.cmd_stats(_Args())
+        out = buf.getvalue()
+        assert "Mechanical echo rows: 1" in out
+        # Verdict tally excludes the echo row: exactly one clean, no
+        # suspicious line.
+        assert "clean" in out
+        assert "suspicious" not in out

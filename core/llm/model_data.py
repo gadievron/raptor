@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Static model data — costs, limits, endpoints, defaults.
 
@@ -6,7 +5,17 @@ Pure data, no logic. Updated during development from provider
 documentation. Changes at a different rate than code — when
 providers update pricing or release new models, edit this file.
 
-Last verified: 2026-07-13.
+Last verified: 2026-08-15.
+
+2026-08-15 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing.
+Added gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash-lite,
+gemini-3.1-pro-preview. Removed gemini-3-flash-preview (superseded by
+3.5/3.6/3.7 stable releases). Updated gemini-3.5-flash pricing
+(unchanged). Updated PROVIDER_DEFAULT_MODELS gemini to
+gemini-2.5-pro (no change — 3.1-pro is still preview). Updated
+PROVIDER_FAST_MODELS gemini to gemini-2.5-flash-lite (no change).
+3.7/3.6 Flash have introductory pricing through 2026-12-31; tabulated
+at introductory rate.
 
 2026-07-13 — added RPM (requests per minute) to MODEL_LIMITS. Added new
 models: claude-fable-5, claude-sonnet-5, gpt-5.6-{sol,terra,luna},
@@ -43,10 +52,13 @@ import re as _re
 
 from .bedrock_prefixes import (
     BEDROCK_GLOBAL_PREFIX as _BEDROCK_GLOBAL_COST_PREFIX,
+)
+from .bedrock_prefixes import (
     BEDROCK_PROVIDER_SEGMENTS as _BEDROCK_PROVIDER_SEGMENTS,
+)
+from .bedrock_prefixes import (
     BEDROCK_REGIONAL_SURCHARGE_PREFIXES as _BEDROCK_REGIONAL_COST_PREFIXES,
 )
-
 
 # Provider API endpoints (Anthropic uses native SDK, no base_url needed)
 PROVIDER_ENDPOINTS = {
@@ -78,6 +90,7 @@ PROVIDER_DEFAULT_MODELS = {
 #
 # Cost-class ratio (input/output, per-1K, vs flagship default):
 #   Anthropic:  Opus  $0.005/$0.025  →  Haiku   $0.001/$0.005   (~5×)
+#   (Note: Sonnet 5 is now $0.002/$0.010 — cheaper than previous Sonnet tier)
 #   OpenAI:     5.4   $0.0025/$0.015 →  4o-mini $0.00015/$0.0006 (~25×)
 #   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
 #   Mistral:    Large $0.002/$0.006  →  Small   $0.00015/$0.0006 (~13×)
@@ -104,9 +117,11 @@ PROVIDER_FAST_MODELS = {
 MODEL_COSTS = {
     # Anthropic — current
     "claude-fable-5":          {"input": 0.010,   "output": 0.050},
+    "claude-mythos-5":         {"input": 0.010,   "output": 0.050},
+    "claude-opus-5":           {"input": 0.005,   "output": 0.025},
     "claude-opus-4-8":         {"input": 0.005,   "output": 0.025},
     "claude-opus-4-7":         {"input": 0.005,   "output": 0.025},
-    "claude-sonnet-5":         {"input": 0.003,   "output": 0.015},
+    "claude-sonnet-5":         {"input": 0.002,   "output": 0.010},
     "claude-sonnet-4-6":       {"input": 0.003,   "output": 0.015},
     "claude-haiku-4-5":        {"input": 0.001,   "output": 0.005},
     # Anthropic — legacy (still served via API)
@@ -150,9 +165,14 @@ MODEL_COSTS = {
     "o3-pro":                  {"input": 0.020,   "output": 0.080},
     "o4-mini":                 {"input": 0.0011,  "output": 0.0044},
     # Google Gemini (<=200K prompt tier for pro models)
+    # 3.7/3.6 Flash: introductory pricing through 2026-12-31; post-intro
+    # is 2× these rates — update when the introductory period ends.
+    "gemini-3.7-flash":        {"input": 0.00075, "output": 0.00375},
+    "gemini-3.6-flash":        {"input": 0.00075, "output": 0.00375},
     "gemini-3.5-flash":        {"input": 0.0015,  "output": 0.009},
+    "gemini-3.5-flash-lite":   {"input": 0.0003,  "output": 0.0025},
+    "gemini-3.1-pro-preview":  {"input": 0.002,   "output": 0.012},
     "gemini-3.1-flash-lite":   {"input": 0.00025, "output": 0.0015},
-    "gemini-3-flash-preview":  {"input": 0.0005,  "output": 0.003},
     "gemini-2.5-pro":          {"input": 0.00125, "output": 0.010},
     "gemini-2.5-flash":        {"input": 0.0003,  "output": 0.0025},
     "gemini-2.5-flash-lite":   {"input": 0.0001,  "output": 0.0004},
@@ -181,8 +201,9 @@ MODEL_COSTS = {
 #   Anthropic: platform.claude.com/docs/en/api/rate-limits — published
 #              per-tier tables; Start tier (1,000 RPM all families).
 #   OpenAI:    developers.openai.com/api/docs/models/<model-id> —
-#              published per-tier tables; Tier 1 (most 500, mini 1K,
-#              gpt-5.5-pro 50).
+#              published per-tier tables; Tier 1 (most 500 — recorded
+#              conservatively for most mini models too; o3-mini /
+#              o4-mini 1K; gpt-5.5-pro 50).
 #   Gemini:    operator-observed defaults. Pro=1K, Flash=2K,
 #              Flash-Lite=10K, Gemma=30.
 #   Mistral:   operator-observed defaults (RPS × 60 → RPM).
@@ -190,6 +211,8 @@ MODEL_COSTS = {
 MODEL_LIMITS = {
     # Anthropic — current
     "claude-fable-5":          {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-mythos-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-5":           {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-4-8":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-4-7":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-sonnet-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
@@ -236,9 +259,12 @@ MODEL_LIMITS = {
     "o3-pro":                  {"max_context": 200000,  "max_output": 100000, "rpm": 500},
     "o4-mini":                 {"max_context": 200000,  "max_output": 100000, "rpm": 1000},
     # Google Gemini
+    "gemini-3.7-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
+    "gemini-3.6-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
     "gemini-3.5-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
+    "gemini-3.5-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
+    "gemini-3.1-pro-preview":  {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
     "gemini-3.1-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
-    "gemini-3-flash-preview":  {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
     "gemini-2.5-pro":          {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
     "gemini-2.5-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
     "gemini-2.5-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
@@ -300,6 +326,8 @@ PROVIDER_ENV_KEYS = {
 # adds global-CRIS coverage; non-listed models stay at 1.0×.
 _BEDROCK_GLOBAL_CRIS_MODELS: frozenset[str] = frozenset({
     "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
     "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-sonnet-5",
@@ -418,21 +446,26 @@ def resolve_model_name(model: str) -> str:
             mc = _get_default_primary_model()
             if mc is not None and mc.model_name:
                 return mc.model_name
-        except Exception:
+        except (OSError, ValueError):
+            # Unreadable / malformed models.json mid-resolution: the
+            # literal "default" passes through to the caller's own
+            # provider resolution.
             pass
         return model
 
     if MODEL_LIMITS.get(model) is not None:
         return model
 
-    try:
-        from core.security.llm_family import resolve_model_shorthand
+    from core.security.llm_family import resolve_model_shorthand
 
-        resolved = resolve_model_shorthand(model, MODEL_LIMITS.keys())
-        if resolved is not None:
-            return resolved
-    except Exception:
-        pass
+    # No except here by design: resolve_model_shorthand raises
+    # ValueError on an ambiguous shorthand ("haiku" matching two
+    # configured models) so the operator can disambiguate, and
+    # TypeError on a misrouted non-string — both are deliberate
+    # fail-loud signals this wrapper used to swallow.
+    resolved = resolve_model_shorthand(model, MODEL_LIMITS.keys())
+    if resolved is not None:
+        return resolved
     return model
 
 
@@ -503,11 +536,15 @@ def price_for(
 
 
 # Anthropic-specific cache pricing multipliers (vs base input rate).
-# Cache writes are 1.25x input; cache reads are 0.1x input. Used by
-# AnthropicToolUseProvider to compute cost when the response carries
-# ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
-ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25
+# Two write durations exist: 5-minute (1.25×) and 1-hour (2×).
+# Cache reads/refreshes are 0.1× regardless of write duration.
+# Used by AnthropicToolUseProvider to compute cost when the response
+# carries ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
+ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER = 1.25
+ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER = 2.0
 ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1
+# Backward compat alias — most callers use the 5-minute default.
+ANTHROPIC_CACHE_WRITE_MULTIPLIER = ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER
 
 # ---------------------------------------------------------------------------
 # Data provenance — where MODEL_COSTS / MODEL_LIMITS values come from.

@@ -1,0 +1,95 @@
+{
+  "description": "Default harvest sources for the parser_apis data pack (core/dataflow/parser_pack_harvest.py). One entry per parsing library: where to find its history (clone_url is documentation — clone locally, point --clone-root at the parent dir) and what its public API namespace looks like (api_patterns filter hunk-context function names from CVE-fix diffs down to exported entry points; internal static helpers carry no import-table signal).",
+  "sources": [
+    {
+      "library": "expat",
+      "clone_url": "https://github.com/libexpat/libexpat.git",
+      "api_patterns": ["^XML_"]
+    },
+    {
+      "library": "libxml2",
+      "clone_url": "https://github.com/GNOME/libxml2.git",
+      "api_patterns": ["^xml", "^html"]
+    },
+    {
+      "library": "jansson",
+      "clone_url": "https://github.com/akheron/jansson.git",
+      "api_patterns": ["^json_"]
+    },
+    {
+      "library": "json-c",
+      "clone_url": "https://github.com/json-c/json-c.git",
+      "api_patterns": ["^json_"]
+    },
+    {
+      "library": "cJSON",
+      "clone_url": "https://github.com/DaveGamble/cJSON.git",
+      "api_patterns": ["^cJSON_"]
+    },
+    {
+      "library": "openssl",
+      "clone_url": "https://github.com/openssl/openssl.git",
+      "api_patterns": ["^d2i_", "^PEM_read_"]
+    },
+    {
+      "library": "lua",
+      "clone_url": "https://github.com/lua/lua.git",
+      "api_patterns": ["^lua_", "^luaL_"]
+    },
+    {
+      "library": "cpython",
+      "clone_url": "https://github.com/python/cpython.git",
+      "api_patterns": ["^Py[A-Z_]", "^Py_"]
+    },
+    {
+      "library": "libpng",
+      "clone_url": "https://github.com/pnggroup/libpng.git",
+      "api_patterns": ["^png_"]
+    },
+    {
+      "library": "libjpeg-turbo",
+      "clone_url": "https://github.com/libjpeg-turbo/libjpeg-turbo.git",
+      "api_patterns": ["^jpeg_", "^tj"]
+    },
+    {
+      "library": "libtiff",
+      "clone_url": "https://gitlab.com/libtiff/libtiff.git",
+      "api_patterns": ["^TIFF"]
+    },
+    {
+      "library": "libwebp",
+      "clone_url": "https://github.com/webmproject/libwebp.git",
+      "api_patterns": ["^WebP", "^VP8"]
+    },
+    {
+      "library": "zlib",
+      "clone_url": "https://github.com/madler/zlib.git",
+      "api_patterns": ["^inflate", "^deflate", "^gz", "^uncompress", "^compress"]
+    },
+    {
+      "library": "bzip2",
+      "clone_url": "https://gitlab.com/bzip2/bzip2.git",
+      "api_patterns": ["^BZ2_"]
+    },
+    {
+      "library": "xz",
+      "clone_url": "https://github.com/tukaani-project/xz.git",
+      "api_patterns": ["^lzma_"]
+    },
+    {
+      "library": "lz4",
+      "clone_url": "https://github.com/lz4/lz4.git",
+      "api_patterns": ["^LZ4"]
+    },
+    {
+      "library": "zstd",
+      "clone_url": "https://github.com/facebook/zstd.git",
+      "api_patterns": ["^ZSTD_"]
+    },
+    {
+      "library": "brotli",
+      "clone_url": "https://github.com/google/brotli.git",
+      "api_patterns": ["^Brotli"]
+    }
+  ]
+}

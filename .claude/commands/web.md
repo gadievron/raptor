@@ -40,10 +40,10 @@ Basic web scan:
 python3 raptor.py web --url https://example.com
 ```
 
-(Authenticated scanning is not currently supported by
-`raptor.py web`. Track future support via the web-
-scanner roadmap; for now, scan only unauthenticated
-endpoints.)
+(The crawler itself has no auth flags, but the ffuf content-discovery
+channel accepts repeatable `--ffuf-header 'Header-Name: value'` and
+`--ffuf-cookie 'session=...'` for authenticated discovery. See also
+`--ffuf-wordlist`.)
 
 ## Important Notes
 

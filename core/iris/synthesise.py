@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from collections.abc import Sequence
 
 from core.evidence import EvidenceTier
 
@@ -87,6 +88,78 @@ class _Batch:
     sources: list[str]
 
 
+class _BudgetExhaustedSkip(Exception):
+    """Internal marker: batch skipped without an LLM call because the
+    run budget is already exhausted (terminal — see
+    ``core.llm.client.LLMBudgetExceededError``)."""
+
+
+def _run_batches(
+    batches: list[_Batch],
+    do_batch: Any,
+    llm_client: Any,
+    *,
+    label: str,
+    on_error: Any | None = None,
+) -> list[Any]:
+    """Fan out *do_batch* over *batches* with budget-terminal semantics.
+
+    ``LLMBudgetExceededError`` is a terminal contract for the run
+    (see ``core.llm.client``): once one batch hits it, every further
+    call is a guaranteed refusal.  On the first budget-exceeded error
+    the loop stops submitting — the remaining batches skip their LLM
+    call and go straight to *on_error* — and ONE warning reports the
+    drop count, instead of each batch independently re-discovering
+    the exhausted budget.  Other LLM errors keep per-batch drop
+    semantics: transient failures legitimately differ per batch.
+
+    When *llm_client* exposes ``is_budget_exhausted()`` it is polled
+    before each batch, so a budget already spent by earlier pipeline
+    stages (or an earlier synthesis leg) stops the loop before the
+    first call.
+    """
+    from core.llm.client import is_budget_exceeded_error
+    from core.llm.concurrency import run_parallel
+
+    exhausted = threading.Event()
+    lock = threading.Lock()
+    skipped = [0]
+    probe = getattr(llm_client, "is_budget_exhausted", None)
+
+    def _fn(batch: _Batch) -> Any:
+        if not exhausted.is_set() and callable(probe):
+            try:
+                if probe():
+                    exhausted.set()
+            except Exception:  # noqa: BLE001 — probe is best-effort
+                pass
+        if exhausted.is_set():
+            raise _BudgetExhaustedSkip()
+        return do_batch(batch)
+
+    def _handle_error(batch: _Batch, exc: Exception) -> Any:
+        if isinstance(exc, _BudgetExhaustedSkip):
+            with lock:
+                skipped[0] += 1
+        elif is_budget_exceeded_error(exc):
+            exhausted.set()
+        return on_error(batch, exc) if on_error else None
+
+    mw = getattr(llm_client, "recommended_max_workers", 1)
+    results = run_parallel(
+        batches, _fn,
+        max_workers=mw,
+        label=label,
+        on_error=_handle_error,
+    )
+    if skipped[0]:
+        logger.warning(
+            "iris.synthesise: %s: budget exhausted, dropping remaining "
+            "%d batch(es)", label, skipped[0],
+        )
+    return results
+
+
 def synthesise_specs(
     candidates: list[CandidateFunction],
     llm_client: Any,
@@ -149,11 +222,8 @@ def synthesise_specs(
     def _on_error(batch: _Batch, _exc: Exception) -> list[TaintSpec]:
         return list(_heuristic_fallback(batch.candidates))
 
-    from core.llm.concurrency import run_parallel
-    mw = getattr(llm_client, "recommended_max_workers", 1)
-    results = run_parallel(
-        batches, _do_batch,
-        max_workers=mw,
+    results = _run_batches(
+        batches, _do_batch, llm_client,
         label="iris-synth",
         on_error=_on_error,
     )
@@ -288,11 +358,18 @@ def _build_user_prompt(
             parts.append("Refinement feedback:\n" + "\n".join(fb_lines))
 
     parts.append("Classify these functions:\n")
+    # Function source (and inventory-derived names/reasons) come from
+    # the target repo — neutralise envelope/role forgery before
+    # interpolation.
+    from core.security.prompt_envelope import neutralize_tag_forgery
     for cand, source in zip(batch.candidates, batch.sources, strict=False):
-        parts.append(f"### {cand.function} ({cand.file})")
+        parts.append(
+            f"### {neutralize_tag_forgery(cand.function)} "
+            f"({neutralize_tag_forgery(cand.file)})")
         if cand.reason:
-            parts.append(f"Candidate reason: {cand.reason}")
-        parts.append(f"```\n{source}\n```\n")
+            parts.append(
+                f"Candidate reason: {neutralize_tag_forgery(cand.reason)}")
+        parts.append(f"```\n{neutralize_tag_forgery(source)}\n```\n")
 
     return "\n\n".join(parts)
 
@@ -440,12 +517,23 @@ def synthesise_assumptions(
         )
         return _parse_assumption_response(response)
 
-    from core.llm.concurrency import run_parallel
-    mw = getattr(llm_client, "recommended_max_workers", 1)
-    results = run_parallel(
-        batches, _do_batch,
-        max_workers=mw,
+    def _on_error(
+        batch: _Batch, exc: Exception,
+    ) -> list[SafetyAssumption]:
+        # Unlike spec synthesis there is no heuristic fallback here —
+        # the name heuristics produce TaintSpecs, not SafetyAssumptions
+        # — so a failed batch degrades to no assumptions.  Log loudly:
+        # run_parallel's default only records the failure at DEBUG.
+        logger.warning(
+            "iris.synthesise: assumption batch of %d function(s) "
+            "dropped after LLM error: %s", len(batch.candidates), exc,
+        )
+        return []
+
+    results = _run_batches(
+        batches, _do_batch, llm_client,
         label="iris-assumptions",
+        on_error=_on_error,
     )
 
     all_assumptions: list[SafetyAssumption] = []
@@ -484,11 +572,14 @@ def _build_assumption_prompt(
     parts.append(
         "Extract safety assumptions for these functions:\n"
     )
+    from core.security.prompt_envelope import neutralize_tag_forgery
     for cand, source in zip(batch.candidates, batch.sources, strict=False):
-        parts.append(f"### {cand.function} ({cand.file})")
+        parts.append(
+            f"### {neutralize_tag_forgery(cand.function)} "
+            f"({neutralize_tag_forgery(cand.file)})")
         if cand.reason:
-            parts.append(f"Context: {cand.reason}")
-        parts.append(f"```\n{source}\n```\n")
+            parts.append(f"Context: {neutralize_tag_forgery(cand.reason)}")
+        parts.append(f"```\n{neutralize_tag_forgery(source)}\n```\n")
 
     return "\n\n".join(parts)
 
@@ -520,7 +611,7 @@ def _parse_assumption_response(response: str) -> list[SafetyAssumption]:
         entry["source"] = "llm"
         try:
             result.append(assumption_from_dict(entry))
-        except Exception:
+        except Exception:  # noqa: BLE001 — LLM-shaped item; skip, don't crash
             logger.debug("iris.synthesise: skipping malformed assumption item")
     return result
 

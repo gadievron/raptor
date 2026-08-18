@@ -88,7 +88,7 @@ class TestDnsCache:
                     # Force the cache entry to be expired by rewriting
                     # its expiry timestamp.
                     key = ("example.com", 443)
-                    expires, addrs = proxy._dns_cache[key]
+                    _expires, addrs = proxy._dns_cache[key]
                     proxy._dns_cache[key] = (time.monotonic() - 1.0, addrs)
                     await proxy._cached_getaddrinfo("example.com", 443)
 
@@ -160,7 +160,7 @@ class TestHappyEyeballs:
                         addrinfo, 443,
                     )
 
-            r, w, ip = asyncio.run_coroutine_threadsafe(
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
                 driver(), proxy._loop,
             ).result(timeout=5)
             assert ip == "1.2.3.4"
@@ -191,7 +191,7 @@ class TestHappyEyeballs:
                         addrinfo, 443,
                     )
 
-            r, w, ip = asyncio.run_coroutine_threadsafe(
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
                 driver(), proxy._loop,
             ).result(timeout=5)
             assert ip == "2606:2800:220:1::"
@@ -222,7 +222,7 @@ class TestHappyEyeballs:
                     )
 
             t0 = time.monotonic()
-            r, w, ip = asyncio.run_coroutine_threadsafe(
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
                 driver(), proxy._loop,
             ).result(timeout=5)
             elapsed = time.monotonic() - t0
@@ -232,6 +232,117 @@ class TestHappyEyeballs:
             assert elapsed < 1.0, (
                 f"happy-eyeballs took {elapsed:.2f}s — v6 stall not "
                 f"bypassed?"
+            )
+        finally:
+            proxy.stop()
+
+    def test_dual_family_falls_back_to_remaining_addresses(
+        self, reset_proxy,
+    ):
+        """Dual-stack host whose FIRST v6 and FIRST v4 addresses are
+        dead must fall back to the remaining addrinfo entries, as the
+        single-family path always did. Pre-fix the dual-stack path
+        raced only v6[0]/v4[0] and gave up."""
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"example.com"})
+        try:
+            connect_calls = []
+
+            async def fake_open(host, port, family=None, **kwargs):
+                connect_calls.append(host)
+                if host in ("2606:2800:220:1::", "1.2.3.4"):
+                    raise ConnectionRefusedError(f"{host} dead")
+                return ("r", "w")
+
+            addrinfo = [
+                self._addrinfo(socket.AF_INET6, "2606:2800:220:1::"),
+                self._addrinfo(socket.AF_INET, "1.2.3.4"),
+                self._addrinfo(socket.AF_INET, "5.6.7.8"),
+            ]
+
+            async def driver():
+                with patch("asyncio.open_connection", fake_open):
+                    return await proxy._happy_eyeballs_connect(
+                        addrinfo, 443,
+                    )
+
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
+                driver(), proxy._loop,
+            ).result(timeout=5)
+            assert ip == "5.6.7.8", (
+                f"remaining v4 address not walked: {connect_calls}"
+            )
+        finally:
+            proxy.stop()
+
+    def test_dual_family_fallback_after_slow_race_failure(
+        self, reset_proxy,
+    ):
+        """Both racing tasks fail (v6 slowly, past the 250ms gate) —
+        the remainder must still be walked."""
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"example.com"})
+        try:
+
+            async def fake_open(host, port, family=None, **kwargs):
+                if host == "2606:2800:220:1::":
+                    await asyncio.sleep(0.4)
+                    raise ConnectionRefusedError("v6 dead, slowly")
+                if host == "1.2.3.4":
+                    raise ConnectionRefusedError("v4 dead")
+                return ("r", "w")
+
+            addrinfo = [
+                self._addrinfo(socket.AF_INET6, "2606:2800:220:1::"),
+                self._addrinfo(socket.AF_INET6, "2606:2800:220:2::"),
+                self._addrinfo(socket.AF_INET, "1.2.3.4"),
+            ]
+
+            async def driver():
+                with patch("asyncio.open_connection", fake_open):
+                    return await proxy._happy_eyeballs_connect(
+                        addrinfo, 443,
+                    )
+
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
+                driver(), proxy._loop,
+            ).result(timeout=5)
+            assert ip == "2606:2800:220:2::"
+        finally:
+            proxy.stop()
+
+    def test_dual_family_fallback_respects_gate2(self, reset_proxy):
+        """Gate-2 (resolved-IP block) applies to every fallback
+        address — a poisoned record in the remainder must be skipped,
+        never dialled."""
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"example.com"})
+        try:
+            connect_calls = []
+
+            async def fake_open(host, port, family=None, **kwargs):
+                connect_calls.append(host)
+                if host in ("2606:2800:220:1::", "1.2.3.4"):
+                    raise ConnectionRefusedError(f"{host} dead")
+                return ("r", "w")
+
+            addrinfo = [
+                self._addrinfo(socket.AF_INET6, "2606:2800:220:1::"),
+                self._addrinfo(socket.AF_INET, "1.2.3.4"),
+                # Poisoned remainder entry — private address.
+                self._addrinfo(socket.AF_INET, "127.0.0.1"),
+                self._addrinfo(socket.AF_INET, "5.6.7.8"),
+            ]
+
+            async def driver():
+                with patch("asyncio.open_connection", fake_open):
+                    return await proxy._happy_eyeballs_connect(
+                        addrinfo, 443,
+                    )
+
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
+                driver(), proxy._loop,
+            ).result(timeout=5)
+            assert ip == "5.6.7.8"
+            assert "127.0.0.1" not in connect_calls, (
+                f"gate-2-blocked IP was dialled: {connect_calls}"
             )
         finally:
             proxy.stop()
@@ -261,7 +372,7 @@ class TestHappyEyeballs:
                         addrinfo, 443,
                     )
 
-            r, w, ip = asyncio.run_coroutine_threadsafe(
+            _r, _w, ip = asyncio.run_coroutine_threadsafe(
                 driver(), proxy._loop,
             ).result(timeout=5)
             assert ip == "1.2.3.4"
@@ -311,6 +422,41 @@ class TestBufferSnapshot:
         finally:
             proxy.stop()
 
+    def test_finalize_tunnel_event_updates_under_buffer_lock(
+        self, reset_proxy,
+    ):
+        """The close-time in-place event mutation must hold
+        _buffer_lock so unregister_sandbox's `{**e}` copy (also under
+        the lock) can never observe a half-applied update (bytes_c2u
+        new, duration stale). Pre-fix _serve_tunnel's finally called
+        event.update() lockless on the asyncio thread."""
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            observed = {}
+
+            class _Event(dict):
+                def update(self, *a, **kw):
+                    observed["locked"] = proxy._buffer_lock.locked()
+                    super().update(*a, **kw)
+
+            token = proxy.register_sandbox(caller_label="a")
+            ev = _Event(host="h", port=1, result="allowed",
+                        bytes_c2u=0, bytes_u2c=0, duration=0.0)
+            proxy._record(ev)
+            proxy._finalize_tunnel_event(
+                ev, result="allowed", reason=None,
+                bytes_c2u=10, bytes_u2c=20, duration=1.5,
+            )
+            assert observed.get("locked") is True, (
+                "close-time event mutation ran without _buffer_lock"
+            )
+            events = proxy.unregister_sandbox(token)
+            assert events[0]["bytes_c2u"] == 10
+            assert events[0]["bytes_u2c"] == 20
+            assert events[0]["duration"] == 1.5
+        finally:
+            proxy.stop()
+
     def test_concurrent_record_and_register(self, reset_proxy):
         """Hammer _record from many threads concurrently with
         register/unregister churn — must not raise (no dict-mutated-
@@ -326,7 +472,7 @@ class TestBufferSnapshot:
                     while not stop.is_set():
                         proxy._record({"host": "h", "port": 1,
                                         "result": "allowed"})
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — hammer thread: collect for the assertion
                     errors.append(e)
 
             def hammer_register():
@@ -334,7 +480,7 @@ class TestBufferSnapshot:
                     while not stop.is_set():
                         t = proxy.register_sandbox()
                         proxy.unregister_sandbox(t)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — hammer thread: collect for the assertion
                     errors.append(e)
 
             ts = [threading.Thread(target=hammer_record) for _ in range(4)]

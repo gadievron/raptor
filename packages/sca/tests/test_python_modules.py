@@ -12,20 +12,18 @@ from __future__ import annotations
 import io
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 from core.http import HttpError, Response
 from packages.sca.python_modules import resolve_modules
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures: synthesise a real .whl in-memory
 # ---------------------------------------------------------------------------
 
 def _make_wheel(
-    *, dist: str, version: str, top_level_lines: List[str],
-    extra_files: Optional[Dict[str, bytes]] = None,
+    *, dist: str, version: str, top_level_lines: list[str],
+    extra_files: dict[str, bytes] | None = None,
 ) -> bytes:
     """Build a minimal wheel as ZIP bytes."""
     buf = io.BytesIO()
@@ -47,16 +45,16 @@ class _FakeHttp:
     HTTP Range slices of a single wheel via ``request("GET", ...)``."""
 
     def __init__(
-        self, *, pypi_json: Dict[str, Any], wheel_url: str,
+        self, *, pypi_json: dict[str, Any], wheel_url: str,
         wheel_bytes: bytes, honour_range: bool = True,
     ) -> None:
         self._pypi = pypi_json
         self._wheel_url = wheel_url
         self._wheel_bytes = wheel_bytes
         self._honour_range = honour_range
-        self.requests: List[Tuple[str, Optional[str]]] = []
+        self.requests: list[tuple[str, str | None]] = []
 
-    def get_json(self, url: str, *args, **kwargs) -> Dict[str, Any]:
+    def get_json(self, url: str, *args, **kwargs) -> dict[str, Any]:
         self.requests.append((url, None))
         if "/pypi/" in url:
             return self._pypi
@@ -64,7 +62,7 @@ class _FakeHttp:
 
     def request(
         self, method: str, url: str, *,
-        headers: Optional[Dict[str, str]] = None, **kwargs,
+        headers: dict[str, str] | None = None, **kwargs,
     ) -> Response:
         rng = (headers or {}).get("Range")
         self.requests.append((url, rng))
@@ -275,6 +273,63 @@ def test_partial_fetch_minimises_bytes_pulled():
         f"pulled {total_bytes[0]} of {len(wheel)} — Range fetch did "
         f"not actually save bytes"
     )
+
+
+def _patch_declared_size(wheel: bytes, filename: str, new_size: int) -> bytes:
+    """Rewrite the central-directory ``uncompressed size`` field for
+    ``filename`` so the header lies about the member's size. Central
+    file header layout: uncompressed size at offset 24, filename
+    length at offset 28, filename at offset 46."""
+    import struct
+    data = bytearray(wheel)
+    sig = b"PK\x01\x02"
+    pos = 0
+    while True:
+        pos = data.find(sig, pos)
+        if pos == -1:
+            break
+        name_len = struct.unpack_from("<H", data, pos + 28)[0]
+        name = bytes(data[pos + 46:pos + 46 + name_len]).decode(
+            "utf-8", errors="replace")
+        if name == filename:
+            struct.pack_into("<I", data, pos + 24, new_size)
+        pos += 4
+    return bytes(data)
+
+
+def test_oversized_top_level_txt_treated_as_no_data():
+    """A ``top_level.txt`` whose declared size exceeds the 1 MB cap is
+    treated the same as a wheel with no top_level data — the resolver
+    must never materialise it."""
+    big_lines = ["m" * 60] * 40_000     # ~2.4 MB of module names
+    wheel = _make_wheel(
+        dist="bloated", version="1.0.0", top_level_lines=big_lines)
+    pypi = {"urls": [
+        {"packagetype": "bdist_wheel",
+         "url": "https://files.example/bloated.whl", "size": len(wheel)},
+    ]}
+    http = _FakeHttp(
+        pypi_json=pypi, wheel_url=pypi["urls"][0]["url"], wheel_bytes=wheel)
+    assert resolve_modules("bloated", "1.0.0", http=http) is None
+
+
+def test_lying_uncompressed_size_header_rejected_without_allocation():
+    """A hostile central-directory entry can declare a multi-hundred-MB
+    uncompressed size on a tiny compressed member. The size check must
+    fire on the *declared* value before any read — the resolver
+    returns the no-data result instead of allocating."""
+    wheel = _make_wheel(
+        dist="myapp", version="1.0.0", top_level_lines=["myapp"])
+    lied = _patch_declared_size(
+        wheel, "myapp-1.0.0.dist-info/top_level.txt", 500 * 1024 * 1024)
+    assert lied != wheel, "header patch did not land"
+    pypi = {"urls": [
+        {"packagetype": "bdist_wheel",
+         "url": "https://files.example/myapp.whl", "size": len(lied)},
+    ]}
+    http = _FakeHttp(
+        pypi_json=pypi, wheel_url=pypi["urls"][0]["url"], wheel_bytes=lied)
+    assert resolve_modules("myapp", "1.0.0", http=http) is None
 
 
 def test_http_error_cached_with_short_ttl_not_forever(tmp_path: Path):

@@ -34,7 +34,6 @@ import re
 from pathlib import Path
 
 from core.atomic_fs import write_text_atomically as _atomic_write
-from typing import List
 
 from . import RewriteEdit, RewriteResult
 
@@ -49,9 +48,7 @@ def _is_dockerfile(path: Path) -> bool:
         return True
     if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
-    if path.suffix == ".dockerfile":
-        return True
-    return False
+    return path.suffix == ".dockerfile"
 
 
 # NOT @register'd: the Dockerfile predicate is owned by
@@ -61,8 +58,8 @@ def _is_dockerfile(path: Path) -> bool:
 # first-match-wins dispatcher from picking the wrong rewriter
 # for a mixed-edit batch.
 def rewrite_dockerfile_arg(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply ARG version-pin edits to a Dockerfile in place.
 
     Each edit's ``locator`` is the ARG name (``SEMGREP_VERSION``,
@@ -77,7 +74,7 @@ def rewrite_dockerfile_arg(
                               reason=f"error: read failed: {e}")
                 for e2 in edits]
 
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     new_text = text
     for edit in edits:
         new_text, result = _apply_one(new_text, edit)
@@ -98,7 +95,7 @@ def rewrite_dockerfile_arg(
 
 def _apply_one(
     text: str, edit: RewriteEdit,
-) -> "tuple[str, RewriteResult]":
+) -> tuple[str, RewriteResult]:
     """Apply a single ARG edit to the text. Returns the (possibly
     unchanged) text plus the per-edit result."""
     # Pattern matches ``ARG <NAME>=<value>`` with optional
@@ -150,7 +147,13 @@ def _apply_one(
         new_value_quoted = f"'{edit.new_value}'"
     else:
         new_value_quoted = edit.new_value
-    new_text = pattern.sub(rf"\g<1>{new_value_quoted}", text, count=1)
+    # Callable replacement writes the value as an exact literal —
+    # interpolating it into a re.sub template would let backslash /
+    # group-reference sequences in the value rewrite the ARG line
+    # into something other than the validated literal.
+    new_text = pattern.sub(
+        lambda m: m.group(1) + new_value_quoted, text, count=1,
+    )
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )

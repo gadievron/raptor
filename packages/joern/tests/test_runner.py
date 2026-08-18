@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -22,12 +23,11 @@ from packages.joern.runner import (
     _write_cpg_manifest,
     build_cpg,
     build_cpg_cached,
-    load_cached_cpg,
     cleanup_cpg,
+    load_cached_cpg,
     run_query,
     run_taint_query,
 )
-
 
 # ── Query validation ────────────────────────────────────────────────
 
@@ -113,6 +113,34 @@ class TestEscapeScalaString:
 
 # ── Output parsing ──────────────────────────────────────────────────
 
+class TestParseDarkMethods:
+    def test_joern_dark_lines(self):
+        from packages.joern.runner import _parse_dark_methods
+
+        out = "JOERN_DARK:parse_hdr\nnoise\nJOERN_DARK:decode\n"
+        assert _parse_dark_methods(out) == ["parse_hdr", "decode"]
+
+    def test_joern_diag_line_from_tiered_taint(self):
+        """tiered_taint.sc emits JOERN_DIAG:dark_methods:<count>:<sample>
+        — the parser must pick up the sample names (pre-fix, nothing
+        emitted the JOERN_DARK shape at all, so dark_methods was
+        always empty)."""
+        from packages.joern.runner import _parse_dark_methods
+
+        out = (
+            "JOERN_TIER:sinks:12 sink arguments across 4 call sites\n"
+            "JOERN_DIAG:dark_methods:3:parse_hdr,decode,init_tbl\n"
+        )
+        assert _parse_dark_methods(out) == [
+            "parse_hdr", "decode", "init_tbl",
+        ]
+
+    def test_no_markers(self):
+        from packages.joern.runner import _parse_dark_methods
+
+        assert _parse_dark_methods("plain output\n") == []
+
+
 class TestParseOutput:
     def test_empty(self):
         flows, errors = _parse_output("")
@@ -131,7 +159,7 @@ class TestParseOutput:
             f"JOERN_FLOW:{json.dumps(steps)}\n"
             "JOERN_FLOWS_END\n"
         )
-        flows, errors = _parse_output(output)
+        flows, _errors = _parse_output(output)
         assert len(flows) == 1
         assert len(flows[0].steps) == 2
         assert not flows[0].is_inter_procedural
@@ -389,7 +417,7 @@ class TestTemplateSlotInjection:
     """Verify that attacker-controlled function/param names cannot
     inject code into Joern query templates."""
 
-    INJECTION_PAYLOADS = [
+    INJECTION_PAYLOADS: ClassVar[list[str]] = [
         '"); Runtime.getRuntime().exec("id"); //',
         "foo\nval x = 1",
         'a"b',
@@ -513,3 +541,170 @@ class TestCPGCaching:
         )
         assert result.path == cpg_dir / "cpg.bin"
         assert len(build_called) == 0
+
+
+class TestValidateSubstitutionValueFullmatch:
+    def test_trailing_newline_rejected(self):
+        # A $-anchored match() admits "foo\n"; fullmatch must not.
+        assert not _validate_substitution_value("parse_header\n")
+
+    def test_trailing_newline_qualified_rejected(self):
+        assert not _validate_substitution_value("os.system\n")
+
+
+class TestBuildCpgSandbox:
+    """on_progress must never bypass the sandbox.
+
+    With core.sandbox available, the build routes through the sandbox
+    runner (the raw-Popen stall monitor is dropped); the monitor path
+    only runs when the sandbox is absent.
+    """
+
+    def _spy_runner(self, calls):
+        def runner(cmd, **kwargs):
+            calls.append({"cmd": cmd, "kwargs": kwargs})
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+        return runner
+
+    def test_progress_path_routes_through_sandbox(self, tmp_path, monkeypatch):
+        target = tmp_path / "src"
+        target.mkdir()
+        (target / "a.c").write_text("int f() { return 0; }")
+
+        calls: list = []
+        monkeypatch.setattr(
+            "packages.joern.runner._default_sandbox_runner",
+            lambda: self._spy_runner(calls),
+        )
+
+        def no_raw_popen(*a, **kw):
+            raise AssertionError(
+                "stall monitor must not spawn a raw Popen when the "
+                "sandbox is available"
+            )
+
+        monkeypatch.setattr(
+            "packages.joern.runner.subprocess.Popen", no_raw_popen,
+        )
+
+        progress: list = []
+        cpg = build_cpg(
+            target, on_progress=progress.append, output_dir=tmp_path / "out",
+        )
+        assert cpg.target == target.resolve()
+        assert len(calls) == 1
+        assert calls[0]["kwargs"]["block_network"] is True
+        assert calls[0]["kwargs"]["target"] == str(target.resolve())
+        assert progress  # coarse note replaces per-file streaming
+
+    def test_non_monitor_branch_blocks_network(self, tmp_path, monkeypatch):
+        target = tmp_path / "src"
+        target.mkdir()
+
+        calls: list = []
+        monkeypatch.setattr(
+            "packages.joern.runner._default_sandbox_runner",
+            lambda: self._spy_runner(calls),
+        )
+
+        build_cpg(target, output_dir=tmp_path / "out")
+        assert calls[0]["kwargs"]["block_network"] is True
+
+    def test_sandbox_unavailable_keeps_stall_monitor(self, tmp_path, monkeypatch):
+        target = tmp_path / "src"
+        target.mkdir()
+
+        monkeypatch.setattr(
+            "packages.joern.runner._default_sandbox_runner",
+            lambda: subprocess.run,
+        )
+
+        called: dict = {}
+
+        def fake_monitor_build(cmd, cpg_path, target_, languages, timeout,
+                               on_progress):
+            called["cmd"] = cmd
+            return JoernCPG(path=cpg_path, target=target_)
+
+        monkeypatch.setattr(
+            "packages.joern.runner._build_cpg_with_stall_monitor",
+            fake_monitor_build,
+        )
+
+        build_cpg(target, on_progress=lambda m: None,
+                  output_dir=tmp_path / "out")
+        assert "cmd" in called
+
+
+class TestStallMonitorStdoutDrain:
+    """A chatty joern-parse stdout must not wedge the monitored build.
+
+    Regression: stdout was PIPE'd but only read after exit, so a child
+    emitting more than the OS pipe buffer (~64KB) on stdout blocked in
+    write(), stalled its stderr progress, and got killed as a spurious
+    timeout/stall.
+    """
+
+    def test_chatty_stdout_completes_and_is_parsed(self, tmp_path):
+        import sys as _sys
+
+        from packages.joern.runner import _build_cpg_with_stall_monitor
+
+        # Writes 256KB of noise plus a language line to stdout — far
+        # past the pipe buffer an undrained child deadlocks on.
+        script = (
+            "import sys\n"
+            "sys.stdout.write('noise\\n' * (256 * 1024 // 6))\n"
+            "sys.stdout.write('language: c\\n')\n"
+        )
+        cpg = _build_cpg_with_stall_monitor(
+            [_sys.executable, "-c", script],
+            cpg_path=tmp_path / "cpg.bin",
+            target=tmp_path,
+            languages=None,
+            timeout=20,
+            on_progress=lambda m: None,
+        )
+        # Pre-fix the child hit the 20s wait timeout and the fallback
+        # JoernCPG carried no languages and no build time.
+        assert cpg.languages == {"c"}
+        assert cpg.build_time_ms < 20_000
+
+
+class TestDefaultSandboxRunnerFailClosed:
+    """The try-import-sandbox-except-bare-subprocess shape is gone:
+    sandbox unimportable -> raise naming the remedy, unless the
+    operator explicitly opted into unsandboxed execution."""
+
+    def test_raises_when_sandbox_unimportable(self, monkeypatch):
+        import sys as _sys
+
+        from unittest.mock import patch as _patch
+
+        from core.run.sandbox_policy import (
+            ALLOW_UNSANDBOXED_ENV,
+            SandboxUnavailableError,
+        )
+        from packages.joern.runner import _default_sandbox_runner
+        monkeypatch.delenv(ALLOW_UNSANDBOXED_ENV, raising=False)
+        with _patch.dict(_sys.modules, {"core.sandbox": None}):
+            with pytest.raises(SandboxUnavailableError, match="joern"):
+                _default_sandbox_runner()
+
+    def test_optout_returns_bare_subprocess_with_event(self, monkeypatch):
+        import sys as _sys
+
+        from unittest.mock import patch as _patch
+
+        import core.run.sandbox_policy as policy_mod
+        from packages.joern.runner import _default_sandbox_runner
+        monkeypatch.setenv(policy_mod.ALLOW_UNSANDBOXED_ENV, "1")
+        events: list = []
+        monkeypatch.setattr(
+            policy_mod, "log_security_event",
+            lambda etype, msg, **kw: events.append(etype),
+        )
+        with _patch.dict(_sys.modules, {"core.sandbox": None}):
+            runner = _default_sandbox_runner()
+        assert runner is subprocess.run
+        assert events == ["unsandboxed_tool_fallback"]

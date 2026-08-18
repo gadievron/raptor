@@ -15,10 +15,9 @@ with GNU ld ``--icf=safe``).
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, Literal
 
 from core.analysis.binary_oracle import Classification
 
@@ -34,8 +33,12 @@ class _SyntheticDriver:
         "classifier sanity check, no external deps.")
     mode: Literal["synthetic"] = "synthetic"
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
-        subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True, timeout=120)
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
+        from core.inventory.binary_oracle_corpora._sandbox_exec import (
+            run_build_step,
+        )
+        run_build_step(["make", "-s", "demo"], cwd=FIXTURE_DIR,
+                       timeout=120)
         binary = FIXTURE_DIR / "demo"
         from core.analysis.binary_oracle import classify_binary_evidence
         probe = classify_binary_evidence(["folded_a", "folded_b"], binary)
@@ -43,7 +46,7 @@ class _SyntheticDriver:
         folded_verdict: Classification = (
             fold_w.classification if fold_w else "symbol_present"
         )
-        expected: Dict[str, Classification] = {
+        expected: dict[str, Classification] = {
             "live_called":                "symbol_present",
             "live_address_taken_target":  "symbol_present",
             "inlined_only":               "inlined",

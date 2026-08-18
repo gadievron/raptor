@@ -84,13 +84,27 @@ def test_subdirectory_keys(tmp_path: Path) -> None:
     assert cache.get("vulns/GHSA-xxx", ttl_seconds=60) == {"id": "GHSA-xxx"}
 
 
-def test_path_traversal_in_key_is_blocked(tmp_path: Path) -> None:
+def test_path_traversal_in_key_is_refused(tmp_path: Path) -> None:
+    # Degenerate segments are refused loudly rather than normalised:
+    # silently dropping them made distinct keys collide onto one file
+    # ("foo/.." used to alias "foo"), letting one entry shadow another.
     cache = JsonCache(root=tmp_path)
-    cache.put("../escape", "should-not-escape", ttl_seconds=60)
-    # Either the file lives inside the cache root, or the put silently
-    # discarded the segment; either way, no escape.
+    with pytest.raises(ValueError):
+        cache.put("../escape", "should-not-escape", ttl_seconds=60)
     assert not (tmp_path.parent / "escape.json").exists()
-    assert (tmp_path / "escape.json").exists()
+    assert not (tmp_path / "escape.json").exists()
+
+
+def test_degenerate_segments_cannot_alias_another_key(tmp_path: Path) -> None:
+    cache = JsonCache(root=tmp_path)
+    cache.put("npm-meta:lodash", {"ok": True}, ttl_seconds=60)
+    for alias in ("npm-meta:lodash/..", "npm-meta:lodash/.",
+                  "npm-meta:lodash//", "./npm-meta:lodash"):
+        with pytest.raises(ValueError):
+            cache.put(alias, None, ttl_seconds=60)
+        with pytest.raises(ValueError):
+            cache.get(alias, ttl_seconds=60)
+    assert cache.get("npm-meta:lodash", ttl_seconds=60) == {"ok": True}
 
 
 def test_empty_key_after_sanitisation_raises(tmp_path: Path) -> None:
@@ -237,7 +251,8 @@ def test_non_json_serialisable_value_does_not_leak_tempfile(tmp_path: Path) -> N
     # datetime is not JSON-serialisable by default; json.dump will raise
     # TypeError. Older versions of this code only caught OSError, leaking
     # the partial tempfile.
-    cache.put("k", datetime.datetime.now(), ttl_seconds=60)
+    cache.put("k", datetime.datetime.now(tz=datetime.timezone.utc),
+              ttl_seconds=60)
     # Tempfile leak = .tmp.<pid>[.<tid>] shaped leftovers. The reaper's
     # rate-limit sentinel (``.reap_last_run``) is cache infrastructure,
     # not a leak — exclude it from the assertion.

@@ -11,9 +11,11 @@ from core.orchestration.audit_bridge import (
     enrich_with_summaries,
     find_audit_output,
     inject_chains_as_hypotheses,
+    inject_dark_as_hypotheses,
     is_audit_format,
     load_attack_chains,
     load_audit_constraints,
+    load_dark_findings,
     load_summaries,
     normalize_audit_findings,
 )
@@ -384,3 +386,87 @@ class TestNormalizeAuditFindings:
         assert f["function"] == "parse"
         assert f["line"] == 42
         assert f["severity"] == "medium"
+
+
+class TestInjectChainsIdCollision:
+    def test_repeated_inject_no_id_collision(self, tmp_path):
+        surface_path = tmp_path / "attack-surface.json"
+        surface_path.write_text(json.dumps({"hypotheses": []}))
+        chains_a = [{"description": "chain A", "goal": "goal A",
+                      "primitives": [], "findings": []}]
+        chains_b = [{"description": "chain B", "goal": "goal B",
+                      "primitives": [], "findings": []}]
+
+        inject_chains_as_hypotheses(chains_a, surface_path)
+        inject_chains_as_hypotheses(chains_b, surface_path)
+
+        data = json.loads(surface_path.read_text())
+        ids = [h["id"] for h in data["hypotheses"]]
+        assert len(ids) == len(set(ids)), f"duplicate IDs: {ids}"
+        assert ids == ["audit_chain_0", "audit_chain_1"]
+
+class TestLoadDarkFindings:
+    def test_loads_only_dark(self, tmp_path):
+        graded = {
+            "findings": [
+                {"status": "dark", "title": "idor", "file": "o.py",
+                 "function": "get_order", "line": 4,
+                 "hypothesis": "order id not scoped to user"},
+                {"status": "finding", "title": "overflow", "file": "a.c",
+                 "function": "f", "line": 9},
+            ],
+        }
+        (tmp_path / "findings-graded.json").write_text(json.dumps(graded))
+        dark = load_dark_findings(tmp_path)
+        assert len(dark) == 1
+        assert dark[0]["title"] == "idor"
+
+    def test_empty_on_missing_file(self, tmp_path):
+        assert load_dark_findings(tmp_path) == []
+
+    def test_empty_on_malformed_json(self, tmp_path):
+        (tmp_path / "findings-graded.json").write_text("{not json")
+        assert load_dark_findings(tmp_path) == []
+
+
+class TestInjectDarkAsHypotheses:
+    def _dark(self):
+        return [{
+            "status": "dark", "title": "idor in order lookup",
+            "file": "orders.py", "function": "get_order", "line": 4,
+            "hypothesis": "order id not scoped to requesting user",
+            "cwe_class": "CWE-639", "verification_tier": "speculative",
+        }]
+
+    def test_injects_into_surface(self, tmp_path):
+        surface_path = tmp_path / "attack-surface.json"
+        surface_path.write_text(json.dumps({"hypotheses": []}))
+        injected = inject_dark_as_hypotheses(self._dark(), surface_path)
+        assert injected == 1
+        data = json.loads(surface_path.read_text())
+        h = data["hypotheses"][0]
+        assert h["source"] == "audit_dark"
+        assert h["needs_validation"] is True
+        assert h["file"] == "orders.py"
+        assert h["function"] == "get_order"
+        assert h["description"] == "order id not scoped to requesting user"
+        assert h["cwe"] == "CWE-639"
+
+    def test_dedupes_on_reinject(self, tmp_path):
+        surface_path = tmp_path / "attack-surface.json"
+        surface_path.write_text(json.dumps({"hypotheses": []}))
+        inject_dark_as_hypotheses(self._dark(), surface_path)
+        injected = inject_dark_as_hypotheses(self._dark(), surface_path)
+        assert injected == 0
+        data = json.loads(surface_path.read_text())
+        assert len(data["hypotheses"]) == 1
+
+    def test_missing_surface_file(self, tmp_path):
+        assert inject_dark_as_hypotheses(
+            self._dark(), tmp_path / "attack-surface.json",
+        ) == 0
+
+    def test_empty_input(self, tmp_path):
+        surface_path = tmp_path / "attack-surface.json"
+        surface_path.write_text(json.dumps({"hypotheses": []}))
+        assert inject_dark_as_hypotheses([], surface_path) == 0

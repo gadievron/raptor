@@ -11,10 +11,10 @@ Protocol. Caching: ``crates-versions:<name>`` with a 24h TTL by default.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import urllib.parse
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY_PREFIX = "crates-versions"
 _DEFAULT_TTL = 24 * 3600
+
+
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — a raw name containing ``/`` or ``..`` could otherwise
+    alias another package's cache file after JsonCache path
+    sanitisation. Old raw-name entries re-fetch once."""
+    return urllib.parse.quote(value, safe="")
 
 
 class CratesClient:
@@ -35,7 +43,7 @@ class CratesClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -45,8 +53,8 @@ class CratesClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+    def list_versions(self, name: str) -> list[str]:
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -61,9 +69,9 @@ class CratesClient:
             self._cache.put(cache_key, versions, ttl_seconds=self._ttl)
         return versions
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         """Return the raw crates.io aggregate response."""
-        cache_key = f"crates-meta:{name}"
+        cache_key = f"crates-meta:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -85,7 +93,7 @@ class CratesClient:
 
     def get_version_dependencies(
         self, name: str, version: str,
-    ) -> Optional[list]:
+    ) -> list | None:
         """Fetch per-version deps from
         ``/api/v1/crates/<crate>/<version>/dependencies``.
 
@@ -93,7 +101,8 @@ class CratesClient:
         ``kind``, ``optional``, ``features``, ``default_features``,
         etc.); None on miss / offline. Used by the
         transitive-drop detector."""
-        cache_key = f"crates-deps:{name}:{version}"
+        cache_key = (f"crates-deps:{_key_component(name)}:"
+                     f"{_key_component(version)}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -121,7 +130,7 @@ class CratesClient:
         return deps
 
 
-def _extract_versions(data: dict) -> List[str]:
+def _extract_versions(data: dict) -> list[str]:
     """Pull stable, non-yanked versions from the crates.io response.
 
     Shape:
@@ -138,7 +147,7 @@ def _extract_versions(data: dict) -> List[str]:
     versions = data.get("versions") or []
     if not isinstance(versions, list):
         return []
-    out: List[str] = []
+    out: list[str] = []
     for v in versions:
         if not isinstance(v, dict):
             continue

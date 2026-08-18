@@ -16,7 +16,6 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +24,8 @@ _NEGATIVE_STATUSES = frozenset({"clean"})
 
 
 def aggregate_strategy_stats(
-    log_dirs: List[Path],
-) -> Dict[str, Dict[str, int]]:
+    log_dirs: list[Path],
+) -> dict[str, dict[str, int]]:
     """Aggregate strategy effectiveness across multiple audit log dirs.
 
     Args:
@@ -35,7 +34,7 @@ def aggregate_strategy_stats(
     Returns:
         Mapping of strategy name to {wins, misses, total} counts.
     """
-    stats: Dict[str, Dict[str, int]] = defaultdict(
+    stats: dict[str, dict[str, int]] = defaultdict(
         lambda: {"wins": 0, "misses": 0, "total": 0},
     )
 
@@ -72,11 +71,11 @@ def aggregate_strategy_stats(
 
 
 def compute_strategy_weights(
-    stats: Dict[str, Dict[str, int]],
+    stats: dict[str, dict[str, int]],
     *,
     min_samples: int = 10,
     default_weight: float = 1.0,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Convert raw stats into priority weight multipliers.
 
     Strategies with fewer than ``min_samples`` observations keep the
@@ -95,7 +94,7 @@ def compute_strategy_weights(
     Returns:
         Mapping of strategy name to weight multiplier.
     """
-    weights: Dict[str, float] = {}
+    weights: dict[str, float] = {}
     for strat, counts in stats.items():
         total = counts["total"]
         if total < min_samples:
@@ -111,8 +110,8 @@ def find_project_log_dirs(
     out_dir: Path,
     *,
     max_dirs: int = 20,
-    target_path: Optional[Path] = None,
-) -> List[Path]:
+    target_path: Path | None = None,
+) -> list[Path]:
     """Find audit log directories from prior runs in a project.
 
     Searches sibling directories of ``out_dir`` for audit logs,
@@ -127,7 +126,7 @@ def find_project_log_dirs(
     if not parent.is_dir():
         return []
 
-    candidates: List[Path] = []
+    candidates: list[Path] = []
     try:
         for child in parent.iterdir():
             if not child.is_dir():
@@ -154,16 +153,27 @@ def find_project_log_dirs(
     except OSError:
         return []
 
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # A sibling can be deleted between iterdir() and the sort (e.g. a
+    # concurrent `/project clean --keep N`); an unguarded stat() would
+    # raise and crash the audit prep phase.
+    candidates.sort(key=_safe_mtime, reverse=True)
     return candidates[:max_dirs]
+
+
+def _safe_mtime(p: Path) -> float:
+    """mtime that survives the path racing away (same as binary_bridge)."""
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def load_strategy_weights(
     out_dir: Path,
     *,
     min_samples: int = 10,
-    target_path: Optional[Path] = None,
-) -> Optional[Dict[str, float]]:
+    target_path: Path | None = None,
+) -> dict[str, float] | None:
     """Load strategy weights from prior runs in the same project.
 
     Returns None when no prior data is available. Returns a weight

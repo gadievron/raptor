@@ -19,14 +19,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+# Import errors are deferred to main() so the module stays import-safe
+# (test collection must never die on a missing optional dependency).
 try:
+    import httpx
     from sage_sdk.async_client import AsyncSageClient
     from sage_sdk.auth import AgentIdentity
+    from sage_sdk.exceptions import SageError
     from sage_sdk.models import MemoryType
-except ImportError:
-    print("ERROR: sage-agent-sdk not installed.")
-    print("  pip install sage-agent-sdk")
-    sys.exit(1)
+except ImportError as _exc:
+    _SAGE_SDK_IMPORT_ERROR = _exc
+    httpx = AsyncSageClient = AgentIdentity = SageError = MemoryType = None
+else:
+    _SAGE_SDK_IMPORT_ERROR = None
 
 from core.sage.scripts._common import async_memory_exists
 from core.security.log_sanitisation import escape_nonprintable as _escape_nonprintable
@@ -280,8 +285,12 @@ async def _register_one(
 ) -> tuple[str, str]:
     """Propose an agent's role + xref memories. Returns (name, status).
 
-    status ∈ {"stored", "skipped", "failed: <err>"}. Skipped when both
-    memories are already present in SAGE and --force isn't set.
+    status ∈ {"stored", "skipped", "partial", "force-restored",
+    "failed: <err>"}. Skipped when both memories are already present
+    in SAGE and --force isn't set; "partial" when exactly one half was
+    already present and only the missing half was proposed;
+    "force-restored" when --force rewrote entries regardless of
+    presence.
     """
     async with sem:
         name = agent["name"]
@@ -351,7 +360,7 @@ async def _register_one(
             if role_exists or xref_exists:
                 return (name, "partial")  # one half was already present
             return (name, "stored")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — per-agent worker: any failure becomes a classified result in the summary; the batch must finish
             return (name, f"failed: {e}")
 
 
@@ -378,7 +387,11 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
             print()
         return
 
-    # Connect to SAGE
+    # Connect to SAGE. Loopback proxy exemption for standalone runs —
+    # raptor-sage-setup exports it for its children, but this script is
+    # also documented for direct invocation.
+    from core.sage.config import ensure_loopback_no_proxy
+    ensure_loopback_no_proxy()
     print(f"Connecting to SAGE at {sage_url}...")
     identity = AgentIdentity.default()
     client = AsyncSageClient(
@@ -399,7 +412,8 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
         reg = await client.register_agent("raptor-registrar")
         height = getattr(reg, "on_chain_height", None)
         print(f"Registered as raptor-registrar (on-chain height {height})\n")
-    except Exception as e:
+    except (OSError, ValueError, KeyError, httpx.HTTPError, SageError) as e:
+        # Already-registered / transport errors are informational only.
         print(f"Registration note: {e}\n")
 
     # Warm the ollama embedding sidecar so the first real embed below
@@ -409,8 +423,10 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
     # /v1/embed is a local ollama roundtrip, nothing on-chain.)
     try:
         await client.embed("wake")
-    except Exception:
-        pass
+    except (OSError, ValueError, KeyError, httpx.HTTPError, SageError) as e:
+        # Transport / sidecar-response failures only; a TypeError from
+        # a drifted SDK call signature must propagate.
+        print(f"Embedding warm-up skipped ({type(e).__name__}): first embed will cold-start.")
 
     sem = asyncio.Semaphore(_PROPOSE_CONCURRENCY)
     # `return_exceptions=True` for batch robustness — see seed_sage's
@@ -475,6 +491,10 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
 
 
 def main():
+    if _SAGE_SDK_IMPORT_ERROR is not None:
+        print("ERROR: sage-agent-sdk not installed.")
+        print("  pip install sage-agent-sdk")
+        sys.exit(1)
     parser = argparse.ArgumentParser(
         description="Register RAPTOR agents on the SAGE network"
     )

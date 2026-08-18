@@ -12,8 +12,8 @@ even if the report write fails (out-of-disk, permission, etc.).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from cve_diff.report.markdown import render_flow
 
@@ -25,7 +25,7 @@ def write_outcome_patches(
     clone_diff_text: str | None,
     api_diff_text: str | None = None,
     api_method: str | None = None,
-    extras: "list[tuple[str, str]] | None" = None,
+    extras: list[tuple[str, str]] | None = None,
 ) -> None:
     """Persist each extraction method's raw diff as a ``.patch`` file.
 
@@ -77,15 +77,18 @@ def write_outcome_patches(
         #   (b) corrupt the filename pattern that downstream
         #       consumers (cve_diff oracle, report aggregators)
         #       rely on for parsing back the method.
-        # Whitelist `[A-Za-z0-9_-]` for method; anything else
+        # Allowlist `[A-Za-z0-9_-]` for method; anything else
         # gets sanitised to `_`.
         import re
         _method_re = re.compile(r"[^A-Za-z0-9_-]")
         for method, text in seen.items():
             safe_method = _method_re.sub("_", str(method)) or "unknown"
             (output_dir / f"{cve_id}.{safe_method}.patch").write_text(text, encoding="utf-8")
-    except Exception:  # noqa: BLE001 — patch writes are best-effort
-        pass
+    except Exception:  # patch writes are best-effort
+        import logging
+        logging.getLogger(__name__).debug(
+            "patch write failed for %s", cve_id, exc_info=True,
+        )
 
 
 def write_flow_files(
@@ -130,7 +133,7 @@ def write_flow_files(
         #     ending up in `cve-2024-1234\n.flow.jsonl` confuses
         #     downstream parsers.
         #
-        # Match the same `[A-Za-z0-9._-]` whitelist that the
+        # Match the same `[A-Za-z0-9._-]` allowlist that the
         # cve_id validator enforces; replace anything outside with
         # `_`. Empty / whitespace → "unknown" so downstream
         # consumers still see a parseable filename.
@@ -172,7 +175,7 @@ def write_flow_files(
             stage_signals=stage_signals,
             stage_status=stage_status,
         ), encoding="utf-8")
-    except Exception as exc:  # noqa: BLE001 — report write must not abort pipeline
+    except Exception as exc:
         import logging as _logging
         _logging.getLogger(__name__).debug(
             "flow report write failed for %s: %s",

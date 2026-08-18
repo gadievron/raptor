@@ -289,3 +289,96 @@ class TestGeneratedCodeFromDisk:
         gaps = [{"name": "f", "file": "schema_pb2.py"}]
         result = detect_generated_files(gaps, target_path=tmp_path)
         assert "schema_pb2.py" in result
+
+
+_TRACE_STRING_SHAPE = """\
+int trace_string(BIO *bio, int text, int full, const unsigned char *data,
+                 size_t len)
+{
+    unsigned char buf[81];
+    int i, j = 0;
+
+    if (!full)
+        len = len > 76 ? 76 : len;
+    for (i = 0; i < (int)len; i++) {
+        if (text && data[i] == '\\n') {
+            buf[j++] = '\\\\';
+            buf[j++] = 'n';
+        } else {
+            buf[j++] = data[i];
+        }
+    }
+    buf[j] = '\\0';
+    return BIO_write(bio, buf, j);
+}
+"""
+
+
+class TestStackBufferSkipVeto:
+    """A fixed-size local buffer with write evidence must not be
+    triage-skipped by the sink-unreachable rule — an 81-byte
+    loop-written stack buffer (real missed stack overflow) was
+    classified "no sink path, no dangerous callees, small"."""
+
+    def test_stack_buffer_writer_vetoes_skip(self):
+        r = classify_function(
+            file="crypto/trace.c", function="trace_string",
+            sink_unreachable=True, sloc=22,
+            source=_TRACE_STRING_SHAPE,
+        )
+        assert r.bucket == TriageBucket.INVESTIGATE
+        assert "stack buffer" in r.reasons[0]
+
+    def test_no_write_evidence_still_skips(self):
+        src = "int f(void)\n{\n    char name[16];\n    return sizeof(name);\n}\n"
+        r = classify_function(
+            file="a.c", function="f",
+            sink_unreachable=True, sloc=5, source=src,
+        )
+        assert r.bucket == TriageBucket.SKIP
+
+    def test_no_source_preserves_skip(self):
+        r = classify_function(
+            file="a.c", function="f",
+            sink_unreachable=True, sloc=10,
+        )
+        assert r.bucket == TriageBucket.SKIP
+
+    def test_memcpy_destination_counts_as_write(self):
+        src = (
+            "void f(const char *p, size_t n)\n{\n"
+            "    uint8_t tmp[32];\n"
+            "    memcpy(tmp, p, n);\n}\n"
+        )
+        r = classify_function(
+            file="a.c", function="f",
+            sink_unreachable=True, sloc=5, source=src,
+        )
+        assert r.bucket == TriageBucket.INVESTIGATE
+
+    def test_classify_all_lazy_reads_source(self, tmp_path):
+        src_file = tmp_path / "t.c"
+        src_file.write_text(_TRACE_STRING_SHAPE)
+        gaps = [{
+            "name": "trace_string", "file": "t.c",
+            "line_start": 1, "line_end": 21, "sloc": 21,
+        }]
+        results = classify_all(
+            gaps,
+            sink_unreachable_keys=frozenset({"t.c:trace_string"}),
+            target_path=tmp_path,
+        )
+        (only,) = results.values()
+        assert only.bucket == TriageBucket.INVESTIGATE
+
+    def test_classify_all_without_target_path_unchanged(self):
+        gaps = [{
+            "name": "trace_string", "file": "t.c",
+            "line_start": 1, "line_end": 21, "sloc": 21,
+        }]
+        results = classify_all(
+            gaps,
+            sink_unreachable_keys=frozenset({"t.c:trace_string"}),
+        )
+        (only,) = results.values()
+        assert only.bucket == TriageBucket.SKIP

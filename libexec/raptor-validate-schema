@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Validate a RAPTOR JSON output file against its schema.
 
 Usage: raptor-validate-schema <type> <file>
@@ -11,23 +13,49 @@ Types:
   attack-surface  attack-surface.json
   hypotheses      hypotheses.json
   disproven       disproven.json
+  context-map     context-map.json (/understand --map)
+  flow-trace      flow-trace-*.json (/understand --trace)
+  variants        variants.json (/understand --hunt)
+  bug-report      bug-report.json (/crash-analysis fetch stage)
 
 Exit code 0 on success, 1 on validation errors, 2 on missing file.
 
 On success, records file hash in <dir>/.validated so the prep script
 can skip re-validation if the file hasn't changed.
+
+Provenance policy (docs/security.md invariant I2-(b)):
+  These artifacts carry LLM-derived content, so writers stamp them with
+  a top-level ``provenance`` object ({generator, untrusted,
+  schema_validated}) plus a ``raptor_schema_version`` marker (see
+  core.artifacts.provenance). This gate enforces the stamp:
+
+  * stamp present and well-formed  -> validated; on success the gate
+    flips ``provenance.schema_validated`` to true in the file.
+  * stamp present but malformed    -> FAIL (exit 1).
+  * ``raptor_schema_version`` present without a stamp -> FAIL — a
+    current-version writer produced the file but did not stamp it.
+  * neither key present            -> LEGACY artifact written by an
+    older RAPTOR version: warn once, treat content as untrusted, and
+    validate the rest normally (no hard failure — old runs stay
+    loadable; consumers read missing stamps as untrusted anyway).
+
+  Top-level-array artifacts (attack-paths, hypotheses) carry the stamp
+  per element; a mix of stamped and unstamped elements is tolerated
+  with a warning (unstamped elements read as untrusted).
+
+Free-text sanitisation check:
+  String fields the schema marks with ``x_free_text`` must be
+  sanitiser-idempotent on disk (the writer already applied
+  core.artifacts.provenance.sanitise_artifact_text). Non-idempotent
+  fields FAIL with the precise field path on stamped artifacts, and
+  warn on legacy artifacts.
 """
-import faulthandler
 import hashlib
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -37,13 +65,20 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
-from core.json import load_json, save_json
-
+from core.artifacts.provenance import (  # noqa: E402
+    ARTIFACT_TEXT_SCHEMAS,
+    STATUS_INVALID,
+    STATUS_LEGACY,
+    check_free_text_idempotent,
+    check_provenance,
+    mark_schema_validated,
+)
+from core.json import load_json, save_json  # noqa: E402
 
 VALIDATORS = {
     "findings": "validate_findings",
@@ -53,7 +88,22 @@ VALIDATORS = {
     "attack-surface": "validate_attack_surface",
     "hypotheses": "validate_hypotheses",
     "disproven": "validate_disproven",
-    "stage": None,  # handled separately
+    "stage": None,       # handled separately
+    "context-map": None,  # lightweight structural validation below
+    "flow-trace": None,
+    "variants": None,
+    "bug-report": None,
+}
+
+# Artifact types whose canonical on-disk form is a top-level JSON
+# array (stamped per element).
+_LIST_TYPES = {"attack-paths", "hypotheses"}
+
+# Filename → type auto-detection (mirrors the stage-file detection).
+_FILENAME_TYPES = {
+    "context-map.json": "context-map",
+    "variants.json": "variants",
+    "bug-report.json": "bug-report",
 }
 
 
@@ -123,6 +173,115 @@ def _validate_stage_file(data, filename):
     return errors
 
 
+def _require_list_fields(data, fields):
+    """Structural minimum: named fields, when present, must be arrays."""
+    if not isinstance(data, dict):
+        return ["artifact must be a JSON object"]
+    return [
+        f"'{field}' must be an array"
+        for field in fields
+        if field in data and not isinstance(data[field], list)
+    ]
+
+
+def _validate_lightweight(schema_type, data):
+    """Structural validation for /understand artifact types."""
+    if schema_type == "context-map":
+        return _require_list_fields(data, (
+            "sources", "sinks", "trust_boundaries", "entry_points",
+            "sink_details", "boundary_details", "unchecked_flows",
+        ))
+    if schema_type == "flow-trace":
+        return _require_list_fields(data, ("steps", "branches"))
+    if schema_type == "variants":
+        return _require_list_fields(
+            data, ("variants", "root_cause_groups", "recommended_traces"))
+    if schema_type == "bug-report":
+        errors = _require_list_fields(data, (
+            "reproduction_steps", "attachments", "affected_versions",
+        ))
+        if errors and not isinstance(data, dict):
+            return errors
+        source_url = data.get("source_url")
+        if not isinstance(source_url, str) or not source_url.strip():
+            errors.append("'source_url' is required (non-empty string)")
+        for i, item in enumerate(data.get("attachments") or []):
+            if not isinstance(item, dict):
+                errors.append(f"attachments[{i}]: must be an object")
+            elif not isinstance(item.get("url"), str) or not item["url"]:
+                errors.append(f"attachments[{i}].url: required non-empty "
+                              "string")
+        return errors
+    return [f"unknown lightweight type: {schema_type}"]
+
+
+def _free_text_schema(schema_type, data):
+    """Resolve the free-text-marked schema for an artifact type."""
+    if schema_type in ARTIFACT_TEXT_SCHEMAS:
+        return ARTIFACT_TEXT_SCHEMAS[schema_type]
+
+    from packages.exploitability_validation import schemas
+
+    if schema_type == "stage":
+        # stage-a: full findings array; stages B-F: per-finding update
+        # dicts — both walk with the finding schema.
+        if isinstance(data, dict) and isinstance(data.get("updates"), dict):
+            return {"properties": {"updates": {"properties": {
+                fid: schemas.FINDING_SCHEMA
+                for fid in data["updates"]
+            }}}}
+        return {"properties": {"findings": {"items": schemas.FINDING_SCHEMA}}}
+
+    by_type = {
+        "findings": schemas.FINDINGS_SCHEMA,
+        "checklist": schemas.CHECKLIST_SCHEMA,
+        "attack-tree": schemas.ATTACK_TREE_SCHEMA,
+        "attack-surface": schemas.ATTACK_SURFACE_SCHEMA,
+        "disproven": schemas.DISPROVEN_SCHEMA,
+        "attack-paths": {"items": schemas.ATTACK_PATH_SCHEMA},
+        "hypotheses": {"items": schemas.HYPOTHESIS_SCHEMA},
+    }
+    return by_type.get(schema_type, {})
+
+
+def _provenance_checks(schema_type, data):
+    """Run provenance + free-text idempotence checks.
+
+    Returns (errors, warnings, provenance_ok):
+      * errors non-empty  -> caller must fail validation
+      * provenance_ok     -> stamp well-formed; safe to flip
+                             schema_validated on success
+    """
+    errors = []
+    warnings = []
+
+    status, msgs = check_provenance(data)
+    if status == STATUS_INVALID:
+        errors.extend(msgs)
+    elif status == STATUS_LEGACY:
+        warnings.append(
+            "legacy artifact (no provenance stamp) — written by an older "
+            "RAPTOR version; treating content as untrusted and validating "
+            "the rest"
+        )
+    else:
+        warnings.extend(msgs)
+
+    offenders = check_free_text_idempotent(
+        data, _free_text_schema(schema_type, data))
+    if offenders:
+        detail = [
+            f"free-text field not sanitised (sanitiser not idempotent): {p}"
+            for p in offenders
+        ]
+        if status == STATUS_LEGACY:
+            warnings.extend(detail)
+        else:
+            errors.extend(detail)
+
+    return errors, warnings, status not in (STATUS_INVALID, STATUS_LEGACY)
+
+
 def is_already_validated(filepath):
     """Check if file was already validated and hasn't changed.
 
@@ -173,11 +332,19 @@ def main():
     schema_type = sys.argv[1]
     filepath = Path(sys.argv[2])
 
-    # Auto-detect stage files regardless of what type was requested
+    # Auto-detect well-known filenames regardless of what type was
+    # requested (mirrors the long-standing stage-file detection).
+    detected = None
     if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
-        if schema_type != "stage":
-            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'", file=sys.stderr)
-            schema_type = "stage"
+        detected = "stage"
+    elif filepath.name.startswith("flow-trace-") and filepath.name.endswith(".json"):
+        detected = "flow-trace"
+    else:
+        detected = _FILENAME_TYPES.get(filepath.name)
+    if detected and detected != schema_type:
+        print(f"NOTE: auto-detected {detected} file — using '{detected}' "
+              f"validator instead of '{schema_type}'", file=sys.stderr)
+        schema_type = detected
 
     if not filepath.exists():
         print(f"✗ file not found: {filepath}", file=sys.stderr)
@@ -191,19 +358,6 @@ def main():
     if data is None:
         print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
         sys.exit(2)
-
-    # Stage file validation (different format from findings.json)
-    if schema_type == "stage":
-        errors = _validate_stage_file(data, filepath.name)
-        if not errors:
-            _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
-            print(f"OK: {filepath.name}")
-        else:
-            print(f"✗ Errors in {filepath.name}:", file=sys.stderr)
-            for e in errors:
-                print(f"  {e}", file=sys.stderr)
-            sys.exit(1)
-        return
 
     # Normalise vuln_types before validating findings
     if schema_type == "findings" and isinstance(data, dict):
@@ -220,18 +374,37 @@ def main():
         if changed:
             save_json(filepath, data)
 
-    from packages.exploitability_validation import schemas
-    validator = getattr(schemas, VALIDATORS[schema_type])
-    valid, errors = validator(data)
-
-    if valid:
-        _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
-        print(f"OK: {filepath.name}")
+    # Schema / structural validation
+    if schema_type == "stage":
+        errors = _validate_stage_file(data, filepath.name)
+    elif schema_type in ARTIFACT_TEXT_SCHEMAS:
+        errors = _validate_lightweight(schema_type, data)
     else:
+        from packages.exploitability_validation import schemas
+        validator = getattr(schemas, VALIDATORS[schema_type])
+        _, errors = validator(data)
+
+    # Provenance stamp + free-text sanitiser-idempotence gate
+    prov_errors, prov_warnings, provenance_ok = _provenance_checks(
+        schema_type, data)
+    errors = list(errors) + prov_errors
+    for w in prov_warnings:
+        print(f"WARNING: {filepath.name}: {w}", file=sys.stderr)
+
+    if errors:
         print(f"ERRORS in {filepath.name}:", file=sys.stderr)
         for e in errors:
             print(f"  {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Record the successful schema validation in the stamp itself so
+    # consumers can distinguish gated artifacts from raw ones. Preserve
+    # the on-disk mode (some artifacts are written 0o600).
+    if provenance_ok and mark_schema_validated(data):
+        save_json(filepath, data, mode=filepath.stat().st_mode & 0o777)
+
+    _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
+    print(f"OK: {filepath.name}")
 
 
 if __name__ == "__main__":

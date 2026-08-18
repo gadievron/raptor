@@ -66,6 +66,32 @@ def _load_cached(path: str) -> dict[str, Any] | None:
         return None
 
 
+_per_run_warned: set[str] = set()
+
+
+def _warn_per_run_once(path: str, *, in_project: bool) -> None:
+    if path in _per_run_warned:
+        return
+    _per_run_warned.add(path)
+    if in_project:
+        logger.warning(
+            "domain-model.json found at per-run location %s — cross-run "
+            "staleness is disabled. Move to <project>/concepts/domain-"
+            "model.json for cross-run hash comparison.",
+            path,
+        )
+    else:
+        # Standalone run (no project container): the per-run location
+        # IS the documented fallback and there is no <project>/concepts/
+        # to move it to — the "move it" advice is inapplicable, so
+        # don't page the operator about working-as-designed behaviour.
+        logger.info(
+            "domain-model.json at per-run location %s (standalone run "
+            "— cross-run staleness not applicable)",
+            path,
+        )
+
+
 def _find_domain_model(out_dir: Path) -> dict[str, Any] | None:
     """Search for domain-model.json — amendment §3 canonical order.
 
@@ -92,11 +118,13 @@ def _find_domain_model(out_dir: Path) -> dict[str, Any] | None:
     if project_root.is_file():
         return _load_cached(str(project_root.resolve()))
     if per_run.is_file():
-        logger.warning(
-            "domain-model.json found at per-run location %s — cross-run "
-            "staleness is disabled. Move to <project>/concepts/domain-"
-            "model.json for cross-run hash comparison.",
-            per_run,
+        # Project detection matches cmd_run's legacy-state check: a
+        # project container carries raptor-project.json alongside its
+        # runs. Standalone out/ dirs don't — for those the per-run
+        # location is the documented fallback, not operator error.
+        _warn_per_run_once(
+            str(per_run),
+            in_project=(out_dir.parent / "raptor-project.json").is_file(),
         )
         return _load_cached(str(per_run.resolve()))
     return None
@@ -159,6 +187,178 @@ def _relevance_score(
     return score
 
 
+def _security_context_lines(model: dict[str, Any]) -> list[str]:
+    """Prompt lines for the model's ``security_context`` section.
+
+    Returns an empty list when the model carries no usable security
+    context (no privilege level).
+    """
+    sc = model.get("security_context")
+    if not isinstance(sc, dict) or not sc.get("privilege_level"):
+        return []
+    parts = ["### Target Security Context\n"]
+    parts.append(f"- **Privilege level:** {sc['privilege_level']}")
+    if sc.get("attack_surface"):
+        parts.append(f"- **Attack surface:** {sc['attack_surface']}")
+    if sc.get("isolation"):
+        parts.append(f"- **Isolation:** {sc['isolation']}")
+    parts.append(
+        "\nUse this context when assessing severity. "
+        "Memory corruption in kernel code reachable from "
+        "unprivileged userspace is high or critical severity. "
+        "Adjust severity relative to the privilege boundary "
+        "the attacker crosses.\n"
+    )
+    return parts
+
+
+def domain_security_context(out_dir: Path) -> str | None:
+    """Standalone security-context prompt block.
+
+    Consumed by ``core.audit.context`` (always-on prompt section,
+    independent of primer relevance) and by the security classifier.
+    Returns None when no domain model exists or it carries no
+    security context.
+    """
+    model = _find_domain_model(out_dir)
+    if not model:
+        return None
+    lines = _security_context_lines(model)
+    if not lines:
+        return None
+    if isinstance(model.get("security_context"), dict):
+        trust = model["security_context"].get("trust_summary")
+        if trust:
+            # Keep the guidance sentence last.
+            lines.insert(len(lines) - 1, f"- **Trust boundary:** {trust}")
+    return "\n".join(lines)
+
+
+def domain_bug_patterns(
+    out_dir: Path,
+    file_path: str,
+    function_name: str,
+    source: str = "",
+) -> str | None:
+    """Bug-pattern prompt block filtered to the function under review.
+
+    A pattern is included when its ``what_to_grep`` hint matches the
+    function source (strong signal) or its relevance score clears the
+    same >1.0 threshold the other bridge functions use.  With no
+    source text available every pattern is included (nothing to
+    filter on).  Returns None when nothing selects.
+    """
+    model = _find_domain_model(out_dir)
+    if not model:
+        return None
+    bug_patterns = model.get("bug_patterns") or []
+    if not isinstance(bug_patterns, list) or not bug_patterns:
+        return None
+
+    selected: list[dict[str, Any]] = []
+    for bp in bug_patterns:
+        if not isinstance(bp, dict):
+            continue
+        hit = False
+        grep_hint = (bp.get("what_to_grep") or "").strip()
+        if source and grep_hint:
+            try:
+                hit = re.search(grep_hint, source, re.IGNORECASE) is not None
+            except re.error:
+                hit = grep_hint.lower() in source.lower()
+        if not hit and source:
+            hit = _relevance_score(bp, file_path, function_name, source) > 1.0
+        if hit or not source:
+            selected.append(bp)
+    if not selected:
+        return None
+
+    parts = ["### Bug Patterns (from study)\n"]
+    parts.append(
+        "These are common mistake classes for this subsystem. "
+        "Check whether the function under review matches any:\n",
+    )
+    for bp in selected:
+        desc = bp.get("description", bp.get("id", ""))
+        parts.append(f"- {desc}")
+        grep_hint = bp.get("what_to_grep", "")
+        if grep_hint:
+            parts.append(f"  - Grep: `{grep_hint}`")
+    return "\n".join(parts)
+
+
+def domain_key_files(out_dir: Path) -> set[str]:
+    """Paths the domain model marks as key files.
+
+    Consumed by the audit orchestrator's priority boost (a gap whose
+    file is a key file gets ``_KEY_FILE_PRIORITY_BOOST``).  Entries
+    may be dicts (``{"path": ..., "reason": ...}``) or bare strings.
+    Returns an empty set when no model or no key files.
+    """
+    model = _find_domain_model(out_dir)
+    if not model:
+        return set()
+    out: set[str] = set()
+    for kf in model.get("key_files") or []:
+        if isinstance(kf, dict):
+            p = kf.get("path") or kf.get("file") or ""
+        elif isinstance(kf, str):
+            p = kf
+        else:
+            continue
+        if p:
+            out.add(str(p))
+    return out
+
+
+def _guard_in_scope(inv: dict[str, Any], file_path: str) -> bool:
+    """Whether a guard-role invariant applies to *file_path*.
+
+    Scope evidence, in order: explicit ``files``/``scope`` lists, a
+    ``file`` field, and file paths inside ``evidence`` entries.  An
+    invariant with no scope information is treated as global (fail
+    open) — matching the ``role`` default of "boost" in consumers.
+    """
+    scopes: list[str] = []
+    for key in ("files", "scope"):
+        v = inv.get(key)
+        if isinstance(v, (list, tuple)):
+            scopes.extend(str(x) for x in v if x)
+        elif isinstance(v, str) and v:
+            scopes.append(v)
+    if inv.get("file"):
+        scopes.append(str(inv["file"]))
+    for ev in inv.get("evidence") or []:
+        if isinstance(ev, dict) and ev.get("file"):
+            scopes.append(str(ev["file"]))
+        elif isinstance(ev, str) and ev:
+            head = ev.split()[0].split(":")[0]
+            if "/" in head or "." in PurePosixPath(head).name:
+                scopes.append(head)
+    if not scopes:
+        return True
+    return any(_paths_match(file_path, s) for s in scopes)
+
+
+
+def _tier_tag(entry: dict) -> str:
+    """Render an entry's provenance tier for prompt injection.
+
+    ``verbatim`` / ``mechanical`` carry verified receipts; everything
+    else — including entries with no provenance stamp at all (fail
+    closed) — is an unverified LLM summary and must read as a hint to
+    check, never as established fact.
+    """
+    if str(entry.get("state") or "") == "stale":
+        # Quarantined by the staleness check — evidence drifted since
+        # the receipt was stamped.
+        return "[stale-unverified]"
+    tier = str(entry.get("provenance") or "")
+    if tier in ("verbatim", "mechanical"):
+        return f"[{tier}]"
+    return "[unverified]"
+
+
 def domain_model_context(
     out_dir: Path,
     file_path: str,
@@ -216,33 +416,30 @@ def domain_model_context(
         return None
 
     parts: list[str] = ["## Domain Knowledge (from /understand --study)\n"]
-
-    sc = model.get("security_context")
-    if sc and sc.get("privilege_level"):
-        parts.append("### Target Security Context\n")
-        parts.append(f"- **Privilege level:** {sc['privilege_level']}")
-        if sc.get("attack_surface"):
-            parts.append(f"- **Attack surface:** {sc['attack_surface']}")
-        if sc.get("isolation"):
-            parts.append(f"- **Isolation:** {sc['isolation']}")
-        parts.append(
-            "\nUse this context when assessing severity. "
-            "Memory corruption in kernel code reachable from "
-            "unprivileged userspace is high or critical severity. "
-            "Adjust severity relative to the privilege boundary "
-            "the attacker crosses.\n"
-        )
+    parts.append(
+        "Provenance: entries tagged [verbatim] or [mechanical] carry "
+        "receipts verified against the source. Entries tagged "
+        "[unverified] are LLM summaries WITHOUT verified receipts — "
+        "treat them as context to check against the code, never as "
+        "established fact, and never as the basis for a verdict.\n",
+    )
+    parts.extend(_security_context_lines(model))
 
     if relevant_concepts:
         parts.append("### Semantic Concepts\n")
         for c in relevant_concepts:
             conf = c.get("confidence", "inferred")
-            parts.append(f"- **{c['id']}** [{conf}]: {c.get('description', '')}")
+            parts.append(
+                f"- **{c['id']}** {_tier_tag(c)} [{conf}]: "
+                f"{c.get('description', '')}"
+            )
 
     if relevant_invariants:
         parts.append("\n### Invariants\n")
         for i in relevant_invariants:
-            parts.append(f"- **{i['id']}**: {i.get('statement', '')}")
+            parts.append(
+                f"- **{i['id']}** {_tier_tag(i)}: {i.get('statement', '')}"
+            )
             neg = i.get("negation", "")
             if neg:
                 parts.append(f"  - Violation: {neg}")
@@ -253,7 +450,9 @@ def domain_model_context(
     if relevant_contracts:
         parts.append("\n### Contracts\n")
         for c in relevant_contracts:
-            parts.append(f"- **{c['function']}** ({c.get('file', '')})")
+            parts.append(
+                f"- **{c['function']}** {_tier_tag(c)} ({c.get('file', '')})"
+            )
             if c.get("when"):
                 parts.append(f"  - When: {c['when']}")
             if c.get("input_semantics"):
@@ -299,7 +498,7 @@ def _sage_recall_for_context(
     across prior runs.  Returns a formatted prompt section or None.
     """
     try:
-        from core.sage.hooks import _get_client, _concepts_domain
+        from core.sage.hooks import _concepts_domain, _get_client
     except ImportError:
         return None
 
@@ -409,9 +608,7 @@ def primers_from_domain_model(
         for po in paired:
             acq = po.get("acquire", "")
             rel = po.get("release", "")
-            if acq and re.search(r"\b" + re.escape(acq.lower()) + r"\b", source_lower):
-                relevant_pairs.append(po)
-            elif rel and re.search(r"\b" + re.escape(rel.lower()) + r"\b", source_lower):
+            if acq and re.search(r"\b" + re.escape(acq.lower()) + r"\b", source_lower) or rel and re.search(r"\b" + re.escape(rel.lower()) + r"\b", source_lower):
                 relevant_pairs.append(po)
         if relevant_pairs:
             score = 6.0 + len(relevant_pairs)
@@ -518,7 +715,6 @@ def invariant_violations_for_hypothesis(
     out_dir: Path,
     hypothesis: str,
     *,
-    finding_file: str = "",
     finding_cwe: str = "",
 ) -> list[dict[str, str]]:
     """Find invariants whose domain aligns with a hypothesis.
@@ -537,14 +733,12 @@ def invariant_violations_for_hypothesis(
 
     hyp_lower = hypothesis.lower()
     results: list[dict[str, str]] = []
-    matched_ids: set[str] = set()
 
     for inv in model.get("invariants", []):
         inv_id = inv.get("id", "")
 
         if _match_pass_cwe(inv, finding_cwe):
             results.append(_inv_to_result(inv, match_pass="cwe"))
-            matched_ids.add(inv_id)
             continue
 
         negation = (inv.get("negation") or "").lower()
@@ -569,7 +763,6 @@ def invariant_violations_for_hypothesis(
 
         if match:
             results.append(_inv_to_result(inv, match_pass="keyword"))
-            matched_ids.add(inv_id)
 
     return results
 
@@ -579,7 +772,6 @@ def invariants_contradicting_finding(
     hypothesis: str,
     preconditions: list[dict[str, Any]],
     *,
-    finding_file: str = "",
     finding_cwe: str = "",
 ) -> list[dict[str, str]]:
     """Find invariants that contradict a finding's hypothesis or preconditions.
@@ -588,8 +780,7 @@ def invariants_contradicting_finding(
     against all invariants. Returns matching invariants (deduplicated).
     """
     matches = invariant_violations_for_hypothesis(
-        out_dir, hypothesis,
-        finding_file=finding_file, finding_cwe=finding_cwe,
+        out_dir, hypothesis, finding_cwe=finding_cwe,
     )
     seen_ids = {m["invariant_id"] for m in matches}
 
@@ -598,8 +789,7 @@ def invariants_contradicting_finding(
         if not assumption:
             continue
         pre_matches = invariant_violations_for_hypothesis(
-            out_dir, assumption,
-            finding_file=finding_file, finding_cwe=finding_cwe,
+            out_dir, assumption, finding_cwe=finding_cwe,
         )
         for m in pre_matches:
             if m["invariant_id"] not in seen_ids:

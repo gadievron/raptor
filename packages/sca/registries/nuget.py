@@ -12,10 +12,10 @@ Returns versions newest-first with pre-releases (any version containing
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import urllib.parse
 
-from core.json import JsonCache, MISSING
 from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
 
@@ -43,6 +43,14 @@ _CACHE_KEY_PREFIX = "nuget-versions"
 _DEFAULT_TTL = 24 * 3600
 
 
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — a raw name containing ``/`` or ``..`` could otherwise
+    alias another package's cache file after JsonCache path
+    sanitisation. Old raw-name entries re-fetch once."""
+    return urllib.parse.quote(value, safe="")
+
+
 class NugetClient:
     """List versions from NuGet's flat-container."""
 
@@ -51,7 +59,7 @@ class NugetClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -61,11 +69,11 @@ class NugetClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         # NuGet IDs are case-insensitive but the URL path requires
         # lowercase.
         canon = name.lower()
-        cache_key = f"{_CACHE_KEY_PREFIX}:{canon}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(canon)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -89,7 +97,7 @@ class NugetClient:
         return versions
 
 
-def _extract_versions(data: dict) -> List[str]:
+def _extract_versions(data: dict) -> list[str]:
     """Pull versions from the NuGet flat-container response.
 
     Shape:
@@ -121,7 +129,7 @@ def _semver_key(v: str):
 def _add_nuspec_methods():
     """Attach ``get_metadata`` + ``get_nuspec`` to NugetClient."""
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         versions = self.list_versions(name)
         if not versions:
             return None
@@ -130,13 +138,14 @@ def _add_nuspec_methods():
             "info": {"version": versions[0]},
         }
 
-    def get_nuspec(self, pkg: str, version: str) -> Optional[dict]:
+    def get_nuspec(self, pkg: str, version: str) -> dict | None:
         """Fetch + parse a .nuspec XML.
 
         ``api.nuget.org/v3-flatcontainer/<id>/<ver>/<id>.nuspec``;
         case-insensitive (caller normalises). Returns
         ``{dependency_groups: [{targetFramework, dependencies}]}``."""
-        cache_key = f"nuget-nuspec:{pkg.lower()}:{version}"
+        cache_key = (f"nuget-nuspec:{_key_component(pkg.lower())}:"
+                     f"{_key_component(version)}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -181,7 +190,7 @@ def _add_nuspec_methods():
         if meta is None:
             meta = root
         deps_root = meta.find(f"{ns}dependencies") if meta is not None else None
-        groups: List[dict] = []
+        groups: list[dict] = []
         if deps_root is not None:
             inner_groups = list(deps_root.findall(f"{ns}group"))
             if inner_groups:

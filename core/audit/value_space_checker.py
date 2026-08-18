@@ -58,6 +58,7 @@ class ValueSpaceMismatch:
     unhandled: List[str]
     dead_branches: List[str]
     confidence: str  # "high", "medium", "low"
+    format_mismatches: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -70,6 +71,7 @@ class ValueSpaceMismatch:
             "unhandled": self.unhandled,
             "dead_branches": self.dead_branches,
             "confidence": self.confidence,
+            "format_mismatches": self.format_mismatches,
         }
 
 
@@ -96,8 +98,10 @@ class _FunctionLiterals:
     function: str
     produced: Set[str] = field(default_factory=set)
     consumed: Set[str] = field(default_factory=set)
-    field_produced: Dict[str, Set[str]] = field(default_factory=dict)
-    field_consumed: Dict[str, Set[str]] = field(default_factory=dict)
+    # Names of bounded-domain fields this function produces/consumes
+    # values for — linking only needs the names, not the values.
+    field_produced: Set[str] = field(default_factory=set)
+    field_consumed: Set[str] = field(default_factory=set)
 
 
 class _LiteralExtractor(ast.NodeVisitor):
@@ -107,8 +111,6 @@ class _LiteralExtractor(ast.NodeVisitor):
         self, file: str, func_name: str, param_names: List[str] | None = None
     ) -> None:
         self.result = _FunctionLiterals(file=file, function=func_name)
-        self._in_compare = False
-        self._in_membership = False
         # Parameter names that match known field names — dict keys in the
         # function body are likely the valid domain of that parameter.
         self._field_params: List[str] = [
@@ -127,9 +129,7 @@ class _LiteralExtractor(ast.NodeVisitor):
         # keys plausibly define the valid domain for that parameter
         # (e.g. ``def get_label(ecosystem): labels = {"Packagist": ...}``).
         if str_keys:
-            for pname in self._field_params:
-                for k in str_keys:
-                    self.result.field_produced.setdefault(pname, set()).add(k)
+            self.result.field_produced.update(self._field_params)
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -138,9 +138,7 @@ class _LiteralExtractor(ast.NodeVisitor):
             node.value.value, str
         ):
             self.result.produced.add(node.value.value)
-            self.result.field_produced.setdefault(field_name, set()).add(
-                node.value.value
-            )
+            self.result.field_produced.add(field_name)
         self.generic_visit(node)
 
     def visit_Return(self, node: ast.Return) -> None:
@@ -161,9 +159,7 @@ class _LiteralExtractor(ast.NodeVisitor):
                 ):
                     self.result.consumed.add(comparator.value)
                     if field_name and _FIELD_NAME_RE.match(field_name):
-                        self.result.field_consumed.setdefault(
-                            field_name, set()
-                        ).add(comparator.value)
+                        self.result.field_consumed.add(field_name)
             if isinstance(op, (ast.In, ast.NotIn)):
                 self._extract_membership_values(comparator, field_name)
         # Also check the symmetric case: "Composer" == ecosystem
@@ -175,9 +171,7 @@ class _LiteralExtractor(ast.NodeVisitor):
                 ):
                     self.result.consumed.add(node.left.value)
                     if comp_field and _FIELD_NAME_RE.match(comp_field):
-                        self.result.field_consumed.setdefault(
-                            comp_field, set()
-                        ).add(node.left.value)
+                        self.result.field_consumed.add(comp_field)
         self.generic_visit(node)
 
     # -- dynamic producers (f-strings, .format(), concatenation) -----------
@@ -240,9 +234,7 @@ class _LiteralExtractor(ast.NodeVisitor):
             if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                 self.result.consumed.add(elt.value)
                 if field_name and _FIELD_NAME_RE.match(field_name):
-                    self.result.field_consumed.setdefault(
-                        field_name, set()
-                    ).add(elt.value)
+                    self.result.field_consumed.add(field_name)
 
     @staticmethod
     def _target_field_name(targets: list) -> Optional[str]:
@@ -318,13 +310,13 @@ def _extract_function_literals_ts(
             fl.produced.add(lit.value)
             # field_produced: use the key as the field name so
             # _link_by_field_heuristic can match cross-function pairs
-            fl.field_produced.setdefault(lit.value, set())
+            fl.field_produced.add(lit.value)
         elif lit.context in ("return", "assignment"):
             fl.produced.add(lit.value)
         elif lit.context in ("comparison", "switch_case"):
             fl.consumed.add(lit.value)
         elif lit.context == "argument":
-            fl.field_consumed.setdefault(lit.value, set())
+            fl.field_consumed.add(lit.value)
 
     return [fl for fl in by_func.values() if fl.produced or fl.consumed]
 
@@ -374,7 +366,8 @@ def _link_by_call_graph(
                 # Try same-file first (high confidence)
                 callee_fl = by_name.get((file_path, callee_name))
                 if callee_fl and callee_fl.produced:
-                    links.append((callee_fl, caller_fl, "high"))
+                    if callee_fl is not caller_fl:
+                        links.append((callee_fl, caller_fl, "high"))
                     continue
                 # Cross-file: find by function name alone (medium confidence)
                 for candidate in by_func_name.get(callee_name, []):
@@ -508,6 +501,12 @@ def _compute_gaps(
         # Remove template values from unhandled (they aren't literal gaps).
         unhandled = [u for u in unhandled if not _is_template(u)]
 
+        # Symmetric normalization for dead branches: remove consumer values
+        # that match a producer value after case-folding / zero-stripping.
+        if dead:
+            producer_norms = {_normalize_for_comparison(p) for p in producer.produced}
+            dead = [d for d in dead if _normalize_for_comparison(d) not in producer_norms]
+
         # Format normalization: flag exact-miss values that match after
         # case-folding or zero-stripping.
         format_mismatches: List[str] = []
@@ -530,9 +529,6 @@ def _compute_gaps(
         if not remaining_unhandled and not dead and not format_mismatches:
             continue
 
-        desc_parts = list(remaining_unhandled)
-        desc_parts.extend(format_mismatches)
-
         results.append(
             ValueSpaceMismatch(
                 producer_file=producer.file,
@@ -544,6 +540,7 @@ def _compute_gaps(
                 unhandled=remaining_unhandled,
                 dead_branches=dead,
                 confidence=confidence,
+                format_mismatches=format_mismatches,
             )
         )
 

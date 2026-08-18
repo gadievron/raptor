@@ -23,8 +23,10 @@ Per-language call extraction reuses the AST/tree-sitter machinery
 already in :mod:`core.inventory.call_graph` — gracefully degrades to
 an empty annotation when:
 
-* the language isn't supported (e.g. C/C++, where we have no
-  call-graph extractor today),
+* the language isn't wired into this module's ``_EXTRACTORS`` table
+  (e.g. C/C++ — :mod:`core.inventory.call_graph` ships extractors for
+  more languages than are mapped here, and unmapped ones fall back to
+  an empty annotation),
 * the language module isn't installed (tree-sitter grammars are
   optional dependencies),
 * the snippet doesn't parse cleanly.

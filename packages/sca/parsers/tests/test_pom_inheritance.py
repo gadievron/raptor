@@ -22,10 +22,22 @@ Plus cycle + depth + offline + property-substitution edge cases.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+
+import pytest
 
 from packages.sca.parsers import pom as pom_parser
 from packages.sca.parsers import pom_inheritance
+from packages.sca.parsers.pom_inheritance import (
+    InheritanceView,
+    PomInheritanceResolver,
+    _strip_namespaces,
+)
+
+# The resolver under test no-ops without defusedxml (its own guarded
+# import), so every assertion here would fail rather than skip on a
+# host without it. Skip the module whole, matching the sibling
+# parser suites' module-level importorskip convention.
+DET = pytest.importorskip("defusedxml.ElementTree")
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +53,11 @@ class _StubMavenClient:
     ``{raw_xml, dependencies}`` shape the resolver expects.
     """
 
-    def __init__(self, poms: Dict[str, str]):
+    def __init__(self, poms: dict[str, str]):
         self._poms = poms
         self.fetch_calls: list[str] = []
 
-    def get_pom(self, coord: str, version: str) -> Optional[dict]:
+    def get_pom(self, coord: str, version: str) -> dict | None:
         key = f"{coord}:{version}"
         self.fetch_calls.append(key)
         xml = self._poms.get(key)
@@ -68,7 +80,7 @@ def _write(tmp_path: Path, rel: str, content: str) -> Path:
 
 
 def _parse_with_resolver(
-    pom_path: Path, client: Optional[_StubMavenClient], *,
+    pom_path: Path, client: _StubMavenClient | None, *,
     offline: bool = False,
 ):
     """Install the resolver, parse, ensure cleanup."""
@@ -511,7 +523,7 @@ def test_no_resolver_installed_means_no_inheritance(tmp_path: Path):
     pom_inheritance.set_inheritance_resolver(None)
     deps = pom_parser.parse(child)
     j = next((d for d in deps if d.name == "junit:junit"), None)
-    # Parent's depMgmt sits in feat/sca's own POM, not in the
+    # The managed version sits in the parent's own POM, not in the
     # child's. Without a resolver, version stays None.
     assert j is not None
     assert j.version is None
@@ -780,7 +792,6 @@ def test_malformed_coord_does_not_reach_network(tmp_path: Path):
 
         def get_pom(self, coord, version):
             self.fetched.append((coord, version))
-            return None
 
     client = _ProbeClient()
     child = _write(tmp_path, "pom.xml", '''\
@@ -905,3 +916,190 @@ def test_relativepath_empty_skips_local_and_uses_network(tmp_path: Path):
     assert s is not None
     assert s.version == "1.7.36"
     assert "com.example:only-on-net:1.0" in client.fetch_calls
+
+
+# ---------------------------------------------------------------------------
+# Cache vs cycle-guard ordering in _walk_parents
+# ---------------------------------------------------------------------------
+
+
+def _root(xml: str):
+    root = DET.fromstring(xml)
+    _strip_namespaces(root)
+    return root
+
+
+_CHILD_XML = (
+    "<project><artifactId>child</artifactId>"
+    "<parent><groupId>g</groupId><artifactId>parent</artifactId>"
+    "<version>1.0</version><relativePath></relativePath></parent>"
+    "</project>"
+)
+
+
+def test_cache_hit_merges_even_when_coord_already_visited() -> None:
+    """Cache entries exist only for fully-resolved coords, so a hit
+    must merge regardless of the visited set (previously the visited
+    check short-circuited first and dropped the merge)."""
+    resolver = PomInheritanceResolver(None, offline=True)
+    cached = InheritanceView()
+    cached.managed[("g", "dep")] = "9.9"
+    cached.properties["k"] = "v"
+    resolver._cache[("g", "parent", "1.0")] = cached
+
+    view = InheritanceView()
+    visited = {("g", "parent", "1.0")}   # already seen in this walk
+    resolver._walk_parents(None, _root(_CHILD_XML), view, visited, depth=0)
+
+    assert view.managed[("g", "dep")] == "9.9"
+    assert view.properties["k"] == "v"
+
+
+def test_cache_hit_merges_on_fresh_walk() -> None:
+    resolver = PomInheritanceResolver(None, offline=True)
+    cached = InheritanceView()
+    cached.managed[("g", "dep")] = "1.2"
+    resolver._cache[("g", "parent", "1.0")] = cached
+
+    view = InheritanceView()
+    resolver._walk_parents(None, _root(_CHILD_XML), view, set(), depth=0)
+    assert view.managed[("g", "dep")] == "1.2"
+
+
+def test_uncached_visited_coord_still_treated_as_cycle() -> None:
+    """No cache entry + already-visited = genuine in-flight cycle;
+    the walk must stop without recursing or fetching."""
+    resolver = PomInheritanceResolver(None, offline=True)
+    view = InheritanceView()
+    visited = {("g", "parent", "1.0")}
+    resolver._walk_parents(None, _root(_CHILD_XML), view, visited, depth=0)
+    assert not view.managed
+    assert not view.properties
+
+
+def test_self_parent_cycle_terminates(tmp_path: Path) -> None:
+    """A POM that names itself as its parent must terminate cleanly
+    (visited-set cycle detection through the local-parent path)."""
+    pom = _write(tmp_path, "pom.xml", (
+        "<project><groupId>g</groupId><artifactId>self</artifactId>"
+        "<version>1.0</version>"
+        "<parent><groupId>g</groupId><artifactId>self</artifactId>"
+        "<version>1.0</version><relativePath>pom.xml</relativePath></parent>"
+        "</project>"
+    ))
+    resolver = PomInheritanceResolver(None, offline=True, scan_root=tmp_path)
+    view = resolver.resolve(pom, _root(pom.read_text(encoding="utf-8")))
+    assert isinstance(view, InheritanceView)
+
+
+# ---------------------------------------------------------------------------
+# Empty <relativePath/> — Maven's "network only" convention
+# ---------------------------------------------------------------------------
+
+
+def test_relative_path_helper_distinguishes_empty_and_missing() -> None:
+    """``_relative_path`` preserves the empty-vs-missing distinction
+    that ``_text`` collapses: absent element → ``../pom.xml`` default;
+    present-but-empty element → ``""`` (network only)."""
+    from packages.sca.parsers.pom_inheritance import _relative_path
+
+    empty = _root("<parent><relativePath></relativePath></parent>")
+    self_closing = _root("<parent><relativePath/></parent>")
+    absent = _root("<parent></parent>")
+    explicit = _root(
+        "<parent><relativePath>../x/pom.xml</relativePath></parent>"
+    )
+
+    assert _relative_path(empty) == ""
+    assert _relative_path(self_closing) == ""
+    assert _relative_path(absent) == "../pom.xml"
+    assert _relative_path(explicit) == "../x/pom.xml"
+
+
+def test_relativepath_empty_skips_matching_local_parent(tmp_path: Path):
+    """The "network only" convention holds even when ``../pom.xml``
+    carries the MATCHING coordinate. Collapsing the empty element to
+    the default read the local file (whose managed versions may be
+    stale) instead of Maven Central."""
+    network_xml = '''\
+<project>
+  <groupId>com.example</groupId>
+  <artifactId>shared</artifactId>
+  <version>1.0</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>1.7.36</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+'''
+    client = _StubMavenClient({"com.example:shared:1.0": network_xml})
+    # Local file at the default relativePath location with the SAME
+    # coordinate but a DIFFERENT managed version — must be bypassed.
+    _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>com.example</groupId>
+  <artifactId>shared</artifactId>
+  <version>1.0</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>0.0.1</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+''')
+    child = _write(tmp_path, "service/pom.xml", '''\
+<project>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>shared</artifactId>
+    <version>1.0</version>
+    <relativePath></relativePath>
+  </parent>
+  <artifactId>service</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+''')
+    deps = _parse_with_resolver(child, client=client)
+    s = next((d for d in deps if d.name == "org.slf4j:slf4j-api"), None)
+    assert s is not None
+    assert s.version == "1.7.36", (
+        f"local parent consulted despite empty relativePath — got {s.version}"
+    )
+    assert "com.example:shared:1.0" in client.fetch_calls
+
+
+def test_bom_missing_raw_xml_logs_debug(caplog) -> None:
+    """Logging parity with ``_read_network_parent``: a BOM fetch whose
+    payload lacks ``raw_xml`` must leave a debug trace, not return
+    silently."""
+    import logging
+
+    class _NoRawXmlClient:
+        def get_pom(self, coord: str, version: str) -> dict | None:
+            return {"dependencies": []}
+
+    resolver = PomInheritanceResolver(_NoRawXmlClient())
+    with caplog.at_level(
+        logging.DEBUG, logger="packages.sca.parsers.pom_inheritance",
+    ):
+        out = resolver._read_network_parent_by_coord("g", "a", "1.0")
+
+    assert out is None
+    assert any(
+        "raw_xml" in rec.getMessage() and "g:a" in rec.getMessage()
+        for rec in caplog.records
+    ), f"no raw_xml debug record: {[r.getMessage() for r in caplog.records]}"

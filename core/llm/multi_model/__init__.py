@@ -9,9 +9,14 @@ Public API:
     ItemAdapter            — protocol: merge + correlate
     VerdictAdapter         — adapter for verdict-style tasks (positive/negative)
     SetAdapter             — adapter for set-style tasks (union with recall)
+    BaseVerdictAdapter     — ABC with merge()/correlate() for verdict tasks
+    BaseSetAdapter         — ABC with merge()/correlate() for set tasks
     Reviewer               — pluggable per-item reviewer (judge/consensus)
     ConditionalReviewer    — reviewer that runs only on certain items
     Aggregator             — optional LLM synthesis at end
+    CostGate               — protocol: budget_ratio() for budget gating
+    ModelHandle            — protocol: anything with a model_name string
+    TaskFn                 — per-model task callable type alias
     wrap_model_output      — wrap prior-model output as untrusted input
 
 The substrate handles dispatch, merge, review, and aggregation. It does

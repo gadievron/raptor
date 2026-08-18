@@ -33,7 +33,6 @@ from core.function_taxonomy import (
     fortified,
 )
 
-
 ALL_DANGEROUS_CATEGORIES = [
     STRING_OVERFLOW_FUNCS, SCAN_FAMILY_FUNCS, MEMORY_COPY_FUNCS,
     FORMAT_STRING_FUNCS, EXEC_FUNCS, ALLOC_FUNCS,
@@ -99,7 +98,7 @@ class TestSafeVariantsExcluded(unittest.TestCase):
     def test_atof_float_strto_excluded_from_integer_parse(self):
         """Float-parsing CVEs are fundamentally different from integer
         overflow (no map to memory corruption). Float APIs out."""
-        for name in {"atof", "strtod", "strtof", "strtold"}:
+        for name in ("atof", "strtod", "strtof", "strtold"):
             self.assertNotIn(name, INTEGER_PARSE_FUNCS,
                              f"{name!r} is float-parsing, not integer")
 
@@ -462,3 +461,91 @@ class TestSizeBounds(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMacosSubstringGroups:
+    """Drift guards for the categorised macOS substring groups.
+
+    MACOS_DANGEROUS_SUBSTRINGS is derived as the union of the category
+    groups; every symbol must live in exactly one group so consumers
+    (surface_classification) can classify from the taxonomy alone.
+    """
+
+    def test_union_is_complete(self):
+        from core.function_taxonomy import (
+            MACOS_BYTE_BUFFER_SUBSTRINGS,
+            MACOS_DANGEROUS_SUBSTRINGS,
+            MACOS_FILESYSTEM_URL_SUBSTRINGS,
+            MACOS_PARSER_SUBSTRINGS,
+            MACOS_PROCESS_EXEC_SUBSTRINGS,
+            MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
+        )
+
+        union = (
+            MACOS_PARSER_SUBSTRINGS
+            | MACOS_FILESYSTEM_URL_SUBSTRINGS
+            | MACOS_SECURITY_BOUNDARY_SUBSTRINGS
+            | MACOS_BYTE_BUFFER_SUBSTRINGS
+            | MACOS_PROCESS_EXEC_SUBSTRINGS
+        )
+        assert union == MACOS_DANGEROUS_SUBSTRINGS
+
+    def test_groups_are_disjoint(self):
+        from core.function_taxonomy import (
+            MACOS_BYTE_BUFFER_SUBSTRINGS,
+            MACOS_FILESYSTEM_URL_SUBSTRINGS,
+            MACOS_PARSER_SUBSTRINGS,
+            MACOS_PROCESS_EXEC_SUBSTRINGS,
+            MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
+        )
+
+        groups = [
+            MACOS_PARSER_SUBSTRINGS,
+            MACOS_FILESYSTEM_URL_SUBSTRINGS,
+            MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
+            MACOS_BYTE_BUFFER_SUBSTRINGS,
+            MACOS_PROCESS_EXEC_SUBSTRINGS,
+        ]
+        for i, a in enumerate(groups):
+            for b in groups[i + 1:]:
+                assert not a & b
+
+    def test_pre_split_flat_set_unchanged(self):
+        from core.function_taxonomy import MACOS_DANGEROUS_SUBSTRINGS
+
+        assert MACOS_DANGEROUS_SUBSTRINGS == frozenset({
+            "CFPropertyListCreateWithData", "CFPropertyListCreateFromXMLData",
+            "CFReadStreamRead", "CFDataGetBytes",
+            "CFStringCreateWithBytes", "CFURLCreateWithBytes",
+            "CFXMLParserCreate", "CFXMLTreeCreateFromData",
+            "Foundation.Data.contentsOf",
+            "Foundation.Data.base64Encoded",
+            "Foundation.Data.write",
+            "Foundation.Data.Iterator",
+            "Foundation.URL.fileURLWithPath",
+            "Foundation.URL.absoluteString",
+            "Foundation.JSONSerialization",
+            "Foundation.PropertyListSerialization",
+            "Foundation.PropertyListDecoder",
+            "Foundation.JSONDecoder",
+            "SecPolicyCreateSSL",
+            "SecTrustEvaluate",
+            "SecItemCopyMatching",
+            "SecKeychainItem",
+            "NSDataReadingOptions",
+            "NSDataBase64DecodingOptions",
+            "NSStringFromBytes",
+            "NSTask",
+            "Foundation.Process",
+        })
+
+    def test_security_entries_covered_by_prefixes(self):
+        from core.function_taxonomy import (
+            MACOS_SECURITY_BOUNDARY_PREFIXES,
+            MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
+        )
+
+        for entry in MACOS_SECURITY_BOUNDARY_SUBSTRINGS:
+            assert any(
+                entry.startswith(p) for p in MACOS_SECURITY_BOUNDARY_PREFIXES
+            ), entry

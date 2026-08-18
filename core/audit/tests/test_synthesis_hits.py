@@ -69,8 +69,23 @@ class TestGapForSite:
     def test_unknown_file_is_unresolved(self):
         assert gap_for_site(_checklist(), "src/nope.c", 10) is None
 
-    def test_non_reviewable_kind_is_skipped(self):
-        assert gap_for_site(_checklist(), "src/util.c", 1) is None
+    def test_hit_bearing_macro_kind_now_returned(self):
+        # A mechanical sweep HIT in a macro body is evidence in hand —
+        # gap_for_site now surfaces top_level/macro/global sites
+        # instead of dropping the confirmed signal on kind alone.
+        gap = gap_for_site(_checklist(), "src/util.c", 1)
+        assert gap is not None
+        assert gap["name"] == "MAX_LEN"
+
+    def test_truly_non_reviewable_kind_is_skipped(self):
+        checklist = {
+            "files": [{
+                "path": "src/k.c",
+                "items": [{"name": "S", "kind": "class",
+                           "line_start": 1, "line_end": 3}],
+            }],
+        }
+        assert gap_for_site(checklist, "src/k.c", 2) is None
 
     def test_zero_line_is_unresolved(self):
         assert gap_for_site(_checklist(), "src/parse.c", 0) is None

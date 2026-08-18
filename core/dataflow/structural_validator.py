@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -41,8 +42,11 @@ logger = logging.getLogger(__name__)
 _EXTRACTORS = {
     "python": extract_call_graph_python,
     "javascript": extract_call_graph_javascript,
-    "typescript": extract_call_graph_javascript,
-    "tsx": extract_call_graph_javascript,
+    # TS / TSX need their own grammars — the bare JS extractor default
+    # parses typed code into ERROR nodes and loses most call edges,
+    # corrupting caller attribution downstream.
+    "typescript": partial(extract_call_graph_javascript, language="typescript"),
+    "tsx": partial(extract_call_graph_javascript, language="tsx"),
     "java": extract_call_graph_java,
     "go": extract_call_graph_go,
     "rust": extract_call_graph_rust,
@@ -173,10 +177,27 @@ def _read_file_content(path: Path) -> Optional[str]:
 
 
 def _extract_graph(content: str, language: str) -> Optional[FileCallGraph]:
-    """Extract call graph for the given language."""
+    """Extract call graph for the given language.
+
+    Returns ``None`` (no evidence) when the language is unsupported OR
+    its tree-sitter grammar isn't installed.  The extractors degrade to
+    an EMPTY — but truthy — graph on a missing grammar, which the link
+    check would otherwise misread as proof that the call chain is
+    broken and refute the finding with high confidence; an environment
+    gap must stay inconclusive, not become a suppression.
+    """
     extractor = _EXTRACTORS.get(language)
     if extractor is None:
         return None
+    if language != "python":
+        # Python's extractor uses the stdlib ast module; every other
+        # extractor needs the matching tree-sitter grammar.
+        try:
+            from core.inventory.extractors import _TS_AVAILABLE, _ts_language
+        except ImportError:
+            return None
+        if not _TS_AVAILABLE or _ts_language(language) is None:
+            return None
     try:
         return extractor(content)
     except Exception:
@@ -297,11 +318,10 @@ def _extract_branch_guards_from_content(
         return guards
 
     scan_start = max(0, line - 30)
-    indent_at_line = len(lines[line - 1]) - len(lines[line - 1].lstrip()) if line <= len(lines) else 0
+    indent_at_line = len(lines[line - 1]) - len(lines[line - 1].lstrip())
 
+    # range stops at scan_start >= 0, so every yielded index is valid.
     for i in range(line - 2, scan_start - 1, -1):
-        if i < 0:
-            break
         src_line = lines[i]
         indent = len(src_line) - len(src_line.lstrip())
         if indent < indent_at_line:
@@ -390,8 +410,11 @@ def validate_structurally(
             ))
             continue
 
-        line_count = content.count("\n") + 1
-        if line > line_count:
+        # Same line-count convention as the branch-guard extractor
+        # (splitlines) — count('\n')+1 accepted a phantom line one past
+        # the last real source line on trailing-newline files.
+        line_count = len(content.splitlines())
+        if line < 1 or line > line_count:
             verifications.append(StepVerification(
                 step_index=i, file=file_path_str, line=line,
                 function=None, exists=False,

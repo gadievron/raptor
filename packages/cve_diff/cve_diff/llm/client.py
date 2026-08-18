@@ -19,12 +19,18 @@ import time
 from dataclasses import dataclass, field
 
 from core.llm.config import ModelConfig
-from core.llm.providers import create_provider, LLMProvider
+from core.llm.providers import LLMProvider, create_provider
 
+# Bare-alias fallback ONLY — core.llm.model_data.price_for() is the
+# authoritative per-model table and consumers must try it first (see
+# agent/loop.py:_price). This table catches class tokens ("opus") that
+# price_for can't resolve. It had drifted badly: "opus" said $15/$75
+# per M-token while every current Opus generation is $5/$25 — a 3x
+# over-count that burned the loop's cost budget at triple speed.
 MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "opus": (15.0, 75.0),
+    "opus": (5.0, 25.0),
     "sonnet": (3.0, 15.0),
-    "haiku": (0.80, 4.0),
+    "haiku": (1.0, 5.0),
 }
 
 
@@ -105,19 +111,25 @@ class ResilientLLMClient:
         if temperature is not None:
             kwargs["temperature"] = temperature
 
-        # Bounded retry. The class advertised `max_retries` and
-        # `backoff_factor` but the original implementation called
-        # provider.generate exactly once. Wire them up for real.
+        # Bounded retry — TRANSIENT failures only. The pre-fix loop
+        # retried every exception blindly: hard auth failures (401/403),
+        # billing caps, and content blocks burned all retries with
+        # exponential sleeps and the real cause surfaced only after the
+        # full backoff schedule. Classify first; non-retryable errors
+        # raise immediately. (Classifier shared with core.llm's own
+        # retry loop — same policy, one implementation.)
+        from core.llm.client import _is_retryable_error
+
         attempt = 0
         while True:
             try:
                 resp = provider.generate(prompt, system_prompt=system, **kwargs)
                 break
             except Exception as exc:
-                if attempt >= self.max_retries:
+                if attempt >= self.max_retries or not _is_retryable_error(exc):
                     raise LLMCallFailed(
                         f"LLM call ({model_id}) failed after "
-                        f"{attempt + 1} attempts: {exc}"
+                        f"{attempt + 1} attempt(s): {exc}"
                     ) from exc
                 attempt += 1
                 time.sleep(self.backoff_factor ** attempt)

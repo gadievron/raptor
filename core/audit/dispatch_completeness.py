@@ -27,7 +27,6 @@ import ast
 import logging
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
 
 from ._util import find_enclosing_function as _find_enclosing_function
 
@@ -46,7 +45,7 @@ class DispatchTable:
     file: str
     function: str  # enclosing function, or "<module>" for top-level
     line: int
-    keys: Set[str]
+    keys: set[str]
     table_type: str  # "dict", "if_elif", "enum", "match"
 
     def to_dict(self) -> dict:
@@ -82,7 +81,7 @@ class DispatchGap:
 # ---------------------------------------------------------------------------
 
 
-def _enclosing_function(node: ast.AST, parents: Dict[int, ast.AST]) -> str:
+def _enclosing_function(node: ast.AST, parents: dict[int, ast.AST]) -> str:
     """Walk up the parent map to find the nearest enclosing function."""
     cur = parents.get(id(node))
     while cur is not None:
@@ -92,17 +91,17 @@ def _enclosing_function(node: ast.AST, parents: Dict[int, ast.AST]) -> str:
     return "<module>"
 
 
-def _build_parent_map(tree: ast.Module) -> Dict[int, ast.AST]:
-    parents: Dict[int, ast.AST] = {}
+def _build_parent_map(tree: ast.Module) -> dict[int, ast.AST]:
+    parents: dict[int, ast.AST] = {}
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             parents[id(child)] = node
     return parents
 
 
-def _string_keys_from_dict(node: ast.Dict) -> Set[str]:
+def _string_keys_from_dict(node: ast.Dict) -> set[str]:
     """Extract string literal keys from an ast.Dict."""
-    keys: Set[str] = set()
+    keys: set[str] = set()
     for k in node.keys:
         if isinstance(k, ast.Constant) and isinstance(k.value, str):
             keys.add(k.value)
@@ -111,7 +110,7 @@ def _string_keys_from_dict(node: ast.Dict) -> Set[str]:
 
 def _dict_is_dispatch(
     node: ast.Dict,
-    parents: Dict[int, ast.AST],
+    parents: dict[int, ast.AST],
 ) -> bool:
     """Heuristic: a dict literal is a dispatch table when it has >= 2
     string keys and all values are callable-shaped (names, attributes,
@@ -122,8 +121,11 @@ def _dict_is_dispatch(
     str_keys = _string_keys_from_dict(node)
     if len(str_keys) < 2:
         return False
-    # Check if at least one value looks callable (Name, Attribute, Lambda,
-    # Call, or another non-constant expression).
+    # Check if at least one value looks callable: a bare Name, an
+    # Attribute (module.handler), or a Lambda. Call-valued dicts
+    # (e.g. {"a": partial(handle_a, ctx)}) are deliberately NOT
+    # accepted — widening to ast.Call would classify plain
+    # data-construction dicts as dispatch tables.
     for v in node.values:
         if isinstance(v, (ast.Name, ast.Attribute, ast.Lambda)):
             return True
@@ -132,11 +134,11 @@ def _dict_is_dispatch(
 
 def _extract_dict_tables(
     tree: ast.Module,
-    parents: Dict[int, ast.AST],
+    parents: dict[int, ast.AST],
     file: str,
-) -> List[DispatchTable]:
+) -> list[DispatchTable]:
     """Find dict-literal dispatch tables in the AST."""
-    tables: List[DispatchTable] = []
+    tables: list[DispatchTable] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict) and _dict_is_dispatch(node, parents):
             keys = _string_keys_from_dict(node)
@@ -160,15 +162,15 @@ def _extract_dict_tables(
 
 def _extract_match_tables(
     tree: ast.Module,
-    parents: Dict[int, ast.AST],
+    parents: dict[int, ast.AST],
     file: str,
-) -> List[DispatchTable]:
+) -> list[DispatchTable]:
     """Find match/case statements dispatching on string values."""
-    tables: List[DispatchTable] = []
+    tables: list[DispatchTable] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Match):
             continue
-        keys: Set[str] = set()
+        keys: set[str] = set()
         for case in node.cases:
             _collect_match_strings(case.pattern, keys)
         if len(keys) >= 2:
@@ -183,7 +185,7 @@ def _extract_match_tables(
     return tables
 
 
-def _collect_match_strings(pattern: ast.pattern, out: Set[str]) -> None:
+def _collect_match_strings(pattern: ast.pattern, out: set[str]) -> None:
     """Extract string literals from a match pattern (handles MatchOr)."""
     if isinstance(pattern, ast.MatchValue):
         if (isinstance(pattern.value, ast.Constant)
@@ -216,27 +218,27 @@ _IF_ELIF_STR_RE = re.compile(
 def _extract_if_elif_tables_from_source(
     source: str,
     file: str,
-) -> List[DispatchTable]:
+) -> list[DispatchTable]:
     """Find if/elif chains comparing a variable to string literals."""
-    tables: List[DispatchTable] = []
+    tables: list[DispatchTable] = []
     lines = source.splitlines()
     i = 0
     while i < len(lines):
         m = _IF_ELIF_STR_RE.match(lines[i])
         if m and not lines[i].lstrip().startswith("elif"):
             var_name = m.group(1)
-            keys: Set[str] = {m.group(2) or m.group(3)}
+            keys: set[str] = {m.group(2) or m.group(3)}
             start_line = i + 1  # 1-indexed
             j = i + 1
             while j < len(lines):
                 m2 = _IF_ELIF_STR_RE.match(lines[j])
-                if m2 and lines[j].lstrip().startswith("elif"):
-                    if m2.group(1) == var_name:
-                        keys.add(m2.group(2) or m2.group(3))
-                        j += 1
-                        continue
+                if (m2 and lines[j].lstrip().startswith("elif")
+                        and m2.group(1) == var_name):
+                    keys.add(m2.group(2) or m2.group(3))
+                    j += 1
+                    continue
                 stripped = lines[j].lstrip()
-                if stripped.startswith("elif") or stripped.startswith("else"):
+                if stripped.startswith(("elif", "else")):
                     if not (m2 and m2.group(1) == var_name):
                         break
                     j += 1
@@ -271,7 +273,7 @@ def _extract_if_elif_tables_from_source(
 def _find_string_producers(
     tree: ast.Module,
     file: str,
-) -> List[Tuple[str, int]]:
+) -> list[tuple[str, int]]:
     """Find string literals produced in the source that might be keys.
 
     We look for:
@@ -281,23 +283,21 @@ def _find_string_producers(
 
     Returns (value, line) pairs.
     """
-    producers: List[Tuple[str, int]] = []
+    producers: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Return) and node.value is not None:
             if isinstance(node.value, ast.Constant) and isinstance(
                 node.value.value, str
             ):
                 producers.append((node.value.value, node.lineno))
-        elif isinstance(node, ast.Assign):
-            _collect_string_constants(node.value, producers)
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+        elif isinstance(node, ast.Assign) or isinstance(node, ast.AnnAssign) and node.value is not None:
             _collect_string_constants(node.value, producers)
     return producers
 
 
 def _collect_string_constants(
     node: ast.AST,
-    out: List[Tuple[str, int]],
+    out: list[tuple[str, int]],
 ) -> None:
     """Recursively collect string constants from an expression."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -321,7 +321,7 @@ def _collect_string_constants(
 def _find_string_producers_ts(
     file_path: str,
     source: str,
-) -> List[Tuple[str, int]]:
+) -> list[tuple[str, int]]:
     """Find string producer sites via tree-sitter for non-Python files."""
     if file_path.endswith(".py"):
         return []
@@ -345,7 +345,7 @@ def _find_string_producers_ts(
 def _extract_dispatch_tables_ts(
     file_path: str,
     source: str,
-) -> List[DispatchTable]:
+) -> list[DispatchTable]:
     """Extract dispatch tables via tree-sitter for non-Python files."""
     if file_path.endswith(".py"):
         return []
@@ -371,9 +371,9 @@ def _extract_dispatch_tables_ts(
 
 
 def find_dispatch_gaps(
-    call_graphs: Dict[str, object],
-    source_texts: Optional[Dict[str, str]] = None,
-) -> List[DispatchGap]:
+    call_graphs: dict[str, object],
+    source_texts: dict[str, str] | None = None,
+) -> list[DispatchGap]:
     """Find dispatch-table keys that are produced but never handled.
 
     Args:
@@ -394,8 +394,8 @@ def find_dispatch_gaps(
         files |= set(source_texts.keys())
 
     # Phase 1: collect dispatch tables and producer sites.
-    all_tables: List[DispatchTable] = []
-    all_producers: Dict[str, List[Tuple[str, int]]] = {}  # file -> [(val, line)]
+    all_tables: list[DispatchTable] = []
+    all_producers: dict[str, list[tuple[str, int]]] = {}  # file -> [(val, line)]
 
     for fpath in sorted(files):
         source = _get_source(fpath, source_texts)
@@ -426,14 +426,14 @@ def find_dispatch_gaps(
 
     # Phase 2: cross-reference.  For each table, check whether any
     # producer in the codebase yields a key the table doesn't handle.
-    gaps: List[DispatchGap] = []
-    all_produced: Dict[str, List[Tuple[str, int]]] = {}
+    gaps: list[DispatchGap] = []
+    all_produced: dict[str, list[tuple[str, int]]] = {}
     for fpath, prods in all_producers.items():
         for val, lineno in prods:
             all_produced.setdefault(val, []).append((fpath, lineno))
 
     # Pre-index produced keys by shape for fast intersection.
-    produced_by_shape: Dict[str, List[str]] = {}
+    produced_by_shape: dict[str, list[str]] = {}
     for key in all_produced:
         if key and not any(c in key for c in " \t\n\r"):
             produced_by_shape.setdefault(_key_shape(key), []).append(key)
@@ -453,13 +453,13 @@ def find_dispatch_gaps(
         max_len = median_len * 3
 
         # Only iterate produced keys with matching shapes.
-        candidates: Set[str] = set()
+        candidates: set[str] = set()
         for shape in table_shapes:
             for key in produced_by_shape.get(shape, []):
                 if min_len <= len(key) <= max_len:
                     candidates.add(key)
 
-        table_gaps: List[DispatchGap] = []
+        table_gaps: list[DispatchGap] = []
         for produced_key in candidates:
             if produced_key in table.keys:
                 continue
@@ -514,33 +514,7 @@ def find_dispatch_gaps(
     return gaps
 
 
-def _key_looks_related(candidate: str, existing_keys: Set[str]) -> bool:
-    """Heuristic: does *candidate* look like it belongs in *existing_keys*?
-
-    We require:
-    - Candidate is non-empty and doesn't contain spaces (dispatch keys
-      are typically identifiers or short tokens).
-    - Candidate length is within 3x of the median existing key length.
-    - Candidate shares the same "shape" as at least one existing key
-      (all-lowercase, snake_case, etc.).
-    """
-    if not candidate or " " in candidate:
-        return False
-    if not existing_keys:
-        return False
-    lengths = sorted(len(k) for k in existing_keys)
-    median_len = lengths[len(lengths) // 2]
-    if median_len == 0:
-        return False
-    if len(candidate) > median_len * 3 or len(candidate) < median_len / 3:
-        return False
-    # Shape check: does the candidate match the general character
-    # pattern of at least one existing key?
-    cand_shape = _key_shape(candidate)
-    return any(_key_shape(k) == cand_shape for k in existing_keys)
-
-
-def _shares_affix(candidate: str, existing_keys: Set[str], min_affix: int = 3) -> bool:
+def _shares_affix(candidate: str, existing_keys: set[str], min_affix: int = 3) -> bool:
     """Does *candidate* share a prefix or suffix with any key in the table?
 
     Catches legitimate missed enum cases (``'status_pending'`` not handled
@@ -582,8 +556,8 @@ def _key_shape(key: str) -> str:
 
 def _get_source(
     fpath: str,
-    source_texts: Optional[Dict[str, str]],
-) -> Optional[str]:
+    source_texts: dict[str, str] | None,
+) -> str | None:
     """Get source for a file, preferring the in-memory dict."""
     # Path traversal guard: fpath originates from call_graphs.keys() which
     # is untrusted when scanning adversarial codebases.

@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-
 from core.llm.cwe_strategies import (
     Signals,
     Strategy,
@@ -253,6 +252,9 @@ class TestRealistic:
             function_calls_made=["spin_lock", "skb_pull"],
             candidate_cwes=["CWE-119"],
             max_strategies=4,
+            # Kernel-shaped context: the kernel signal bulk lives in
+            # the linux_kernel profile, applied on kernel targets.
+            profile="linux_kernel",
         )
         names = [s.name for s in out]
         # general always first, then specialised.

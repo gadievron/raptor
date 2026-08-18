@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
 
 import pytest
 
 from packages.sca import update
-
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -24,7 +22,7 @@ def _vuln_row(
     manifest: Path,
     advisory_id: str = "GHSA-x",
     pin_style: str = "exact",
-    aliases: List[str] | None = None,
+    aliases: list[str] | None = None,
 ) -> dict:
     return {
         "id": f"sca:vuln:{ecosystem}:{name}:{version}:{advisory_id}",
@@ -158,7 +156,7 @@ def test_package_json_caret_preserved(tmp_path: Path) -> None:
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("package.json"))[0]
+    proposed = next(iter((out / "proposed").rglob("package.json")))
     obj = json.loads(proposed.read_text())
     assert obj["dependencies"]["lodash"] == "^4.17.21"
 
@@ -176,7 +174,7 @@ def test_package_json_exact_pin_replaced(tmp_path: Path) -> None:
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("package.json"))[0]
+    proposed = next(iter((out / "proposed").rglob("package.json")))
     assert json.loads(proposed.read_text())["dependencies"]["lodash"] == "4.17.21"
 
 
@@ -210,7 +208,7 @@ def test_requirements_txt_rewrite(tmp_path: Path) -> None:
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("requirements.txt"))[0]
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
     body = proposed.read_text()
     assert "django==4.2.10" in body
     # Untouched line preserved.
@@ -230,7 +228,7 @@ def test_requirements_txt_pep503_normalisation(tmp_path: Path) -> None:
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("requirements.txt"))[0]
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
     assert "==1.0.1" in proposed.read_text()
 
 
@@ -251,7 +249,7 @@ def test_requirements_txt_prose_comment_not_mangled(tmp_path: Path) -> None:
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("requirements-dev.txt"))[0]
+    proposed = next(iter((out / "proposed").rglob("requirements-dev.txt")))
     body = proposed.read_text()
     assert "pytest==9.1.1" in body
     assert "# pytest pinned exactly:" in body
@@ -275,7 +273,7 @@ def test_requirements_txt_bare_commented_dep_gets_pinned(tmp_path: Path) -> None
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("requirements.txt"))[0]
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
     body = proposed.read_text()
     assert "pytest==9.1.1" in body
     assert "# pytest is an optional dep" in body
@@ -302,7 +300,7 @@ dependencies = [
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("pyproject.toml"))[0]
+    proposed = next(iter((out / "proposed").rglob("pyproject.toml")))
     body = proposed.read_text()
     assert '"django==4.2.10"' in body
     assert '"requests~=2.31.0"' in body
@@ -322,7 +320,7 @@ django = "^4.2.7"
     )])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("pyproject.toml"))[0]
+    proposed = next(iter((out / "proposed").rglob("pyproject.toml")))
     body = proposed.read_text()
     assert 'django = "^4.2.10"' in body
     assert 'python = "^3.10"' in body
@@ -373,7 +371,7 @@ def test_minimal_picks_max_fix_across_findings(tmp_path: Path) -> None:
     ])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out), "--offline"])
-    proposed = list((out / "proposed").rglob("package.json"))[0]
+    proposed = next(iter((out / "proposed").rglob("package.json")))
     assert json.loads(proposed.read_text())["dependencies"]["x"] == "1.10.0"
 
 
@@ -400,7 +398,7 @@ def test_allow_major_gates_cross_major_upgrade(tmp_path: Path) -> None:
         "--findings", str(findings), "--out", str(out_allow),
         "--allow-major", "--offline",
     ])
-    proposed = list((out_allow / "proposed").rglob("package.json"))[0]
+    proposed = next(iter((out_allow / "proposed").rglob("package.json")))
     assert json.loads(proposed.read_text())["dependencies"]["x"] == "2.0.0"
 
 
@@ -608,7 +606,7 @@ def _make_proposed(tmp_path: Path, eco_to_files: dict) -> Path:
 
 def _make_change(
     *, ecosystem: str, name: str = "pkg", manifest: Path,
-) -> "update.UpgradeChange":
+) -> update.UpgradeChange:
     return update.UpgradeChange(
         ecosystem=ecosystem, name=name,
         old_version="1.0.0", new_version="1.0.1",
@@ -825,3 +823,95 @@ def test_cascade_empty_applied_no_op(
     update._run_cascade_validation([], out)
     cascade = json.loads((out / "cascade.json").read_text())
     assert cascade == []
+
+
+# ---------------------------------------------------------------------------
+# pom.xml rewriter — robustness against pathological / oversized input
+# ---------------------------------------------------------------------------
+
+def _pom_plan(installed: str = "2.14.1",
+              target: str = "2.17.1") -> update._PlanEntry:
+    return update._PlanEntry(
+        ecosystem="Maven",
+        name="org.apache.logging.log4j:log4j-core",
+        installed=installed,
+        target=target,
+        manifest=Path("pom.xml"),
+        advisory_ids=["GHSA-x"],
+    )
+
+
+def test_pom_pathological_openers_completes_quickly() -> None:
+    """~1 MB of ``<dependency>`` openers with no closers. The old
+    tempered-dot DOTALL regex backtracked quadratically on this
+    shape (minutes of CPU); the find-based block scan must bail
+    out in linear time."""
+    import time
+
+    openers = "<dependency>" * 83_000        # ≈996 KB, under the size cap
+    start = time.monotonic()
+    text, applied, _reason = update._rewrite_pom_xml(openers, _pom_plan())
+    elapsed = time.monotonic() - start
+    assert applied is False
+    assert text == openers
+    assert elapsed < 10.0, f"pom scan took {elapsed:.1f}s on malformed input"
+
+
+def test_pom_over_size_cap_skipped_with_reason() -> None:
+    """Manifests past the size cap are skipped, never scanned."""
+    filler = "<dependency><groupId>g</groupId></dependency>"
+    big = filler * (update._POM_MAX_CHARS // len(filler) + 2)
+    assert len(big) > update._POM_MAX_CHARS
+    text, applied, reason = update._rewrite_pom_xml(big, _pom_plan())
+    assert applied is False
+    assert text == big
+    assert reason is not None and "exceeds" in reason
+
+
+def test_pom_block_scan_targets_matching_block_only() -> None:
+    """The linear scan must keep the old semantics: only the block
+    whose groupId+artifactId match is rewritten; same-version
+    entries in other block kinds stay untouched."""
+    pom = """\
+<project>
+  <build><plugins>
+    <plugin>
+      <groupId>other.group</groupId>
+      <artifactId>some-plugin</artifactId>
+      <version>2.14.1</version>
+    </plugin>
+  </plugins></build>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>2.14.1</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+    text, applied, _reason = update._rewrite_pom_xml(pom, _pom_plan())
+    assert applied is True
+    assert "<artifactId>log4j-core</artifactId>" in text
+    assert text.count("<version>2.17.1</version>") == 1
+    assert "<artifactId>some-plugin</artifactId>" in text
+    # The plugin block keeps its old version.
+    plugin_block = text.split("<plugin>")[1].split("</plugin>")[0]
+    assert "<version>2.14.1</version>" in plugin_block
+
+
+def test_pom_target_written_verbatim() -> None:
+    """The replacement is a callable, not a template — backslash
+    sequences in the target version must land verbatim rather than
+    being reinterpreted as regex group references."""
+    pom = """\
+<project><dependencies><dependency>
+  <groupId>org.apache.logging.log4j</groupId>
+  <artifactId>log4j-core</artifactId>
+  <version>2.14.1</version>
+</dependency></dependencies></project>
+"""
+    plan = _pom_plan(target=r"2.17.1\g<1>")
+    text, applied, _reason = update._rewrite_pom_xml(pom, plan)
+    assert applied is True
+    assert r"<version>2.17.1\g<1></version>" in text

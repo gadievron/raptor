@@ -19,21 +19,26 @@ automatically.
 
 The primary engine on Linux.  RAPTOR wraps `afl-fuzz` with support for:
 
-- **CmpLog** (`--cmplog-binary`): input-to-state correspondence for bypassing
-  multi-byte comparisons.  Requires a separate CmpLog-instrumented binary
-  compiled with `AFL_LLVM_CMPLOG=1`.
-- **Power schedules** (`--power-schedule`): `fast` (default), `explore`,
-  `exploit`, `seek`, `rare`, `mmopt`, `coe`.
-- **Custom mutators** (`--custom-mutator`): path to a shared library loaded by
-  AFL++ for domain-specific mutation.
+- **CmpLog** (`AFLRunner(cmplog_binary=...)`): input-to-state correspondence
+  for bypassing multi-byte comparisons.  Requires a separate
+  CmpLog-instrumented binary compiled with `AFL_LLVM_CMPLOG=1`.
+  API-level only — no CLI flag.
+- **Power schedules** (`AFLRunner(power_schedule=...)`): `fast` (default),
+  `explore`, `exploit`, `coe`, `lin`, `quad`, `rare`, `seek`.
+  API-level only.
+- **Custom mutators** (`AFLRunner(custom_mutator=...)`): path to a shared
+  library loaded by AFL++ for domain-specific mutation.  API-level only.
 - **Dictionaries** (`--dict`): AFL dictionary files for structured input
-  formats (JSON tokens, HTTP keywords, etc.).
-- **Deterministic mode** (`--deterministic`): enables AFL++'s deterministic
-  mutation stage.  Off by default for faster startup.
-- **Extra flags** (`--extra-afl-flags`): pass-through for any AFL++ flag not
-  covered above.
+  formats (JSON tokens, HTTP keywords, etc.).  When `--dict` is not passed,
+  `/fuzz` auto-discovers an audit-generated `fuzz.dict` (own run directory
+  first, then the newest sibling run directory) -- see
+  [Dictionary auto-discovery](#dictionary-auto-discovery).
+- **Deterministic mode** (`AFLRunner(deterministic=True)`): enables AFL++'s
+  deterministic mutation stage.  Off by default for faster startup.
+  API-level only.
 - **Parallel instances** (`--parallel N`): runs N AFL++ instances (one main,
-  N-1 secondary) for faster coverage.
+  N-1 secondary) for faster coverage.  N is clamped to the `tuning.json`
+  `max_fuzz_parallel` ceiling with a warning.
 
 For best results, compile the target with AFL instrumentation
 (`afl-clang-fast` or `afl-clang-lto`) and AddressSanitizer
@@ -131,7 +136,7 @@ python3 raptor.py fuzz --binary <path> [flags]
 | `--binary <path>` | *required* | Path to binary to fuzz |
 | `--corpus <dir>` | built-in / autonomous | Seed corpus directory |
 | `--duration <secs>` | 3600 | Fuzzing duration in seconds |
-| `--parallel <N>` | 1 | Number of parallel AFL++ instances |
+| `--parallel <N>` | 1 | Number of parallel AFL++ instances (clamped to the `tuning.json` `max_fuzz_parallel` ceiling) |
 | `--max-crashes <N>` | 10 | Maximum crashes to analyse |
 | `--timeout <ms>` | 1000 | Per-execution timeout in milliseconds |
 | `--out <dir>` | auto | Output directory |
@@ -228,6 +233,20 @@ Export the built-in corpus for review or local editing:
 ```bash
 python3 raptor.py fuzz --export-seed-corpus /tmp/raptor-fuzz-seeds
 ```
+
+### Dictionary auto-discovery
+
+`/audit` writes a fuzz handoff at the end of each run: `fuzz-dict.json`
+(structured tokens with provenance, plus seed hints) and `fuzz.dict` -- the
+same tokens in AFL `name="value"` format, mined from unique magic constants,
+parse-shape string literals, and dispatch/switch keys in the audited code.
+
+When the operator does not pass `--dict`, `/fuzz` picks that dictionary up
+automatically: it checks the run's own output directory first (shared-dir
+pipelines), then the newest `fuzz.dict` among sibling run directories under
+the same parent (project layouts).  An explicit `--dict` always wins.
+Discovery is best-effort and bounded -- a missing or oversized (>1 MiB)
+dictionary simply means no `-x` flag, exactly as before.
 
 ## Crash Triage and Replay
 
@@ -343,6 +362,8 @@ out/fuzz_<binary>_<timestamp>/
       queue/                  -- Interesting inputs (coverage)
       fuzzer_stats            -- AFL++ statistics
     secondaryNN/              -- Parallel instance results
+    merged_crashes/           -- All instances' crashes (hardlinked) when a
+                                 secondary found any; analysis reads this dir
   analysis/
     crash_*.json              -- Per-crash LLM analysis
     exploits/

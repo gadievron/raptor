@@ -24,7 +24,6 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 
-
 # ------------------------------------------------------------------
 # Priority
 # ------------------------------------------------------------------
@@ -62,10 +61,24 @@ class ReadingListItem:
     resolved: bool = False
     resolved_concept_id: str | None = None
     resolved_at: float | None = None
+    # Terminal "could not be verified" state — distinct from resolved.
+    # An unresolvable item was attempted and cannot be answered from
+    # the source (dynamic dispatch, monkey-patching, external
+    # dependency, unsupported language).  Consumers must NOT treat it
+    # as resolved-clean: the assumption stays unverified, with the
+    # reason recorded.  Excluded from pending() so it is never
+    # re-studied.
+    unresolvable: bool = False
+    unresolvable_reason: str = ""
 
     def resolve(self, concept_id: str) -> None:
         self.resolved = True
         self.resolved_concept_id = concept_id
+        self.resolved_at = time.time()
+
+    def mark_unresolvable(self, reason: str) -> None:
+        self.unresolvable = True
+        self.unresolvable_reason = reason
         self.resolved_at = time.time()
 
 
@@ -97,10 +110,15 @@ class ReadingList:
             self.items.append(item)
 
     def pending(self) -> list[ReadingListItem]:
-        return [i for i in self.items if not i.resolved]
+        return [
+            i for i in self.items if not i.resolved and not i.unresolvable
+        ]
 
     def resolved(self) -> list[ReadingListItem]:
         return [i for i in self.items if i.resolved]
+
+    def unresolvable_items(self) -> list[ReadingListItem]:
+        return [i for i in self.items if i.unresolvable]
 
     def drain(self, max_items: int | None = None) -> list[ReadingListItem]:
         """Return pending items in priority order, optionally limited."""
@@ -122,18 +140,22 @@ class ReadingList:
                 return True
         return False
 
+    def mark_unresolvable(self, item_id: str, reason: str) -> bool:
+        """Mark an item as attempted-but-unanswerable.
+
+        The item leaves pending() permanently but is NEVER reported as
+        resolved — the assumption it encodes stays unverified.
+        """
+        for item in self.items:
+            if item.id == item_id:
+                if item.resolved:
+                    return False
+                item.mark_unresolvable(reason)
+                return True
+        return False
+
     def by_command(self, command: str) -> list[ReadingListItem]:
         return [i for i in self.items if i.source_command == command]
-
-    def merge_from(self, other: ReadingList) -> int:
-        """Merge items from another reading list. Returns count of new items added."""
-        added = 0
-        for item in other.items:
-            before = len(self.items)
-            self.queue(item)
-            if len(self.items) > before:
-                added += 1
-        return added
 
     def __len__(self) -> int:
         return len(self.items)

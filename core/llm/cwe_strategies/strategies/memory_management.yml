@@ -7,16 +7,11 @@ description: |
   boundaries.
 
 signals:
-  paths:
-    - mm/
-    - mm/slab/
-    - kernel/cred.c
-    - kernel/exit.c
-  includes:
-    - linux/slab.h
-    - linux/refcount.h
-    - linux/kref.h
-    - linux/percpu-refcount.h
+  # Kernel allocator bulk (mm/ paths, linux/slab.h includes, the
+  # kmalloc/kfree/kref_*/refcount_* callees) lives in the
+  # linux_kernel profile pack (profiles/linux_kernel.yml). Universal
+  # libc allocator calls stay here; learned allocators/deallocators
+  # arrive via the picker's DomainVocabulary supplements.
   function_keywords:
     - alloc
     - free
@@ -25,23 +20,12 @@ signals:
     - ref
     - unref
     - refcount
-    - kref
   function_calls:
-    - kmalloc
-    - kzalloc
-    - kfree
-    - kvfree
-    - vmalloc
-    - vfree
-    - kmem_cache_alloc
-    - kmem_cache_free
-    - kref_get
-    - kref_put
-    - refcount_inc
-    - refcount_dec
-    - refcount_dec_and_test
-    - put_device
-    - get_device
+    - malloc
+    - calloc
+    - realloc
+    - free
+    - strdup
   cwes:
     - CWE-119   # buffer bounds
     - CWE-401   # missing release after lifecycle

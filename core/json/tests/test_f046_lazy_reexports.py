@@ -96,11 +96,13 @@ def test_f046_dir_includes_all_public_names():
 
 
 def test_f046_all_unchanged():
-    """`__all__` must still list all 7 public names — no
-    documentation drift introduced by the lazy refactor."""
+    """`__all__` must list every public name — no documentation
+    drift introduced by the lazy refactor (or by later additions:
+    ``append_jsonl`` / ``load_jsonl`` joined with core.json.jsonl)."""
     _force_fresh_core_json_import()
     import core.json
     assert set(core.json.__all__) == {
         "CacheEnvelope", "JsonCache", "MISSING", "TTL_FOREVER",
-        "load_json", "save_json", "load_json_with_comments",
+        "append_jsonl", "load_json", "load_json_with_comments",
+        "load_jsonl", "save_json",
     }

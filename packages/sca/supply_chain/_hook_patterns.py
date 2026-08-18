@@ -41,7 +41,6 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from ..models import Dependency
 
@@ -54,10 +53,14 @@ logger = logging.getLogger(__name__)
 
 # Dangerous shell shapes — high-FP-tolerance.  Each entry is
 # (regex, short reason).  Reasons surface in the finding.
-_DANGEROUS_PATTERNS: Tuple[Tuple[re.Pattern, str], ...] = (
-    (re.compile(r"\bcurl\s+[^|]*\s*\|\s*(?:bash|sh|zsh)\b"),
+_DANGEROUS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
+    # Single run-consuming class between the tool and the pipe — the
+    # previous ``\s+[^|]*\s*`` form had three adjacent overlapping
+    # quantifiers (the negated class includes whitespace), which was
+    # quadratic on "curl" + long whitespace runs with no pipe.
+    (re.compile(r"\bcurl\b[^|\n]*\|\s*(?:bash|sh|zsh)\b"),
      "curl piped to shell"),
-    (re.compile(r"\bwget\s+[^|]*\s*\|\s*(?:bash|sh|zsh)\b"),
+    (re.compile(r"\bwget\b[^|\n]*\|\s*(?:bash|sh|zsh)\b"),
      "wget piped to shell"),
     (re.compile(r"\bnc\s+(?:-[^ ]+\s+)*[\w.\-]+\s+\d+"),
      "netcat to remote host"),
@@ -92,7 +95,7 @@ _DANGEROUS_PATTERNS: Tuple[Tuple[re.Pattern, str], ...] = (
 
 
 # Credential-read patterns (Phase 5 C-set).
-_CREDENTIAL_READ_PATTERNS: Tuple[re.Pattern, ...] = (
+_CREDENTIAL_READ_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"~/\.aws/(?:credentials|config)"),
     re.compile(r"~/\.kube/config"),
     re.compile(r"~/\.gnupg"),
@@ -143,7 +146,7 @@ def _quoted_pair(tool: str, verb: str) -> str:
     return rf'[\'"]{tool}[\'"]{_QP}[\'"]{verb}[\'"]'
 
 
-_PUBLISH_ACTION_PATTERNS: Tuple[re.Pattern, ...] = (
+_PUBLISH_ACTION_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\bnpm\s+publish\b"),
     re.compile(_quoted_pair("npm", "publish")),
     re.compile(r"\byarn\s+publish\b"),
@@ -169,15 +172,15 @@ _PUBLISH_ACTION_PATTERNS: Tuple[re.Pattern, ...] = (
 # Publish-helpers allowlist
 # ---------------------------------------------------------------------------
 
-_PUBLISH_HELPERS_CACHE: Optional[frozenset] = None
-_PUBLISH_HELPERS_SCOPES_CACHE: Optional[frozenset] = None
+_PUBLISH_HELPERS_CACHE: frozenset | None = None
+_PUBLISH_HELPERS_SCOPES_CACHE: frozenset | None = None
 
 
 def _publish_helpers_path() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "publish_helpers.json"
 
 
-def load_publish_helpers() -> Tuple[frozenset, frozenset]:
+def load_publish_helpers() -> tuple[frozenset, frozenset]:
     """Return ``(exact_names, scope_prefixes)`` from the
     ``publish_helpers.json`` data file.  Cached after first call."""
     global _PUBLISH_HELPERS_CACHE, _PUBLISH_HELPERS_SCOPES_CACHE
@@ -227,11 +230,20 @@ def is_publish_helper(dep: Dependency) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# Cap on hook-body length before pattern application. Legitimate
+# lifecycle-hook commands are short (a line or two of shell); even
+# elaborate build scripts stay well under a few KB. Bounding here
+# keeps every substrate regex linear-time on adversarial inputs
+# (e.g. megabytes of whitespace crafted against a backtracking
+# pattern) for every adapter in one place.
+_MAX_HOOK_BODY_BYTES = 16 * 1024
+
+
 @dataclass(frozen=True)
 class HookAnalysis:
     """Result of scanning one hook body with the shared substrate."""
 
-    reasons: List[str]               # ``_DANGEROUS_PATTERNS`` matches
+    reasons: list[str]               # ``_DANGEROUS_PATTERNS`` matches
     reads_credentials: bool          # any C-set match
     has_publish_action: bool         # any G-set match
 
@@ -247,6 +259,13 @@ def analyse_body(body: str) -> HookAnalysis:
         publish-helper host → high (self-replication shape)
       * otherwise → low (hook present, behaviour not flagged)
     """
+    if len(body) > _MAX_HOOK_BODY_BYTES:
+        logger.debug(
+            "sca.supply_chain._hook_patterns: hook body of %d bytes "
+            "exceeds %d-byte cap; truncating (DoS bound)",
+            len(body), _MAX_HOOK_BODY_BYTES,
+        )
+        body = body[:_MAX_HOOK_BODY_BYTES]
     reasons = [why for rgx, why in _DANGEROUS_PATTERNS if rgx.search(body)]
     reads_credentials = any(
         rgx.search(body) for rgx in _CREDENTIAL_READ_PATTERNS

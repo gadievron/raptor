@@ -12,9 +12,7 @@ NOT mean they share syntactic patterns.
 
 from __future__ import annotations
 
-from typing import Dict, List
-
-_FAMILIES: Dict[str, List[str]] = {
+_FAMILIES: dict[str, list[str]] = {
     "sql_injection": ["CWE-89", "CWE-564", "CWE-943"],
     "xss": ["CWE-79", "CWE-80", "CWE-83", "CWE-87"],
     "command_injection": ["CWE-77", "CWE-78", "CWE-88"],
@@ -31,7 +29,7 @@ _FAMILIES: Dict[str, List[str]] = {
     "info_disclosure": ["CWE-200", "CWE-209"],
 }
 
-_CWE_TO_FAMILY: Dict[str, str] = {}
+_CWE_TO_FAMILY: dict[str, str] = {}
 for _fam, _cwes in _FAMILIES.items():
     for _cwe in _cwes:
         _CWE_TO_FAMILY[_cwe] = _fam
@@ -42,7 +40,7 @@ def cwe_family(cwe: str) -> str:
     return _CWE_TO_FAMILY.get(cwe, cwe)
 
 
-def cwe_siblings(cwe: str) -> List[str]:
+def cwe_siblings(cwe: str) -> list[str]:
     """Return all CWEs in the same family (including the input).
 
     Unmapped CWEs return a single-element list of themselves.

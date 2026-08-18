@@ -20,7 +20,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class DynamicSweepResult:
     compiled: bool
     ran: bool
     crashed: bool
-    sanitizer_output: Optional[str]
+    sanitizer_output: str | None
     exit_code: int
     evidence_strength: str
     duration_s: float
@@ -67,9 +67,9 @@ def should_run_dynamic(
 
 def run_dynamic_sweep(
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
-) -> Optional[DynamicSweepResult]:
+) -> DynamicSweepResult | None:
     """Run a dynamic test for a finding.
 
     Generates a harness, compiles with sanitisers, runs in sandbox,
@@ -96,7 +96,7 @@ def run_dynamic_sweep(
 
 def generate_c_harness(
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
 ) -> str:
     """Generate a C test harness for a finding."""
     function_name = getattr(outcome, "function", "unknown")
@@ -107,7 +107,6 @@ def generate_c_harness(
     if not _is_valid_identifier(function_name):
         return ""
 
-    cwe = ""
     review = getattr(outcome, "review_result", None) or {}
     cwe = review.get("cwe_class", "") or review.get("cwe", "")
 
@@ -125,7 +124,7 @@ def generate_c_harness(
 
 def generate_python_harness(
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
 ) -> str:
     """Generate a Python test script for a finding."""
     function_name = getattr(outcome, "function", "unknown")
@@ -174,6 +173,29 @@ def generate_python_harness(
     )
 
 
+def _sandbox_unavailable_result(
+    exc: BaseException, *, compiled: bool, start: float,
+) -> DynamicSweepResult:
+    """The harness (or its compile) could not run because sandbox
+    isolation failed to engage. LLM-derived code must never execute
+    unsandboxed, so the dynamic channel is skipped: the finding keeps
+    whatever static evidence it had, the operator sees why in the log,
+    and the result reads as inconclusive rather than as tested.
+    """
+    logger.warning(
+        "dynamic_sweep: sandbox isolation could not engage — skipping "
+        "dynamic validation for this finding (never runs LLM-generated "
+        "harness code unsandboxed): %s", exc,
+    )
+    return DynamicSweepResult(
+        compiled=compiled, ran=False, crashed=False,
+        sanitizer_output=f"sandbox unavailable: {exc}"[:500],
+        exit_code=-1,
+        evidence_strength="inconclusive",
+        duration_s=time.monotonic() - start,
+    )
+
+
 def _detect_compiler(target_path: Path, file_path: str) -> str:
     """Detect the C/C++ compiler for the target project.
 
@@ -187,7 +209,9 @@ def _detect_compiler(target_path: Path, file_path: str) -> str:
         _, compiler, _, _ = detector._detect_build_params("cpp")
         if compiler:
             return compiler
-    except Exception:  # noqa: BLE001 — optional dependency
+    except (OSError, ValueError):
+        # Best-effort detection: tree walk / build-file parse failures
+        # fall back to extension-based compiler choice below.
         pass
     # Fallback: choose compiler based on the file being compiled.
     if file_path.endswith((".cpp", ".cc", ".cxx")):
@@ -197,10 +221,10 @@ def _detect_compiler(target_path: Path, file_path: str) -> str:
 
 def _run_c_harness(
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
     start: float,
-) -> Optional[DynamicSweepResult]:
+) -> DynamicSweepResult | None:
     """Compile and run a C test harness."""
     harness_code = generate_c_harness(outcome, ctx)
     if not harness_code:
@@ -216,6 +240,17 @@ def _run_c_harness(
 
     safe_env = _get_safe_env()
 
+    # Harness code (and the harness binary compiled from it) is
+    # LLM-derived — run_untrusted() for both steps: restrict_reads +
+    # fake home + strict env + namespace network block, with target
+    # readable (compile needs -I{target}) and the scratch dir writable.
+    # There is deliberately NO unsandboxed fallback: when isolation
+    # cannot engage, the dynamic channel is skipped with a loud
+    # warning (SandboxSetupError caught BY NAME below — the documented
+    # exception to its except-Exception-proof design) rather than
+    # executing LLM-generated code on the bare host.
+    from core.sandbox import SandboxSetupError, run_untrusted
+
     with tempfile.TemporaryDirectory(prefix="raptor_dyn_") as tmpdir:
         harness_path = Path(tmpdir) / "harness.c"
         binary_path = Path(tmpdir) / "harness"
@@ -228,12 +263,18 @@ def _run_c_harness(
         ] + _SANITIZER_FLAGS.split()
 
         try:
-            compile_result = subprocess.run(
+            compile_result = run_untrusted(
                 compile_cmd,
+                target=str(target_path),
+                output=tmpdir,
+                cwd=tmpdir,
+                env=safe_env,
+                caller_label="dynamic_sweep_compile",
                 capture_output=True, text=True,
                 timeout=_COMPILE_TIMEOUT_S,
-                env=safe_env,
             )
+        except SandboxSetupError as e:
+            return _sandbox_unavailable_result(e, compiled=False, start=start)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return DynamicSweepResult(
                 compiled=False, ran=False, crashed=False,
@@ -253,21 +294,19 @@ def _run_c_harness(
 
         try:
             try:
-                from core.sandbox import run as sandbox_run
-                run_result = sandbox_run(
+                run_result = run_untrusted(
                     [str(binary_path)],
-                    block_network=True,
+                    target=str(target_path),
+                    output=tmpdir,
+                    cwd=tmpdir,
+                    env=safe_env,
                     caller_label="dynamic_sweep_harness",
                     capture_output=True, text=True,
                     timeout=_HARNESS_TIMEOUT_S,
                 )
-            except (ImportError, OSError):
-                run_result = subprocess.run(
-                    [str(binary_path)],
-                    capture_output=True, text=True,
-                    timeout=_HARNESS_TIMEOUT_S,
-                    env=safe_env,
-                )
+            except SandboxSetupError as e:
+                return _sandbox_unavailable_result(
+                    e, compiled=True, start=start)
         except subprocess.TimeoutExpired:
             return DynamicSweepResult(
                 compiled=True, ran=True, crashed=False,
@@ -303,10 +342,10 @@ def _run_c_harness(
 
 def _run_python_harness(
     outcome: Any,
-    ctx: Dict[str, Any],
+    ctx: dict[str, Any],
     config: Any,
     start: float,
-) -> Optional[DynamicSweepResult]:
+) -> DynamicSweepResult | None:
     """Run a Python test harness."""
     harness_code = generate_python_harness(outcome, ctx)
     if not harness_code:
@@ -318,30 +357,36 @@ def _run_python_harness(
     target_path = Path(raw_target)
 
     safe_env = _get_safe_env()
-    safe_env["PYTHONPATH"] = str(target_path)
+
+    # Same containment rationale as the C harness (see _run_c_harness).
+    # The target path rides in a sys.path prelude rather than
+    # PYTHONPATH: run_untrusted()'s strict_env strips PYTHONPATH (it's
+    # in DANGEROUS_ENV_VARS), and the prelude gives identical import
+    # behaviour without weakening that contract.
+    from core.sandbox import SandboxSetupError, run_untrusted
 
     with tempfile.TemporaryDirectory(prefix="raptor_dyn_") as tmpdir:
         harness_path = Path(tmpdir) / "harness.py"
-        harness_path.write_text(harness_code)
+        harness_path.write_text(
+            f"import sys\nsys.path.insert(0, {str(target_path)!r})\n"
+            + harness_code
+        )
 
         try:
             try:
-                from core.sandbox import run as sandbox_run
-                run_result = sandbox_run(
+                run_result = run_untrusted(
                     ["python3", str(harness_path)],
-                    block_network=True,
+                    target=str(target_path),
+                    output=tmpdir,
+                    cwd=tmpdir,
+                    env=safe_env,
                     caller_label="dynamic_sweep_python_harness",
                     capture_output=True, text=True,
                     timeout=_HARNESS_TIMEOUT_S,
-                    env=safe_env,
                 )
-            except (ImportError, OSError):
-                run_result = subprocess.run(
-                    ["python3", str(harness_path)],
-                    capture_output=True, text=True,
-                    timeout=_HARNESS_TIMEOUT_S,
-                    env=safe_env,
-                )
+            except SandboxSetupError as e:
+                return _sandbox_unavailable_result(
+                    e, compiled=True, start=start)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return DynamicSweepResult(
                 compiled=True, ran=False, crashed=False,
@@ -537,7 +582,7 @@ def _harness_generic(func: str, source: str, file_path: str) -> str:
     )
 
 
-def _get_safe_env() -> Dict[str, str]:
+def _get_safe_env() -> dict[str, str]:
     """Get a sanitised environment for subprocess execution."""
     try:
         from core.config import RaptorConfig

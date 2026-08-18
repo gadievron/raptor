@@ -6,15 +6,15 @@ import json
 from pathlib import Path
 
 from core.audit.report import (
-    format_summary,
-    generate_report,
-    write_markdown_report,
-    write_report,
     _compute_stats,
     _count_remaining_gaps,
     _evidence_distribution,
     _find_unrecorded_reads,
     _format_summary,
+    format_summary,
+    generate_report,
+    write_markdown_report,
+    write_report,
 )
 
 
@@ -47,6 +47,78 @@ class TestComputeStats:
     def test_empty(self):
         stats = _compute_stats({"files": {}})
         assert stats["reviewed"] == 0
+
+    def test_mechanical_entries_counted_separately(self):
+        # The observed contradiction: report said 14 reviewed /
+        # 8 suspicious, console said 9 / 3 — five post-loop mechanical
+        # journal entries were silently counted as LLM reviews. One
+        # rule now: reviewed = LLM reviews; mechanical stated apart.
+        audit_data = {
+            "functions_analysed": (
+                [
+                    {"file": "a.c", "function": f"f{i}", "status": "clean"}
+                    for i in range(6)
+                ]
+                + [
+                    {"file": "a.c", "function": f"s{i}",
+                     "status": "suspicious"}
+                    for i in range(3)
+                ]
+                + [
+                    {"file": "b.c", "function": f"m{i}",
+                     "status": "suspicious", "mechanical": True}
+                    for i in range(5)
+                ]
+            ),
+        }
+        stats = _compute_stats(audit_data)
+        assert stats["reviewed"] == 9
+        assert stats["suspicious"] == 3
+        assert stats["mechanical"] == 5
+
+    def test_mechanical_share_stated_in_summary(self):
+        report = {
+            "stats": {
+                "reviewed": 9, "clean": 6, "suspicious": 3,
+                "finding": 0, "error": 0, "mechanical": 5,
+            },
+            "findings_count": 0,
+            "gaps_remaining": 0,
+            "findings": [],
+        }
+        summary = _format_summary(report)
+        assert "Functions LLM-reviewed: 9 (+5 mechanical post-loop)" in summary
+        assert "Suspicious: 3" in summary
+
+    def test_load_review_state_marks_mechanical_entries(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from core.audit import journal as journal_mod
+        from core.audit.report import _load_review_state
+
+        def _entry(func, *, strategies=(), body=""):
+            return SimpleNamespace(
+                file="a.c", function=func, verdict="suspicious",
+                source_hash="h", strategies=list(strategies), body=body,
+            )
+
+        entries = {
+            "a.c:llm": _entry("llm", strategies=["taint"], body="deep dive"),
+            "a.c:mech": _entry(
+                "mech",
+                strategies=["post-loop-mechanical"],
+                body="[mechanical] resource exhaustion",
+            ),
+        }
+        monkeypatch.setattr(
+            journal_mod, "latest_entries", lambda out_dir: entries,
+        )
+        state = _load_review_state(Path("/nonexistent"))
+        by_name = {
+            f["function"]: f for f in state["functions_analysed"]
+        }
+        assert by_name["llm"]["mechanical"] is False
+        assert by_name["mech"]["mechanical"] is True
 
     def test_functions_analysed_format(self):
         audit_data = {
@@ -111,7 +183,7 @@ class TestFormatSummary:
             ],
         }
         summary = _format_summary(report)
-        assert "Functions reviewed: 10" in summary
+        assert "Functions LLM-reviewed: 10" in summary
         assert "Clean: 7" in summary
         assert "Suspicious: 2" in summary
         assert "Finding: 1" in summary
@@ -136,7 +208,9 @@ class TestGenerateReport:
         # not coverage-audit.json. Seed two entries and verify the
         # report reads them via ``_load_review_state``.
         from core.coverage.journal import (
-            ReviewJournalEntry, append_entry, now_iso,
+            ReviewJournalEntry,
+            append_entry,
+            now_iso,
         )
         append_entry(tmp_path, ReviewJournalEntry(
             ts=now_iso(), run_id="test", file="a.c", function="f1",
@@ -419,3 +493,66 @@ class TestWriteMarkdownReport:
         path = write_markdown_report(report, tmp_path)
         content = path.read_text()
         assert "| HEURISTIC | 2 |" in content
+
+
+class TestDarkSurfacing:
+    """Dark outcomes must reach the operator: stats, summary, and a
+    dedicated report section (previously tallied invisibly)."""
+
+    def test_compute_stats_counts_dark(self):
+        audit_data = {
+            "functions_analysed": [
+                {"file": "a.c", "function": "f1", "status": "dark"},
+                {"file": "a.c", "function": "f2", "status": "clean"},
+            ],
+        }
+        stats = _compute_stats(audit_data)
+        assert stats["dark"] == 1
+
+    def test_summary_lists_dark_findings(self):
+        report = {
+            "stats": {"reviewed": 2, "dark": 1},
+            "findings_count": 0,
+            "gaps_remaining": 0,
+            "findings": [],
+            "dark_findings": [
+                {"title": "auth bypass in role check",
+                 "file": "auth.py", "line": 12},
+            ],
+        }
+        text = _format_summary(report)
+        assert "Dark: 1" in text
+        assert "need concrete verification" in text
+        assert "auth bypass in role check" in text
+        assert "/validate" in text
+
+    def test_markdown_report_dark_section(self, tmp_path):
+        report = {
+            "stats": {},
+            "findings": [],
+            "dark_findings": [
+                {"title": "auth bypass in role check",
+                 "file": "auth.py", "line": 12},
+            ],
+        }
+        path = write_markdown_report(report, tmp_path)
+        content = path.read_text()
+        assert "## Dark findings (1)" in content
+        assert "needs_validation" in content
+        assert "auth bypass in role check" in content
+
+    def test_generate_report_loads_dark_from_graded_export(self, tmp_path):
+        graded = {
+            "findings": [
+                {"status": "dark", "title": "idor in order lookup",
+                 "file": "orders.py", "line": 4},
+                {"status": "finding", "title": "overflow",
+                 "file": "a.c", "line": 9},
+            ],
+            "stats": {"total": 2},
+        }
+        (tmp_path / "findings-graded.json").write_text(json.dumps(graded))
+        report = generate_report(tmp_path)
+        dark = report.get("dark_findings", [])
+        assert len(dark) == 1
+        assert dark[0]["title"] == "idor in order lookup"

@@ -57,6 +57,22 @@ if _existing and _existing != _conftest_dir:
     )
 os.environ["RAPTOR_DIR"] = _conftest_dir
 
+# The operator's real ``~/.config/raptor/models.json`` must never
+# steer tests: a configured API-served primary (e.g. a Bedrock entry)
+# flips model selection, egress enablement and provider construction
+# for every test that builds a real ``LLMConfig`` — observed as a
+# full-suite hang when the egress proxy dutifully allowed the
+# configured Bedrock host and a test's SDK call attempted a live
+# connection. Pin ``RAPTOR_CONFIG`` at a nonexistent in-tree path;
+# tests that exercise config parsing set ``RAPTOR_CONFIG`` to their
+# own tmp file (monkeypatch wins over this default). ``setdefault``
+# keeps a deliberately exported RAPTOR_CONFIG usable for
+# operator-driven runs against real config.
+os.environ.setdefault(
+    "RAPTOR_CONFIG",
+    str(Path(_conftest_dir) / ".pytest-no-operator-models.json"),
+)
+
 # Put the repo root on sys.path so ``from core.X import Y`` and
 # ``from packages.Y.Z import W`` resolve during pytest collection.
 # pytest.ini's ``pythonpath`` only lists a handful of package-standalone
@@ -147,6 +163,7 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def pytest_terminal_summary(terminalreporter):
+    _tree_drift_summary(terminalreporter)
     if _slow_test_threshold is None or not _slow_test_overruns:
         return
     tr = terminalreporter
@@ -163,3 +180,69 @@ def pytest_terminal_summary(terminalreporter):
     )
     for nodeid, dur in sorted(_slow_test_overruns, key=lambda x: -x[1]):
         tr.write_line(f"  {dur:7.1f}s  {nodeid}")
+
+
+# ---------------------------------------------------------------------------
+# Tree-changed-mid-run guard (warning only).
+#
+# A test session whose source tree is edited WHILE it runs (multi-agent
+# checkouts, a patch series being applied mid-suite) produces failures
+# indistinguishable from real ones — collection saw one tree, execution
+# another. Fingerprint the tree at session start and compare at the end;
+# on drift, print one prominent banner. Never fails or skips anything:
+# CI and normal runs see zero behaviour change, and git-less environments
+# skip silently.
+# ---------------------------------------------------------------------------
+
+_tree_state_at_start = None
+
+
+def _tree_fingerprint():
+    import hashlib
+    import subprocess as _sp
+    try:
+        head = _sp.run(
+            ["git", "-C", _conftest_dir, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if head.returncode != 0:
+            return None
+        dirty = _sp.run(
+            ["git", "-C", _conftest_dir, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if dirty.returncode != 0:
+            return None
+        return (
+            head.stdout.strip(),
+            hashlib.sha256(dirty.stdout.encode()).hexdigest()[:16],
+        )
+    except (OSError, _sp.TimeoutExpired):
+        return None
+
+
+def pytest_sessionstart(session):
+    global _tree_state_at_start
+    _tree_state_at_start = _tree_fingerprint()
+
+
+def _tree_drift_summary(terminalreporter):
+    if _tree_state_at_start is None:
+        return
+    now = _tree_fingerprint()
+    if now is None or now == _tree_state_at_start:
+        return
+    tr = terminalreporter
+    tr.section("source tree changed during this session", yellow=True,
+               bold=True)
+    tr.write_line(
+        "The checkout was edited while tests ran (HEAD or dirty state "
+        "differs from session start). Failures above may be artifacts "
+        "of a mid-run edit, not real regressions — re-run on a quiescent "
+        "tree before investigating them."
+    )
+    tr.write_line(
+        f"  start: HEAD {_tree_state_at_start[0][:12]} "
+        f"dirty {_tree_state_at_start[1]}"
+    )
+    tr.write_line(f"  end:   HEAD {now[0][:12]} dirty {now[1]}")

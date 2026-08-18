@@ -9,8 +9,8 @@ test scripts a sequence of turns to exercise specific code paths.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -22,7 +22,6 @@ from core.llm.tool_use.types import (
     ToolCall,
     TurnResponse,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fake provider: scripts a sequence of TurnResponse values.
@@ -167,10 +166,10 @@ class TestTrajectoryWiring:
     def test_trajectory_written_when_env_var_set(
         self, repo, fake_model_config, tmp_path, monkeypatch,
     ):
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
         from packages.code_understanding.dispatch.hunt_dispatch import (
             default_hunt_dispatch,
         )
-        from core.trajectories.auto import TRAJECTORY_DIR_ENV
 
         monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
         turns = [
@@ -203,10 +202,10 @@ class TestTrajectoryWiring:
         self, repo, fake_model_config, tmp_path, monkeypatch,
     ):
         """No env var → no trajectory directory created."""
+        from core.trajectories.auto import TRAJECTORY_DIR_ENV
         from packages.code_understanding.dispatch.hunt_dispatch import (
             default_hunt_dispatch,
         )
-        from core.trajectories.auto import TRAJECTORY_DIR_ENV
 
         monkeypatch.delenv(TRAJECTORY_DIR_ENV, raising=False)
         turns = [
@@ -234,12 +233,15 @@ class TestTrajectoryWiring:
         doesn't depend on cost-arithmetic edge cases of the fake
         provider."""
         from unittest.mock import patch as _patch
-        from packages.code_understanding.dispatch.hunt_dispatch import (
-            default_hunt_dispatch,
+
+        from core.llm.tool_use.types import (
+            CostBudgetExceeded,
+            Message,
+            TextBlock,
         )
         from core.trajectories.auto import TRAJECTORY_DIR_ENV
-        from core.llm.tool_use.types import (
-            CostBudgetExceeded, Message, TextBlock,
+        from packages.code_understanding.dispatch.hunt_dispatch import (
+            default_hunt_dispatch,
         )
 
         monkeypatch.setenv(TRAJECTORY_DIR_ENV, str(tmp_path))
@@ -254,14 +256,13 @@ class TestTrajectoryWiring:
             "budget", messages=partial_messages, tool_calls_made=0,
         )
 
-        with _patch_provider([FakeTurn(text="never reached")]):
-            with _patch(
-                "core.llm.tool_use.loop.ToolUseLoop.run",
-                side_effect=exc,
-            ):
-                result = default_hunt_dispatch(
-                    fake_model_config, "x", str(repo),
-                )
+        with _patch_provider([FakeTurn(text="never reached")]), _patch(
+            "core.llm.tool_use.loop.ToolUseLoop.run",
+            side_effect=exc,
+        ):
+            result = default_hunt_dispatch(
+                fake_model_config, "x", str(repo),
+            )
 
         assert isinstance(result, list) and result and "error" in result[0]
         assert "cost budget exceeded" in result[0]["error"]
@@ -616,9 +617,9 @@ class TestDirectCallerValidation:
         captured = {}
         original = _format_user_message
 
-        def _capture(p):
+        def _capture(p, repo_path=None):
             captured["pattern"] = p
-            return original(p)
+            return original(p, repo_path)
 
         # Run a happy-path-shaped script; we just need the dispatch to
         # hit _format_user_message before terminating.

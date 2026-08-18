@@ -436,6 +436,7 @@ def write_observation_records(
             pass
         raise
 
+    logger.info("wrote %d observation records to %s", len(records), path)
     return path
 
 

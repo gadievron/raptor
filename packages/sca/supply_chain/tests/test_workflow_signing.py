@@ -26,7 +26,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
 
 import pytest
 
@@ -34,7 +33,6 @@ from packages.sca.supply_chain.workflow_signing import (
     WorkflowSigningFinding,
     scan_target,
 )
-
 
 # Detector relies on git binary being available. Skip cleanly when
 # we can't run any of this.
@@ -45,7 +43,7 @@ _HAS_GPG = shutil.which("gpg") is not None
 def _git(target: Path, *args: str) -> None:
     r = subprocess.run(
         ["git", "-C", str(target), *args],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if r.returncode != 0:
         raise AssertionError(
@@ -120,8 +118,8 @@ def gpg_signing_key(tmp_path: Path):
         ["gpg", "--list-secret-keys", "--with-colons"],
         capture_output=True, text=True, env=env, check=True,
     )
-    keyid: Optional[str] = None
-    fpr: Optional[str] = None
+    keyid: str | None = None
+    fpr: str | None = None
     for line in listed.stdout.splitlines():
         if line.startswith("sec:"):
             cols = line.split(":")
@@ -146,7 +144,7 @@ def gpg_signing_key(tmp_path: Path):
             ["gpg", "--batch", "--yes",
              "--command-fd", "0", "--edit-key", fpr],
             input="trust\n5\ny\nquit\n",
-            text=True, env=env, capture_output=True,
+            text=True, env=env, capture_output=True, check=False,
         )
 
     # End-to-end smoke: build a throwaway commit + verify %G? returns
@@ -213,7 +211,7 @@ def _commit_workflow_signed(
          "-c", f"user.signingkey={keyid}",
          "-c", "gpg.program=gpg",
          "commit", "-S", "-m", message],
-        env=env, capture_output=True, text=True,
+        env=env, capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         # Surface stderr to make signing-setup issues visible in
@@ -275,7 +273,7 @@ def test_all_unsigned_emits_single_summary_finding(tmp_path: Path) -> None:
             tmp_path, "ci.yml", f"name: CI\n# rev {i}\non: push\n",
             message=f"commit {i}",
         )
-    findings: List[WorkflowSigningFinding] = scan_target(
+    findings: list[WorkflowSigningFinding] = scan_target(
         tmp_path, manifests=[],
     )
     assert len(findings) == 1
@@ -580,3 +578,59 @@ def test_summary_finding_emits_through_orchestrator(
     assert f.evidence["unsigned_count"] == 1
     assert f.evidence["signing_rate"] == 0.0
     assert f.severity == "info"
+
+
+def test_bad_signature_status_surfaces_even_at_full_signing_rate(
+    tmp_path: Path,
+) -> None:
+    """``B`` (signature present, verification failed) counts as signed
+    for the rate — but it is anomalous in every regime, so it earns its
+    own per-commit finding even when the rate branch would otherwise
+    emit nothing (100% signed-ish history)."""
+    from packages.sca.supply_chain import workflow_signing
+    target = tmp_path / "fake_repo"
+    (target / ".github" / "workflows").mkdir(parents=True)
+    (target / ".git").mkdir()
+    fake_walked = [
+        (f"aa{i:038x}", "G", "Dev", "d@x.com", f"commit {i}")
+        for i in range(9)
+    ] + [("bb" + "0" * 38, "B", "Dev", "d@x.com", "odd one")]
+    original = workflow_signing._git_log_signatures
+    workflow_signing._git_log_signatures = lambda *a, **k: fake_walked
+    try:
+        findings = workflow_signing.scan_target(target, [])
+    finally:
+        workflow_signing._git_log_signatures = original
+    assert len(findings) == 1
+    hit = findings[0].unsigned_commit
+    assert hit is not None and hit.sig_status == "B"
+    assert findings[0].severity == "medium"
+
+
+def test_bad_signature_finding_joins_summary_in_mixed_regime(
+    tmp_path: Path,
+) -> None:
+    """In a mixed-signing regime the B-status per-commit signal is
+    emitted alongside the usual rate summary, not instead of it."""
+    from packages.sca.supply_chain import workflow_signing
+    target = tmp_path / "fake_repo"
+    (target / ".github" / "workflows").mkdir(parents=True)
+    (target / ".git").mkdir()
+    fake_walked = [
+        (f"cc{i:038x}", "N", "Dev", "d@x.com", f"commit {i}")
+        for i in range(8)
+    ] + [
+        ("dd" + "0" * 38, "G", "Dev", "d@x.com", "signed"),
+        ("ee" + "0" * 38, "B", "Dev", "d@x.com", "bad sig"),
+    ]
+    original = workflow_signing._git_log_signatures
+    workflow_signing._git_log_signatures = lambda *a, **k: fake_walked
+    try:
+        findings = workflow_signing.scan_target(target, [])
+    finally:
+        workflow_signing._git_log_signatures = original
+    b_hits = [f for f in findings
+              if f.unsigned_commit and f.unsigned_commit.sig_status == "B"]
+    summaries = [f for f in findings if f.stats is not None]
+    assert len(b_hits) == 1
+    assert len(summaries) == 1

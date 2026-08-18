@@ -9,8 +9,10 @@ import pytest
 
 import core.security.rule_of_two as r2
 from core.security.rule_of_two import (
+    HITL_REQUIRED_AGENTS,
     NonInteractiveError,
     is_interactive,
+    require_human_for_agent_dispatch,
     require_human_or_sandbox_for_agentic_pass,
     require_interactive_for_weakened_defenses,
 )
@@ -63,14 +65,18 @@ class TestWeakenedDefensesGate:
             require_interactive_for_weakened_defenses()
 
     def test_raises_when_non_interactive(self):
-        with patch("core.security.rule_of_two.is_interactive", return_value=False):
-            with pytest.raises(NonInteractiveError, match="not allowed in non-interactive"):
-                require_interactive_for_weakened_defenses()
+        with patch("core.security.rule_of_two.is_interactive",
+                   return_value=False), \
+             pytest.raises(NonInteractiveError,
+                           match="not allowed in non-interactive"):
+            require_interactive_for_weakened_defenses()
 
     def test_error_message_mentions_flag(self):
-        with patch("core.security.rule_of_two.is_interactive", return_value=False):
-            with pytest.raises(NonInteractiveError, match="accept-weakened-defenses"):
-                require_interactive_for_weakened_defenses()
+        with patch("core.security.rule_of_two.is_interactive",
+                   return_value=False), \
+             pytest.raises(NonInteractiveError,
+                           match="accept-weakened-defenses"):
+            require_interactive_for_weakened_defenses()
 
 
 class TestAgenticPassGate:
@@ -133,6 +139,65 @@ class TestAgenticPassGate:
             self._run(human=False, sandbox=False)
         with pytest.raises(NonInteractiveError, match="interactive session"):
             self._run(human=False, sandbox=False)
+
+
+class TestHITLAgentDispatchGate:
+    """Human-only gate for HITL-required agents: unlike the agentic-pass
+    gate, an effective sandbox does NOT substitute — these agents keep
+    at least two Rule-of-Two legs even when contained, so only a
+    human-attended session satisfies the gate.
+
+    Headless is simulated the same way as the agentic-pass tests: mock
+    the helper boundary rather than the real process tree / sandbox.
+    """
+
+    @staticmethod
+    def _run(agent: str, *, human: bool, sandbox: bool = False):
+        with patch("core.security.rule_of_two._session_has_human_terminal",
+                   return_value=human), \
+             patch("core.security.rule_of_two._sandbox_will_contain",
+                   return_value=sandbox):
+            require_human_for_agent_dispatch(agent)
+
+    def test_registry_contains_offsec_specialist(self):
+        assert "offsec-specialist" in HITL_REQUIRED_AGENTS
+
+    def test_allows_hitl_agent_when_human_present(self):
+        self._run("offsec-specialist", human=True)  # no raise
+
+    def test_blocks_hitl_agent_when_headless(self):
+        with pytest.raises(NonInteractiveError):
+            self._run("offsec-specialist", human=False)
+
+    def test_sandbox_does_not_substitute_for_human(self):
+        # The agentic-pass gate's sandbox leg must not leak in — an
+        # all-three-legs agent stays blocked even with containment.
+        with pytest.raises(NonInteractiveError):
+            self._run("offsec-specialist", human=False, sandbox=True)
+
+    def test_noop_for_unregistered_agent(self):
+        # Callers may gate every dispatch unconditionally; agents not
+        # in the registry pass through even fully headless.
+        self._run("crash-analyzer", human=False, sandbox=False)
+
+    # --- error message content (block condition) ---
+
+    def test_error_names_the_agent(self):
+        with pytest.raises(NonInteractiveError, match="offsec-specialist"):
+            self._run("offsec-specialist", human=False)
+
+    def test_error_mentions_rule_of_two(self):
+        with pytest.raises(NonInteractiveError, match="Rule of Two"):
+            self._run("offsec-specialist", human=False)
+
+    def test_error_says_sandbox_is_not_a_remedy(self):
+        with pytest.raises(NonInteractiveError,
+                           match="sandbox does not substitute"):
+            self._run("offsec-specialist", human=False)
+
+    def test_error_points_to_interactive_session(self):
+        with pytest.raises(NonInteractiveError, match="interactive session"):
+            self._run("offsec-specialist", human=False)
 
 
 class TestSessionHumanTerminal:

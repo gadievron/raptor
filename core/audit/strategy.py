@@ -7,12 +7,26 @@ Selects which review strategies to apply per function based on:
 - Include/import patterns
 - Checklist metadata (attributes, visibility)
 - Context map sink reachability
+
+The hardcoded signal maps carry UNIVERSAL vocabulary only (libc/POSIX
+plus multi-language classics). Linux-kernel token bulk lives in the
+``core/audit/data/strategy_packs/linux_kernel.json`` pack, merged
+additively when ``target_path`` is a detected kernel tree (the same
+markers that gate the checker vocab packs); project-specific
+vocabulary arrives via the study-learned DomainVocabulary
+(``domain_vocab``), never by growing the maps here.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 STRATEGY_GENERAL = "general"
 STRATEGY_INPUT = "input_handling"
@@ -34,7 +48,7 @@ ALL_STRATEGIES = frozenset({
     STRATEGY_INTEGER,
 })
 
-_PATH_SIGNALS: Dict[str, List[str]] = {
+_PATH_SIGNALS: dict[str, list[str]] = {
     STRATEGY_INPUT: [
         "parse", "decode", "deserial", "proto", "codec", "format",
         "packet", "frame", "message", "request", "handler",
@@ -42,13 +56,13 @@ _PATH_SIGNALS: Dict[str, List[str]] = {
         "servlet", "unmarshal",
     ],
     STRATEGY_CONCURRENCY: [
-        "lock", "mutex", "sync", "thread", "atomic", "rcu",
+        "lock", "mutex", "sync", "thread", "atomic",
         "spinlock", "rwlock", "semaphore", "concurrent",
         "worker", "executor", "scheduler", "channel",
         "async", "futures",
     ],
     STRATEGY_MEMORY: [
-        "alloc", "pool", "slab", "cache", "refcount", "kref",
+        "alloc", "pool", "cache", "refcount",
         "buffer", "arena", "heap",
         "gc", "destructor", "disposable",
     ],
@@ -64,9 +78,7 @@ _PATH_SIGNALS: Dict[str, List[str]] = {
     ],
     STRATEGY_ALIASING: [
         "splice", "zero_copy", "zerocopy", "scatter", "mmap",
-        "sk_buff", "skb", "page_cache", "pagecache", "sendfile",
-        "scatterlist", "sg_", "aead", "frag", "page_pool",
-        "pipe_buf", "vmsplice", "copy_page", "kmap",
+        "sendfile", "aead", "frag",
     ],
     STRATEGY_INTEGER: [
         "overflow", "truncat", "cast", "convert", "spec_opts",
@@ -74,7 +86,7 @@ _PATH_SIGNALS: Dict[str, List[str]] = {
     ],
 }
 
-_PARAM_TYPE_SIGNALS: Dict[str, List[str]] = {
+_PARAM_TYPE_SIGNALS: dict[str, list[str]] = {
     STRATEGY_INPUT: [
         r"char\s*\*", r"const\s+char\s*\*", r"unsigned\s+char\s*\*",
         r"void\s*\*", r"const\s+void\s*\*",
@@ -86,17 +98,17 @@ _PARAM_TYPE_SIGNALS: Dict[str, List[str]] = {
     ],
 }
 
-_RETURN_TYPE_SIGNALS: Dict[str, List[str]] = {
+_RETURN_TYPE_SIGNALS: dict[str, list[str]] = {
     STRATEGY_MEMORY: [r"void\s*\*", r"char\s*\*"],
 }
 
-_ATTRIBUTE_SIGNALS: Dict[str, List[str]] = {
+_ATTRIBUTE_SIGNALS: dict[str, list[str]] = {
     STRATEGY_INPUT: ["__user"],
     STRATEGY_MEMORY: ["__must_check"],
     STRATEGY_CONCURRENCY: ["__acquires", "__releases", "__lockdep"],
 }
 
-_INCLUDE_SIGNALS: Dict[str, List[str]] = {
+_INCLUDE_SIGNALS: dict[str, list[str]] = {
     STRATEGY_CONCURRENCY: [
         "pthread.h", "mutex.h", "spinlock.h", "rwlock.h",
         "threading", "asyncio", "concurrent",
@@ -113,15 +125,13 @@ _INCLUDE_SIGNALS: Dict[str, List[str]] = {
     ],
 }
 
-_SOURCE_SIGNALS: Dict[str, List[str]] = {
+_SOURCE_SIGNALS: dict[str, list[str]] = {
     STRATEGY_CONCURRENCY: [
-        # C/kernel
-        "rcu_read_lock", "rcu_read_unlock", "rcu_dereference",
-        "spin_lock", "spin_unlock", "mutex_lock", "mutex_unlock",
-        "task_lock", "task_unlock", "lock_sock", "release_sock",
-        "down_read", "up_read", "down_write", "up_write",
+        # C (universal; "mutex_lock" substring also covers
+        # pthread_mutex_lock)
+        "mutex_lock", "mutex_unlock",
         "atomic_inc", "atomic_dec", "atomic_set",
-        "READ_ONCE", "WRITE_ONCE", "smp_rmb", "smp_wmb",
+        "pthread_", "sem_wait", "sem_post",
         # Go
         "sync.Mutex", ".Lock()", "go func", " chan ",
         "sync.RWMutex", ".RLock()",
@@ -138,9 +148,7 @@ _SOURCE_SIGNALS: Dict[str, List[str]] = {
         "flock(", "sem_acquire",
     ],
     STRATEGY_MEMORY: [
-        # C/kernel
-        "kfree", "kmalloc", "kzalloc", "vmalloc", "vfree",
-        "refcount_inc", "refcount_dec", "kref_put", "kref_get",
+        # C (universal libc)
         "free(", "malloc(", "calloc(", "realloc(",
         # Rust
         "unsafe {", "ManuallyDrop", "Box::from_raw",
@@ -148,13 +156,9 @@ _SOURCE_SIGNALS: Dict[str, List[str]] = {
         # Java
         "finalize()", "WeakReference",
     ],
-    STRATEGY_ALIASING: [
-        "sg_chain", "sg_init_table", "scatterlist",
-        "memcpy_sglist", "skb_cow_data",
-    ],
     STRATEGY_INTEGER: [
-        # C/kernel
-        "size_t", "ssize_t", "uint32_t", "check_mul_overflow",
+        # C (universal)
+        "size_t", "ssize_t", "uint32_t",
         # Go
         "strconv.Atoi", "uint32(", "math.MaxInt",
         # Rust
@@ -210,22 +214,153 @@ _SOURCE_SIGNALS: Dict[str, List[str]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Target-kind signal packs + learned vocabulary
+# ---------------------------------------------------------------------------
+
+_STRATEGY_PACK_DIR = Path(__file__).resolve().parent / "data" / "strategy_packs"
+
+
+@lru_cache(maxsize=4)
+def _signal_pack(name: str) -> tuple | None:
+    """(path_signals, source_signals) supplements from a pack file.
+
+    Returns None (logged) when the pack is missing or malformed —
+    inference then runs on the universal maps alone.
+    """
+    path = _STRATEGY_PACK_DIR / f"{name}.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("strategy pack %s unavailable (%s)", path, e)
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    def _sig(key: str) -> dict[str, list[str]]:
+        block = raw.get(key, {})
+        if not isinstance(block, dict):
+            return {}
+        return {
+            strategy: [s for s in tokens if isinstance(s, str) and s]
+            for strategy, tokens in block.items()
+            if isinstance(tokens, list) and strategy in ALL_STRATEGIES
+        }
+
+    return _sig("path_signals"), _sig("source_signals")
+
+
+def _pack_for_target(target_path: Any) -> tuple | None:
+    """Kernel-tree gate — the same markers as the checker vocab packs."""
+    if target_path is None:
+        return None
+    try:
+        from .vocab_packs import is_kernel_tree
+        if is_kernel_tree(target_path):
+            return _signal_pack("linux_kernel")
+    except Exception:
+        logger.debug("strategy pack gating failed", exc_info=True)
+    return None
+
+
+def _merged_signal_map(
+    base: dict[str, list[str]],
+    extra: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Additive union of two signal maps (base order preserved)."""
+    if not extra:
+        return base
+    merged = {k: list(v) for k, v in base.items()}
+    for strategy, tokens in extra.items():
+        bucket = merged.setdefault(strategy, [])
+        bucket.extend(t for t in tokens if t not in bucket)
+    return merged
+
+
+@lru_cache(maxsize=8)
+def _learned_vocab_cached(out_dir_str: str, target_str: str) -> Any:
+    try:
+        from core.coverage.journal import load_domain_model
+
+        from .condition_smt import DomainVocabulary
+        return DomainVocabulary.from_domain_model(
+            load_domain_model(Path(out_dir_str)),
+            target_path=target_str or None,
+        )
+    except Exception:
+        logger.debug("learned vocab load failed", exc_info=True)
+        return None
+
+
+def learned_vocab(out_dir: Any, target_path: Any = None) -> Any:
+    """Cached study-learned DomainVocabulary for a run (or None).
+
+    Convenience for strategy-inference callers: loads the run's
+    domain model once per (out_dir, target) and merges the target-kind
+    checker pack. Best-effort — returns None when there is nothing to
+    load.
+    """
+    if out_dir is None:
+        return None
+    vocab = _learned_vocab_cached(
+        str(out_dir), str(target_path) if target_path else "",
+    )
+    if vocab is not None and not vocab.has_content:
+        return None
+    return vocab
+
+
+# Which DomainVocabulary classes route to which strategy when the
+# function's source calls one of the learned names.
+_VOCAB_CLASS_STRATEGIES: dict[str, tuple] = {
+    STRATEGY_MEMORY: (
+        "allocators", "deallocators", "refcount_gets", "refcount_puts",
+        "callback_registers", "callback_cancels",
+    ),
+    STRATEGY_CONCURRENCY: ("lock_acquires", "lock_releases"),
+    STRATEGY_INPUT: ("boundary_transfers",),
+}
+
+
+def _vocab_strategies(source: str, domain_vocab: Any) -> set[str]:
+    """Strategies routed by learned vocabulary calls in *source*."""
+    out: set[str] = set()
+    for strategy, classes in _VOCAB_CLASS_STRATEGIES.items():
+        for cls_attr in classes:
+            names = getattr(domain_vocab, cls_attr, None) or ()
+            if any(
+                isinstance(n, str) and n and (n + "(") in source
+                for n in names
+            ):
+                out.add(strategy)
+                break
+    auth_preds = getattr(domain_vocab, "auth_predicates", None) or ()
+    for entry in auth_preds:
+        name = entry[0] if isinstance(entry, tuple) else entry
+        if isinstance(name, str) and name and (name + "(") in source:
+            out.add(STRATEGY_AUTH)
+            break
+    return out
+
+
 def infer_strategies(
     *,
     file_path: str,
     function_name: str,
-    parameters: Optional[List[tuple]] = None,
-    return_type: Optional[str] = None,
-    attributes: Optional[List[str]] = None,
-    includes: Optional[List[str]] = None,
-    reachable_sinks: Optional[List[str]] = None,
-    shared_state: Optional[List[Any]] = None,
-    crypto_inventory: Optional[List[Any]] = None,
-    ownership_model: Optional[List[Any]] = None,
-    kind: Optional[str] = None,
-    visibility: Optional[str] = None,
-    source: Optional[str] = None,
-) -> FrozenSet[str]:
+    parameters: list[tuple] | None = None,
+    return_type: str | None = None,
+    attributes: list[str] | None = None,
+    includes: list[str] | None = None,
+    reachable_sinks: list[str] | None = None,
+    shared_state: list[Any] | None = None,
+    crypto_inventory: list[Any] | None = None,
+    ownership_model: list[Any] | None = None,
+    kind: str | None = None,
+    visibility: str | None = None,
+    source: str | None = None,
+    target_path: Any = None,
+    domain_vocab: Any = None,
+) -> frozenset[str]:
     """Select review strategies for a function.
 
     Always includes ``general``. Additional strategies are added based
@@ -246,17 +381,33 @@ def infer_strategies(
         kind: Checklist item kind (function, global, macro, class).
         visibility: Checklist item visibility (static, extern, exported, etc.).
         source: Function source text for keyword-based strategy inference.
+        target_path: root of the target under analysis. A detected
+            Linux kernel tree merges the linux_kernel strategy pack's
+            token supplements into the path/source signal maps (the
+            kernel token bulk lives in the pack, not here).
+        domain_vocab: optional study-learned DomainVocabulary; calls
+            to its learned names in ``source`` route the function to
+            the matching strategy (allocators/refcounts/callback verbs
+            → memory, lock verbs → concurrency, auth predicates →
+            auth, boundary transfers → input_handling) — additively.
 
     Returns:
         Frozen set of strategy names to apply.
     """
-    strategies: Set[str] = {STRATEGY_GENERAL}
+    strategies: set[str] = {STRATEGY_GENERAL}
+
+    path_signals = _PATH_SIGNALS
+    source_signals = _SOURCE_SIGNALS
+    pack = _pack_for_target(target_path)
+    if pack is not None:
+        path_signals = _merged_signal_map(_PATH_SIGNALS, pack[0])
+        source_signals = _merged_signal_map(_SOURCE_SIGNALS, pack[1])
 
     path_lower = file_path.lower()
     name_lower = function_name.lower()
     combined = f"{path_lower}/{name_lower}"
 
-    for strategy, keywords in _PATH_SIGNALS.items():
+    for strategy, keywords in path_signals.items():
         if any(kw in combined for kw in keywords):
             strategies.add(strategy)
 
@@ -309,27 +460,34 @@ def infer_strategies(
         strategies.add(STRATEGY_INPUT)
 
     if source:
-        for strategy, keywords in _SOURCE_SIGNALS.items():
+        for strategy, keywords in source_signals.items():
             if any(kw in source for kw in keywords):
                 strategies.add(strategy)
+        if domain_vocab is not None:
+            strategies |= _vocab_strategies(source, domain_vocab)
 
     return frozenset(strategies)
 
 
 def strategies_from_item(
-    item: Dict[str, Any],
+    item: dict[str, Any],
     file_path: str,
     *,
-    reachable_sinks: Optional[List[str]] = None,
-    shared_state: Optional[List[Any]] = None,
-    crypto_inventory: Optional[List[Any]] = None,
-    ownership_model: Optional[List[Any]] = None,
-    source: Optional[str] = None,
-) -> FrozenSet[str]:
+    includes: list[str] | None = None,
+    reachable_sinks: list[str] | None = None,
+    shared_state: list[Any] | None = None,
+    crypto_inventory: list[Any] | None = None,
+    ownership_model: list[Any] | None = None,
+    source: str | None = None,
+    target_path: Any = None,
+    domain_vocab: Any = None,
+) -> frozenset[str]:
     """Select strategies from a checklist item dict.
 
     Convenience wrapper that extracts metadata fields from the
-    serialized checklist item format.
+    serialized checklist item format. Checklist metadata carries no
+    include/import data, so ``includes`` must be supplied by the
+    caller (e.g. from the source file's import lines).
     """
     metadata = item.get("metadata", {}) or {}
     parameters = None
@@ -352,6 +510,7 @@ def strategies_from_item(
         parameters=parameters,
         return_type=metadata.get("return_type"),
         attributes=metadata.get("attributes"),
+        includes=includes,
         reachable_sinks=reachable_sinks,
         shared_state=shared_state,
         crypto_inventory=crypto_inventory,
@@ -359,10 +518,12 @@ def strategies_from_item(
         kind=item.get("kind"),
         visibility=metadata.get("visibility"),
         source=source,
+        target_path=target_path,
+        domain_vocab=domain_vocab,
     )
 
 
-STRATEGY_PRIMERS: Dict[str, str] = {
+STRATEGY_PRIMERS: dict[str, str] = {
     "aliasing": (
         "ALIASING / ZERO-COPY VULNERABILITY PRIMER\n"
         "\n"
@@ -399,6 +560,52 @@ STRATEGY_PRIMERS: Dict[str, str] = {
         "4. Identify what writes through the aliased pointer: "
         "crypto_aead_encrypt/decrypt, memcpy into SGL, skb_cow_data "
         "that doesn't actually copy."
+    ),
+    "auth": (
+        "AUTHENTICATION / AUTHORIZATION VULNERABILITY PRIMER\n"
+        "\n"
+        "The pattern: the check and the action live in different "
+        "places, and a path exists from request to action that skips "
+        "or weakens the check. Authn/authz bugs are rarely broken "
+        "algorithms — they are broken PLUMBING between the credential "
+        "and the privileged operation.\n"
+        "\n"
+        "What to look for:\n"
+        "- Check/act separation: a handler that performs the "
+        "privileged operation, and a decorator/middleware/filter "
+        "expected to have run first. Find registrations that bypass "
+        "the middleware chain (alternate routers, internal endpoints, "
+        "debug handlers, websocket/upgrade paths).\n"
+        "- Verification results that are computed but not enforced: "
+        "jwt.verify/signature-check calls whose return value or "
+        "exception is swallowed; verify=False / algorithms=['none'] "
+        "reachable via config.\n"
+        "- Identity from mutable sources: trusting Host/X-Forwarded-* "
+        "headers, client-supplied user ids or role fields, session "
+        "values written before authentication completed.\n"
+        "- Comparison defects: token/secret equality via early-exit "
+        "string compare on a network-observable path; case/Unicode "
+        "normalisation differences between the check and the lookup.\n"
+        "- State-machine gaps: password-reset, MFA, and OAuth flows "
+        "where a later step does not re-verify what an earlier step "
+        "established (or a step can be replayed/skipped).\n"
+        "\n"
+        "The assumption that fails: 'every path to this operation went "
+        "through the auth layer' or 'this value was set by us'. "
+        "Alternate entry points, background jobs replaying user input, "
+        "and deserialised session state violate both.\n"
+        "\n"
+        "Verification steps:\n"
+        "1. Enumerate every route/registration that reaches the "
+        "privileged function; diff against the set covered by the "
+        "auth middleware/decorator.\n"
+        "2. For each verify/authenticate call, confirm the result is "
+        "consumed on every branch (including exception paths).\n"
+        "3. Trace the identity value from its origin — reject any "
+        "origin the client controls.\n"
+        "4. For multi-step flows, write down the state each step "
+        "assumes and check the server enforces the ordering rather "
+        "than trusting the client to follow it."
     ),
     "crypto": (
         "CRYPTO SUBSYSTEM VULNERABILITY PRIMER\n"
@@ -561,9 +768,9 @@ STRATEGY_PRIMERS: Dict[str, str] = {
 }
 
 
-def primers_for_strategies(strategies: FrozenSet[str]) -> List[str]:
+def primers_for_strategies(strategies: frozenset[str]) -> list[str]:
     """Return primer texts for the given strategy set."""
-    result: List[str] = []
+    result: list[str] = []
     for strategy in sorted(strategies):
         if strategy in STRATEGY_PRIMERS:
             result.append(STRATEGY_PRIMERS[strategy])

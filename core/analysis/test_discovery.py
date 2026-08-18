@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 _TEST_DIR_PATTERNS = ("test_", "tests", "test", "spec", "specs")
 _TEST_FILE_PATTERNS = re.compile(r"(?:test_\w+|_test)\.\w+$")
+# Languages the extraction heuristics below understand. Test-tree files
+# in other languages (C/C++ suites especially) are counted and reported
+# as skipped, not silently dropped — a huge native test suite used to
+# surface as "found 0 test cases for 0 functions in 7 files", which
+# reads as a discovery bug instead of a language-support boundary.
+_SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".rs", ".rb", ".java")
 _ASSERT_PATTERN = re.compile(
     r"^\s*(?:assert(?:Equal|True|False|Raises|In|NotIn|Is|IsNot|Greater|Less"
     r"|Regex|Almost|Count|Contains|Not)?|self\.assert\w+|expect\(|assert )"
@@ -56,8 +62,15 @@ def discover_tests(
     if not target.is_dir():
         return {}
 
-    test_files = _find_test_files(target)
+    test_files, skipped_unsupported = _find_test_files(target)
     if not test_files:
+        if skipped_unsupported:
+            logger.info(
+                "test_discovery: no test files in a supported language "
+                "(%d test-tree files skipped; discovery reads %s only)",
+                skipped_unsupported,
+                "/".join(_SUPPORTED_EXTENSIONS),
+            )
         return {}
 
     result: Dict[str, List[TestCase]] = {}
@@ -83,12 +96,28 @@ def discover_tests(
                 )
                 result.setdefault(target_fn, []).append(tc)
 
-    logger.info(
-        "test_discovery: found %d test cases for %d functions in %d files",
-        sum(len(v) for v in result.values()),
-        len(result),
-        len(test_files),
+    skipped_note = (
+        " (%d test-tree files skipped: unsupported language; discovery"
+        " reads %s only)"
+        % (skipped_unsupported, "/".join(_SUPPORTED_EXTENSIONS))
+        if skipped_unsupported else ""
     )
+    if result:
+        logger.info(
+            "test_discovery: found %d test cases for %d functions in "
+            "%d scanned test files%s",
+            sum(len(v) for v in result.values()),
+            len(result),
+            len(test_files),
+            skipped_note,
+        )
+    else:
+        logger.info(
+            "test_discovery: no test cases matched the naming/call "
+            "heuristics in %d scanned test files%s",
+            len(test_files),
+            skipped_note,
+        )
 
     return result
 
@@ -117,9 +146,17 @@ def format_tests_for_context(
     return "\n".join(lines)
 
 
-def _find_test_files(target: Path) -> List[Path]:
-    """Find test files under the target directory."""
+def _find_test_files(target: Path) -> tuple[List[Path], int]:
+    """Find test files under the target directory.
+
+    Returns ``(supported_test_files, skipped_unsupported)`` where the
+    counter is the number of test-tree files whose language the
+    extraction heuristics don't read — reported so a "0 test cases"
+    summary on a large native suite is attributable to the language
+    boundary rather than looking like a discovery bug.
+    """
     test_files: List[Path] = []
+    skipped_unsupported = 0
 
     for root, dirs, files in os.walk(str(target)):
         root_path = Path(root)
@@ -137,14 +174,16 @@ def _find_test_files(target: Path) -> List[Path]:
         )
 
         for fname in files:
-            if not fname.endswith((".py", ".js", ".ts", ".go", ".rs", ".rb", ".java")):
+            if not fname.endswith(_SUPPORTED_EXTENSIONS):
+                if is_test_dir or _TEST_FILE_PATTERNS.search(fname):
+                    skipped_unsupported += 1
                 continue
             if is_test_dir or _TEST_FILE_PATTERNS.search(fname):
                 fpath = root_path / fname
                 if fpath.stat().st_size < 500_000:
                     test_files.append(fpath)
 
-    return test_files[:500]
+    return test_files[:500], skipped_unsupported
 
 
 def _extract_test_functions(source: str) -> List[tuple]:

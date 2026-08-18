@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from core.audit.cost_tracker import CostTracker
+from core.audit.cost_tracker import PhaseCostLedger
 from core.audit.orchestrator import (
     OrchestratorConfig,
     OrchestratorResult,
@@ -188,7 +188,7 @@ class TestCostTrackerPhases:
     """Verify the new phases are tracked correctly."""
 
     def test_all_new_phases_record(self):
-        ct = CostTracker()
+        ct = PhaseCostLedger()
         new_phases = [
             "error_retry", "iris_synthesis", "re_review", "propagation",
         ]
@@ -202,7 +202,7 @@ class TestCostTrackerPhases:
             assert ct.phases[phase].calls == 1
 
     def test_cost_breakdown_json(self, tmp_path):
-        ct = CostTracker()
+        ct = PhaseCostLedger()
         ct.record_call("review", cost_usd=0.50, tokens_in=5000, tokens_out=1000)
         ct.record_call("re_review", cost_usd=0.10, tokens_in=1000, tokens_out=200)
         ct.record_call("error_retry", cost_usd=0.05, tokens_in=500, tokens_out=100)
@@ -219,7 +219,7 @@ class TestCostTrackerPhases:
         assert abs(data["totals"]["cost_usd"] - 0.68) < 0.01
 
     def test_summary_includes_new_phases(self):
-        ct = CostTracker()
+        ct = PhaseCostLedger()
         ct.record_call("review", cost_usd=0.50)
         ct.record_call("error_retry", cost_usd=0.05)
         ct.record_call("re_review", cost_usd=0.10)

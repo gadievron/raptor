@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,8 @@ class ToolPolicy:
     network_deny: bool = True
     fs_read_only: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "tool": self.tool,
             "profile": self.profile,
             "reason": self.reason,
@@ -58,7 +58,7 @@ class ToolPolicy:
         return d
 
 
-_TOOL_POLICIES: Dict[str, ToolPolicy] = {
+_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "readelf": ToolPolicy(
         tool="readelf", profile=SandboxProfile.TRUSTED,
         reason="binutils parsing attacker-controlled ELF headers",
@@ -139,7 +139,7 @@ _TOOL_POLICIES: Dict[str, ToolPolicy] = {
 }
 
 
-def get_sandbox_profile(tool: str) -> Optional[ToolPolicy]:
+def get_sandbox_profile(tool: str) -> ToolPolicy | None:
     """Look up the sandbox policy for a tool.
 
     Returns None for unknown tools — callers should refuse to run
@@ -159,24 +159,46 @@ def require_sandbox_profile(tool: str) -> ToolPolicy:
     return policy
 
 
-def all_policies() -> List[ToolPolicy]:
+def all_policies() -> list[ToolPolicy]:
     """Return all registered tool policies."""
     return list(_TOOL_POLICIES.values())
 
 
 _LLM_PHASES = frozenset({
     "review", "checker_synthesis", "error_retry", "re_review",
+    # Pre-loop LLM summary extraction (core.audit.llm_summaries),
+    # booked into the phase ledger as the "summary" call class.
+    "summary",
+    # Remaining LLM-side ledger names. The orchestrator feeds this
+    # validator the COST-LEDGER phase keys, and that ledger books LLM
+    # spend classes exclusively — subprocess tools never book cost
+    # there (their runners enforce sandboxing at the invocation
+    # chokepoint instead). Every name the ledger can carry is
+    # therefore LLM-side by construction: the cost tracker's known
+    # phases plus any telemetry call class book_unbooked_classes
+    # imports (spec_inference, iris, glance_batch, audit, the
+    # "unclassified" fallback…). A live run warned "invoked without
+    # policy: refinement, iris, unclassified" — three LLM spend
+    # buckets, zero subprocesses; pure false positives.
+    "refinement", "spec_inference", "iris", "glance_batch", "audit",
+    "unclassified", "concept_discovery", "rule_refinement", "stress",
+    "triage", "prefilter", "clean_check", "sweep", "synthesis",
+    "dynamic", "reachability", "propagation", "attacker_synthesis",
+    "dark_verify", "report", "deepen", "study",
 })
 
 
 def validate_all_tools_sandboxed(
-    invoked_tools: List[str],
-) -> List[str]:
+    invoked_tools: list[str],
+) -> list[str]:
     """Check that every invoked tool has a sandbox policy.
 
     Returns a list of tools WITHOUT a policy (should be empty).
-    LLM-only phases (review, checker_synthesis, etc.) are excluded —
-    they don't invoke external tools.
+    LLM-only phases and cost-ledger spend buckets (review,
+    checker_synthesis, refinement, iris, etc.) are excluded — they
+    don't invoke external tools; subprocess tools enforce their
+    policies at the runner chokepoint and never appear in the cost
+    ledger this validator is fed from.
     """
     missing = []
     for tool in invoked_tools:
@@ -188,7 +210,7 @@ def validate_all_tools_sandboxed(
 
 
 def format_sandbox_summary(
-    invoked_tools: Optional[List[str]] = None,
+    invoked_tools: list[str] | None = None,
 ) -> str:
     """Render a summary of sandbox coverage."""
     if invoked_tools is None:

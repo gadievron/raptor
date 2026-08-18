@@ -9,6 +9,7 @@ per-call — batching it adds complexity for no gain.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -16,8 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from .journal import (
-    ReviewJournalEntry, append_entry, compute_domain_model_hash,
-    flush_journal, now_iso,
+    ReviewJournalEntry,
+    append_entry,
+    compute_domain_model_hash,
+    flush_journal,
+    now_iso,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,7 +34,7 @@ def append_journal_for_outcome(
     run_id: str,
     outcome: Any,
     gap: dict[str, Any],
-    checked_by: list[str],
+    checked_by: list[str] | None = None,
     domain_model_hash: str | None = None,
     producer: str | None = None,
 ) -> None:
@@ -44,11 +48,16 @@ def append_journal_for_outcome(
     review journal, since the design makes the journal the LLM
     review record.
 
+    ``checked_by`` is vestigial: accepted for call-site compatibility
+    (orchestrator still passes it) but NOT persisted — the journal
+    schema has no checked_by column; model attribution lands via
+    ``entry.model``.
+
     ``producer`` distinguishes /audit vs /agentic write sites so
     ``import_journal`` doesn't have to guess from run_id string
     prefixes (amendment §1 A2 / final review Finding #2). Default
-    ``"audit"`` matches the historical convention for `checked_by`
-    labels — /agentic call sites pass ``"agentic"`` explicitly.
+    ``"audit"`` matches the historical convention — /agentic call
+    sites pass ``"agentic"`` explicitly.
 
     Best-effort: any failure logs at DEBUG and swallows so an
     unrelated review can't be lost when a hash / concept lookup
@@ -96,11 +105,20 @@ def append_journal_for_outcome(
             if isinstance(item, dict)
         ]
 
+    study_receipts: list[dict] = []
+    if review_result and review_result.get("study_receipts"):
+        study_receipts = [
+            r for r in review_result["study_receipts"]
+            if isinstance(r, dict)
+        ]
+
     domain_concepts: list[str] = []
     invariants_available: list[str] = []
     try:
         from core.concepts.audit_bridge import (
-            _find_domain_model, _guard_in_scope, _relevance_score,
+            _find_domain_model,
+            _guard_in_scope,
+            _relevance_score,
         )
         dm = _find_domain_model(out_dir)
         if dm:
@@ -115,9 +133,10 @@ def append_journal_for_outcome(
                         )
             for inv in dm.get("invariants", []):
                 inv_role = inv.get("role", "boost")
-                if inv_role == "guard":
-                    if not _guard_in_scope(inv, outcome.file or ""):
-                        continue
+                if inv_role == "guard" and not _guard_in_scope(
+                    inv, outcome.file or "",
+                ):
+                    continue
                 inv_id = inv.get("id", "")
                 if inv_id:
                     invariants_available.append(inv_id)
@@ -141,6 +160,26 @@ def append_journal_for_outcome(
         verdict_rationale = review_result.get("verdict_rationale") or None
         counter_hypothesis = review_result.get("counter_hypothesis") or None
 
+    # Reduced-context and reused verdicts are journaled with their
+    # provenance so cross-run verdict reuse can (a) refuse to treat a
+    # reduced-context verdict as durable coverage and (b) keep a
+    # chain of reuses pointing at the run that actually reviewed.
+    context_reduced = bool(getattr(outcome, "context_reduced", False)) or None
+    reused = bool(getattr(outcome, "reused", False)) or None
+    reused_from_run = (getattr(outcome, "reused_from_run", "") or None) if reused else None
+
+    # Promotion-without-tool-evidence alarm: the journal write is the
+    # chokepoint every review outcome flows through, so an evidence-less
+    # ``finding`` here means the tool-gated promotion invariant was
+    # bypassed upstream.  Alarm-only — the entry is still written.
+    try:
+        from .promotion_alarm import check_and_emit
+        check_and_emit(
+            out_dir, outcome, stage="journal-write", run_id=run_id,
+        )
+    except Exception:
+        logger.debug("promotion alarm hook failed", exc_info=True)
+
     entry = ReviewJournalEntry(
         ts=now_iso(),
         run_id=run_id,
@@ -158,12 +197,16 @@ def append_journal_for_outcome(
         hypotheses=hypotheses_list,
         body=getattr(outcome, "body", "") or "",
         reading_list_items=reading_list_items,
+        study_receipts=study_receipts,
         model=getattr(outcome, "model", None) or None,
         evidence_tools=evidence_tools,
         cost_usd=getattr(outcome, "cost_usd", None) or None,
         duration_s=getattr(outcome, "duration_s", None) or None,
         verdict_rationale=verdict_rationale,
         counter_hypothesis=counter_hypothesis,
+        context_reduced=context_reduced,
+        reused=reused,
+        reused_from_run=reused_from_run,
         producer=producer,
     )
     try:
@@ -194,16 +237,14 @@ class Collector:
         *,
         batch: bool = False,
     ) -> None:
-        checked_by = ["audit"]
-        if outcome.model:
-            checked_by.append(outcome.model)
-
         # Journal is the sole LLM review store (see amendment §2).
         # ``record_review``'s coverage-audit.json write and
         # ``mark_checked``'s checklist stamp were removed at Phase-3
         # completion; the journal captures verdict/body/context and
-        # the coverage store imports it at run completion.
-        self._append_journal_entry(outcome, gap, checked_by)
+        # the coverage store imports it at run completion. Model
+        # attribution travels via ``entry.model`` — there is no
+        # separate checked_by record.
+        self._append_journal_entry(outcome, gap)
 
         entry: dict[str, Any] = {
             "action": "orchestrator_review",
@@ -252,16 +293,14 @@ class Collector:
         self,
         outcome: Any,
         gap: dict[str, Any],
-        checked_by: list[str],
     ) -> None:
-        """Dual-write: append a journal entry alongside checked_by."""
+        """Append the review outcome to the journal (batch-cached hash)."""
         append_journal_for_outcome(
             out_dir=self.out_dir,
             target_path=self.target_path,
             run_id=self.run_id,
             outcome=outcome,
             gap=gap,
-            checked_by=checked_by,
             domain_model_hash=self._get_domain_model_hash(),
         )
 
@@ -277,11 +316,11 @@ class Collector:
     def invalidate_domain_model_cache(self) -> None:
         """Call after the domain model changes (e.g. JIT study loop)."""
         self._domain_model_hash = None
-        try:
+        # cache_clear() cannot raise; only a partial install (import
+        # failure) can legitimately fail here.
+        with contextlib.suppress(ImportError):
             from core.concepts.audit_bridge import _load_cached
             _load_cached.cache_clear()
-        except Exception:
-            pass
 
     def flush(self) -> None:
         """Write all buffered state to disk in bulk."""

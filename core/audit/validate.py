@@ -13,13 +13,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
-import subprocess
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from core.orchestration.skill_dispatch import (
+    MAX_VALIDATE_FINDINGS,
+    run_skill_dispatch,
+    truncate_findings_by_signal,
+)
 from core.schema_constants import CWE_TO_VULN_TYPE, normalise_vuln_type
 
 from .orchestrator import OrchestratorResult, ReviewOutcome
@@ -28,19 +30,19 @@ from .record import append_audit_log
 logger = logging.getLogger(__name__)
 
 _RAPTOR_DIR = Path(os.environ["RAPTOR_DIR"])
-_LIFECYCLE = _RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"
-_MAX_VALIDATE_FINDINGS = 50
+# Re-exported from the shared skill-dispatch substrate (kept as a module
+# attribute so tests/monkeypatchers can dial the cap per-module).
+_MAX_VALIDATE_FINDINGS = MAX_VALIDATE_FINDINGS
 _VALIDATE_TOOLS = "Read,Grep,Glob,Write,Bash"
 _VALIDATE_BUDGET_USD = "10.00"
 _VALIDATE_TIMEOUT_S = 1800
-_LIFECYCLE_TIMEOUT_S = 30
 
 
 @dataclass
 class ValidatePostpassResult:
     ran: bool
     selected_count: int = 0
-    validate_dir: Optional[str] = None
+    validate_dir: str | None = None
     skipped_reason: str = ""
     duration_s: float = 0.0
 
@@ -151,19 +153,8 @@ def _dispatch_validate_unsafe(
     findings_path: Path,
     findings_count: int,
 ) -> ValidatePostpassResult:
-    from core.security.rule_of_two import (
-        NonInteractiveError, require_human_or_sandbox_for_agentic_pass,
-    )
-    try:
-        require_human_or_sandbox_for_agentic_pass("validate")
-    except NonInteractiveError as e:
-        return ValidatePostpassResult(ran=False, skipped_reason=str(e))
-
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        return ValidatePostpassResult(
-            ran=False, skipped_reason="claude not on PATH",
-        )
+    target_path = Path(target_path).resolve()
+    audit_out_dir = Path(audit_out_dir).resolve()
 
     if findings_count > _MAX_VALIDATE_FINDINGS:
         logger.warning(
@@ -172,22 +163,7 @@ def _dispatch_validate_unsafe(
         )
         findings_count = _MAX_VALIDATE_FINDINGS
 
-    target_path = Path(target_path).resolve()
-    audit_out_dir = Path(audit_out_dir).resolve()
-
-    t0 = time.monotonic()
-
-    validate_dir = _start_validate_lifecycle(target_path)
-    if validate_dir is None:
-        return ValidatePostpassResult(
-            ran=False,
-            selected_count=findings_count,
-            skipped_reason="lifecycle start failed",
-            duration_s=time.monotonic() - t0,
-        )
-
-    lifecycle_settled = False
-    try:
+    def _stage(validate_dir: Path) -> None:
         selection_file = validate_dir / "selected-findings.json"
         _copy_findings_for_validate(findings_path, selection_file)
 
@@ -203,158 +179,70 @@ def _dispatch_validate_unsafe(
                 },
             )
 
-        prompt = _build_audit_validate_prompt(
+    def _prompt(validate_dir: Path) -> str:
+        return _build_audit_validate_prompt(
             target_path, audit_out_dir, validate_dir,
-            selection_file, findings_count,
+            validate_dir / "selected-findings.json", findings_count,
         )
 
-        from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
-        from core.sandbox import run_untrusted_networked
-        from core.llm.cc_proxy_hosts import (
-            readable_paths_for_cc_dispatch,
-            proxy_hosts_for_cc_dispatch,
-        )
-        dispatch_config = CCDispatchConfig(
-            claude_bin=claude_bin,
-            tools=_VALIDATE_TOOLS,
-            add_dirs=(
-                str(_RAPTOR_DIR), str(target_path),
-                str(audit_out_dir), str(validate_dir),
-            ),
-            budget_usd=_VALIDATE_BUDGET_USD,
-            timeout_s=_VALIDATE_TIMEOUT_S,
-            capture_json_envelope=False,
-        )
+    # cc-trust gate: refuse to dispatch a Claude Code child against a
+    # repo whose .claude/settings / .mcp.json the operator has not
+    # trusted for cc dispatch. Same gate the /agentic launcher applies
+    # (check_repo_claude_trust honours the operator's --trust-repo via
+    # set_trust_override). Pre-consolidation the audit handoff had no
+    # such gate — an untrusted repo's config reached the CC child.
+    from core.security.cc_trust import check_repo_claude_trust
 
-        try:
-            proc = run_untrusted_networked(
-                build_cc_command(dispatch_config),
-                input=prompt, text=True,
-                timeout=_VALIDATE_TIMEOUT_S,
-                target=str(target_path), output=str(validate_dir),
-                readable_paths=(
-                    [str(_RAPTOR_DIR), str(audit_out_dir)]
-                    + readable_paths_for_cc_dispatch(claude_bin)
-                ),
-                proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
-                caller_label="audit-validate",
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("validate post-pass timed out after %ds",
-                           _VALIDATE_TIMEOUT_S)
-            _fail_validate_lifecycle(validate_dir, "timeout")
-            lifecycle_settled = True
-            return ValidatePostpassResult(
-                ran=False,
-                selected_count=findings_count,
-                validate_dir=str(validate_dir),
-                skipped_reason="timeout",
-                duration_s=time.monotonic() - t0,
-            )
-
-        if proc.returncode != 0:
-            logger.warning(
-                "validate post-pass exited %d: %s",
-                proc.returncode, (proc.stderr or "")[:500],
-            )
-            _fail_validate_lifecycle(
-                validate_dir,
-                f"exit {proc.returncode}",
-            )
-            lifecycle_settled = True
-            return ValidatePostpassResult(
-                ran=False,
-                selected_count=findings_count,
-                validate_dir=str(validate_dir),
-                skipped_reason=f"exit {proc.returncode}",
-                duration_s=time.monotonic() - t0,
-            )
-
-        _complete_validate_lifecycle(validate_dir)
-        lifecycle_settled = True
-
-        return ValidatePostpassResult(
-            ran=True,
-            selected_count=findings_count,
-            validate_dir=str(validate_dir),
-            duration_s=time.monotonic() - t0,
-        )
-
-    except KeyboardInterrupt:
-        if not lifecycle_settled:
-            _fail_validate_lifecycle(validate_dir, "interrupted")
-        raise
-    except Exception:
-        if not lifecycle_settled:
-            _fail_validate_lifecycle(validate_dir, "unexpected error")
-        raise
-
-
-def _start_validate_lifecycle(target: Path) -> Optional[Path]:
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        proc = subprocess.run(
-            [str(_LIFECYCLE), "start", "validate", "--target", str(target)],
-            capture_output=True, text=True,
-            timeout=_LIFECYCLE_TIMEOUT_S, env=safe_env,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning("lifecycle start validate failed: %s", e)
-        return None
-    if proc.returncode != 0:
-        logger.warning(
-            "lifecycle start validate returned %d: %s",
-            proc.returncode, (proc.stderr or "")[:300],
-        )
-        return None
-    for line in reversed(proc.stdout.splitlines()):
-        line = line.strip()
-        if line.startswith("OUTPUT_DIR="):
-            return Path(line[len("OUTPUT_DIR="):]).resolve()
-    logger.warning("lifecycle start validate did not emit OUTPUT_DIR=")
-    return None
-
-
-def _complete_validate_lifecycle(output_dir: Path) -> None:
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        subprocess.run(
-            [str(_LIFECYCLE), "complete", str(output_dir)],
-            capture_output=True, text=True,
-            timeout=_LIFECYCLE_TIMEOUT_S, env=safe_env,
-        )
-    except Exception as e:
-        logger.warning("lifecycle complete failed: %s", e)
-
-
-def _fail_validate_lifecycle(output_dir: Path, message: str) -> None:
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        subprocess.run(
-            [str(_LIFECYCLE), "fail", str(output_dir), message],
-            capture_output=True, text=True,
-            timeout=_LIFECYCLE_TIMEOUT_S, env=safe_env,
-        )
-    except Exception as e:
-        logger.warning("lifecycle fail failed: %s", e)
+    dispatch = run_skill_dispatch(
+        command="validate",
+        target=target_path,
+        tools=_VALIDATE_TOOLS,
+        budget_usd=_VALIDATE_BUDGET_USD,
+        timeout_s=_VALIDATE_TIMEOUT_S,
+        caller_label="audit-validate",
+        log_label="validate post-pass",
+        build_prompt=_prompt,
+        block_cc_dispatch=check_repo_claude_trust(str(target_path)),
+        context_dirs=(audit_out_dir,),
+        stage=_stage,
+    )
+    return ValidatePostpassResult(
+        ran=dispatch.ran,
+        selected_count=findings_count,
+        validate_dir=str(dispatch.run_dir) if dispatch.run_dir else None,
+        skipped_reason=dispatch.skipped_reason or "",
+        duration_s=dispatch.duration_s,
+    )
 
 
 def _copy_findings_for_validate(
     findings_path: Path,
     dest: Path,
 ) -> None:
-    """Copy audit findings.json into the validate dir."""
+    """Copy audit findings.json into the validate dir.
+
+    Over-cap selections are truncated SIGNAL-SORTED (shared policy from
+    core.orchestration.skill_dispatch): is_exploitable first, then
+    exploitability_score, ties stable in emission order. Pre-
+    consolidation this head-truncated — silently dropping the
+    strongest findings whenever more than the cap qualified.
+    """
     try:
         with open(findings_path, encoding="utf-8") as f:
             container = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return
     entries = container.get("findings", [])
-    if len(entries) > _MAX_VALIDATE_FINDINGS:
-        entries = entries[:_MAX_VALIDATE_FINDINGS]
+    if isinstance(entries, list) and len(entries) > _MAX_VALIDATE_FINDINGS:
+        if all(isinstance(e, dict) for e in entries):
+            entries = truncate_findings_by_signal(
+                entries, _MAX_VALIDATE_FINDINGS,
+                log_label="validate post-pass",
+            )
+        else:
+            # Corrupt container (non-dict entries) — fall back to the
+            # positional cap rather than crash the best-effort copy.
+            entries = entries[:_MAX_VALIDATE_FINDINGS]
         container["findings"] = entries
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(container, f, indent=2)
@@ -428,55 +316,64 @@ def _threat_model_prompt_block(target: Path) -> str:
     try:
         from core.threat_model import threat_model_prompt_block
         return threat_model_prompt_block(target)
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort context block, never load-bearing
         return ""
 
 
 def _emit_findings_json(
-    findings_outcomes: List[tuple],
+    findings_outcomes: list[tuple],
     out_dir: Path,
     target_path: Path,
 ) -> Path:
     """Write audit findings in /validate container format.
 
-    Produces the exact schema that /validate Stage A reads
-    as pre-existing findings: a container with ``stage``,
-    ``target_path``, and a ``findings`` array where each
-    entry has ``id``, ``file``, ``function``, ``line``,
-    ``vuln_type``, and ``status``.
+    Built on the canonical /validate dataclasses
+    (``FindingsContainer.create_empty`` + ``Finding.from_dict``) so
+    the emission carries the same schema /validate Stage A reads —
+    including the ``timestamp`` this hand-rolled emitter had silently
+    drifted away from — and inherits the canonical value coercion.
+    Only the INPUT-side mapping (ReviewOutcome → field names) lives
+    here, plus two audit-owned extras the canonical dataclass doesn't
+    model (``title``, ``hypothesis``).
     """
-    findings: List[Dict[str, Any]] = []
+    from packages.exploitability_validation.models import (
+        Finding,
+        FindingsContainer,
+    )
+
+    findings: list[dict[str, Any]] = []
     for seq, (_, outcome) in enumerate(findings_outcomes, start=1):
         cwe = _extract_cwe(outcome)
         vuln_type = _resolve_vuln_type(outcome, cwe)
-        finding: Dict[str, Any] = {
+        raw: dict[str, Any] = {
             "id": f"FIND-{seq:03d}",
             "file": outcome.file,
             "function": outcome.function,
             "line": outcome.line or 1,
             "vuln_type": vuln_type,
             "status": "pending",
-            "title": outcome.hypothesis or f"Finding in {outcome.function}",
             "description": outcome.body,
             "severity": "medium",
             "origin": "pre_existing",
         }
+        if cwe:
+            raw["cwe_id"] = cwe
+        finding = Finding.from_dict(raw).to_dict()
+        # Audit-owned extras (not modelled by the canonical Finding).
+        finding["title"] = (outcome.hypothesis
+                            or f"Finding in {outcome.function}")
         if outcome.hypothesis:
             finding["hypothesis"] = outcome.hypothesis
-        if cwe:
-            finding["cwe_id"] = cwe
         findings.append(finding)
 
-    container = {
-        "stage": "audit",
-        "target_path": str(target_path),
-        "source": "audit",
-        "findings": findings,
-    }
+    container = FindingsContainer.create_empty("audit", str(target_path))
+    container.source = "audit"
+    payload = container.to_dict()
+    payload["findings"] = findings
 
     path = out_dir / "findings.json"
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(container, f, indent=2)
+        json.dump(payload, f, indent=2)
 
     logger.info("emitted %d findings to %s", len(findings), path)
     return path
@@ -499,7 +396,7 @@ def _resolve_vuln_type(outcome: ReviewOutcome, cwe: str) -> str:
 def _extract_cwe(outcome: ReviewOutcome) -> str:
     """Extract CWE from the review result."""
     if outcome.review_result:
-        return outcome.review_result.get("cwe", "")
+        return outcome.review_result.get("cwe") or outcome.review_result.get("cwe_class", "")
     return ""
 
 

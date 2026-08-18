@@ -3,11 +3,39 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 30.0
+
+
+def ensure_loopback_no_proxy() -> None:
+    """Exempt loopback from proxy env vars for this process.
+
+    httpx honours HTTP_PROXY/HTTPS_PROXY but — unlike browsers — does
+    not special-case loopback: with a proxy set and no NO_PROXY entry,
+    every call to the localhost SAGE/Ollama sidecars is routed to a
+    proxy that cannot reach this machine's loopback, and SAGE silently
+    degrades to unavailable. Corporate NO_PROXY values rarely include
+    loopback, so append it ourselves. Additive and idempotent —
+    non-loopback SAGE hosts still use the configured proxy chain.
+
+    Lives here (not client.py) so hooks.py can call it without a
+    hooks↔client import cycle; every SAGE consumer already imports
+    this module.
+    """
+    if not any(
+        os.environ.get(k)
+        for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                  "http_proxy", "https_proxy", "all_proxy")
+    ):
+        return
+    for var in ("NO_PROXY", "no_proxy"):
+        entries = [e.strip() for e in os.environ.get(var, "").split(",") if e.strip()]
+        for host in ("localhost", "127.0.0.1", "::1"):
+            if host not in entries:
+                entries.append(host)
+        os.environ[var] = ",".join(entries)
 
 
 def _read_timeout() -> float:
@@ -57,7 +85,7 @@ class SageConfig:
     url: str = field(
         default_factory=lambda: os.getenv("SAGE_URL", "http://localhost:8090")
     )
-    identity_path: Optional[str] = field(
+    identity_path: str | None = field(
         default_factory=lambda: os.getenv("SAGE_IDENTITY_PATH")
     )
     timeout: float = field(default_factory=_read_timeout)

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Enrich context-map.json with mechanically-discovered sinks, reverse
 reachability, and autonomously discovered framework APIs.
 
@@ -15,16 +17,11 @@ Runs as MAP-5f, after forward-reachable (MAP-5b). Idempotent — safe to
 re-run. Best-effort: missing checklist / no call graphs skip silently.
 """
 import argparse
-import faulthandler
-import signal
 import sys
 from pathlib import Path
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -34,13 +31,13 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
-from core.json import load_json, save_json
-from core.orchestration.context_map_sinks import (
+from core.json import load_json, save_json  # noqa: E402
+from core.orchestration.context_map_sinks import (  # noqa: E402
     DEFAULT_MAX_DEPTH,
     enrich_with_sink_discovery,
 )
@@ -99,8 +96,20 @@ def main() -> int:
         )
         return 0
 
+    # checklist.json is a mutable run artefact — corroborate against
+    # the target_path sealed into .raptor-run.json at run start.
+    from core.run.metadata import corroborate_target_path
+    mismatch = corroborate_target_path(understand_dir, target_path)
+    if mismatch:
+        print(
+            f"raptor-enrich-context-map-sinks: {mismatch}; refusing "
+            "recovered target", file=sys.stderr,
+        )
+        return 1
+
     enriched = enrich_with_sink_discovery(
         context_map, Path(target_path), max_depth=args.max_depth,
+        run_dir=understand_dir,
     )
     if enriched:
         save_json(context_map_path, context_map)

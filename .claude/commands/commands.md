@@ -12,16 +12,16 @@ Output "RAPTOR commands:" then list all available RAPTOR slash commands grouped 
 Find vulnerabilities: agentic, codeql, fuzz, scan, sca, web.
 
 **Analyse**
-Go deeper: binary, crash-analysis, describe, frida, threat-model, understand, validate.
+Go deeper: analyze, audit, binary, crash-analysis, describe, frida, oss-forensics, threat-model, understand, validate.
 
 **Exploit & fix**
 Act on findings: cve-diff, exploit, patch.
 
 **Report**
-Present results: annotate, diagram, scorecard.
+Present results: annotate, diagram, review, scorecard.
 
 **Project**
-Manage work: project, sage, version.
+Manage work: ask, project, sage, version.
 
 After the groups, on a separate line: `- /create-skill — Save approaches as reusable skills (alpha)`
 

@@ -263,6 +263,170 @@ class TestRunSandboxedSmokeTest(unittest.TestCase):
         )
 
 
+class TestEtcOverlayMissingHostTarget(unittest.TestCase):
+    """etc_overlay when the target path doesn't exist on the host.
+
+    Baron Samedit (CVE-2021-3156) needs /etc/pam.d/sudoedit overlay'd into
+    the sandbox, but that file doesn't exist on the host.  On kernel ≥5.12
+    the bind mount of /etc is MNT_LOCKED (can't remount RW), and the
+    namespace uid can't create files on the host FS anyway (EACCES).
+
+    The fix mounts a tmpfs on {root}/etc, shallow-copies host /etc into it,
+    and pre-creates mount-point stubs for missing targets.  This test
+    exercises that path end-to-end: the child reads the overlaid content
+    through a path that doesn't exist on the host.
+    """
+
+    def setUp(self):
+        if not _mount_ns_usable():
+            self.skipTest(
+                "mount-ns unusable here (needs uidmap package + "
+                "kernel.apparmor_restrict_unprivileged_userns=0)"
+            )
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_overlay_file_visible_at_missing_host_path(self):
+        """A file overlay'd to a path that doesn't exist on the host
+        is readable inside the sandbox with the correct content."""
+        from core.sandbox._spawn import run_sandboxed
+
+        # Pick a target path that definitely doesn't exist on the host.
+        overlay_target = "/etc/raptor_test_overlay_missing.conf"
+        assert not os.path.exists(overlay_target), (
+            f"test assumption violated: {overlay_target} exists on host"
+        )
+
+        # Create the overlay source file in our temp dir.
+        overlay_source = os.path.join(self.tmp.name, "overlay.conf")
+        sentinel = "RAPTOR-OVERLAY-SENTINEL-42"
+        with open(overlay_source, "w") as f:
+            f.write(sentinel + "\n")
+
+        r = run_sandboxed(
+            ["cat", overlay_target],
+            target=self.tmp.name, output=self.tmp.name,
+            block_network=True,
+            nproc_limit=1024,
+            limits={"memory_mb": 0, "max_file_mb": 10240, "cpu_seconds": 300},
+            writable_paths=[self.tmp.name, "/tmp"],
+            readable_paths=None,
+            allowed_tcp_ports=None,
+            seccomp_profile=None, seccomp_block_udp=False,
+            env=None, cwd=None, timeout=15,
+            capture_output=True, text=True,
+            etc_overlay={overlay_target: overlay_source},
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"cat failed inside sandbox; stderr: {r.stderr!r}")
+        self.assertIn(sentinel, r.stdout,
+                      "overlay content not visible at the missing-host path")
+
+    def test_host_etc_files_still_visible_with_tmpfs_overlay(self):
+        """When tmpfs+copy is used for /etc, pre-existing host files
+        (e.g. /etc/hostname) remain visible inside the sandbox."""
+        from core.sandbox._spawn import run_sandboxed
+
+        overlay_target = "/etc/raptor_test_overlay_missing2.conf"
+        assert not os.path.exists(overlay_target)
+
+        overlay_source = os.path.join(self.tmp.name, "overlay2.conf")
+        with open(overlay_source, "w") as f:
+            f.write("OVERLAY2\n")
+
+        # Read /etc/hostname — a file that exists on any Linux host.
+        r = run_sandboxed(
+            ["sh", "-c",
+             f"cat /etc/hostname && cat {overlay_target}"],
+            target=self.tmp.name, output=self.tmp.name,
+            block_network=True,
+            nproc_limit=1024,
+            limits={"memory_mb": 0, "max_file_mb": 10240, "cpu_seconds": 300},
+            writable_paths=[self.tmp.name, "/tmp"],
+            readable_paths=None,
+            allowed_tcp_ports=None,
+            seccomp_profile=None, seccomp_block_udp=False,
+            env=None, cwd=None, timeout=15,
+            capture_output=True, text=True,
+            etc_overlay={overlay_target: overlay_source},
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"sandbox cmd failed; stderr: {r.stderr!r}")
+        # Host /etc/hostname content should be present (shallow-copied).
+        host_hostname = open("/etc/hostname").read().strip()
+        self.assertIn(host_hostname, r.stdout,
+                      "host /etc/hostname not preserved after tmpfs+copy")
+        # Overlay content should also be present.
+        self.assertIn("OVERLAY2", r.stdout,
+                      "overlay file not visible alongside host /etc")
+
+
+class TestGidmapAllowProbe(unittest.TestCase):
+    """_gidmap_allow_available() — detection of the raptor-gidmap-allow helper."""
+
+    def setUp(self):
+        from core.sandbox import state
+        state._gidmap_allow_cache = None
+
+    def tearDown(self):
+        from core.sandbox import state
+        state._gidmap_allow_cache = None
+
+    def test_returns_none_when_binary_missing(self):
+        """When the helper binary doesn't exist, returns None."""
+        from unittest.mock import patch
+        from core.sandbox._spawn import _gidmap_allow_available
+        with patch("core.sandbox._spawn.GIDMAP_ALLOW_PATH") as mock_path:
+            mock_path.is_file.return_value = False
+            self.assertIsNone(_gidmap_allow_available())
+
+    def test_returns_none_when_no_cap_setgid(self):
+        """Binary exists but getcap doesn't show cap_setgid → None."""
+        from unittest.mock import patch, MagicMock
+        from core.sandbox._spawn import _gidmap_allow_available
+        mock_run = MagicMock(return_value=MagicMock(stdout="", returncode=0))
+        with patch("core.sandbox._spawn.GIDMAP_ALLOW_PATH") as mock_path:
+            mock_path.is_file.return_value = True
+            with (
+                patch("core.sandbox._spawn.shutil.which",
+                      return_value="/usr/sbin/getcap"),
+                patch("core.sandbox._spawn.subprocess.run", mock_run),
+            ):
+                self.assertIsNone(_gidmap_allow_available())
+
+    def test_returns_path_when_cap_present(self):
+        """Binary exists and getcap confirms cap_setgid → returns path."""
+        from unittest.mock import patch, MagicMock
+        from core.sandbox._spawn import _gidmap_allow_available
+        mock_run = MagicMock(return_value=MagicMock(
+            stdout="/path/to/raptor-gidmap-allow cap_setgid=ep",
+            returncode=0,
+        ))
+        with patch("core.sandbox._spawn.GIDMAP_ALLOW_PATH") as mock_path:
+            mock_path.is_file.return_value = True
+            mock_path.__str__ = lambda _: "/path/to/raptor-gidmap-allow"
+            with (
+                patch("core.sandbox._spawn.shutil.which",
+                      return_value="/usr/sbin/getcap"),
+                patch("core.sandbox._spawn.subprocess.run", mock_run),
+            ):
+                result = _gidmap_allow_available()
+                self.assertEqual(result, "/path/to/raptor-gidmap-allow")
+
+    def test_cached_after_first_probe(self):
+        """Second call returns the cached value without re-probing."""
+        from unittest.mock import patch
+        from core.sandbox import state
+        from core.sandbox._spawn import _gidmap_allow_available
+        with patch("core.sandbox._spawn.GIDMAP_ALLOW_PATH") as mock_path:
+            mock_path.is_file.return_value = False
+            _gidmap_allow_available()
+        # Cache should be set to False (not None).
+        self.assertFalse(state._gidmap_allow_cache)
+        # Second call should still return None — cache is already decided.
+        self.assertIsNone(_gidmap_allow_available())
+
+
 class TestDeathPipeOrphanTeardown(unittest.TestCase):
     """Death-pipe mechanism: intermediate child exits 137 when the
     parent's write end closes (simulating orchestrator SIGKILL/OOM).

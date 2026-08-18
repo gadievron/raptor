@@ -470,3 +470,35 @@ class TestSiblingPathSerialization:
             minority_value="", majority_count=0, minority_count=0,
             minority_siblings=[], confidence=0.5,
         ).is_high_confidence
+
+
+class TestSemanticFindingsToMechanical:
+    def test_converts_to_detector_shape(self):
+        from core.audit.sibling_analysis import semantic_findings_to_mechanical
+
+        findings = [{
+            "file": "handlers.py",
+            "function": "handle_delta",
+            "siblings": ["handle_alpha", "handle_beta"],
+            "inconsistency": "2/3 siblings perform auth checks; handle_delta does not",
+            "confidence": 0.67,
+            "cwe": "CWE-862",
+        }]
+        out = semantic_findings_to_mechanical(findings)
+        assert len(out) == 1
+        mf = out[0]
+        assert mf["file"] == "handlers.py"
+        assert mf["function"] == "handle_delta"
+        assert mf["detector"] == "semantic_consistency"
+        assert mf["line"] == 0
+        assert "CWE-862" in mf["description"]
+        assert "confidence 0.67" in mf["description"]
+
+    def test_skips_malformed_entries(self):
+        from core.audit.sibling_analysis import semantic_findings_to_mechanical
+
+        out = semantic_findings_to_mechanical([
+            "not-a-dict",
+            {"file": "a.py", "inconsistency": "no function key"},
+        ])
+        assert out == []

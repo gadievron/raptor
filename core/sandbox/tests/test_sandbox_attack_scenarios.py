@@ -30,7 +30,7 @@ def _compile(source: str, path: Path, extra_flags=()) -> bool:
     src.write_text(source)
     r = subprocess.run(
         ["gcc", str(src), "-o", str(path), "-O0", *extra_flags],
-        capture_output=True,
+        capture_output=True, check=False,
     )
     return r.returncode == 0 and path.exists()
 
@@ -268,9 +268,8 @@ class TestAPIContract(unittest.TestCase):
         """shell=True reinterprets argv into `sh -c argv[0] argv[1:]` which
         silently mangles our unshare command-line construction and is a
         shell-injection surface. Must be rejected early with TypeError."""
-        with self.assertRaises(TypeError) as cm:
-            with sandbox() as run:
-                run(["echo", "hello"], shell=True)
+        with self.assertRaises(TypeError) as cm, sandbox() as run:
+            run(["echo", "hello"], shell=True)
         self.assertIn("shell", str(cm.exception).lower())
 
     def test_pass_fds_socket_rejected(self):
@@ -282,11 +281,10 @@ class TestAPIContract(unittest.TestCase):
         # Create a socket FD — should be rejected
         s1, s2 = socket.socketpair()
         try:
-            with self.assertRaises((TypeError, ValueError)):
-                with sandbox(
-                    target=self.tmp.name, output=self.tmp.name,
-                ) as run:
-                    run(["true"], pass_fds=[s1.fileno()], timeout=5)
+            with self.assertRaises((TypeError, ValueError)), sandbox(
+                target=self.tmp.name, output=self.tmp.name,
+            ) as run:
+                run(["true"], pass_fds=[s1.fileno()], timeout=5)
         finally:
             s1.close()
             s2.close()
@@ -364,9 +362,9 @@ class TestFakeHomeXDGRedirection(unittest.TestCase):
         out = self.tmp.name
         r = run_untrusted(
             ["sh", "-c",
-             'for v in HOME XDG_CONFIG_HOME XDG_CACHE_HOME '
-             'XDG_DATA_HOME XDG_STATE_HOME; do '
-             'eval echo "$v=\\$$v"; done'],
+             ('for v in HOME XDG_CONFIG_HOME XDG_CACHE_HOME '
+              'XDG_DATA_HOME XDG_STATE_HOME; do '
+              'eval echo "$v=\\$$v"; done')],
             target=out, output=out,
             capture_output=True, text=True, timeout=5,
         )
@@ -492,8 +490,8 @@ class TestOOMScoreAdjWrite(unittest.TestCase):
         UNCHANGED. Assert that, rather than the specific mechanism.
         """
         r = run_untrusted(
-            ["sh", "-c", "echo -1000 > /proc/self/oom_score_adj 2>&1; "
-                         "cat /proc/self/oom_score_adj 2>&1"],
+            ["sh", "-c", ("echo -1000 > /proc/self/oom_score_adj 2>&1; "
+                          "cat /proc/self/oom_score_adj 2>&1")],
             target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
@@ -921,9 +919,9 @@ class TestCLIPrecedence(unittest.TestCase):
         state._cli_sandbox_disabled = self._saved_disabled
 
     def test_unknown_profile_raises(self):
-        with self.assertRaises(ValueError) as cm:
-            with sandbox(profile="not-a-real-profile"):
-                pass
+        with self.assertRaises(ValueError) as cm, \
+                sandbox(profile="not-a-real-profile"):
+            pass
         self.assertIn("Unknown sandbox profile", str(cm.exception))
         self.assertIn("not-a-real-profile", str(cm.exception))
 
@@ -957,7 +955,26 @@ class TestProxyIsGlobalScreen(unittest.TestCase):
     def test_loopback_resolved_ip_rejected(self):
         """'localhost' is allowlisted as a hostname but resolves to 127.0.0.1
         which fails the is_global check. Must yield denied_resolved_ip."""
-        with sandbox(
+        # Hermetic on mandatory-proxy hosts: with a live HTTPS_PROXY in
+        # the test env, the egress proxy autodetects an upstream and
+        # delegates DNS to it — the CONNECT takes the upstream path and
+        # the local is_global screen this test exercises never runs
+        # (event: upstream_failed instead of denied_resolved_ip). Scrub
+        # the proxy env and reset the proxy singleton so the direct
+        # path is taken; reset again on cleanup so later tests re-detect
+        # from the real env.
+        import os
+        from unittest.mock import patch as _patch
+
+        from core.sandbox.proxy import _reset_for_tests
+        _scrubbed = {
+            k: v for k, v in os.environ.items()
+            if k.upper() not in
+            ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY")
+        }
+        _reset_for_tests()
+        self.addCleanup(_reset_for_tests)
+        with _patch.dict(os.environ, _scrubbed, clear=True), sandbox(
             use_egress_proxy=True, proxy_hosts=["localhost"],
             output=self.tmp.name, caller_label="is-global-test",
         ) as run:

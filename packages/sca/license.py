@@ -1033,9 +1033,56 @@ def _spdx_from_npm_block(block: Any) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Project license — what the scanned project declares for ITSELF
+# ---------------------------------------------------------------------------
+
+
+def detect_project_license(target: Path) -> Optional[str]:
+    """SPDX string the target's root manifest declares for the project
+    itself, or None when no root manifest declares one.
+
+    Distinct from ``Dependency.declared_license``: a manifest-level
+    license describes the scanned project, not its deps, so it belongs
+    on the SBOM metadata/root component — dep rows get their licenses
+    from registry enrichment (:func:`enrich_licenses`) or stay None
+    for the ``on_unknown`` policy path.
+
+    Only root-level manifests are consulted — a nested workspace
+    member's license describes that member, not the scanned project.
+    On polyglot roots the first manifest (in the fixed order below)
+    that declares a license wins.
+    """
+    from .parsers import package_json, pom, pyproject
+
+    extractors: Tuple[Tuple[str, Any], ...] = (
+        ("package.json", package_json.extract_project_license),
+        ("pyproject.toml", pyproject.extract_project_license),
+        ("pom.xml", pom.extract_project_license),
+    )
+    for filename, extract in extractors:
+        manifest = target / filename
+        if not manifest.is_file():
+            continue
+        try:
+            spdx = extract(manifest)
+        except Exception as e:                          # noqa: BLE001
+            # A hostile / malformed root manifest must not abort the
+            # run — the SBOM simply carries no project license.
+            logger.warning(
+                "sca.license: project-license extraction failed for "
+                "%s: %s", manifest, e,
+            )
+            continue
+        if spdx:
+            return spdx
+    return None
+
+
 __all__ = [
     "DEFAULT_POLICY",
     "LicensePolicy",
+    "detect_project_license",
     "enrich_licenses",
     "evaluate",
     "load_policy",

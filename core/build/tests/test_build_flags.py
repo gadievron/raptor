@@ -107,7 +107,7 @@ def test_cc_fortify_undef(tmp_path):
         "command": "gcc -U_FORTIFY_SOURCE foo.c",
     }])
     ctx = extract_flags(target)
-    assert ctx.fortify_source_level == 0
+    assert ctx.fortify_source_level is None
 
 
 def test_cc_stack_protector_strong(tmp_path):

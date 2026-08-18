@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 CodeQL Autonomous Analyzer
 
@@ -11,27 +10,27 @@ Fully autonomous analysis of CodeQL findings with:
 """
 
 import sys
-from dataclasses import dataclass, asdict
-
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Add parent directory to path for imports
 # packages/codeql/autonomous_analyzer.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
-
+from core.llm.methodology import load_methodology
+from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
 from core.llm.task_types import TaskType
 from core.logging import get_logger
+from core.paths import path_to_module, to_repo_relative
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     TaintedString,
     UntrustedBlock,
     build_prompt,
 )
-from core.llm.methodology import load_methodology
-from packages.codeql.dataflow_validator import DataflowValidator, DataflowValidation
+from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
 
 logger = get_logger()
@@ -48,7 +47,7 @@ class CodeQLFinding:
     start_line: int
     end_line: int
     snippet: str
-    cwe: Optional[str] = None
+    cwe: str | None = None
     has_dataflow: bool = False
     dataflow_path_count: int = 0
 
@@ -62,7 +61,7 @@ class VulnerabilityAnalysis:
     severity_assessment: str
     reasoning: str
     attack_scenario: str
-    prerequisites: List[str]
+    prerequisites: list[str]
     impact: str
     cvss_estimate: float  # 0.0-10.0
     mitigation: str
@@ -108,11 +107,11 @@ class AutonomousAnalysisResult:
     """Complete autonomous analysis result."""
     finding: CodeQLFinding
     analysis: VulnerabilityAnalysis
-    dataflow_validation: Optional[DataflowValidation]
+    dataflow_validation: DataflowValidation | None
     exploitable: bool
-    exploit_code: Optional[str]
+    exploit_code: str | None
     exploit_compiled: bool
-    validation_result: Optional[Dict]
+    validation_result: dict | None
     refinement_iterations: int
     total_duration_seconds: float
     # Reachability prefilter outcome — set when the inventory-based
@@ -127,7 +126,7 @@ class AutonomousAnalysisResult:
     # (``http.HandleFunc("/x", target)``, ``app.get(...)``,
     # ``router.use(...)`` — the JS / Go equivalent of the decorator
     # pattern). Both treated as reachable; full LLM analysis runs.
-    reachability_verdict: Optional[str] = None
+    reachability_verdict: str | None = None
     # Set to a non-None reason when the analyzer short-circuited
     # without running deep analysis. The reachability prefilter
     # hard-skips ONLY on a SOUND witness — ``"reachability_module_aborts"``
@@ -135,7 +134,39 @@ class AutonomousAnalysisResult:
     # ``"reachability_lexical_dead"`` (sink defined in an always-false
     # guard). Heuristic verdicts (``not_called`` / ``no_path_from_entry``)
     # are surface-only: recorded in ``reachability_verdict`` but NOT skipped.
-    skipped_reason: Optional[str] = None
+    skipped_reason: str | None = None
+
+
+def _analysis_artifact_payload(
+    *,
+    finding: CodeQLFinding,
+    analysis: VulnerabilityAnalysis,
+    dataflow_validation,
+    refinement_count: int,
+    elapsed_seconds: float,
+    visualization_paths=None,
+) -> dict:
+    """Payload for the per-finding ``{safe_id}_analysis.json`` artifact.
+
+    Carries refinement/duration provenance alongside the analysis:
+    "compiled first try" and "compiled after N LLM repairs" are
+    different confidence signals, and the duration shows where the
+    wall-clock went. All keys are additive for artifact readers.
+    """
+    data = {
+        "finding": asdict(finding),
+        "analysis": asdict(analysis),
+        "dataflow_validation": (
+            asdict(dataflow_validation) if dataflow_validation else None
+        ),
+        "refinement_iterations": refinement_count,
+        "total_duration_seconds": round(elapsed_seconds, 2),
+    }
+    if visualization_paths:
+        data["visualizations"] = {
+            fmt: str(path) for fmt, path in visualization_paths.items()
+        }
+    return data
 
 
 class AutonomousCodeQLAnalyzer:
@@ -195,8 +226,8 @@ class AutonomousCodeQLAnalyzer:
         try:
             from core.dataflow.llm_bridge import make_evidence_collector
             from packages.source_intel.llm_bridge import (
-                make_source_intel_collector,
                 make_cwe_dispatched_collector,
+                make_source_intel_collector,
             )
             sanitizer_collector = make_evidence_collector(llm_client)
             si_collector = make_source_intel_collector()
@@ -235,7 +266,7 @@ class AutonomousCodeQLAnalyzer:
 
     def _check_reachability(
         self, finding: CodeQLFinding, repo_path: Path,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Best-effort prefilter: is the function containing this
         finding's sink line reached from anywhere in the project?
 
@@ -287,8 +318,9 @@ class AutonomousCodeQLAnalyzer:
                     )
             if self._reachability_inventory is None:
                 try:
-                    from core.inventory.builder import build_inventory
                     import tempfile
+
+                    from core.inventory.builder import build_inventory
                     with tempfile.TemporaryDirectory() as td:
                         # Union/raw view in isolation mode so the prefilter's
                         # reachability graph matches the operator's intent.
@@ -305,8 +337,8 @@ class AutonomousCodeQLAnalyzer:
                     return None
 
         try:
-            from core.inventory.lookup import lookup_function
             from core.analysis.reach_audit import classify_reachability
+            from core.inventory.lookup import lookup_function
         except ImportError:
             return None
 
@@ -345,45 +377,22 @@ class AutonomousCodeQLAnalyzer:
 
     def _relative_path(
         self, file_path: str, repo_path: Path,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Normalise a finding's file path to a project-relative
         path. SARIF emitters produce a mix of absolute, repo-
-        relative, and ``file://``-URI shapes — handle all three.
+        relative, and ``file://``-URI shapes — all handled by
+        :func:`core.paths.to_repo_relative` (strict mode: out-of-
+        root paths return ``None``).
         """
-        from pathlib import Path as _P
-        if file_path.startswith("file://"):
-            file_path = file_path[len("file://"):]
-        p = _P(file_path)
-        if p.is_absolute():
-            try:
-                return str(p.relative_to(repo_path.resolve()))
-            except ValueError:
-                return None
-        return file_path
+        return to_repo_relative(file_path, repo_path,
+                                outside_root="none")
 
-    def _path_to_module(self, rel_path: str) -> Optional[str]:
-        """``packages/foo/bar.py`` → ``packages.foo.bar``.
+    def _path_to_module(self, rel_path: str) -> str | None:
+        """``packages/foo/bar.py`` → ``packages.foo.bar`` — one
+        implementation in :func:`core.paths.path_to_module`."""
+        return path_to_module(rel_path)
 
-        For non-Python files we strip the extension and replace
-        path separators with dots. The resolver's chain matching
-        is dotted-only, so this works for any language whose
-        call_graph data was produced by an extractor on the
-        inventory side."""
-        if not rel_path:
-            return None
-        from pathlib import PurePosixPath
-        p = PurePosixPath(rel_path.replace("\\", "/"))
-        if not p.suffix:
-            return None
-        # Drop the extension. Multiple-extension cases (.tar.gz)
-        # don't apply for source files; ``.py`` / ``.go`` /
-        # ``.js`` / ``.ts`` etc. are all single-suffix.
-        parts = list(p.with_suffix("").parts)
-        if not parts:
-            return None
-        return ".".join(parts)
-
-    def parse_sarif_finding(self, result: Dict, run: Dict) -> CodeQLFinding:
+    def parse_sarif_finding(self, result: dict, run: dict) -> CodeQLFinding:
         """
         Parse SARIF result into CodeQLFinding.
 
@@ -466,12 +475,12 @@ class AutonomousCodeQLAnalyzer:
         return CodeQLFinding(
             rule_id=rule_id,
             rule_name=rule_name,
-            message=result.get("message", {}).get("text", ""),
+            message=(result.get("message") or {}).get("text", ""),
             level=result.get("level", "warning"),
             file_path=artifact.get("uri", ""),
             start_line=region.get("startLine", 0),
             end_line=region.get("endLine") or region.get("startLine", 0),
-            snippet=region.get("snippet", {}).get("text", ""),
+            snippet=(region.get("snippet") or {}).get("text", ""),
             cwe=cwe,
             has_dataflow=has_dataflow,
             dataflow_path_count=dataflow_path_count
@@ -532,38 +541,28 @@ class AutonomousCodeQLAnalyzer:
 
             return "\n".join(context)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
             self.logger.warning("Failed to read vulnerable code: %s", e)
             return finding.snippet
 
     def _fast_tier_model_name(self) -> str:
-        """Return the model_name routed to for ``TaskType.VERDICT_BINARY``
-        — the model whose track record the scorecard accumulates against.
-
-        Falls back to the primary model when the operator hasn't
-        configured (or auto-config didn't seed) a fast-tier mapping
-        — in that case fast-tier and primary are the same model and
-        scorecard cells naturally key by the primary."""
-        from core.llm.task_types import TaskType
-        cfg = self.llm.config
-        specialized = cfg.specialized_models.get(TaskType.VERDICT_BINARY)
-        if specialized is not None and specialized.enabled:
-            return specialized.model_name
-        if cfg.primary_model is not None:
-            return cfg.primary_model.model_name
-        return ""
+        """The model whose track record the scorecard accumulates
+        against. Delegates to the shared helper."""
+        return fast_tier_model_name(self.llm.config)
 
     def _cheap_fp_check(
         self, finding: CodeQLFinding, vulnerable_code: str,
-    ) -> Optional[Tuple[str, str]]:
+    ) -> tuple[str, str] | None:
         """Ask the fast-tier model whether this finding is a clear
         false positive. Returns ``(verdict, reasoning)`` on success,
         ``None`` on call failure (caller treats as "no signal" and
         runs full analysis as today).
 
-        ``verdict`` is one of ``"clear_fp"`` or ``"needs_analysis"``.
-        Asymmetric framing — we never use the cheap model to greenlight
-        a TP, only to identify confident FPs."""
+        The prompt/blocks/slots are this consumer's; the envelope +
+        structured-call + verdict-validation mechanics are the shared
+        :func:`core.llm.scorecard.run_cheap_fp_check`. Asymmetric
+        framing — we never use the cheap model to greenlight a TP,
+        only to identify confident FPs."""
         system = (
             "You are reviewing a CodeQL finding to determine whether it "
             "is a CLEAR false positive that needs no further analysis. "
@@ -592,38 +591,14 @@ class AutonomousCodeQLAnalyzer:
             "rule_id": TaintedString(value=finding.rule_id, trust="untrusted"),
             "rule_name": TaintedString(value=finding.rule_name, trust="untrusted"),
         }
-        bundle = build_prompt(
+        return run_cheap_fp_check(
+            self.llm,
             system=system,
-            profile=CONSERVATIVE,
-            untrusted_blocks=tuple(blocks),
+            schema=FP_PREFILTER_SCHEMA,
+            untrusted_blocks=blocks,
             slots=slots,
+            log=self.logger,
         )
-        system_prompt = next(
-            (m.content for m in bundle.messages if m.role == "system"), None,
-        )
-        prompt = next(
-            (m.content for m in bundle.messages if m.role == "user"), "",
-        )
-        try:
-            response, _ = self.llm.generate_structured(
-                prompt=prompt,
-                schema=FP_PREFILTER_SCHEMA,
-                system_prompt=system_prompt,
-                task_type=TaskType.VERDICT_BINARY,
-            )
-        except Exception as e:                         # noqa: BLE001
-            self.logger.debug("Cheap FP check failed (falling through to full): %s", e)
-            return None
-        verdict = (response.get("verdict") or "").strip().lower()
-        reasoning = response.get("reasoning") or ""
-        if verdict not in ("clear_fp", "needs_analysis"):
-            # Defensive: an unexpected verdict string means we can't
-            # gate on it. Fall through to full analysis.
-            self.logger.debug(
-                "Cheap FP check returned unexpected verdict %r — falling through", verdict
-            )
-            return None
-        return verdict, reasoning
 
     def _short_circuit_fp_result(
         self, reasoning: str,
@@ -654,8 +629,8 @@ class AutonomousCodeQLAnalyzer:
         self,
         finding: CodeQLFinding,
         vulnerable_code: str,
-        dataflow_validation: Optional[DataflowValidation] = None,
-        repo_path: Optional[Path] = None,
+        dataflow_validation: DataflowValidation | None = None,
+        repo_path: Path | None = None,
     ) -> VulnerabilityAnalysis:
         """
         Perform deep LLM analysis of vulnerability.
@@ -764,7 +739,7 @@ class AutonomousCodeQLAnalyzer:
                 tm_block = threat_model_untrusted_block(repo_path)
                 if tm_block:
                     blocks.append(tm_block)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
                 logger.debug("threat_model_untrusted_block failed: %s", exc)
 
         slots = {
@@ -833,7 +808,7 @@ class AutonomousCodeQLAnalyzer:
 
             return analysis
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
             self.logger.error("Vulnerability analysis failed: %s", e)
 
             # Return conservative default
@@ -842,7 +817,7 @@ class AutonomousCodeQLAnalyzer:
                 is_exploitable=False,
                 exploitability_score=0.0,
                 severity_assessment="Unknown",
-                reasoning=f"Analysis failed: {str(e)}",
+                reasoning=f"Analysis failed: {e!s}",
                 attack_scenario="Could not determine",
                 prerequisites=[],
                 impact="Unknown",
@@ -855,7 +830,7 @@ class AutonomousCodeQLAnalyzer:
         finding: CodeQLFinding,
         analysis: VulnerabilityAnalysis,
         vulnerable_code: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Generate PoC exploit code.
 
@@ -961,7 +936,7 @@ class AutonomousCodeQLAnalyzer:
             self.logger.info("Exploit generated (%d bytes)", len(exploit_code))
             return exploit_code
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
             self.logger.error("Exploit generation failed: %s", e)
             return None
 
@@ -1059,8 +1034,8 @@ class AutonomousCodeQLAnalyzer:
 
     def analyze_finding_autonomous(
         self,
-        sarif_result: Dict,
-        sarif_run: Dict,
+        sarif_result: dict,
+        sarif_run: dict,
         repo_path: Path,
         out_dir: Path,
         max_refinement: int = 3
@@ -1213,10 +1188,19 @@ class AutonomousCodeQLAnalyzer:
                         self.logger.info(
                             "✓ Generated %d visualization formats", len(visualization_paths)
                         )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
                     self.logger.warning("Failed to generate visualizations: %s", e)
 
-            if dataflow_validation and not dataflow_validation.is_exploitable:
+            if dataflow_validation and getattr(dataflow_validation, "error", None):
+                # Validation errored: is_exploitable=False is a default,
+                # not a verdict. Fall through to deep analysis instead
+                # of silently dropping the finding.
+                self.logger.warning(
+                    "Dataflow validation errored (%s) — proceeding to "
+                    "deep analysis, not treating as non-exploitable",
+                    dataflow_validation.error,
+                )
+            elif dataflow_validation and not dataflow_validation.is_exploitable:
                 self.logger.info("✗ Dataflow not exploitable - skipping exploit generation")
                 return AutonomousAnalysisResult(
                     finding=finding,
@@ -1321,16 +1305,14 @@ class AutonomousCodeQLAnalyzer:
         # Save analysis
         safe_id = f"{finding.rule_id}_{finding.start_line}".replace("/", "_")
         analysis_file = out_dir / f"{safe_id}_analysis.json"
-        analysis_data = {
-            "finding": asdict(finding),
-            "analysis": asdict(analysis),
-            "dataflow_validation": asdict(dataflow_validation) if dataflow_validation else None,
-        }
-        # Add visualization paths if available
-        if visualization_paths:
-            analysis_data["visualizations"] = {
-                fmt: str(path) for fmt, path in visualization_paths.items()
-            }
+        analysis_data = _analysis_artifact_payload(
+            finding=finding,
+            analysis=analysis,
+            dataflow_validation=dataflow_validation,
+            refinement_count=refinement_count,
+            elapsed_seconds=time.time() - start_time,
+            visualization_paths=visualization_paths,
+        )
         save_json(analysis_file, analysis_data)
 
         # Save exploit

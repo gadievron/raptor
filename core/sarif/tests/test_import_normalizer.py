@@ -56,6 +56,24 @@ def _source_tree(tmp_path):
     return tmp_path
 
 
+def _lines_source_tree(tmp_path):
+    """Source tree whose src/main.c holds 20 numbered lines, so snippet
+    synthesis output is predictable line-by-line."""
+    root = tmp_path / "src_root"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "main.c").write_text(
+        "\n".join(f"line {i}" for i in range(1, 21))
+    )
+    return root
+
+
+def _lines_finding(**overrides):
+    """Finding pointing into the numbered-lines source tree."""
+    base = {"file": "src/main.c", "startLine": 5, "endLine": None}
+    base.update(overrides)
+    return _make_finding(**base)
+
+
 # ---------------------------------------------------------------------------
 # _strip_file_scheme
 # ---------------------------------------------------------------------------
@@ -310,6 +328,131 @@ class TestNormalizeImportedFindings:
 
 
 # ---------------------------------------------------------------------------
+# Untrusted numeric fields
+# ---------------------------------------------------------------------------
+
+class TestNumericFieldValidation:
+    """Non-integer startLine/endLine from untrusted SARIF must not crash
+    snippet synthesis — invalid values skip the finding (with a warning)
+    instead of raising TypeError mid-import."""
+
+    def test_string_startline_skipped_not_crash(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(startLine="abc")], root
+        )
+        assert result.stats.findings_skipped == 1
+        assert result.stats.total_imported == 0
+        assert result.warnings and "invalid" in result.warnings[0].message
+
+    def test_infinity_startline_skipped_not_crash(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(startLine=float("inf"))], root
+        )
+        assert result.stats.findings_skipped == 1
+
+    def test_nan_endline_falls_back_to_startline(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(endLine=float("nan"))], root
+        )
+        assert result.stats.total_imported == 1
+        assert result.findings[0]["endLine"] == 5
+
+    def test_string_endline_falls_back_and_snippet_synthesized(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(endLine="zzz")], root
+        )
+        f = result.findings[0]
+        assert f["endLine"] == 5
+        assert f["snippet"].startswith("line 5")
+
+    def test_endline_before_startline_clamped(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(startLine=5, endLine=-2)], root
+        )
+        assert result.findings[0]["endLine"] == 5
+
+    def test_negative_startline_skipped(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(startLine=-4)], root
+        )
+        assert result.stats.findings_skipped == 1
+
+    def test_integral_float_lines_coerced(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(startLine=5.0, endLine=6.0)], root
+        )
+        f = result.findings[0]
+        assert f["startLine"] == 5
+        assert f["endLine"] == 6
+        assert f["snippet"]
+
+    def test_non_string_file_skipped(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        result = normalize_imported_findings(
+            [_lines_finding(file={"weird": 1})], root
+        )
+        assert result.stats.findings_skipped == 1
+
+    def test_crafted_sarif_end_to_end_import_survives(self, tmp_path):
+        """Full chain: hostile SARIF file → parse → normalize."""
+        from core.sarif.parser import parse_sarif_findings
+
+        root = _lines_source_tree(tmp_path)
+        sarif = {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "evil", "rules": []}},
+                "results": [
+                    {
+                        "ruleId": "R-bad",
+                        "message": {"text": "boom"},
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": "src/main.c"},
+                                "region": {"startLine": "abc"},
+                            }
+                        }],
+                    },
+                    {
+                        "ruleId": "R-inf",
+                        "message": {"text": "boom"},
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": "src/main.c"},
+                                "region": {"startLine": float("inf")},
+                            }
+                        }],
+                    },
+                    {
+                        "ruleId": "R-ok",
+                        "message": {"text": "fine"},
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": "src/main.c"},
+                                "region": {"startLine": 3},
+                            }
+                        }],
+                    },
+                ],
+            }],
+        }
+        path = tmp_path / "evil.sarif"
+        path.write_text(json.dumps(sarif))
+        findings = parse_sarif_findings(path)
+        result = normalize_imported_findings(findings, root)
+        assert result.stats.total_imported == 1
+        assert result.stats.findings_skipped == 2
+        assert result.findings[0]["rule_id"] == "R-ok"
+
+
+# ---------------------------------------------------------------------------
 # format_import_summary
 # ---------------------------------------------------------------------------
 
@@ -368,6 +511,46 @@ class TestImportProvenanceBlock:
         )
         assert block["source"] == "archive"
         assert block["archive_sha256"] == "abc123"
+
+
+class TestUriUnresolvedSurfaced:
+    """uri_unresolved is surfaced in the operator summary and the
+    provenance block, not just counted internally."""
+
+    def _unresolved_result(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        return normalize_imported_findings(
+            [_lines_finding(file="no/such/file.c")], root
+        )
+
+    def test_counter_still_increments(self, tmp_path):
+        result = self._unresolved_result(tmp_path)
+        assert result.stats.uri_unresolved == 1
+        assert result.stats.findings_skipped == 1
+
+    def test_summary_reports_unresolved_uris(self, tmp_path):
+        result = self._unresolved_result(tmp_path)
+        text = format_import_summary(result, ["test.sarif"])
+        assert "could not be mapped to the source tree" in text
+        assert "1 skipped" in text
+
+    def test_summary_omits_line_when_zero(self, tmp_path):
+        root = _lines_source_tree(tmp_path)
+        # Skipped for a different reason: missing startLine.
+        result = normalize_imported_findings(
+            [_lines_finding(startLine=None)], root
+        )
+        assert result.stats.uri_unresolved == 0
+        text = format_import_summary(result, ["test.sarif"])
+        assert "could not be mapped" not in text
+
+    def test_provenance_block_carries_unresolved_count(self, tmp_path):
+        result = self._unresolved_result(tmp_path)
+        block = import_provenance_block(
+            result, sarif_files=["test.sarif"], tools=["external"],
+        )
+        assert block["synthesized_fields"]["uri_unresolved"] == 1
+        assert block["synthesized_fields"]["findings_skipped"] == 1
 
 
 # ---------------------------------------------------------------------------

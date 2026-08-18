@@ -8,8 +8,9 @@ Four areas, in the order the design doc lists them:
   4. Iteration guard: must_progress raises iff progress isn't strict.
 
 The runner-behavior assertions in section 3 are the load-bearing ones —
-they pin down that pulling the downgrade rules out of `runner._evaluate`
-into `verdict_from` left the runner's behaviour unchanged.
+they pin down that the runner's evaluation path
+(`runner._evaluate_with_refinement`) still derives its verdict from the
+downgrade rules in `verdict_from`.
 """
 
 import hashlib
@@ -459,26 +460,30 @@ class TestAggregate:
 
 
 class TestRunnerStillUsesDowngrades:
-    """Behaviour-preservation: refactor must not change runner output."""
+    """Behaviour-preservation: the runner's evaluation path must apply
+    the `verdict_from` downgrade ladder, not the raw LLM claim."""
 
     def _setup(self):
         from unittest.mock import MagicMock
-        from packages.hypothesis_validation.runner import _evaluate
-        return _evaluate, MagicMock
+        from packages.hypothesis_validation.runner import (
+            _evaluate_with_refinement,
+        )
+        return _evaluate_with_refinement, MagicMock
 
     def test_runner_downgrades_confirmed_without_matches(self):
-        _evaluate, MagicMock = self._setup()
+        _evaluate_with_refinement, MagicMock = self._setup()
         client = MagicMock()
         client.generate_structured.return_value = {
             "verdict": "confirmed", "reasoning": "tried"
         }
         ev = ToolEvidence(tool="t", rule="r", success=True, matches=[])
         h = Hypothesis(claim="x", target=Path("/src"))
-        verdict, _ = _evaluate(h, ev, client, task_type="audit")
+        verdict, _, _ = _evaluate_with_refinement(
+            h, ev, client, task_type="audit")
         assert verdict == "refuted"
 
     def test_runner_downgrades_refuted_with_matches(self):
-        _evaluate, MagicMock = self._setup()
+        _evaluate_with_refinement, MagicMock = self._setup()
         client = MagicMock()
         client.generate_structured.return_value = {
             "verdict": "refuted", "reasoning": "spurious"
@@ -488,11 +493,12 @@ class TestRunnerStillUsesDowngrades:
             matches=[{"file": "x", "line": 1}],
         )
         h = Hypothesis(claim="x", target=Path("/src"))
-        verdict, _ = _evaluate(h, ev, client, task_type="audit")
+        verdict, _, _ = _evaluate_with_refinement(
+            h, ev, client, task_type="audit")
         assert verdict == "inconclusive"
 
     def test_runner_passes_confirmed_with_matches(self):
-        _evaluate, MagicMock = self._setup()
+        _evaluate_with_refinement, MagicMock = self._setup()
         client = MagicMock()
         client.generate_structured.return_value = {
             "verdict": "confirmed", "reasoning": "ok"
@@ -502,15 +508,17 @@ class TestRunnerStillUsesDowngrades:
             matches=[{"file": "x", "line": 1}],
         )
         h = Hypothesis(claim="x", target=Path("/src"))
-        verdict, _ = _evaluate(h, ev, client, task_type="audit")
+        verdict, _, _ = _evaluate_with_refinement(
+            h, ev, client, task_type="audit")
         assert verdict == "confirmed"
 
     def test_runner_tool_failure_inconclusive(self):
-        _evaluate, MagicMock = self._setup()
+        _evaluate_with_refinement, MagicMock = self._setup()
         client = MagicMock()
         ev = ToolEvidence(tool="t", rule="r", success=False, error="boom")
         h = Hypothesis(claim="x", target=Path("/src"))
-        verdict, _ = _evaluate(h, ev, client, task_type="audit")
+        verdict, _, _ = _evaluate_with_refinement(
+            h, ev, client, task_type="audit")
         assert verdict == "inconclusive"
         # LLM never called when the tool failed.
         client.generate_structured.assert_not_called()

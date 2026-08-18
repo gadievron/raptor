@@ -10,10 +10,12 @@ Sibling types:
   - peer_functions:   functions doing the same job (renderers,
                       validators, parsers) identified by naming
                       pattern or call-graph position
-  - parallel_loops:   loops over different collections that should
-                      apply the same checks
   - paired_operations: sanitizer/encoder pairs that should be
                        symmetric (encode on input ↔ decode on output)
+
+Peer-group *formation* lives in ``core.analysis.peer_groups`` (the
+layered L0–L6 resolver); this module supplies the group/path data
+model and the comparators.
 
 Safety properties compared across siblings:
   - sanitizer_used:       which sanitizer function (identity, name)
@@ -37,13 +39,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 
 class SiblingType(str, Enum):
     ERROR_VS_NORMAL = "error_vs_normal"
     PEER_FUNCTIONS = "peer_functions"
-    PARALLEL_LOOPS = "parallel_loops"
     PAIRED_OPERATIONS = "paired_operations"
 
 
@@ -69,9 +70,9 @@ class SiblingPath:
     function: str
     line: int = 0
     is_error_path: bool = False
-    properties: Dict[str, Any] = field(default_factory=dict)
+    properties: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "label": self.label,
             "file": self.file,
@@ -89,10 +90,10 @@ class SiblingGroup:
     group_id: str
     sibling_type: SiblingType
     description: str
-    siblings: List[SiblingPath] = field(default_factory=list)
+    siblings: list[SiblingPath] = field(default_factory=list)
     shared_context: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "group_id": self.group_id,
             "sibling_type": self.sibling_type.value,
@@ -112,7 +113,7 @@ class Asymmetry:
     minority_value: Any
     majority_count: int
     minority_count: int
-    minority_siblings: List[str]
+    minority_siblings: list[str]
     confidence: float
     severity: str = "medium"
     explanation: str = ""
@@ -121,7 +122,7 @@ class Asymmetry:
     def is_high_confidence(self) -> bool:
         return self.confidence >= 0.75
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "group_id": self.group_id,
             "property": self.property_name,
@@ -136,7 +137,7 @@ class Asymmetry:
         }
 
 
-def find_asymmetries(group: SiblingGroup) -> List[Asymmetry]:
+def find_asymmetries(group: SiblingGroup) -> list[Asymmetry]:
     """Compare safety properties across siblings in a group.
 
     For each property present in any sibling, count how many agree
@@ -146,13 +147,13 @@ def find_asymmetries(group: SiblingGroup) -> List[Asymmetry]:
     if len(group.siblings) < 2:
         return []
 
-    all_props: Set[str] = set()
+    all_props: set[str] = set()
     for sibling in group.siblings:
         all_props.update(sibling.properties.keys())
 
     asymmetries = []
     for prop in sorted(all_props):
-        values: Dict[Any, List[str]] = {}
+        values: dict[Any, list[str]] = {}
         for sibling in group.siblings:
             val = sibling.properties.get(prop)
             if val is None:
@@ -243,24 +244,24 @@ _ERROR_BRANCH_PATTERNS = frozenset({
 })
 
 _PEER_NAME_GROUPS = [
-    re.compile(r"^(render|format|emit|display)_(\w+)$", re.I),
-    re.compile(r"^(validate|check|verify)_(\w+)$", re.I),
-    re.compile(r"^(sanitize|sanitise|escape|clean|scrub)_(\w+)$", re.I),
-    re.compile(r"^(parse|decode|deserialize|unmarshal)_(\w+)$", re.I),
-    re.compile(r"^(handle|process|dispatch)_(\w+)$", re.I),
-    re.compile(r"^(scan|detect|identify)_(\w+)$", re.I),
+    re.compile(r"^(render|format|emit|display)_(\w+)$", re.IGNORECASE),
+    re.compile(r"^(validate|check|verify)_(\w+)$", re.IGNORECASE),
+    re.compile(r"^(sanitize|sanitise|escape|clean|scrub)_(\w+)$", re.IGNORECASE),
+    re.compile(r"^(parse|decode|deserialize|unmarshal)_(\w+)$", re.IGNORECASE),
+    re.compile(r"^(handle|process|dispatch)_(\w+)$", re.IGNORECASE),
+    re.compile(r"^(scan|detect|identify)_(\w+)$", re.IGNORECASE),
 ]
 
 
 def identify_peer_groups(
-    functions: List[Dict[str, Any]],
-) -> List[SiblingGroup]:
+    functions: list[dict[str, Any]],
+) -> list[SiblingGroup]:
     """Group functions into peer groups by naming pattern.
 
     Functions that share a verb prefix (render_X, render_Y) are
     likely siblings that should share safety properties.
     """
-    groups: Dict[str, List[Dict[str, Any]]] = {}
+    groups: dict[str, list[dict[str, Any]]] = {}
 
     for func in functions:
         name = func.get("name", "")
@@ -301,8 +302,8 @@ def identify_peer_groups(
 def identify_error_branches(
     function_name: str,
     file: str,
-    branches: List[Dict[str, Any]],
-) -> Optional[SiblingGroup]:
+    branches: list[dict[str, Any]],
+) -> SiblingGroup | None:
     """Create a sibling group from normal vs error branches
     within a single function.
     """
@@ -336,136 +337,6 @@ def identify_error_branches(
     )
 
 
-_LOOP_PATTERNS = [
-    re.compile(r"\bfor\s*\(.*\bin\b", re.I),
-    re.compile(r"\bfor\s*\(.*\bof\b", re.I),
-    re.compile(r"\bfor\s+\w+\s+in\b", re.I),
-    re.compile(r"\.(?:forEach|map|filter|reduce|each|for_each)\s*\(", re.I),
-    re.compile(r"\bfor\s*\(.*;.*;", re.I),
-    re.compile(r"\bwhile\s*\(", re.I),
-]
-
-_COLLECTION_ACCESS = re.compile(
-    r"(?:(\w+)\s*\[|\bget\s*\(\s*(\w+)\b|\.(\w+)\s*\.\s*(?:forEach|map|filter|each|for_each))",
-    re.I,
-)
-
-
-def identify_parallel_loops(
-    functions: List[Dict[str, Any]],
-) -> List[SiblingGroup]:
-    """Group functions that iterate over different collections with similar checks.
-
-    Parallel loops that process different collections in sibling fashion
-    (e.g. validate_users loops over users, validate_orders loops over orders)
-    should apply consistent security checks.
-    """
-    loop_funcs: List[Dict[str, Any]] = []
-    for func in functions:
-        source = func.get("source", "")
-        if not source:
-            continue
-        if any(p.search(source) for p in _LOOP_PATTERNS):
-            loop_funcs.append(func)
-
-    groups: Dict[str, List[Dict[str, Any]]] = {}
-    for func in loop_funcs:
-        name = func.get("name", "")
-        for pattern in _PEER_NAME_GROUPS:
-            m = pattern.match(name)
-            if m:
-                verb = m.group(1).lower()
-                key = f"{verb}_loop_group"
-                groups.setdefault(key, []).append(func)
-                break
-
-    result = []
-    for key, members in groups.items():
-        if len(members) < 2:
-            continue
-        result.append(SiblingGroup(
-            group_id=key,
-            sibling_type=SiblingType.PARALLEL_LOOPS,
-            description=f"Parallel loops: {key}",
-            siblings=[
-                SiblingPath(
-                    label=m.get("name", ""),
-                    file=m.get("file", ""),
-                    function=m.get("name", ""),
-                    line=m.get("line", 0),
-                )
-                for m in members
-            ],
-        ))
-    return result
-
-
-_PAIR_PATTERNS = [
-    (re.compile(r"^(\w+?)_(?:encode|encrypt|serialize|marshal|pack|compress)$", re.I),
-     re.compile(r"^(\w+?)_(?:decode|decrypt|deserialize|unmarshal|unpack|decompress)$", re.I)),
-    (re.compile(r"^(?:encode|encrypt|serialize|marshal|pack|compress)_(\w+)$", re.I),
-     re.compile(r"^(?:decode|decrypt|deserialize|unmarshal|unpack|decompress)_(\w+)$", re.I)),
-    (re.compile(r"^(\w+?)_(?:sanitize|sanitise|escape|clean)_input$", re.I),
-     re.compile(r"^(\w+?)_(?:sanitize|sanitise|escape|clean)_output$", re.I)),
-]
-
-
-def identify_paired_operations(
-    functions: List[Dict[str, Any]],
-) -> List[SiblingGroup]:
-    """Find paired encode/decode, encrypt/decrypt, sanitize-input/sanitize-output functions.
-
-    Paired operations should be symmetric: if encode escapes certain
-    characters, decode must handle the same set.
-    """
-    func_by_name: Dict[str, Dict[str, Any]] = {
-        f.get("name", ""): f for f in functions if f.get("name")
-    }
-
-    result = []
-    paired_names: Set[str] = set()
-
-    for fwd_pat, rev_pat in _PAIR_PATTERNS:
-        forward: Dict[str, Dict[str, Any]] = {}
-        reverse: Dict[str, Dict[str, Any]] = {}
-
-        for name, func in func_by_name.items():
-            m = fwd_pat.match(name)
-            if m:
-                forward[m.group(1).lower()] = func
-            m = rev_pat.match(name)
-            if m:
-                reverse[m.group(1).lower()] = func
-
-        for prefix in forward:
-            if prefix in reverse:
-                fwd = forward[prefix]
-                rev = reverse[prefix]
-                fwd_name = fwd.get("name", "")
-                rev_name = rev.get("name", "")
-                if fwd_name in paired_names or rev_name in paired_names:
-                    continue
-                paired_names.add(fwd_name)
-                paired_names.add(rev_name)
-                result.append(SiblingGroup(
-                    group_id=f"pair:{prefix}",
-                    sibling_type=SiblingType.PAIRED_OPERATIONS,
-                    description=f"Paired operations: {fwd_name} ↔ {rev_name}",
-                    siblings=[
-                        SiblingPath(
-                            label=fwd_name, file=fwd.get("file", ""),
-                            function=fwd_name, line=fwd.get("line", 0),
-                        ),
-                        SiblingPath(
-                            label=rev_name, file=rev.get("file", ""),
-                            function=rev_name, line=rev.get("line", 0),
-                        ),
-                    ],
-                ))
-
-    return result
-
-
 # ── Sanitizer strength comparison ──────────────────────────────────
 
 _STRONG_SANITIZERS = frozenset({
@@ -495,9 +366,9 @@ def classify_sanitizer_strength(sanitizer_name: str) -> str:
 # ── Operation ordering comparison ──────────────────────────────────
 
 def check_operation_order(
-    ops_a: List[str],
-    ops_b: List[str],
-) -> Optional[str]:
+    ops_a: list[str],
+    ops_b: list[str],
+) -> str | None:
     """Check if two operation sequences have a security-relevant
     ordering difference.
 
@@ -542,11 +413,18 @@ def check_operation_order(
 # ── Format helpers ─────────────────────────────────────────────────
 
 def format_asymmetry_finding(asymmetry: Asymmetry) -> str:
-    """Format an asymmetry as a finding description for the LLM prompt."""
+    """Format an asymmetry as a finding description for the LLM prompt.
+
+    Property names / explanations embed target identifiers, so they
+    are defanged with ``neutralize_tag_forgery`` before landing in the
+    review prompt.
+    """
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
     lines = [
-        f"Sibling asymmetry [{asymmetry.severity.upper()}]: "
-        f"{asymmetry.property_name}",
-        f"  {asymmetry.explanation}",
+        (f"Sibling asymmetry [{asymmetry.severity.upper()}]: "
+         f"{neutralize_tag_forgery(asymmetry.property_name)}"),
+        f"  {neutralize_tag_forgery(asymmetry.explanation)}",
     ]
     if asymmetry.confidence >= 0.75:
         lines.append(
@@ -556,7 +434,7 @@ def format_asymmetry_finding(asymmetry: Asymmetry) -> str:
     return "\n".join(lines)
 
 
-def format_asymmetry_report(asymmetries: List[Asymmetry]) -> str:
+def format_asymmetry_report(asymmetries: list[Asymmetry]) -> str:
     """Format all asymmetries for the operator."""
     if not asymmetries:
         return "Sibling analysis: no asymmetries detected"
@@ -566,8 +444,8 @@ def format_asymmetry_report(asymmetries: List[Asymmetry]) -> str:
     low = [a for a in asymmetries if a.severity == "low"]
 
     lines = [
-        f"Sibling analysis: {len(asymmetries)} asymmetries "
-        f"({len(high)} high, {len(medium)} medium, {len(low)} low)",
+        (f"Sibling analysis: {len(asymmetries)} asymmetries "
+         f"({len(high)} high, {len(medium)} medium, {len(low)} low)"),
         "",
     ]
 
@@ -580,8 +458,8 @@ def format_asymmetry_report(asymmetries: List[Asymmetry]) -> str:
 
 
 def format_for_prompt(
-    groups: List[SiblingGroup],
-    asymmetries: List[Asymmetry],
+    groups: list[SiblingGroup],
+    asymmetries: list[Asymmetry],
 ) -> str:
     """Format sibling analysis results for injection into the LLM
     review prompt."""
@@ -628,13 +506,13 @@ _ERROR_RETURN_RE = re.compile(
 _INCLUSIVE_BOUND_RE = re.compile(
     r"\b\w+\s*<=\s*(?:len\s*\(|\w+\.(?:length|size|count)\b"
     r"|\w*(?:max|limit|bound|capacity|_len|_size)\b)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _STRICT_BOUND_RE = re.compile(
     r"\b\w+\s*<(?!=)\s*(?:len\s*\(|\w+\.(?:length|size|count)\b"
     r"|\w*(?:max|limit|bound|capacity|_len|_size)\b)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _NULL_GUARD_RE = re.compile(
@@ -645,7 +523,7 @@ _NULL_GUARD_RE = re.compile(
     r"|\bif\s+not\s+\w+\b"
     r"|\bif\s*\(.*!=\s*(?:NULL|null|nil|nullptr)\b"
     r")",
-    re.I,
+    re.IGNORECASE,
 )
 
 _BOUNDS_GUARD_RE = re.compile(
@@ -654,13 +532,13 @@ _BOUNDS_GUARD_RE = re.compile(
     r"|\bif\b.*\.(?:size|length|count)\s*\("
     r"|\bif\b.*\b(?:index|idx|offset|pos)\s*[<>=!]"
     r")",
-    re.I,
+    re.IGNORECASE,
 )
 
 
 def _find_sibling(
     group: SiblingGroup, func_name: str,
-) -> Optional[SiblingPath]:
+) -> SiblingPath | None:
     """Find a SiblingPath by function name."""
     for s in group.siblings:
         if s.function == func_name:
@@ -670,17 +548,17 @@ def _find_sibling(
 
 def _flag_outliers(
     group: SiblingGroup,
-    sources: Dict[str, str],
+    sources: dict[str, str],
     check_fn: Any,
     inconsistency_template: str,
     cwe: str,
-) -> List[Dict]:
+) -> list[dict]:
     """Flag siblings that don't match a pattern when the majority does.
 
     ``check_fn`` is called with the function's source and should
     return a truthy value when the practice is present.
     """
-    results: Dict[str, bool] = {}
+    results: dict[str, bool] = {}
     for func, src in sources.items():
         results[func] = bool(check_fn(src))
 
@@ -694,7 +572,7 @@ def _flag_outliers(
         return []
 
     confidence = present / total
-    findings: List[Dict] = []
+    findings: list[dict] = []
     for func, has_pattern in results.items():
         if not has_pattern:
             sib = _find_sibling(group, func)
@@ -719,8 +597,8 @@ def _flag_outliers(
 
 def _check_variable_use(
     group: SiblingGroup,
-    sources: Dict[str, str],
-) -> List[Dict]:
+    sources: dict[str, str],
+) -> list[dict]:
     """Flag siblings that skip auth/permission checks present in peers."""
     return _flag_outliers(
         group,
@@ -734,8 +612,8 @@ def _check_variable_use(
 
 def _check_error_handling(
     group: SiblingGroup,
-    sources: Dict[str, str],
-) -> List[Dict]:
+    sources: dict[str, str],
+) -> list[dict]:
     """Flag siblings that silently continue when peers return errors."""
     return _flag_outliers(
         group,
@@ -749,14 +627,14 @@ def _check_error_handling(
 
 def _check_boundary_values(
     group: SiblingGroup,
-    sources: Dict[str, str],
-) -> List[Dict]:
+    sources: dict[str, str],
+) -> list[dict]:
     """Flag siblings using different comparison operators for bounds checks.
 
     If most siblings use ``<`` (strict) for bounds and one uses ``<=``
     (inclusive), or vice versa, the outlier may have an off-by-one.
     """
-    styles: Dict[str, str] = {}
+    styles: dict[str, str] = {}
     for func, src in sources.items():
         has_inclusive = bool(_INCLUSIVE_BOUND_RE.search(src))
         has_strict = bool(_STRICT_BOUND_RE.search(src))
@@ -769,7 +647,7 @@ def _check_boundary_values(
     if len(styles) < 3:
         return []
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for val in styles.values():
         counts[val] = counts.get(val, 0) + 1
 
@@ -780,7 +658,7 @@ def _check_boundary_values(
     majority_count = counts[majority_style]
     total = len(styles)
 
-    findings: List[Dict] = []
+    findings: list[dict] = []
     for func, style in styles.items():
         if style != majority_style and counts[style] < majority_count:
             sib = _find_sibling(group, func)
@@ -806,10 +684,10 @@ def _check_boundary_values(
 
 def _check_guard_consistency(
     group: SiblingGroup,
-    sources: Dict[str, str],
-) -> List[Dict]:
+    sources: dict[str, str],
+) -> list[dict]:
     """Flag siblings that skip null/bounds guards present in peers."""
-    findings: List[Dict] = []
+    findings: list[dict] = []
     findings.extend(_flag_outliers(
         group,
         sources,
@@ -830,9 +708,9 @@ def _check_guard_consistency(
 
 
 def check_semantic_consistency(
-    siblings: List[SiblingGroup],
-    checklist: Dict,
-) -> List[Dict]:
+    siblings: list[SiblingGroup],
+    checklist: dict,
+) -> list[dict]:
     """Check for semantic inconsistencies between sibling functions.
 
     Scans source code of sibling functions via regex for patterns
@@ -860,14 +738,14 @@ def check_semantic_consistency(
         ``function``, ``siblings``, ``inconsistency``,
         ``confidence``, ``cwe``.
     """
-    findings: List[Dict] = []
+    findings: list[dict] = []
 
     for group in siblings:
         if len(group.siblings) < 3:
             continue
 
         # Resolve source code for each sibling from the checklist.
-        sources: Dict[str, str] = {}
+        sources: dict[str, str] = {}
         for sib in group.siblings:
             key = f"{sib.file}:{sib.function}"
             entry = checklist.get(key, {})
@@ -888,3 +766,42 @@ def check_semantic_consistency(
         findings.extend(_check_guard_consistency(group, sources))
 
     return findings
+
+
+def semantic_findings_to_mechanical(
+    findings: list[dict],
+) -> list[dict]:
+    """Convert :func:`check_semantic_consistency` outputs into the
+    mechanical-detector finding shape (``file``/``function``/
+    ``detector``/``line``/``description``).
+
+    This is how semantic-consistency outliers reach
+    ``mechanical-findings.json`` and the per-gap review prompt —
+    the same route every other mechanical detector uses.
+    """
+    mechanical: list[dict] = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        file = f.get("file", "")
+        function = f.get("function", "")
+        if not function:
+            continue
+        desc = f.get("inconsistency", "")
+        cwe = f.get("cwe", "")
+        confidence = f.get("confidence")
+        detail = []
+        if cwe:
+            detail.append(cwe)
+        if confidence is not None:
+            detail.append(f"confidence {confidence}")
+        if detail:
+            desc = f"{desc} [{', '.join(detail)}]"
+        mechanical.append({
+            "file": file,
+            "function": function,
+            "detector": "semantic_consistency",
+            "line": 0,
+            "description": desc,
+        })
+    return mechanical

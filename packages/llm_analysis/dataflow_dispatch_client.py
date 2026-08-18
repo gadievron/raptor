@@ -13,7 +13,10 @@ CostTracker.
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
+
+from core.llm.coerce import structured_result
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ class DispatchClient:
         dispatch_fn: Callable,
         model: Any,
         *,
-        cost_tracker: Optional[Any] = None,
+        cost_tracker: Any | None = None,
         temperature: float = 0.0,
     ):
         self._dispatch_fn = dispatch_fn
@@ -52,11 +55,11 @@ class DispatchClient:
     def generate_structured(
         self,
         prompt: str,
-        schema: Dict[str, Any],
-        system_prompt: Optional[str] = None,
-        task_type: Optional[str] = None,
+        schema: dict[str, Any],
+        system_prompt: str | None = None,
+        task_type: str | None = None,
         **kwargs: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Invoke the orchestrator's dispatch_fn and return the parsed dict.
 
         `task_type` is accepted for protocol compatibility but ignored —
@@ -72,7 +75,7 @@ class DispatchClient:
             response = self._dispatch_fn(
                 prompt, schema, system_prompt, self._temperature, self._model,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — fail-open: any dispatch failure means "no verdict"
             logger.warning("dispatch_fn raised during dataflow validation: %s", e)
             return None
 
@@ -84,12 +87,12 @@ class DispatchClient:
                     or str(self._model)
                 )
                 self._cost_tracker.add_cost(model_name, cost)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — cost accounting must never sink the validation
                 logger.debug(
                     "cost_tracker.add_cost failed: %s", e,
                 )
 
-        result = getattr(response, "result", None)
+        result = structured_result(response)
         if not isinstance(result, dict):
             return None
         if "error" in result:

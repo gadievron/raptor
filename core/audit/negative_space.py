@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any
 
 from .gaps import read_gap_source
 
@@ -39,7 +40,7 @@ ALL_CONCERNS = frozenset({
     CONCERN_SECURE_RANDOM, CONCERN_LOCK,
 })
 
-_STRATEGY_CONCERNS: Dict[str, List[str]] = {
+_STRATEGY_CONCERNS: dict[str, list[str]] = {
     "auth": [CONCERN_AUTH],
     "input_handling": [CONCERN_VALIDATION, CONCERN_BOUNDS],
     "memory": [CONCERN_NULL_CHECK, CONCERN_BOUNDS],
@@ -49,7 +50,7 @@ _STRATEGY_CONCERNS: Dict[str, List[str]] = {
     "aliasing": [],
 }
 
-_CONCERN_CWE: Dict[str, str] = {
+_CONCERN_CWE: dict[str, str] = {
     CONCERN_AUTH: "CWE-306",
     CONCERN_VALIDATION: "CWE-20",
     CONCERN_ERROR_HANDLING: "CWE-252",
@@ -71,7 +72,7 @@ class SecurityConvention:
     concern: str
     pattern: str
     occurrences: int
-    locations: List[str] = field(default_factory=list)
+    locations: list[str] = field(default_factory=list)
     framework: str = ""
     confidence: float = 0.5
 
@@ -95,8 +96,8 @@ class NegativeSpaceFinding:
     function: str = ""
     title: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "check_type": self.check_type,
             "expected": self.expected,
             "evidence": self.evidence,
@@ -114,7 +115,7 @@ class NegativeSpaceFinding:
         return d
 
 
-_FRAMEWORK_PATTERNS: Dict[str, Dict[str, List[str]]] = {
+_FRAMEWORK_PATTERNS: dict[str, dict[str, list[str]]] = {
     "django": {
         CONCERN_AUTH: [
             r"@login_required",
@@ -172,7 +173,7 @@ _FRAMEWORK_PATTERNS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
-_GENERIC_PATTERNS: Dict[str, List[str]] = {
+_GENERIC_PATTERNS: dict[str, list[str]] = {
     CONCERN_AUTH: [
         r"check_auth",
         r"require_auth",
@@ -227,7 +228,7 @@ _GENERIC_PATTERNS: Dict[str, List[str]] = {
 
 
 def detect_framework(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
 ) -> str:
     """Detect the project's web framework from import/require patterns.
 
@@ -235,7 +236,7 @@ def detect_framework(
     or empty string if no framework detected.
     """
     gaps = [g for g in gaps if not g.get("dead")]
-    signals: Dict[str, int] = {}
+    signals: dict[str, int] = {}
 
     framework_imports = {
         "django": ["from django", "import django", "django."],
@@ -264,27 +265,47 @@ def detect_framework(
 
 
 def discover_conventions(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
     framework: str = "",
-) -> List[SecurityConvention]:
+    domain_vocab: Any = None,
+) -> list[SecurityConvention]:
     """Discover the project's security conventions by scanning source code.
 
     Counts how many functions use each security pattern and emits
     conventions with ≥MIN_CONVENTION_OCCURRENCES occurrences.
+
+    *domain_vocab* is an optional
+    :class:`~core.audit.condition_smt.DomainVocabulary`; its
+    ``auth_predicates`` (study-learned project gates plus any
+    target-kind pack) extend the generic auth patterns additively, so
+    convention discovery recognises project-specific auth gates
+    (``foo_may_access``, ``ns_capable``) the framework/generic seeds
+    never matched.
     """
     gaps = [g for g in gaps if not g.get("dead")]
     if not framework:
         framework = detect_framework(gaps)
 
-    pattern_hits: Dict[str, Dict[str, List[str]]] = {}
+    pattern_hits: dict[str, dict[str, list[str]]] = {}
 
     fw_patterns = _FRAMEWORK_PATTERNS.get(framework, {})
 
+    vocab_auth_patterns: list[str] = []
+    if domain_vocab is not None:
+        preds = getattr(domain_vocab, "auth_predicates", frozenset())
+        vocab_auth_patterns = [
+            rf"\b{re.escape(name)}\s*\("
+            for name, _kind in sorted(preds)
+            if name
+        ]
+
     for concern in ALL_CONCERNS:
-        patterns_to_check: List[str] = []
+        patterns_to_check: list[str] = []
         patterns_to_check.extend(fw_patterns.get(concern, []))
         patterns_to_check.extend(_GENERIC_PATTERNS.get(concern, []))
+        if concern == CONCERN_AUTH:
+            patterns_to_check.extend(vocab_auth_patterns)
 
         if not patterns_to_check:
             continue
@@ -306,7 +327,7 @@ def discover_conventions(
                 except re.error:
                     continue
 
-    conventions: List[SecurityConvention] = []
+    conventions: list[SecurityConvention] = []
     for concern, pat_map in pattern_hits.items():
         best_pat = max(pat_map, key=lambda p: len(pat_map[p]))
         locs = pat_map[best_pat]
@@ -329,11 +350,11 @@ def discover_conventions(
 
 
 def _count_functions_in_concern(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     concern: str,
 ) -> int:
     """Count how many functions are in strategies relevant to this concern."""
-    relevant_strategies: Set[str] = set()
+    relevant_strategies: set[str] = set()
     for strat, concerns in _STRATEGY_CONCERNS.items():
         if concern in concerns:
             relevant_strategies.add(strat)
@@ -353,10 +374,10 @@ def _count_functions_in_concern(
 
 
 def check_negative_space(
-    gap: Dict[str, Any],
+    gap: dict[str, Any],
     conventions: Sequence[SecurityConvention],
     strategy: str,
-) -> List[NegativeSpaceFinding]:
+) -> list[NegativeSpaceFinding]:
     """Check a single function for missing security checks.
 
     Returns findings for each convention this function should follow
@@ -370,7 +391,7 @@ def check_negative_space(
     if not relevant_concerns:
         return []
 
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
     key = f"{gap['file']}:{gap['name']}"
 
     for conv in conventions:
@@ -409,7 +430,7 @@ def check_negative_space(
 
 
 def _should_have_convention(
-    gap: Dict[str, Any],
+    gap: dict[str, Any],
     convention: SecurityConvention,
 ) -> bool:
     """Decide if this function is in a context where the convention applies.
@@ -421,7 +442,7 @@ def _should_have_convention(
     """
     name = gap.get("name", "").lower()
 
-    if name.startswith("test_") or name.startswith("_test"):
+    if name.startswith(("test_", "_test")):
         return False
 
     sloc = gap.get("sloc", 0)
@@ -436,7 +457,7 @@ def _should_have_convention(
     return True
 
 
-def _looks_like_handler(gap: Dict[str, Any]) -> bool:
+def _looks_like_handler(gap: dict[str, Any]) -> bool:
     """Heuristic: does this function look like a request/API handler?"""
     name = gap.get("name", "").lower()
     handler_signals = [
@@ -465,10 +486,10 @@ def _looks_like_handler(gap: Dict[str, Any]) -> bool:
 
 
 def check_sibling_negative_space(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     conventions: Sequence[SecurityConvention],
     peer_groups=None,
-) -> List[NegativeSpaceFinding]:
+) -> list[NegativeSpaceFinding]:
     """Detect convention violations by comparing sibling functions.
 
     Groups functions by naming pattern (render_X / render_Y), then
@@ -502,12 +523,12 @@ def check_sibling_negative_space(
     if not peer_groups:
         return []
 
-    gap_by_key: Dict[str, Dict[str, Any]] = {}
+    gap_by_key: dict[str, dict[str, Any]] = {}
     for g in gaps:
         key = f"{g.get('file', '')}:{g.get('name', '')}"
         gap_by_key[key] = g
 
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
     for pg in peer_groups:
         enriched_siblings = []
@@ -588,10 +609,10 @@ def format_negative_space_prose(
 
     lines = [
         "### Convention deviations",
-        "Sibling functions in this file follow conventions that this "
+        ("Sibling functions in this file follow conventions that this "
         "function deviates from. A deviation is an observation, not a "
         "finding — the function may handle the concern differently, "
-        "or the convention may not apply here. Evaluate independently.",
+        "or the convention may not apply here. Evaluate independently."),
     ]
     for f in findings:
         conf = f"[{f.confidence}]" if f.confidence == "high" else ""
@@ -609,40 +630,40 @@ def format_negative_space_prose(
 
 _REDOS_SUSPICIOUS = re.compile(
     r"""re\.compile\(\s*[rfbu]*["'].*(?:\+\)\+|\*\)\*|\+\)\*|\*\)\+)""",
-    re.I,
+    re.IGNORECASE,
 )
 
 _UNBOUNDED_ALLOC = re.compile(
     r"(?:malloc|calloc|realloc|new\s+\w+\[)\s*\(\s*\w+\s*(?:\+|\*)\s*\w+",
-    re.I,
+    re.IGNORECASE,
 )
 
 _XML_ENTITY_EXPANSION = re.compile(
     r"(?:XMLParser|xml\.(?:sax|dom|etree|parsers)|parseString|parse\(|fromstring)\s*\(",
-    re.I,
+    re.IGNORECASE,
 )
 
 _XML_SAFE_GUARD = re.compile(
     r"(?:defusedxml|resolve_entities\s*=\s*False|XMLParser\s*\([^)]*resolve_entities|"
     r"set_feature\s*\(\s*feature_external_ges)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _UNBOUNDED_WRITE = re.compile(
     r"\.(?:write|send|sendall|sendto|put|append|extend)\s*\([^)]*\bwhile\b|"
     r"(?:fwrite|fputs|fprintf|write)\s*\(.*\bwhile\b|"
     r"\bwhile\b[^{]*\.(?:write|send|append)\s*\(",
-    re.I | re.DOTALL,
+    re.IGNORECASE | re.DOTALL,
 )
 
 _HASH_COLLISION = re.compile(
     r"(?:dict|HashMap|HashSet|hash_map|unordered_map|defaultdict)\s*\(",
-    re.I,
+    re.IGNORECASE,
 )
 
 _HASH_COLLISION_GUARD = re.compile(
     r"(?:max_size|capacity|limit|max_entries|MAX_\w+|threshold)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _RECURSIVE_CALL = re.compile(
@@ -652,18 +673,18 @@ _RECURSIVE_CALL = re.compile(
 
 _RECURSION_GUARD = re.compile(
     r"(?:depth|level|max_depth|MAX_DEPTH|recursion_limit|sys\.setrecursionlimit)",
-    re.I,
+    re.IGNORECASE,
 )
 
 
 def check_resource_exhaustion(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
+    target_path: Path | None = None,
     domain_vocab: Any = None,
-) -> List[NegativeSpaceFinding]:
+) -> list[NegativeSpaceFinding]:
     """Detect resource exhaustion patterns."""
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
     for gap in gaps:
         source = gap.get("source", "") or (
@@ -699,11 +720,11 @@ def check_resource_exhaustion(
                 unbounded_re = re.compile(
                     rf"(?:malloc|calloc|realloc|{alloc_alts}|new\s+\w+\[)\s*\("
                     r"\s*\w+\s*(?:\+|\*)\s*\w+",
-                    re.I,
+                    re.IGNORECASE,
                 )
         if unbounded_re.search(source):
             is_checked = bool(re.search(
-                r"if\s*\(.*(?:size|len|count|num).*[<>]", source, re.I,
+                r"if\s*\(.*(?:size|len|count|num).*[<>]", source, re.IGNORECASE,
             ))
             if not is_checked:
                 findings.append(NegativeSpaceFinding(
@@ -722,9 +743,9 @@ def check_resource_exhaustion(
                     title="Allocation with arithmetic on user-influenced size",
                 ))
 
-        if _XML_ENTITY_EXPANSION.search(source):
-            if not _XML_SAFE_GUARD.search(source):
-                findings.append(NegativeSpaceFinding(
+        if (_XML_ENTITY_EXPANSION.search(source)
+                and not _XML_SAFE_GUARD.search(source)):
+            findings.append(NegativeSpaceFinding(
                     check_type="resource_exhaustion",
                     expected="defusedxml or entity resolution disabled",
                     evidence=(
@@ -743,7 +764,7 @@ def check_resource_exhaustion(
         if _HASH_COLLISION.search(source):
             has_external_input = bool(re.search(
                 r'\b(?:request|input|argv|user|params|query|form|body|headers)\b',
-                source, re.I,
+                source, re.IGNORECASE,
             ))
             if has_external_input and not _HASH_COLLISION_GUARD.search(source):
                 findings.append(NegativeSpaceFinding(
@@ -762,9 +783,9 @@ def check_resource_exhaustion(
                     title="Hash container without size limit",
                 ))
 
-        if _RECURSIVE_CALL.search(source):
-            if not _RECURSION_GUARD.search(source):
-                findings.append(NegativeSpaceFinding(
+        if (_RECURSIVE_CALL.search(source)
+                and not _RECURSION_GUARD.search(source)):
+            findings.append(NegativeSpaceFinding(
                     check_type="resource_exhaustion",
                     expected="depth limit on recursive function",
                     evidence=(
@@ -790,47 +811,70 @@ class ProtocolCheck:
     ambiguity: str
     question: str
     cwe: str
+    # Protocol-evidence gate (the check_missing_app_features
+    # precedent): when set, the source must ALSO show this evidence
+    # before the check fires. Trigger words like "session"/"cookie"
+    # are shared vocabulary across protocols — TLS session-cache code
+    # was flagged with an HTTP CRLF-injection question purely on the
+    # word "session".
+    context: re.Pattern | None = None
+
+
+# Evidence that the source actually speaks HTTP (not merely shares
+# vocabulary with it): version strings, header-plumbing identifiers,
+# literal header writes.
+_HTTP_CONTEXT_RE = re.compile(
+    r"(?:HTTP/[0-9]"
+    r"|https?://"
+    r"|http[_-]?(?:request|response|header|server|client|conn)"
+    r"|(?:request|response)[_-]?headers?"
+    r"|Content-Length|Transfer-Encoding|Set-Cookie"
+    r"|X-Forwarded|status[_ -]?code)",
+    re.IGNORECASE,
+)
 
 
 _PROTOCOL_CHECKS = [
     ProtocolCheck(
         protocol="HTTP",
-        pattern=re.compile(r"(?:Content-Length|Transfer-Encoding)", re.I),
+        pattern=re.compile(r"(?:Content-Length|Transfer-Encoding)", re.IGNORECASE),
         ambiguity="CL vs TE request smuggling",
         question="When both Content-Length and Transfer-Encoding are present, does the parser reject or pick one consistently?",
         cwe="CWE-444",
+        context=_HTTP_CONTEXT_RE,
     ),
     ProtocolCheck(
         protocol="HTTP",
-        pattern=re.compile(r"(?:Set-Cookie|cookie|session)", re.I),
+        pattern=re.compile(r"(?:Set-Cookie|cookie|session)", re.IGNORECASE),
         ambiguity="CRLF header injection",
         question="Are header values checked for \\r\\n before being used in HTTP responses?",
         cwe="CWE-113",
+        context=_HTTP_CONTEXT_RE,
     ),
     ProtocolCheck(
         protocol="JWT",
-        pattern=re.compile(r"(?:jwt|json.web.token|jose)", re.I),
+        pattern=re.compile(r"(?:jwt|json.web.token|jose)", re.IGNORECASE),
         ambiguity="Algorithm confusion",
         question="Does the JWT verifier enforce the expected algorithm, or accept alg:none / HS256 when RSA is expected?",
         cwe="CWE-327",
     ),
     ProtocolCheck(
         protocol="XML",
-        pattern=re.compile(r"(?:xml\.etree|lxml|minidom|SAXParser|XMLReader|DocumentBuilder)", re.I),
+        pattern=re.compile(r"(?:xml\.etree|lxml|minidom|SAXParser|XMLReader|DocumentBuilder)", re.IGNORECASE),
         ambiguity="XXE / entity expansion",
         question="Is entity expansion disabled or limited in the XML parser?",
         cwe="CWE-611",
     ),
     ProtocolCheck(
         protocol="OAuth",
-        pattern=re.compile(r"(?:redirect_uri|oauth|authorization_code)", re.I),
+        pattern=re.compile(r"(?:redirect_uri|oauth|authorization_code)", re.IGNORECASE),
         ambiguity="Open redirect in redirect_uri",
         question="Is redirect_uri validated against a strict allowlist?",
         cwe="CWE-601",
     ),
     ProtocolCheck(
         protocol="SAML",
-        pattern=re.compile(r"(?:saml|assertion|xmldsig)", re.I),
+        pattern=re.compile(r"(?:saml|assertion|xmldsig)", re.IGNORECASE),
         ambiguity="XML signature wrapping",
         question="Does the SAML processor verify that the signed element is the one being consumed?",
         cwe="CWE-347",
@@ -839,13 +883,13 @@ _PROTOCOL_CHECKS = [
 
 
 def check_protocol_ambiguity(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
-) -> List[NegativeSpaceFinding]:
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
     """Flag protocol-handling code vulnerable to known ambiguity classes."""
-    findings: List[NegativeSpaceFinding] = []
-    seen: Set[str] = set()
+    findings: list[NegativeSpaceFinding] = []
+    seen: set[str] = set()
 
     for gap in gaps:
         source = gap.get("source", "") or (
@@ -856,6 +900,10 @@ def check_protocol_ambiguity(
 
         for check in _PROTOCOL_CHECKS:
             if not check.pattern.search(source):
+                continue
+            if check.context is not None and not check.context.search(source):
+                # Trigger word without protocol evidence — shared
+                # vocabulary, not a protocol handler.
                 continue
 
             key = f"{gap.get('file')}:{check.protocol}:{check.ambiguity}"
@@ -882,7 +930,7 @@ def check_protocol_ambiguity(
 @dataclass
 class AppFeatureCheck:
     feature: str
-    search_patterns: List[re.Pattern]
+    search_patterns: list[re.Pattern]
     finding_if_absent: str
     cwe: str
 
@@ -891,7 +939,7 @@ _APP_FEATURE_CHECKS = [
     AppFeatureCheck(
         feature="Rate limiting",
         search_patterns=[
-            re.compile(r"(?:rate.?limit|throttl|RateLimit|slowdown)", re.I),
+            re.compile(r"(?:rate.?limit|throttl|RateLimit|slowdown)", re.IGNORECASE),
         ],
         finding_if_absent=(
             "No rate limiting found. Authentication endpoints and "
@@ -903,7 +951,7 @@ _APP_FEATURE_CHECKS = [
     AppFeatureCheck(
         feature="Account lockout",
         search_patterns=[
-            re.compile(r"(?:lockout|lock.?out|max.?attempts|failed.?login.?count)", re.I),
+            re.compile(r"(?:lockout|lock.?out|max.?attempts|failed.?login.?count)", re.IGNORECASE),
         ],
         finding_if_absent=(
             "No account lockout mechanism found. Repeated failed login "
@@ -914,7 +962,7 @@ _APP_FEATURE_CHECKS = [
     AppFeatureCheck(
         feature="CSRF protection",
         search_patterns=[
-            re.compile(r"(?:csrf|xsrf|CSRFMiddleware|SameSite|anti.?forgery)", re.I),
+            re.compile(r"(?:csrf|xsrf|CSRFMiddleware|SameSite|anti.?forgery)", re.IGNORECASE),
         ],
         finding_if_absent=(
             "No CSRF protection found on state-changing endpoints. "
@@ -925,7 +973,7 @@ _APP_FEATURE_CHECKS = [
     AppFeatureCheck(
         feature="Session timeout",
         search_patterns=[
-            re.compile(r"(?:session.?timeout|session.?expir|SESSION_COOKIE_AGE|maxAge)", re.I),
+            re.compile(r"(?:session.?timeout|session.?expir|SESSION_COOKIE_AGE|maxAge)", re.IGNORECASE),
         ],
         finding_if_absent=(
             "No session timeout configured. Sessions may persist indefinitely, "
@@ -936,7 +984,7 @@ _APP_FEATURE_CHECKS = [
     AppFeatureCheck(
         feature="Security headers",
         search_patterns=[
-            re.compile(r"(?:Content-Security-Policy|X-Frame-Options|HSTS|Strict-Transport-Security|X-Content-Type-Options)", re.I),
+            re.compile(r"(?:Content-Security-Policy|X-Frame-Options|HSTS|Strict-Transport-Security|X-Content-Type-Options)", re.IGNORECASE),
         ],
         finding_if_absent=(
             "No HTTP security headers detected. Missing CSP, HSTS, "
@@ -947,7 +995,7 @@ _APP_FEATURE_CHECKS = [
     AppFeatureCheck(
         feature="Global error handler",
         search_patterns=[
-            re.compile(r"(?:error.?handler|exception.?handler|500|handler500|errorMiddleware|unhandledException)", re.I),
+            re.compile(r"(?:error.?handler|exception.?handler|500|handler500|errorMiddleware|unhandledException)", re.IGNORECASE),
         ],
         finding_if_absent=(
             "No global error handler. Unhandled exceptions may leak "
@@ -958,29 +1006,81 @@ _APP_FEATURE_CHECKS = [
 ]
 
 
+# File suffixes of languages web applications are written in. The
+# app-feature checklist (CSRF, session timeout, rate limiting, …)
+# asserts *web-application* obligations: on a target with none of
+# these languages (a C crypto library, a kernel module) every check
+# "fails" vacuously and pollutes the post-loop findings with noise —
+# one measured run emitted all six against pure C.
+_WEB_APP_SUFFIXES = frozenset({
+    ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".php", ".rb", ".java", ".kt", ".cs", ".go", ".scala",
+})
+
+# Framework / HTTP-server evidence: a web-capable language alone is
+# not enough (a Python CLI tool has no CSRF surface either).
+_WEB_FRAMEWORK_RE = re.compile(
+    r"(?:flask|django|fastapi|starlette|tornado|bottle|aiohttp"
+    r"|express\(|require\(['\"]express|fastify|createServer"
+    r"|rails|sinatra|rack"
+    r"|spring|servlet|@RestController|@RequestMapping|HttpServlet"
+    r"|laravel|symfony|asp\.net"
+    r"|net/http|http\.Handle|gin\.Default|echo\.New|fiber\.New"
+    r"|@app\.route|@router\.|add_url_rule|HttpServer)",
+    re.IGNORECASE,
+)
+
+
 def check_missing_app_features(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
-) -> List[NegativeSpaceFinding]:
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
     """Check for application-level security features that should exist
-    but may not have been implemented."""
-    found_features: Set[int] = set()
+    but may not have been implemented.
+
+    Gated on target language/framework evidence: only runs when the
+    target contains web-application-capable language files AND some
+    reviewed source shows framework / HTTP-server usage. Anything else
+    returns empty with one visible skip line instead of six vacuous
+    "Missing: CSRF protection"-style findings.
+    """
+    if not any(
+        Path(gap.get("file", "")).suffix.lower() in _WEB_APP_SUFFIXES
+        for gap in gaps
+    ):
+        logger.info(
+            "app-feature checklist skipped — target has no "
+            "web-application-capable language files",
+        )
+        return []
+
+    found_features: set[int] = set()
+    framework_seen = False
     for gap in gaps:
-        if len(found_features) == len(_APP_FEATURE_CHECKS):
+        if framework_seen and len(found_features) == len(_APP_FEATURE_CHECKS):
             break
         source = gap.get("source", "") or (
             read_gap_source(gap, target_path) if target_path else ""
         )
         if not source:
             continue
+        if not framework_seen and _WEB_FRAMEWORK_RE.search(source):
+            framework_seen = True
         for idx, check in enumerate(_APP_FEATURE_CHECKS):
             if idx in found_features:
                 continue
             if any(p.search(source) for p in check.search_patterns):
                 found_features.add(idx)
 
-    findings: List[NegativeSpaceFinding] = []
+    if not framework_seen:
+        logger.info(
+            "app-feature checklist skipped — no web framework / "
+            "HTTP-server evidence in target sources",
+        )
+        return []
+
+    findings: list[NegativeSpaceFinding] = []
     for idx, check in enumerate(_APP_FEATURE_CHECKS):
         if idx not in found_features:
             findings.append(NegativeSpaceFinding(
@@ -1035,16 +1135,16 @@ _UB_PATTERNS = [
 
 
 def check_ub_patterns(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    languages: Optional[Set[str]] = None,
-    target_path: Optional[Path] = None,
-) -> List[NegativeSpaceFinding]:
+    languages: set[str] | None = None,
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
     """Detect known undefined behaviour patterns in C/C++ source."""
     if languages and not (languages & {"c", "cpp", "c++"}):
         return []
 
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
     for gap in gaps:
         source = gap.get("source", "") or (
             read_gap_source(gap, target_path) if target_path else ""
@@ -1089,15 +1189,15 @@ _SIGNAL_UNSAFE_CALLS = frozenset({
 
 
 def check_signal_safety(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
+    target_path: Path | None = None,
     domain_vocab: Any = None,
-) -> List[NegativeSpaceFinding]:
+) -> list[NegativeSpaceFinding]:
     """Flag signal handlers that call signal-unsafe functions."""
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
-    handler_funcs: Set[str] = set()
+    handler_funcs: set[str] = set()
     for gap in gaps:
         source = gap.get("source", "") or (
             read_gap_source(gap, target_path) if target_path else ""
@@ -1151,27 +1251,27 @@ def check_signal_safety(
 
 _EARLY_RETURN_AUTH = re.compile(
     r"(?:password|passwd|secret|token|key|hmac|digest)\s*\[.*\]\s*!=.*:\s*return\s+False",
-    re.I,
+    re.IGNORECASE,
 )
 
 _NON_CONSTANT_TIME_CMP = re.compile(
     r"(?:strcmp|memcmp|==)\s*\(?\s*(?:password|passwd|token|secret|key|hmac|api_key|auth)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _TIMING_BRANCH = re.compile(
     r"if\s+(?:is_admin|is_superuser|is_root|is_privileged|has_role)\s*(?:\(|:)",
-    re.I,
+    re.IGNORECASE,
 )
 
 
 def check_side_channels(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
-) -> List[NegativeSpaceFinding]:
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
     """Blind spot 12: flag secret-dependent branches and timing leaks."""
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
     for gap in gaps:
         source = gap.get("source", "") or (
@@ -1241,52 +1341,52 @@ def check_side_channels(
 _IPC_DESER_NO_VALIDATE = re.compile(
     r"(?:pickle\.loads?|yaml\.(?:unsafe_)?load|json\.loads?)\s*\(\s*"
     r"(?:\w+\.)?(?:recv|read|readline|recvfrom|recvmsg)\s*\(",
-    re.I,
+    re.IGNORECASE,
 )
 
 _IPC_DESER_SIMPLE = re.compile(
     r"(?:pickle\.loads?|yaml\.(?:unsafe_)?load)\s*\(",
-    re.I,
+    re.IGNORECASE,
 )
 
 _IPC_DESER_SCHEMA_GUARD = re.compile(
     r"(?:schema|validate|pydantic|marshmallow|jsonschema|voluptuous|cerberus)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _SHM_NO_LOCK = re.compile(
     r"(?:mmap\.mmap|shm_open|shmget|shared_memory|SharedMemory)\s*\(",
-    re.I,
+    re.IGNORECASE,
 )
 
 _SHM_LOCK_GUARD = re.compile(
     r"(?:Lock|RLock|Semaphore|mutex|flock|fcntl\.lockf|msync)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _CROSS_PROC_PRIV = re.compile(
     r"(?:os\.getuid|os\.geteuid|os\.getpid|getuid|geteuid)\s*\(\s*\)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _CROSS_PROC_PRIV_CONTEXT = re.compile(
     r"if\s+.*(?:os\.getuid|os\.geteuid|getuid|geteuid)\s*\(",
-    re.I,
+    re.IGNORECASE,
 )
 
 _SUBPROCESS_SHELL_UNTRUSTED = re.compile(
     r"subprocess\.(?:Popen|call|run|check_output|check_call)\s*\([^)]*shell\s*=\s*True",
-    re.I,
+    re.IGNORECASE,
 )
 
 
 def check_multi_process(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
-) -> List[NegativeSpaceFinding]:
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
     """Blind spot 3: cross-service trust boundary analysis."""
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
     for gap in gaps:
         source = gap.get("source", "") or (
@@ -1375,17 +1475,17 @@ def check_multi_process(
 _HARDCODED_LOCALHOST = re.compile(
     r"""(?:127\.0\.0\.1|localhost|0\.0\.0\.0).*(?:auth|secur|allow|trust|permit|acl|whitelist)"""
     r"""|(?:auth|secur|allow|trust|permit|acl|whitelist).*(?:127\.0\.0\.1|localhost|0\.0\.0\.0)""",
-    re.I,
+    re.IGNORECASE,
 )
 
 _GLOBAL_STATE_NO_LOCK = re.compile(
     r"(?:global\s+\w+|_(?:cache|state|registry|store|sessions|connections)\s*(?:=|\[))",
-    re.I,
+    re.IGNORECASE,
 )
 
 _GLOBAL_STATE_LOCK_GUARD = re.compile(
     r"(?:Lock|RLock|threading\.Lock|mutex|synchronized|atomic)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _HARDCODED_PATHS = re.compile(
@@ -1394,23 +1494,23 @@ _HARDCODED_PATHS = re.compile(
 
 _HARDCODED_PATH_SECURITY_CONTEXT = re.compile(
     r"(?:secret|key|password|token|cert|credential|auth|session|cookie)",
-    re.I,
+    re.IGNORECASE,
 )
 
 _DEBUG_SKIP_SECURITY = re.compile(
     r"if\s+.*(?:DEBUG|TESTING|DEV_MODE|DEVELOPMENT|TEST_MODE)\s*"
     r"(?::|.*(?:skip|disable|bypass|no).*(?:auth|secur|valid|check|verif))",
-    re.I,
+    re.IGNORECASE,
 )
 
 
 def check_deployment_assumptions(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
-) -> List[NegativeSpaceFinding]:
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
     """Blind spot 9: deployment mismatch detection."""
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
     for gap in gaps:
         source = gap.get("source", "") or (
@@ -1502,17 +1602,17 @@ _LOCK_ACQUIRE = re.compile(
 
 _LOCK_IN_SIGNAL_HANDLER = re.compile(
     r"(?:pthread_mutex_lock|\.acquire\s*\(|\.lock\s*\()",
-    re.I,
+    re.IGNORECASE,
 )
 
 _LOCK_MISSING_UNLOCK = re.compile(
     r"(?:\.acquire\s*\(|pthread_mutex_lock\s*\(|\.lock\s*\()",
-    re.I,
+    re.IGNORECASE,
 )
 
 _UNLOCK_PATTERN = re.compile(
     r"(?:\.release\s*\(|pthread_mutex_unlock\s*\(|\.unlock\s*\()",
-    re.I,
+    re.IGNORECASE,
 )
 
 _CONTEXT_MANAGER_LOCK = re.compile(
@@ -1527,35 +1627,35 @@ _NON_REENTRANT_CALLS = frozenset({
 
 
 def check_lock_ordering(
-    gaps: Sequence[Dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    target_path: Optional[Path] = None,
+    target_path: Path | None = None,
     domain_vocab: Any = None,
-) -> List[NegativeSpaceFinding]:
+) -> list[NegativeSpaceFinding]:
     """Extends blind spot 11: lock ordering and locking discipline analysis."""
     lock_acquire_re = _LOCK_ACQUIRE
     lock_missing_re = _LOCK_MISSING_UNLOCK
     unlock_re = _UNLOCK_PATTERN
     if domain_vocab and (domain_vocab.lock_acquires or domain_vocab.lock_releases):
-        extra_acq = "|".join(
-            rf"{re.escape(n)}\s*\(" for n in domain_vocab.lock_acquires
+        extra_acq_names = "|".join(
+            re.escape(n) for n in domain_vocab.lock_acquires
         )
         extra_rel = "|".join(
             rf"{re.escape(n)}\s*\(" for n in domain_vocab.lock_releases
         )
-        if extra_acq:
+        if extra_acq_names:
             lock_acquire_re = re.compile(
-                _LOCK_ACQUIRE.pattern + "|" + extra_acq,
+                _LOCK_ACQUIRE.pattern + rf"|({extra_acq_names})\s*\(",
             )
             lock_missing_re = re.compile(
-                _LOCK_MISSING_UNLOCK.pattern + "|" + extra_acq, re.I,
+                _LOCK_MISSING_UNLOCK.pattern + "|" + extra_acq_names + r"\s*\(", re.IGNORECASE,
             )
         if extra_rel:
             unlock_re = re.compile(
-                _UNLOCK_PATTERN.pattern + "|" + extra_rel, re.I,
+                _UNLOCK_PATTERN.pattern + "|" + extra_rel, re.IGNORECASE,
             )
 
-    findings: List[NegativeSpaceFinding] = []
+    findings: list[NegativeSpaceFinding] = []
 
     for gap in gaps:
         source = gap.get("source", "") or (
@@ -1592,9 +1692,9 @@ def check_lock_ordering(
                 title="Multiple lock acquisitions (potential ordering violation)",
             ))
 
-        if re.search(r"(?:signal|sigaction)\s*\(", source):
-            if _LOCK_IN_SIGNAL_HANDLER.search(source):
-                findings.append(NegativeSpaceFinding(
+        if (re.search(r"(?:signal|sigaction)\s*\(", source)
+                and _LOCK_IN_SIGNAL_HANDLER.search(source)):
+            findings.append(NegativeSpaceFinding(
                     check_type="lock_ordering",
                     expected="no lock operations in signal handler context",
                     evidence=(

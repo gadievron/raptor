@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -37,10 +36,14 @@ from pathlib import Path
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
-os.environ.setdefault("RAPTOR_DIR", str(REPO))
+# Hard-SET (never setdefault): children of this tree must import this
+# tree even when the launching shell exported RAPTOR_DIR for another
+# checkout (see core.config.pin_raptor_dir).
+from core.config import pin_raptor_dir_in_environ
 
-from packages.llm_analysis.intent_match import intent_match  # noqa: E402
+pin_raptor_dir_in_environ()
 
+from packages.llm_analysis.intent_match import intent_match
 
 # ---------------------------------------------------------------------------
 # Fake LLM provider

@@ -8,7 +8,12 @@ same call site, they fuse into one item with higher confidence.
 Fusion rules:
 - Same call site, same concern: merge descriptions, upgrade confidence
 - Same function, complementary evidence: combine into evidence summary
-- Contradictory evidence: flag disagreement for the reviewer
+
+There is NO contradiction detection: items grouped under the same
+concern key are always merged as corroborating — opposing signals are
+not flagged. If disagreement surfacing is ever needed, FusedEvidence
+would need a polarity/contradiction field rendered by
+to_prompt_section.
 
 This reduces prompt size (fewer items) while increasing signal strength
 (corroborated evidence is more trustworthy).
@@ -19,7 +24,6 @@ from __future__ import annotations
 import logging
 import re as _re_module
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 from .evidence_grade import (
     Confidence,
@@ -39,10 +43,10 @@ class FusedEvidence:
     """A fused evidence item from multiple sources."""
 
     description: str
-    sources: List[EvidenceSource]
+    sources: list[EvidenceSource]
     confidence: Confidence
     corroboration_count: int
-    detail: Optional[str] = None
+    detail: str | None = None
 
     def to_prompt_section(self) -> str:
         src_tags = ", ".join(
@@ -55,19 +59,19 @@ class FusedEvidence:
 
 
 def fuse_evidence(
-    mechanical_evidence: List[GradedEvidence],
-    spec_evidence: List[GradedEvidence],
-    negative_space: List[GradedEvidence],
-    contract_evidence: List[GradedEvidence],
-    typestate_evidence: List[GradedEvidence],
-) -> List[FusedEvidence]:
+    mechanical_evidence: list[GradedEvidence],
+    spec_evidence: list[GradedEvidence],
+    negative_space: list[GradedEvidence],
+    contract_evidence: list[GradedEvidence],
+    typestate_evidence: list[GradedEvidence],
+) -> list[FusedEvidence]:
     """Fuse evidence from multiple capability sources.
 
     Groups by concern and merges corroborating signals. Two signals
     corroborate when they point at the same concern (same callee,
     same missing check, same state violation).
     """
-    all_items: List[Tuple[str, GradedEvidence]] = []
+    all_items: list[tuple[str, GradedEvidence]] = []
 
     for ev in mechanical_evidence:
         key = _extract_concern_key(ev)
@@ -85,11 +89,11 @@ def fuse_evidence(
         key = _extract_concern_key(ev)
         all_items.append((key, ev))
 
-    groups: Dict[str, List[GradedEvidence]] = {}
+    groups: dict[str, list[GradedEvidence]] = {}
     for key, ev in all_items:
         groups.setdefault(key, []).append(ev)
 
-    fused: List[FusedEvidence] = []
+    fused: list[FusedEvidence] = []
     for key, group in groups.items():
         if len(group) == 1:
             ev = group[0]
@@ -111,7 +115,7 @@ def fuse_evidence(
     return fused[:_MAX_FUSED_ITEMS]
 
 
-def _merge_group(group: List[GradedEvidence]) -> FusedEvidence:
+def _merge_group(group: list[GradedEvidence]) -> FusedEvidence:
     """Merge a group of corroborating evidence items."""
     sources = list({ev.source for ev in group})
     descriptions = [ev.description for ev in group]
@@ -192,7 +196,7 @@ def _extract_concern_key(ev: GradedEvidence) -> str:
     return f"item:{desc[:50]}"
 
 
-def format_fused_evidence(fused: List[FusedEvidence]) -> str:
+def format_fused_evidence(fused: list[FusedEvidence]) -> str:
     """Render fused evidence for the LLM prompt."""
     if not fused:
         return ""

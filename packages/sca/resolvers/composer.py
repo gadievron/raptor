@@ -5,10 +5,13 @@ the project's ``composer.json``. ``--no-install`` re-resolves and
 writes ``composer.lock`` without populating ``vendor/``;
 ``--no-interaction`` keeps the subprocess non-blocking.
 
-Composer's resolution is mostly metadata-only — packages aren't
-unpacked or executed during ``update --no-install``. The sandbox
-remains defence-in-depth: outbound TCP locked to Packagist + the
-public composer mirror.
+``--no-scripts`` and ``--no-plugins`` are **always** set — composer
+runs the root package's script events (``pre-update-cmd``,
+``post-update-cmd``, ...) and loads composer plugins on ``update``
+even with ``--no-install``, so scripts/plugins are explicitly
+disabled to keep resolution metadata-only. The sandbox remains
+defence-in-depth: outbound TCP locked to Packagist + the public
+composer mirror.
 """
 
 from __future__ import annotations
@@ -18,7 +21,6 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from . import ResolverResult, _check_tool, _run
 
@@ -74,7 +76,11 @@ class ComposerResolver:
                 proc = _run(
                     ["composer", "update",
                      "--no-install", "--no-interaction",
-                     "--no-progress"],
+                     "--no-progress",
+                     # Root-package script events + plugins still run
+                     # on ``update`` regardless of ``--no-install`` —
+                     # disable both so resolution stays metadata-only.
+                     "--no-scripts", "--no-plugins"],
                     cwd=tmp_path,
                     timeout=timeout,
                     proxy_hosts=self.proxy_hosts,
@@ -104,7 +110,7 @@ class ComposerResolver:
             )
 
 
-def _read_if_exists(p: Path) -> Optional[bytes]:
+def _read_if_exists(p: Path) -> bytes | None:
     try:
         return p.read_bytes()
     except OSError:

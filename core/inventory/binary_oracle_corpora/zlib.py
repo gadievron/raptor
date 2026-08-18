@@ -42,13 +42,17 @@ when build flags change.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Literal
+
+from core.inventory.binary_oracle_corpora._sandbox_exec import (
+    run_build_step,
+    run_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +69,7 @@ class _ZlibDriver:
         "self-test; classifier target = statically-linked example.")
     mode: Literal["gcov"] = "gcov"
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         sha_dir = work_dir / ZLIB_SHA[:12]
         sentinel = sha_dir / "sentinel.ok"
@@ -79,10 +83,14 @@ class _ZlibDriver:
 
         live = _collect_gcov_liveness(build_o0)
         candidates = _enumerate_candidates(build_o0)
+        # Toolchain block: makes the precision number reproducible
+        # (zlib's configure picks cc; liveness comes from gcov).
+        from .toolchain import record_toolchain
         return {
             "o2_binary": build_o2 / "example",
             "candidate_functions": candidates,
             "live_set": live,
+            "toolchain": record_toolchain(cc="cc", gcov="gcov"),
         }
 
 
@@ -104,7 +112,9 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
     subprocess.run(
         safe_git_command("-C", str(src), "fetch", "--depth", "1",
                          "origin", ZLIB_SHA),
-        env=get_safe_git_env(), check=True, timeout=60,
+        # Dials origin outside the sandbox egress proxy — keep the
+        # operator proxy vars (get_safe_git_env contract).
+        env=get_safe_git_env(preserve_proxy=True), check=True, timeout=60,
     )
     subprocess.run(
         safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
@@ -125,25 +135,21 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
             ["cp", "-a", f"{src}/.", str(build_dir)],
             check=True, timeout=120,
         )
-        env = {**os.environ, "CFLAGS": cflags, "LDFLAGS": ldflags}
-        subprocess.run(["./configure", "--static"], cwd=build_dir,
-                       env=env, check=True, timeout=120)
-        subprocess.run(["make", "-j4"], cwd=build_dir,
-                       env=env, check=True, timeout=300)
+        # Fetched build system — sandboxed with sanitised env (see
+        # _sandbox_exec: supply-chain compromise of the pinned ref is
+        # the residual risk; configure/make must not run with the
+        # operator's environment or network).
+        flags = {"CFLAGS": cflags, "LDFLAGS": ldflags}
+        run_build_step(["./configure", "--static"], cwd=build_dir,
+                       extra_env=flags, timeout=120)
+        run_build_step(["make", "-j4"], cwd=build_dir,
+                       extra_env=flags, timeout=300)
         if run_tests:
             # Run only ``./example`` — see module docstring for why we
-            # skip ``make test``. Sandbox the built-binary invocation
-            # — upstream tag is trusted but supply-chain compromise on
-            # a pinned ref is the residual risk. writable_paths
-            # includes build_dir so gcov can write .gcda files.
-            from core.sandbox import run as _sandbox_run
-            _sandbox_run(
-                ["./example"], cwd=str(build_dir),
-                target=str(build_dir),
-                writable_paths=[str(build_dir)],
-                block_network=True,
-                check=True, timeout=60,
-            )
+            # skip ``make test``. writable_paths includes build_dir so
+            # gcov can write .gcda files.
+            run_build_step(["./example"], cwd=build_dir,
+                           writable_paths=[build_dir], timeout=60)
 
     shutil.rmtree(src, ignore_errors=True)
 
@@ -156,7 +162,7 @@ _GCOV_FN_RE = re.compile(r"^Function '([^']+)'")
 _GCOV_LINES_RE = re.compile(r"^Lines executed:([\d.]+)% of \d+")
 
 
-def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
+def _collect_gcov_liveness(build_dir: Path) -> set[str]:
     """Run ``gcov -f`` over every ``.c`` file with a matching ``.gcda``
     in the build dir; return the set of functions with > 0% lines
     executed."""
@@ -167,12 +173,12 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
                        build_dir)
         return set()
 
-    out = subprocess.run(
+    out = run_tool(
         ["gcov", "-f"] + c_files, cwd=build_dir,
-        capture_output=True, text=True, check=False, timeout=120,
+        check=False, timeout=120,
     ).stdout
 
-    live: Set[str] = set()
+    live: set[str] = set()
     current_fn = None
     for line in out.splitlines():
         m = _GCOV_FN_RE.match(line)
@@ -192,7 +198,7 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
 # Candidate enumeration
 # ---------------------------------------------------------------------------
 
-def _enumerate_candidates(build_o0: Path) -> List[str]:
+def _enumerate_candidates(build_o0: Path) -> list[str]:
     """Functions defined in ``libz.a`` — the population the classifier
     evaluates. ``nm`` types ``T`` (text, exported) and ``t`` (text, local)
     are functions; ``W``/``w`` are weak. Skip data symbols."""
@@ -201,10 +207,9 @@ def _enumerate_candidates(build_o0: Path) -> List[str]:
         logger.warning("zlib: %s not found; cannot enumerate candidates",
                        archive)
         return []
-    out = subprocess.run(["nm", str(archive)],
-                         capture_output=True, text=True,
-                         check=False, timeout=30).stdout
-    fns: Set[str] = set()
+    out = run_tool(["nm", str(archive)],
+                   check=False, timeout=30).stdout
+    fns: set[str] = set()
     for line in out.splitlines():
         parts = line.split()
         # ``<addr> T <name>`` or ``         T <name>`` (undefined → skip).

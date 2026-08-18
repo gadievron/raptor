@@ -65,18 +65,23 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 
 ### Ecosystems
 
-Eight ecosystems are supported with manifest and lockfile parsing:
+The main ecosystems supported with manifest and lockfile parsing:
 
 | Ecosystem | Manifests and lockfiles |
 |-----------|------------------------|
-| Python | `requirements*.txt`, `pyproject.toml`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg` |
+| Python | `requirements*.txt`, `pyproject.toml`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `setup.py`, `setup.cfg` |
 | Node.js | `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `shrinkwrap.json` |
-| Java | `pom.xml`, `build.gradle`, `build.gradle.kts`, `gradle.lockfile` |
+| Java | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.lockfile` |
 | Rust | `Cargo.toml`, `Cargo.lock` |
 | Go | `go.mod`, `go.sum` |
 | Ruby | `Gemfile`, `Gemfile.lock` |
 | .NET | `*.csproj`, `*.fsproj`, `*.vbproj`, `packages.config`, `packages.lock.json` |
 | PHP | `composer.json`, `composer.lock` |
+| C/C++ | `vcpkg.json`, `conanfile.txt`, `conanfile.py`, `conan.lock`, `CMakeLists.txt` (FetchContent) |
+
+Discovery also covers `.gitmodules`, Helm charts (`Chart.yaml` /
+`Chart.lock`), Docker Compose, GitLab CI, and
+`.pre-commit-config.yaml`.
 
 ### Inline-Install Sources
 
@@ -89,15 +94,13 @@ In addition to manifests, RAPTOR parses inline package installs from:
 
 Recognised commands across all four shapes: `pip`, `pipx`, `uv pip`,
 `apt`, `apt-get`, `yum`, `dnf`, `apk`, `npm`, `npx`, `bunx`, `yarn`,
-`pnpm`, `cargo install`, `gem install`, `brew install`, `go install`,
-`dotnet add package`, `nuget install`, `Install-Package`,
-`composer require`.
+`pnpm`, `cargo install`, `gem install`, `brew install`, `go install`.
 
 ### Advisory Matching
 
 | Source | Use | Cache |
 |--------|-----|-------|
-| OSV.dev (`/v1/query`, `/v1/vulns/<id>`) | Advisory and affected ranges | 24h disk |
+| OSV.dev (`/v1/querybatch`, `/v1/vulns/<id>`) | Advisory and affected ranges | 24h disk |
 | CISA KEV catalogue | Known-exploited filter | 24h disk |
 | FIRST.org EPSS | Exploitation probability | 24h disk |
 | Per-ecosystem registries | Version listing for fix | 24h disk |
@@ -116,7 +119,15 @@ Homebrew. Run `raptor-sca health` to probe all ten in one shot.
 --no-kev / --no-epss      skip the named enrichment
 --offline                 skip network; cache-only
 --skip-triage             skip LLM triage pass
+--trust-repo              honour repo-shipped policy files this run
+--no-trust-repo           keep strict checks, overriding --trust-repo
+                          and the project's `config` trust marker
 ```
+
+Repo trust is gated: on untrusted runs a repo-shipped suppression
+overlay (`.raptor-sca-suppress.yml`) and license-policy file are
+reported but ignored. Precedence: `--no-trust-repo` > `--trust-repo`
+> the active project's `config` trust marker > off.
 
 ---
 

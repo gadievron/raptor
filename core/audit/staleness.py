@@ -13,7 +13,6 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ class StaleItem:
 def find_stale_annotations(
     annotations_dir: Path,
     target_path: Path,
-) -> List[StaleItem]:
+) -> list[StaleItem]:
     """Find annotations whose source has changed or been deleted.
 
     Returns a list of StaleItem for each annotation where:
@@ -44,8 +43,8 @@ def find_stale_annotations(
     """
     try:
         from core.annotations.storage import (
-            iter_all_annotations,
             compute_function_hash,
+            iter_all_annotations,
         )
     except ImportError:
         logger.debug("annotations module not available")
@@ -99,9 +98,9 @@ def find_stale_annotations(
 
 
 def stale_as_gaps(
-    stale_items: List[StaleItem],
-    existing_gaps: Optional[List[dict]] = None,
-) -> List[dict]:
+    stale_items: list[StaleItem],
+    existing_gaps: list[dict] | None = None,
+) -> list[dict]:
     """Convert stale annotations into gap-format dicts for the orchestrator.
 
     Merges stale items with existing gaps, marking stale items with
@@ -109,27 +108,27 @@ def stale_as_gaps(
     Avoids duplicates — if a stale function is already in the gap list,
     just sets is_stale=True on the existing entry.
     """
-    existing_keys = set()
+    by_key: dict = {}
     result = []
 
     if existing_gaps:
         for gap in existing_gaps:
             key = f"{gap['file']}:{gap['name']}"
-            existing_keys.add(key)
+            # First occurrence wins for collision marking, matching the
+            # previous first-match scan.
+            by_key.setdefault(key, gap)
             result.append(gap)
 
     for item in stale_items:
         if item.reason == "deleted":
             continue
         key = f"{item.file}:{item.function}"
-        if key in existing_keys:
-            for gap in result:
-                if f"{gap['file']}:{gap['name']}" == key:
-                    gap["is_stale"] = True
-                    gap["priority"] = 0
-                    break
+        existing = by_key.get(key)
+        if existing is not None:
+            existing["is_stale"] = True
+            existing["priority"] = 0
         else:
-            result.append({
+            gap = {
                 "file": item.file,
                 "name": item.function,
                 "line_start": item.line_start,
@@ -138,7 +137,8 @@ def stale_as_gaps(
                 "strategies": [],
                 "is_stale": True,
                 "sloc": max(0, item.line_end - item.line_start + 1) if item.line_end else 0,
-            })
-            existing_keys.add(key)
+            }
+            result.append(gap)
+            by_key[key] = gap
 
     return result

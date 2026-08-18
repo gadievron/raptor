@@ -146,7 +146,6 @@ class ScanResult:
     """Result of scanning target content for injection attempts."""
 
     warnings: List[InjectionWarning] = field(default_factory=list)
-    sanitised_count: int = 0
 
     @property
     def has_injection(self) -> bool:

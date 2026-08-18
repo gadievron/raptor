@@ -7,18 +7,17 @@ Combines crawling, fuzzing, and LLM analysis for complete web app testing.
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Self
 
 # Add paths for cross-package imports
 # packages/web/scanner.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-
-from core.logging import get_logger
 from core.llm.providers import LLMProvider
+from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.ffuf import FfufConfig, FfufRunner
@@ -33,13 +32,13 @@ class WebScanner:
     def __init__(
         self,
         base_url: str,
-        llm: Optional[LLMProvider],
+        llm: LLMProvider | None,
         out_dir: Path,
         verify_ssl: bool = True,
         reveal_secrets: bool = False,
         max_depth: int = 3,
         max_pages: int = 100,
-        ffuf_config: Optional[FfufConfig] = None,
+        ffuf_config: FfufConfig | None = None,
         block_private_ips: bool = True,
     ):
         self.base_url = base_url
@@ -62,7 +61,7 @@ class WebScanner:
             f"(verify_ssl={verify_ssl}, max_depth={max_depth}, max_pages={max_pages})"
         )
 
-    def scan(self) -> Dict[str, Any]:
+    def scan(self) -> dict[str, Any]:
         """
         Run complete autonomous web security scan.
 
@@ -157,7 +156,7 @@ class WebScanner:
         """Release the underlying HTTP client resources."""
         self.client.close()
 
-    def __enter__(self) -> "WebScanner":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -252,7 +251,7 @@ Examples:
     return parser
 
 
-def build_ffuf_config(args) -> Optional[FfufConfig]:
+def build_ffuf_config(args) -> FfufConfig | None:
     """Convert parsed CLI args into an optional ffuf configuration."""
     if not args.ffuf_wordlist:
         return None
@@ -277,6 +276,7 @@ def build_ffuf_config(args) -> Optional[FfufConfig]:
 def main():
     """CLI entry point for web scanner."""
     import time
+
     from core.config import RaptorConfig
 
     parser = build_arg_parser()
@@ -309,7 +309,7 @@ def main():
     logger.info("Output: %s", out_dir)
 
     # Initialize LLM client with multi-model support, fallback, and retry
-    from packages.llm_analysis import get_client
+    from core.llm.factory import get_client
     llm = get_client()
     if llm:
         logger.info("LLM client initialized")
@@ -325,7 +325,7 @@ def main():
         llm,
         out_dir,
         verify_ssl=verify_ssl,
-        reveal_secrets=True if args.reveal_secrets else False,
+        reveal_secrets=bool(args.reveal_secrets),
         max_depth=args.max_depth,
         max_pages=args.max_pages,
         ffuf_config=ffuf_config,
@@ -350,7 +350,12 @@ def main():
         logger.info("=" * 70)
         logger.info("Vulnerabilities found: %s", results['total_vulnerabilities'])
 
-        return 0 if results['total_vulnerabilities'] == 0 else 1
+        # A completed scan is a success regardless of how many vulnerabilities
+        # it found — the findings live in web_scan_report.json. The raptor.py
+        # lifecycle wrapper treats any non-zero exit as a failed run, so
+        # exiting 1 on findings would record every successful vuln-finding
+        # scan as status=failed.
+        return 0
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Scan interrupted by user", file=sys.stderr)
@@ -358,7 +363,7 @@ def main():
         return 130
     except Exception as e:
         print(f"\n✗ Scan failed: {e}", file=sys.stderr)
-        logger.error("Scan failed: %s", e, exc_info=True)
+        logger.exception("Scan failed")
         return 1
     finally:
         scanner.close()

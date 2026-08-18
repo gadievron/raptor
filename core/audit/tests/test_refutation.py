@@ -10,13 +10,17 @@ from core.audit.refutation import (
     _classify_lifecycle,
     _extract_all_cwes,
     _extract_cwe,
+    _extract_cwes_from_text,
     _get_calls,
+    _get_function_source_and_callees,
     _refute_by_architecture,
+    _refute_by_callee_inheritance,
     _refute_by_contract,
     _refute_by_known_return_type,
     _refute_by_lifecycle,
     _signal_reachable_set,
     refute_hypothesis,
+    rescue_self_refuted,
 )
 
 
@@ -32,6 +36,7 @@ class _Outcome:
     status: str = "finding"
     body: str = ""
     hypothesis: str = ""
+    hypotheses: Optional[list] = None
     evidence_tool: str = ""
     review_result: Optional[Dict[str, Any]] = None
 
@@ -96,6 +101,45 @@ class TestRefuteByArchitecture:
             architecture={"threading_model": "single_threaded"},
         )
         r = _refute_by_architecture(outcome, dm, None, _Config())
+        assert r is not None
+        assert r.gate == "architecture"
+
+    def test_visible_thread_primitive_vetoes_claim(self, tmp_path):
+        """The single_threaded claim is an unverified LLM output; when
+        the source visibly spawns threads the claim is provably wrong
+        and must not demote race findings."""
+        import core.audit.refutation as refutation_mod
+        (tmp_path / "worker.c").write_text(
+            "void start(void) { pthread_create(&t, 0, run, 0); }\n")
+        refutation_mod._threading_seen_cache.clear()
+        outcome = _Outcome(
+            hypothesis="data race in newaddress concurrent modification",
+        )
+        dm = _domain_model(
+            architecture={"threading_model": "single_threaded"},
+        )
+        try:
+            r = _refute_by_architecture(
+                outcome, dm, None, _Config(target_path=tmp_path))
+        finally:
+            refutation_mod._threading_seen_cache.clear()
+        assert r is None
+
+    def test_no_primitives_claim_still_suppresses(self, tmp_path):
+        import core.audit.refutation as refutation_mod
+        (tmp_path / "main.c").write_text("int main(void) { return 0; }\n")
+        refutation_mod._threading_seen_cache.clear()
+        outcome = _Outcome(
+            hypothesis="data race in newaddress concurrent modification",
+        )
+        dm = _domain_model(
+            architecture={"threading_model": "single_threaded"},
+        )
+        try:
+            r = _refute_by_architecture(
+                outcome, dm, None, _Config(target_path=tmp_path))
+        finally:
+            refutation_mod._threading_seen_cache.clear()
         assert r is not None
         assert r.gate == "architecture"
         assert r.demote_to == "clean"
@@ -759,3 +803,361 @@ class TestRefuteHypothesis:
             config=_Config(),
         )
         assert r is None
+
+
+# ---------------------------------------------------------------------------
+# Gate 5: Anti-self-refutation
+# ---------------------------------------------------------------------------
+
+
+class TestRescueSelfRefuted:
+    """Tests for rescue_self_refuted (Gate 5)."""
+
+    def test_rescues_refuted_race_hypothesis(self):
+        """Refuted CWE-362 hypothesis without evidence → suspicious."""
+        outcome = _Outcome(
+            status="clean",
+            hypothesis="race condition on credential field",
+            hypotheses=[{
+                "mechanism": "CWE-362 race between read and write of cred",
+                "confidence": "refuted",
+                "counter": "analysis shows it fails safely",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+        assert r.demote_to == "suspicious"
+
+    def test_rescues_refuted_uaf_hypothesis(self):
+        """Refuted CWE-416 hypothesis without evidence → suspicious."""
+        outcome = _Outcome(
+            status="clean",
+            hypothesis="use-after-free on list head",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free: kfree then rcu deref",
+                "confidence": "refuted",
+                "counter": "existing readers already dereferenced",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+
+    def test_no_rescue_for_non_race_cwe(self):
+        """CWE-190 self-refutation is not rescued."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-190 integer overflow in size calc",
+                "confidence": "refuted",
+                "counter": "value fits in 32-bit",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
+    def test_no_rescue_when_tool_evidence(self):
+        """Tool already spoke — don't second-guess."""
+        outcome = _Outcome(
+            status="clean",
+            evidence_tool="joern:taint",
+            hypotheses=[{
+                "mechanism": "CWE-362 race on shared counter",
+                "confidence": "refuted",
+                "counter": "no concurrent access found",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
+    def test_no_rescue_when_not_clean(self):
+        """Gate only fires on clean outcomes."""
+        outcome = _Outcome(
+            status="suspicious",
+            hypotheses=[{
+                "mechanism": "CWE-362 race condition",
+                "confidence": "refuted",
+                "counter": "appears safe",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
+    def test_no_rescue_without_counter(self):
+        """No counter reasoning → nothing to rescue."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free",
+                "confidence": "refuted",
+                "counter": "",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
+    def test_rescues_from_review_result_hypotheses(self):
+        """Hypotheses in review_result are also checked."""
+        outcome = _Outcome(
+            status="clean",
+            review_result={
+                "hypotheses": [{
+                    "mechanism": "CWE-415 double free of skb",
+                    "confidence": "refuted",
+                    "counter": "second free path unreachable",
+                }],
+            },
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+
+    def test_inferred_cwe_from_keywords(self):
+        """CWE inferred from keywords when no explicit CWE-NNN."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "race condition between reader and writer threads",
+                "confidence": "refuted",
+                "counter": "lock ordering prevents this",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is not None
+
+    def test_skips_non_refuted_hypotheses(self):
+        """Only hypotheses with confidence=refuted are candidates."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-362 race condition",
+                "confidence": "high",
+                "counter": "",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
+
+# ---------------------------------------------------------------------------
+# Gate 6: Callee-inheritance suppression
+# ---------------------------------------------------------------------------
+
+
+class TestCalleeInheritance:
+    """Tests for _refute_by_callee_inheritance (Gate 6)."""
+
+    _THIN_WRAPPER = (
+        "int aead_sendmsg_nokey(struct sock *sk, struct msghdr *msg, size_t size)\n"
+        "{\n"
+        "    if (!aead_check_key(sk))\n"
+        "        return -ENOKEY;\n"
+        "    return aead_sendmsg(sk, msg, size);\n"
+        "}\n"
+    )
+
+    def test_suppresses_thin_wrapper_with_callee_pattern(self):
+        """Hypothesis says 'calls vulnerable function' + thin wrapper → refute."""
+        outcome = _Outcome(
+            hypothesis="calls vulnerable function aead_sendmsg",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, self._THIN_WRAPPER, ["aead_sendmsg"],
+        )
+        assert r is not None
+        assert r.gate == "callee_inheritance"
+        assert r.demote_to == "clean"
+
+    def test_suppresses_named_callee_in_hypothesis(self):
+        """Hypothesis names a specific callee that is in the callee list."""
+        outcome = _Outcome(
+            hypothesis="the function aead_sendmsg has a TOCTOU race condition",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, self._THIN_WRAPPER, ["aead_sendmsg"],
+        )
+        assert r is not None
+        assert r.gate == "callee_inheritance"
+
+    def test_no_suppression_when_body_has_memcpy(self):
+        """Wrapper with memcpy is not a thin delegation."""
+        source = (
+            "void wrap_copy(void *dst, void *src, size_t n)\n"
+            "{\n"
+            "    memcpy(dst, src, n);\n"
+            "}\n"
+        )
+        outcome = _Outcome(
+            hypothesis="calls vulnerable function inner_copy",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, source, ["inner_copy"],
+        )
+        assert r is None
+
+    def test_no_suppression_when_body_has_cast(self):
+        """Wrapper with pointer cast is not a thin delegation."""
+        source = (
+            "int wrap(void *p)\n"
+            "{\n"
+            "    struct foo *f = (struct foo *)p;\n"
+            "    return inner(f);\n"
+            "}\n"
+        )
+        outcome = _Outcome(
+            hypothesis="calls vulnerable function inner",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, source, ["inner"],
+        )
+        assert r is None
+
+    def test_no_suppression_when_body_too_large(self):
+        """Function with >10 SLOC is not a thin wrapper."""
+        lines = ["int big_func(int x) {"]
+        for i in range(12):
+            lines.append(f"    x = do_thing_{i}(x);")
+        lines.append("    return x;")
+        lines.append("}")
+        source = "\n".join(lines)
+        outcome = _Outcome(
+            hypothesis="calls vulnerable function do_thing_0",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, source, ["do_thing_0"],
+        )
+        assert r is None
+
+    def test_no_suppression_without_callee_match(self):
+        """Named callee not in callee list → no suppression."""
+        outcome = _Outcome(
+            hypothesis="the function unknown_func has a bug",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, self._THIN_WRAPPER, ["aead_sendmsg"],
+        )
+        assert r is None
+
+    def test_no_suppression_without_hypothesis(self):
+        """No hypothesis text → no suppression."""
+        outcome = _Outcome(hypothesis="")
+        r = _refute_by_callee_inheritance(
+            outcome, self._THIN_WRAPPER, ["aead_sendmsg"],
+        )
+        assert r is None
+
+    def test_no_suppression_with_allocation(self):
+        """Wrapper that allocates memory is doing real work."""
+        source = (
+            "void *wrap_alloc(size_t n)\n"
+            "{\n"
+            "    void *p = kmalloc(n, GFP_KERNEL);\n"
+            "    return inner(p);\n"
+            "}\n"
+        )
+        outcome = _Outcome(
+            hypothesis="calls vulnerable function inner",
+        )
+        r = _refute_by_callee_inheritance(
+            outcome, source, ["inner"],
+        )
+        assert r is None
+
+    def test_integrated_via_refute_hypothesis(self):
+        """Gate 6 fires through the main refute_hypothesis entry point."""
+        checklist = {
+            "files": [{
+                "path": "src/net.c",
+                "items": [{
+                    "name": "handle_packet",
+                    "source": self._THIN_WRAPPER,
+                }],
+                "call_graph": {
+                    "calls": [{
+                        "caller": "handle_packet",
+                        "chain": ["aead_sendmsg"],
+                        "line": 5,
+                    }],
+                },
+            }],
+        }
+        outcome = _Outcome(
+            hypothesis="calls vulnerable function aead_sendmsg",
+            function="handle_packet",
+        )
+        r = refute_hypothesis(
+            outcome,
+            domain_model=None,
+            checklist=checklist,
+            config=_Config(),
+        )
+        assert r is not None
+        assert r.gate == "callee_inheritance"
+
+
+# ---------------------------------------------------------------------------
+# _extract_cwes_from_text
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCwesFromText:
+    """Tests for _extract_cwes_from_text helper."""
+
+    def test_explicit_cwe_ids(self):
+        assert _extract_cwes_from_text("CWE-362 race condition") == frozenset({"CWE-362"})
+
+    def test_multiple_cwe_ids(self):
+        result = _extract_cwes_from_text("CWE-416 and CWE-362 combined")
+        assert result == frozenset({"CWE-416", "CWE-362"})
+
+    def test_keyword_inference(self):
+        result = _extract_cwes_from_text("race condition between threads")
+        assert "CWE-362" in result
+
+    def test_empty_string(self):
+        assert _extract_cwes_from_text("") == frozenset()
+
+    def test_no_match(self):
+        assert _extract_cwes_from_text("just some random text") == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# _get_function_source_and_callees
+# ---------------------------------------------------------------------------
+
+
+class TestGetFunctionSourceAndCallees:
+    """Tests for _get_function_source_and_callees helper."""
+
+    def test_finds_source_and_callees(self):
+        checklist = {
+            "files": [{
+                "path": "src/net.c",
+                "items": [{"name": "handle_packet", "source": "int handle_packet() {}"}],
+                "call_graph": {
+                    "calls": [
+                        {"caller": "handle_packet", "chain": ["send_reply"], "line": 10},
+                        {"caller": "handle_packet", "chain": ["log_event"], "line": 20},
+                    ],
+                },
+            }],
+        }
+        outcome = _Outcome(file="src/net.c", function="handle_packet")
+        source, callees = _get_function_source_and_callees(outcome, checklist)
+        assert source == "int handle_packet() {}"
+        assert "send_reply" in callees
+        assert "log_event" in callees
+
+    def test_returns_empty_for_missing_function(self):
+        checklist = {"files": [{"path": "src/net.c", "items": [], "call_graph": {"calls": []}}]}
+        outcome = _Outcome(file="src/net.c", function="nonexistent")
+        source, callees = _get_function_source_and_callees(outcome, checklist)
+        assert source == ""
+        assert callees == []
+
+    def test_returns_empty_for_no_checklist(self):
+        outcome = _Outcome()
+        source, callees = _get_function_source_and_callees(outcome, None)
+        assert source == ""
+        assert callees == []

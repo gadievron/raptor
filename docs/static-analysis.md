@@ -23,7 +23,13 @@ For LLM-powered analysis of scan results, use `/agentic` or
 
 Dispatches to `python3 raptor.py scan`. Runs Semgrep (always) and
 Coccinelle (default-on for C/C++ targets). CodeQL is opt-in via
-`--codeql`.
+`--codeql`; when enabled it runs **concurrently with the Semgrep
+stage** (they are independent SARIF producers — the CodeQL database
+build is usually the critical path, so it starts first and its
+console lines are tagged `[codeql]`). Two further opt-in channels
+run as their own stages after Semgrep on C/C++ targets: the
+compiler analyzers (`--compiler-scan`) and the expanded-view
+Semgrep pass (`--expanded-semgrep`).
 
 ### CLI Flags
 
@@ -36,14 +42,20 @@ Coccinelle (default-on for C/C++ targets). CodeQL is opt-in via
 | `--no-codeql` | -- | Explicitly disable CodeQL |
 | `--no-cocci` | off | Disable Coccinelle stage |
 | `--languages <list>` | auto | CodeQL language list (only relevant with `--codeql`) |
-| `--build-command <cmd>` | auto | CodeQL build command override (only relevant with `--codeql`) |
+| `--build-command <cmd>` | auto | CodeQL build command override (only relevant with `--codeql`; implies a traced build) |
+| `--traced-build` | off | Opt into traced-build C/C++ CodeQL extraction — executes the repo's build system (asserts trust). Default is buildless: no repo code runs during database creation |
+| `--no-traced-build` | -- | Force buildless extraction for this run, overriding `--traced-build` and the project's `build` trust marker |
+| `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes) |
+| `--no-compiler-scan` | -- | Explicitly disable the compiler-analyzer channel |
+| `--compiler-scan-max-tus <n>` | 2000 | Cap on translation units analysed by `--compiler-scan` (skipped TUs are reported) |
+| `--expanded-semgrep` | off | Re-run the loaded ruleset over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ TUs, line-mapped back to the originals |
 | `--keep` | off | Keep temporary working directory after completion |
-| `--sequential` | off | Disable parallel scanning; run packs one at a time |
+| `--sequential` | off | Fully serial run: packs one at a time and stages in order (no Semgrep/CodeQL overlap) |
 | `--out <dir>` | auto | Output directory override |
 | `--exclude-dir <glob>` | none | Drop results from matching paths (repeatable, OR semantics) |
 | `--extra-config <path>` | none | Additional Semgrep rule source path (repeatable) |
 | `--show-suppressed` | off | Include `nosemgrep`-suppressed findings in output summary |
-| `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`debug` / `full` / `network-only` / `none`) |
+| `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`full` / `strict` / `debug` / `target_run` / `frida` / `network-only` / `none`) |
 | `--no-sandbox` | off | Alias for `--sandbox none` |
 | `--audit` | off | Engage [sandbox](sandbox.md) audit mode |
 | `--audit-verbose` | off | Log every traced syscall (requires `--audit`) |
@@ -54,26 +66,28 @@ Coccinelle (default-on for C/C++ targets). CodeQL is opt-in via
 
 ### Rule Categories
 
-RAPTOR ships 40 YAML rule files across 15 categories under
-`engine/semgrep/rules/`:
+RAPTOR ships custom YAML rule files under `engine/semgrep/rules/`,
+organised by category:
 
-| Category | Count | Covers |
-|----------|------:|--------|
-| `crypto` | 12 | Weak hash, weak PRNG, weak ciphers, weak KDF iterations/keysize, reused nonce, insecure IV, PKCS1v15 padding, insecure password hash, weak asymmetric keysize, weak block modes |
-| `injection` | 12 | SQL taint, SQL concat, command taint (single + multi-lang), eval taint, SSTI taint, NoSQL taint, XSS, LDAP taint, header injection, log injection, regex DoS |
-| `auth` | 2 | JWT signature bypass (`jwt-no-verify`), TLS certificate skip (`tls-skip-verify`) |
-| `deserialisation` | 2 | Unsafe deserialise (Python/Ruby/PHP), unsafe Java deserialise |
-| `sinks` | 2 | SSRF, open redirect |
-| `filesystem` | 1 | Path traversal |
-| `flows` | 1 | Bad MAC order (encrypt-then-MAC vs MAC-then-encrypt) |
-| `go` | 1 | Go-specific security rules |
-| `java` | 1 | Java-specific security rules |
-| `javascript` | 1 | JavaScript-specific security rules |
-| `logging` | 1 | Secrets in log output |
-| `python` | 1 | Python-specific security rules |
-| `secrets` | 1 | Hardcoded API keys |
-| `web` | 1 | Prototype pollution |
-| `xml` | 1 | XXE |
+| Category | Covers |
+|----------|--------|
+| `crypto` | Weak hash, weak PRNG, weak ciphers, weak KDF iterations/keysize, reused nonce, insecure IV, PKCS1v15 padding, insecure password hash, weak asymmetric keysize, weak block modes |
+| `injection` | SQL taint, SQL concat, command taint (single + multi-lang), eval taint, SSTI taint, NoSQL taint, XSS, LDAP taint, header injection, log injection, regex DoS |
+| `auth` | JWT signature bypass, TLS certificate skip |
+| `deserialisation` | Unsafe deserialise (Python/Ruby/PHP), unsafe Java deserialise |
+| `sinks` | SSRF, open redirect |
+| `filesystem` | Path traversal |
+| `flows` | Bad MAC order (encrypt-then-MAC vs MAC-then-encrypt) |
+| `go` | Go-specific security rules |
+| `java` | Java-specific security rules |
+| `javascript` | JavaScript-specific security rules |
+| `logging` | Secrets in log output |
+| `python` | Python-specific security rules |
+| `secrets` | Hardcoded API keys |
+| `web` | Prototype pollution |
+| `xml` | XXE |
+
+Run `ls engine/semgrep/rules/` for the current file list.
 
 ### Upstream Registry Packs
 
@@ -145,62 +159,26 @@ and deduplicated by resolved absolute path.
 
 ### Rule Inventory
 
-54 semantic patch files under `engine/coccinelle/rules/`, covering
-C/C++ structural patterns that require control-flow sensitivity:
+RAPTOR ships custom semantic patches under `engine/coccinelle/rules/`,
+covering C/C++ structural patterns that require control-flow sensitivity:
 
-**Memory safety:**
-`use_after_free`, `double_free`, `realloc_losing_ptr`,
-`free_nonbase_ptr`, `stack_addr_escape`, `missing_null_check`,
-`free_stack_array`, `mmap_free`, `use_after_close`,
-`use_after_fclose`
+| Category | Covers |
+|----------|--------|
+| Memory safety | Use-after-free, double free, realloc losing pointer, stack address escape, missing null check, mmap free |
+| Uninitialised data | copy_to_user uninit, uninitialised return |
+| Resource leaks | Resource leak on error, mmap leak, double close, popen/fclose mismatch |
+| Integer issues | Integer overflow in alloc, shift overflow, sign extension, division by zero, UID truncation |
+| Buffer handling | Missing bounds check, strncpy without NUL, snprintf advance, sizeof mismatches |
+| Concurrency | Lock imbalance, sleep under spinlock, RCU violations, use after unlock, missing memory barriers, lock ordering |
+| TOCTOU and races | stat/open TOCTOU, double fetch, check-then-act |
+| Sandbox escape | chroot without chdir, socket without CLOEXEC |
+| Unchecked returns | Unchecked return value, unchecked strtol |
+| Format strings | Format string from untrusted input |
+| API misuse | Signal misuse, fcntl flag domain, double byteswap, inet_ntoa double call |
+| Compiler optimisation hazards | Dead memset before free |
+| Kernel-specific | IS_ERR/PTR_ERR confusion, kfree without RCU grace period |
 
-**Uninitialised data:**
-`copy_to_user_uninit`, `uninitialized_return`
-
-**Resource leaks:**
-`resource_leak_err`, `mmap_leak_err`, `double_close`,
-`popen_fclose`, `fdopendir_double_close`
-
-**Integer issues:**
-`integer_overflow_alloc`, `shift_overflow`, `sign_extension_widen`,
-`division_by_zero`, `uid_truncation`, `double_sizeof`
-
-**Buffer handling:**
-`missing_bounds_check`, `strncpy_no_nul`, `snprintf_advance`,
-`copy_user_size_mismatch`, `sizeof_array_param`,
-`sizeof_container_of`, `malloc_strlen_strcpy`
-
-**Concurrency:**
-`lock_imbalance`, `sleep_under_spinlock`,
-`gfp_kernel_under_spinlock`, `rcu_no_lock`, `use_after_unlock`,
-`signal_handler_unsafe`
-
-**TOCTOU and race conditions:**
-`toctou_stat_open`, `double_fetch`
-
-**Sandbox escape:**
-`chroot_no_chdir`, `socket_no_cloexec`
-
-**Unchecked returns:**
-`unchecked_return`, `unchecked_strtol`
-
-**Format strings:**
-`format_string`
-
-**API misuse:**
-`signal_sigkill_sigstop`, `fcntl_flag_domain`,
-`double_byteswap`, `inet_ntoa_double_call`,
-`open_creat_no_mode`
-
-**Compiler optimisation hazards:**
-`dead_memset_free`
-
-**Kernel-specific:**
-`is_err_not_ptr_err`
-
-**Miscellaneous:**
-`va_arg_mismatch`, `init_after_register`, `unsafe_list_del`,
-`sensitive_data_leak`
+Run `ls engine/coccinelle/rules/` for the current file list.
 
 ### Prerequisites
 
@@ -315,10 +293,19 @@ a false-pass "0 findings" result.
 ### Parallel Execution
 
 By default, packs run in parallel via `ThreadPoolExecutor` with
-`max_workers` defaulting to 4 (or half the available CPUs when set to
-`auto`). A post-completion check verifies that every submitted pack's
-SARIF file actually exists on disk -- missing files (filesystem error,
-sandbox teardown race) are added to the `failed_scans` list.
+`max_workers` from `tuning.json` (`max_semgrep_workers`, default
+`auto` = half the available CPUs). Each pack's semgrep process gets a
+`--jobs` share of the cores divided by the number of packs actually
+running at once, so concurrent packs cannot each claim every core. A
+post-completion check verifies that every submitted pack's SARIF file
+actually exists on disk -- missing files (filesystem error, sandbox
+teardown race) are added to the `failed_scans` list.
 
-Pass `--sequential` to disable parallelism and run packs one at a
-time.
+With `--codeql`, the CodeQL stage (database build + analyze) runs
+concurrently with the Semgrep packs; its console lines are tagged
+`[codeql]` and a stage-completion line reports its duration. Multi-
+language builds also divide `-j` between concurrent per-language
+invocations when `codeql_threads` is `auto`.
+
+Pass `--sequential` for a fully serial run: packs one at a time AND
+stages in order (no Semgrep/CodeQL overlap).

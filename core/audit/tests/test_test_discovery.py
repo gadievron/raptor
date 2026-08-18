@@ -69,22 +69,25 @@ class TestFindTestFiles:
         td.mkdir()
         (td / "test_foo.py").write_text("pass")
         (td / "helper.py").write_text("pass")
-        files = _find_test_files(tmp_path)
+        files, skipped = _find_test_files(tmp_path)
         names = [f.name for f in files]
         assert "test_foo.py" in names
         assert "helper.py" in names
+        assert skipped == 0
 
     def test_finds_test_file_pattern(self, tmp_path):
         (tmp_path / "test_bar.py").write_text("pass")
-        files = _find_test_files(tmp_path)
+        files, _skipped = _find_test_files(tmp_path)
         assert any(f.name == "test_bar.py" for f in files)
 
     def test_respects_extension_filter(self, tmp_path):
         td = tmp_path / "tests"
         td.mkdir()
         (td / "test_x.txt").write_text("pass")
-        files = _find_test_files(tmp_path)
+        files, skipped = _find_test_files(tmp_path)
         assert not any(f.name == "test_x.txt" for f in files)
+        # the unsupported-language file is counted, not silently lost
+        assert skipped == 1
 
 
 class TestExtractTestFunctions:

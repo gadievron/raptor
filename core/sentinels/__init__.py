@@ -32,7 +32,7 @@ class _MissingType:
         return cls._instance
 
     def __repr__(self) -> str:
-        return "<JsonCache._MISSING>"
+        return "<core.sentinels.MISSING>"
 
     def __bool__(self) -> bool:
         return False

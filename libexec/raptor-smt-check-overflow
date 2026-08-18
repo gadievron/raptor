@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Stage E SMT verb: CWE-190 integer overflow / wraparound.
 
 Usage:
@@ -38,19 +40,14 @@ parser involved for the verb's own predicate), so the verb cannot fail
 at parse time on its own predicate — only on caller-supplied guards.
 """
 import argparse
-import faulthandler
 import json
-import signal
 import sys
 from pathlib import Path
 
 # libexec/<this> -> repo root
 
-faulthandler.enable()
-if hasattr(signal, "SIGUSR1"):
-    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
-
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
 import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
@@ -60,12 +57,13 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
-from packages.exploit_feasibility.smt_verbs import check_overflow
+from packages.exploit_feasibility.smt_verbs import check_overflow  # noqa: E402
 
 
 def main() -> int:

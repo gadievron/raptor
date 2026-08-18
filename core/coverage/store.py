@@ -13,7 +13,9 @@ scanned -> analysed -> dataflow-traced -> runtime-tested ladder. The
 store treats the label as an opaque string; categorisation lives in the
 registry, not here.
 
-This is the (file,function)-keyed coverage sink. Per-run provenance
+This is the file-keyed coverage sink (per-tool line intervals nested
+under each file; function views are joined from the inventory at query
+time, never used as a storage key). Per-run provenance
 (tool version, resolved model, timestamp, target identity) is sourced
 separately from the run manifest (``.raptor-run.json``) and joined in by
 callers -- coverage does not embed it, and keys on file *content* SHA
@@ -241,7 +243,9 @@ class CoverageStore:
                 data = {}
             self.version = data.get("version", SCHEMA_VERSION)
             check_version(self.version, SCHEMA_VERSION, str(self.path))
-            # Constructor-supplied target wins only when the store is new.
+            # Stored target wins when present; the constructor-supplied
+            # target covers new stores and existing stores whose
+            # persisted target is missing or empty.
             self.target = data.get("target") or target
             self.content_id = data.get("content_id")
             self._files = normalise_loaded_files(

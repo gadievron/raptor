@@ -8,12 +8,10 @@ written in Semgrep YAML.
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Dict, Optional
 
 from packages import semgrep as semgrep_pkg
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence, make_sandbox_runner
-
 
 _SYNTAX_EXAMPLE = """\
 rules:
@@ -77,7 +75,7 @@ class SemgrepAdapter(ToolAdapter):
         target: Path,
         *,
         timeout: int = 300,
-        env: Optional[Dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ) -> ToolEvidence:
         if not self.is_available():
             return ToolEvidence(
@@ -95,14 +93,13 @@ class SemgrepAdapter(ToolAdapter):
             from core.config import RaptorConfig
             env = RaptorConfig.get_safe_env()
 
-        rule_file: Optional[Path] = None
+        rule_file: Path | None = None
         try:
-            tmp = NamedTemporaryFile(
+            with NamedTemporaryFile(
                 prefix="semgrep_hv_", suffix=".yaml",
                 mode="w", delete=False,
-            )
-            tmp.write(rule)
-            tmp.close()
+            ) as tmp:
+                tmp.write(rule)
             rule_file = Path(tmp.name)
 
             subprocess_runner = (
@@ -114,6 +111,10 @@ class SemgrepAdapter(ToolAdapter):
                 timeout=timeout,
                 env=env,
                 subprocess_runner=subprocess_runner,
+                # sandbox=False on this adapter is the documented
+                # trusted-input escape hatch; without this flag the
+                # runner's own default sandbox would re-engage.
+                unsandboxed=not self._sandbox,
             )
         except OSError as e:
             return ToolEvidence(

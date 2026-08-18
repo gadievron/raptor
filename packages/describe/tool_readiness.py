@@ -32,8 +32,8 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
-from typing import List, Optional
 
+from core.run.toolprobe import probe
 from packages.describe.target_shape import TargetShape
 
 
@@ -58,9 +58,9 @@ class ToolCheck:
     """
     name: str
     status: str  # "ok" | "warn" | "fail" | "unknown"
-    version: Optional[str]
+    version: str | None
     detail: str
-    hint: Optional[str] = None
+    hint: str | None = None
 
 
 # Build-system → list of binaries the target's build will need.
@@ -89,7 +89,7 @@ _BUILD_SYSTEM_DEPS = {
     "go": ["go"],
 }
 
-def _format_build_deps_hint(missing_deps: List[str]) -> str:
+def _format_build_deps_hint(missing_deps: list[str]) -> str:
     """Group missing build deps by their per-PM package name +
     install verb so the operator gets ONE pastable install
     command per shared install path (rather than N sudo prompts
@@ -107,7 +107,9 @@ def _format_build_deps_hint(missing_deps: List[str]) -> str:
     fall back to per-binary advice joined with "; ".
     """
     from packages.describe.package_manager import (
-        _INSTALL_ADVICE, detect_package_manager, format_install_advice,
+        _INSTALL_ADVICE,
+        detect_package_manager,
+        format_install_advice,
         format_install_hint,
     )
 
@@ -115,8 +117,8 @@ def _format_build_deps_hint(missing_deps: List[str]) -> str:
     # collapse into one install command; everything else falls
     # through per-binary.
     pm = detect_package_manager()
-    distro_pkgs: List[str] = []
-    other_hints: List[str] = []
+    distro_pkgs: list[str] = []
+    other_hints: list[str] = []
     for dep in missing_deps:
         adv = _INSTALL_ADVICE.get(dep)
         if adv and adv.kind == "distro_pm":
@@ -125,7 +127,7 @@ def _format_build_deps_hint(missing_deps: List[str]) -> str:
         else:
             other_hints.append(format_install_advice(dep))
 
-    parts: List[str] = []
+    parts: list[str] = []
     if distro_pkgs:
         # De-dupe pkg names — multiple binaries (autoreconf +
         # automake share no package, but autoreconf is from
@@ -141,7 +143,7 @@ def _format_build_deps_hint(missing_deps: List[str]) -> str:
     return "; ".join(parts)
 
 
-def check_tool_readiness(shape: TargetShape) -> List[ToolCheck]:
+def check_tool_readiness(shape: TargetShape) -> list[ToolCheck]:
     """Return target-applicability checks for ``shape``.
     Per-tool helpers may return None when the check doesn't
     apply (binary oracle on header-only library, cocci on
@@ -151,7 +153,7 @@ def check_tool_readiness(shape: TargetShape) -> List[ToolCheck]:
     Host-level checks (LLM dispatcher, raw binary presence)
     are NOT included — those live in ``raptor doctor``. The
     renderer adds a footer pointing the operator there."""
-    checks: List[Optional[ToolCheck]] = [
+    checks: list[ToolCheck | None] = [
         _check_codeql(shape),
         _check_coccinelle(shape),
         _check_binary_oracle(shape),
@@ -177,7 +179,7 @@ def _doctor_deferral(tool_name: str) -> ToolCheck:
     )
 
 
-def _check_codeql(shape: TargetShape) -> Optional[ToolCheck]:
+def _check_codeql(shape: TargetShape) -> ToolCheck | None:
     """Target-applicability for CodeQL: given that the binary
     exists, will the target's detected build system actually
     build under codeql's database step? Names the missing dep
@@ -189,7 +191,7 @@ def _check_codeql(shape: TargetShape) -> Optional[ToolCheck]:
         return _doctor_deferral("CodeQL")
     version = _bin_version("codeql")
     # Build-deps check for the target's primary-language build.
-    missing_deps: List[str] = []
+    missing_deps: list[str] = []
     if shape.primary_language and shape.primary_language in shape.build_systems:
         bs = shape.build_systems[shape.primary_language]
         required = _BUILD_SYSTEM_DEPS.get(bs, [])
@@ -218,7 +220,7 @@ def _check_codeql(shape: TargetShape) -> Optional[ToolCheck]:
     )
 
 
-def _check_coccinelle(shape: TargetShape) -> Optional[ToolCheck]:
+def _check_coccinelle(shape: TargetShape) -> ToolCheck | None:
     """Target-applicability for Coccinelle: will the shipped
     rule pack actually fire? Cocci's rules are C-specific —
     honest "will 0-fire on Python" warning beats silent
@@ -249,7 +251,7 @@ def _check_coccinelle(shape: TargetShape) -> Optional[ToolCheck]:
     )
 
 
-def _check_binary_oracle(shape: TargetShape) -> Optional[ToolCheck]:
+def _check_binary_oracle(shape: TargetShape) -> ToolCheck | None:
     """Binary-oracle reachability is opt-out on /agentic / /codeql.
     Check whether the target has build artefacts in the
     auto-detect dirs — if not, the oracle will be inactive
@@ -287,33 +289,30 @@ def _check_binary_oracle(shape: TargetShape) -> Optional[ToolCheck]:
 # ---------------------------------------------------------------------------
 
 
-def _bin_version(binary: str) -> Optional[str]:
+def _bin_version(binary: str) -> str | None:
     """Best-effort ``--version`` extraction. Returns None on
     binary missing / non-zero exit / parse failure — caller
-    renders without a version suffix."""
-    if not shutil.which(binary):
-        return None
-    import subprocess
+    renders without a version suffix.
+
+    Probing goes through core.run.toolprobe (sanitised env,
+    resolved-path exec); the flag ladder and the version-token
+    parse stay this module's own."""
     for flag in ("--version", "-V", "version"):
-        try:
-            res = subprocess.run(
-                [binary, flag],
-                capture_output=True, text=True, timeout=5,
-            )
-            if res.returncode == 0 and res.stdout:
-                # First line; strip whitespace + leading tool name.
-                first = res.stdout.splitlines()[0].strip()
-                # Extract just the version token if the line is
-                # "tool-name X.Y.Z [other stuff]". Strip
-                # trailing punctuation so "2.23.8." (CodeQL's
-                # release-line shape) renders as "2.23.8".
-                parts = first.split()
-                for tok in parts:
-                    if tok and tok[0].isdigit():
-                        return tok.rstrip(".,;:")
-                return first[:60].rstrip(".,;:")
-        except (subprocess.TimeoutExpired, OSError):
-            continue
+        info = probe(binary, args=(flag,), timeout=5)
+        if info is None:
+            return None  # not on PATH — no flag will help
+        if info.returncode == 0 and info.stdout:
+            # First line; strip whitespace + leading tool name.
+            first = info.stdout.splitlines()[0].strip()
+            # Extract just the version token if the line is
+            # "tool-name X.Y.Z [other stuff]". Strip
+            # trailing punctuation so "2.23.8." (CodeQL's
+            # release-line shape) renders as "2.23.8".
+            parts = first.split()
+            for tok in parts:
+                if tok and tok[0].isdigit():
+                    return tok.rstrip(".,;:")
+            return first[:60].rstrip(".,;:")
     return None
 
 

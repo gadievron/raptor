@@ -7,7 +7,9 @@ from typing import List
 
 from core.audit.contracts import (
     ContractContext,
+    ContractViolation,
     extract_callee_contracts,
+    format_contract_violations_for_prompt,
     format_contracts_for_prompt,
 )
 
@@ -242,3 +244,40 @@ class TestFormatContractsForPrompt:
         text = format_contracts_for_prompt(contracts)
         assert "helper" in text
         assert "()" in text  # no file parens
+
+
+class TestFormatContractViolationsForPrompt:
+    def test_renders_violated_precondition(self):
+        violations = [
+            ContractViolation(
+                caller_file="a.c",
+                caller_function="caller",
+                callee_function="ssl_read",
+                violated_precondition="ctx != NULL",
+                evidence="no null check on `ctx` before the call",
+                cwe="CWE-476",
+            ),
+        ]
+        text = format_contract_violations_for_prompt(violations)
+        assert "Contract violations" in text
+        assert "ssl_read" in text
+        assert "ctx != NULL" in text
+        assert "no null check on `ctx`" in text
+        assert "CWE-476" in text
+        assert "caller" in text
+
+    def test_no_cwe_omits_brackets(self):
+        violations = [
+            ContractViolation(
+                caller_file="a.c",
+                caller_function="caller",
+                callee_function="helper",
+                violated_precondition="n >= 0",
+                evidence="no positivity check",
+            ),
+        ]
+        text = format_contract_violations_for_prompt(violations)
+        assert "[" not in text.split("\n")[2]
+
+    def test_empty_violations(self):
+        assert format_contract_violations_for_prompt([]) == ""

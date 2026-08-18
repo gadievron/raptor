@@ -7,6 +7,7 @@ packages.
 
 Public API:
     from core.archive import detect_format, is_archive, extract_to_dir
+    from core.archive import DEFAULT_MAX_FILES, DEFAULT_MAX_TOTAL_BYTES
     from core.archive import ArchiveError, UnsupportedArchive, DecompressionLimitExceeded
     from core.archive import safe_cache_name
 """

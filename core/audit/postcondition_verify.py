@@ -33,17 +33,17 @@ from typing import Any, Dict, List, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 _SANITISER_PATTERNS = re.compile(
-    r"(?:sanitiz|sanitise|clean|strip|escape|filter|purif|scrub|bleach|safe)",
+    r"\b(?:sanitiz|sanitise|clean|strip|escape|filter|purif|scrub|bleach|safe)",
     re.IGNORECASE,
 )
 
 _VALIDATOR_PATTERNS = re.compile(
-    r"(?:validat|verify|check|assert|is_valid|is_safe|ensure|confirm|guard)",
+    r"\b(?:validat|verify|check|assert|is_valid|is_safe|ensure|confirm|guard)",
     re.IGNORECASE,
 )
 
 _ENCODER_PATTERNS = re.compile(
-    r"(?:encod|decod|serial|deserial|marshal|unmarshal|pack|unpack|render|format)",
+    r"\b(?:encod|decod|serial|deserial|marshal|unmarshal|pack|unpack|render|format)",
     re.IGNORECASE,
 )
 
@@ -161,8 +161,12 @@ def classify_function_role(
         if re.search(r"\bis_\w+|check_\w+|valid", name_lower):
             return FunctionRole.VALIDATOR
     if _ENCODER_PATTERNS.search(combined):
-        if re.search(r"de(?:cod|serial|marshal)", name_lower):
+        if re.search(r"de(?:serial|marshal)", name_lower):
             return FunctionRole.DESERIALISER
+        if re.search(r"decod", name_lower):
+            return FunctionRole.DECODER
+        if re.search(r"serial|marshal", name_lower):
+            return FunctionRole.SERIALISER
         return FunctionRole.ENCODER
 
     return None
@@ -210,12 +214,22 @@ def extract_postconditions(
 def check_ordering_violations(
     postcondition: Postcondition,
     call_sequence: Sequence[str],
+    *,
+    consumer_function: Optional[str] = None,
+    consumer_file: Optional[str] = None,
 ) -> Optional[PostconditionViolation]:
     """Check whether the postcondition-relevant operation is the last step.
 
     A sanitiser that strips dangerous characters then normalises Unicode
     violates its postcondition because normalisation can reintroduce
     stripped characters.
+
+    ``call_sequence`` is the CONSUMER's call sequence; the misordering
+    is a property of that consumer, so the violation is attributed to
+    ``consumer_function``/``consumer_file`` when given. ``postcondition``
+    names the guarantee at risk (the sanitising callee's) — without the
+    consumer attribution the record would blame the sanitiser's own
+    defining module for its caller's ordering bug.
     """
     if not call_sequence or len(call_sequence) < 2:
         return None
@@ -250,8 +264,8 @@ def check_ordering_violations(
             if c in transform_calls and i > last_safety_idx
         ]
         return PostconditionViolation(
-            function=postcondition.function,
-            file=postcondition.file,
+            function=consumer_function or postcondition.function,
+            file=consumer_file or postcondition.file,
             violation_kind=ViolationKind.ORDERING,
             postcondition=postcondition,
             description=(
@@ -319,7 +333,11 @@ def check_completeness(
     handled_set = {r.lower() for r in handled_representations}
     known_set = {r.lower() for r in known_representations}
 
-    missing = known_set - handled_set
+    # Score only representations the handled-representation extractor can
+    # actually report; tokens outside its vocabulary would count as missing
+    # for every function regardless of the implementation, making the
+    # check non-discriminating.
+    missing = (known_set & _EXTRACTABLE_REPRESENTATIONS) - handled_set
     if not missing:
         return None
 
@@ -351,7 +369,9 @@ def verify_postconditions(
     result = PostconditionVerifyResult(
         postconditions=postconditions,
         functions_checked=len(gaps),
-        functions_with_postconditions=len(postconditions),
+        functions_with_postconditions=len(
+            {(pc.file, pc.function) for pc in postconditions}
+        ),
     )
 
     postcond_by_func: Dict[str, Postcondition] = {}
@@ -362,18 +382,60 @@ def verify_postconditions(
     if not call_graphs:
         return result
 
+    # Index the call graphs so gaps carrying no callee data can be
+    # filled from them: "file:caller" -> [callee tail names]. The
+    # ``call_graphs`` parameter used to be a pure boolean gate the
+    # loop never read — and every production caller passed None, so
+    # this whole ordering/composition tier had never executed.
+    graph_callees: Dict[str, List[str]] = {}
+    for cg_file, fcg in call_graphs.items():
+        for cs in getattr(fcg, "calls", None) or ():
+            chain = getattr(cs, "chain", None) or []
+            caller = getattr(cs, "caller", None)
+            if not chain or not caller:
+                continue
+            graph_callees.setdefault(
+                f"{cg_file}:{caller}", [],
+            ).append(chain[-1])
+
     for gap in gaps:
         func_name = gap.get("name", "")
         file_path = gap.get("file", "")
         key = f"{file_path}:{func_name}"
 
-        callees = gap.get("callees", [])
+        callees = gap.get("callees", []) or graph_callees.get(key, [])
         callee_names = [
             c if isinstance(c, str) else c.get("name", "")
             for c in callees
         ]
 
         consumer_preconditions = _extract_consumer_preconditions(gap, summaries)
+
+        # Ordering is a property of THIS gap's call sequence — check it
+        # once per gap and attribute it to the consumer, not once per
+        # callee attributed to whichever producer module the loop was
+        # visiting. The at-risk postcondition is the last sanitising
+        # callee's (the guarantee a later transform can undo).
+        gap_producers = [
+            (c, postcond_by_func[k])
+            for c in callee_names
+            for k in (_find_key_for_function(c, postcond_by_func),)
+            if k is not None
+        ]
+        ordering_pc = None
+        for c, pc in gap_producers:
+            if _SANITISER_PATTERNS.search(c.lower()):
+                ordering_pc = pc  # latest sanitising callee wins
+        if ordering_pc is None and gap_producers:
+            ordering_pc = gap_producers[-1][1]
+        if ordering_pc is not None:
+            ordering_viol = check_ordering_violations(
+                ordering_pc, callee_names,
+                consumer_function=func_name,
+                consumer_file=file_path,
+            )
+            if ordering_viol:
+                result.violations.append(ordering_viol)
 
         for callee in callee_names:
             callee_key = _find_key_for_function(callee, postcond_by_func)
@@ -382,12 +444,6 @@ def verify_postconditions(
 
             producer_pc = postcond_by_func[callee_key]
 
-            ordering_viol = check_ordering_violations(
-                producer_pc, callee_names,
-            )
-            if ordering_viol:
-                result.violations.append(ordering_viol)
-
             if consumer_preconditions:
                 comp_viols = check_composition_violations(
                     producer_pc, func_name, file_path,
@@ -395,8 +451,19 @@ def verify_postconditions(
                 )
                 result.violations.extend(comp_viols)
 
-            if producer_pc.role in (
+            # Completeness only for postconditions a summary actually
+            # CLAIMED — an "inferred" postcondition is this module's
+            # own name-based guess, and scoring the guess against the
+            # representation catalogue just argues with itself
+            # (measured on a large tree: every sanitiser-NAMED
+            # function produced the same boilerplate
+            # missing-representations row). Deduped per
+            # (file, function, kind): the enclosing loop visits a
+            # producer once per CALLER, and per-encounter emission
+            # multiplied each violation by its call-site count.
+            if producer_pc.source != "inferred" and producer_pc.role in (
                 FunctionRole.SANITISER, FunctionRole.ENCODER,
+                FunctionRole.SERIALISER,
             ):
                 handled = _extract_handled_representations(
                     producer_pc, summaries,
@@ -406,6 +473,20 @@ def verify_postconditions(
                 )
                 if completeness_viol:
                     result.violations.append(completeness_viol)
+
+    # Dedup: the gap loop reaches the same producer through every
+    # caller; identical violations differ only by traversal path.
+    _seen: set = set()
+    _unique = []
+    for v in result.violations:
+        d = v.to_dict()
+        k = (d.get("function"), d.get("file"), d.get("violation_kind"),
+             str(d.get("description", ""))[:120])
+        if k in _seen:
+            continue
+        _seen.add(k)
+        _unique.append(v)
+    result.violations[:] = _unique
 
     return result
 
@@ -630,6 +711,7 @@ def _extract_postconditions_from_summary(
         summary_text = getattr(summary, "summary", "") if summary else ""
         inferred = _infer_postcondition(function_name, role, summary_text)
         if inferred:
+            inferred.file = file_path
             postconditions.append(inferred)
 
     return postconditions
@@ -727,6 +809,17 @@ def _extract_consumer_preconditions(
             if text:
                 result.append(text)
     return result[:10]
+
+
+# Vocabulary of representations _extract_handled_representations can emit.
+# check_completeness scores against this set — a token the extractor can
+# never report as handled must not be counted as missing.
+_EXTRACTABLE_REPRESENTATIONS = frozenset({
+    "ascii",
+    "url_encoded",
+    "html_entity",
+    "unicode",
+})
 
 
 def _extract_handled_representations(

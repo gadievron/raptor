@@ -10,6 +10,16 @@ from unittest.mock import MagicMock, patch
 from packages.joern import lifecycle
 
 
+def _mock_server(pid=12345, port=8888):
+    """MagicMock server with the attributes joern_acquire persists."""
+    srv = MagicMock()
+    srv.pid = pid
+    srv.port = port
+    srv._auth_user = "raptor"
+    srv._auth_password = "test-credential"
+    return srv
+
+
 class _TmpState:
     """Redirect lifecycle state files to a temp directory for test isolation."""
 
@@ -79,19 +89,22 @@ class TestStateReadWrite(unittest.TestCase):
             self.assertIsNone(lifecycle._read_state(fd))
 
 
+_AUTH_STATE = {"auth_user": "raptor", "auth_password": "test-credential"}
+
+
 class TestConnectExisting(unittest.TestCase):
     def test_dead_pid_returns_none(self):
-        state = {"pid": 2_000_000_000, "port": 9999}
+        state = {"pid": 2_000_000_000, "port": 9999, **_AUTH_STATE}
         self.assertIsNone(lifecycle._connect_existing(state))
 
     def test_missing_port_returns_none(self):
-        state = {"pid": os.getpid()}
+        state = {"pid": os.getpid(), **_AUTH_STATE}
         self.assertIsNone(lifecycle._connect_existing(state))
 
     @patch.object(lifecycle, "_pid_alive", return_value=True)
     @patch.object(lifecycle, "_health_check", return_value=True)
     def test_healthy_server_returns_client(self, _hc, _pa):
-        state = {"pid": 12345, "port": 8888, "heap_mb": 4096}
+        state = {"pid": 12345, "port": 8888, "heap_mb": 4096, **_AUTH_STATE}
         srv = lifecycle._connect_existing(state)
         self.assertIsNotNone(srv)
         self.assertEqual(srv.port, 8888)
@@ -99,8 +112,29 @@ class TestConnectExisting(unittest.TestCase):
     @patch.object(lifecycle, "_pid_alive", return_value=True)
     @patch.object(lifecycle, "_health_check", return_value=False)
     def test_unhealthy_server_returns_none(self, _hc, _pa):
+        state = {"pid": 12345, "port": 8888, **_AUTH_STATE}
+        self.assertIsNone(lifecycle._connect_existing(state))
+
+    @patch.object(lifecycle, "_pid_alive", return_value=True)
+    @patch.object(lifecycle, "_health_check", return_value=True)
+    def test_missing_auth_credential_returns_none(self, _hc, _pa):
+        # State written before server auth existed — the running
+        # server is unauthenticated and must be recycled, not reused.
         state = {"pid": 12345, "port": 8888}
         self.assertIsNone(lifecycle._connect_existing(state))
+
+    @patch.object(lifecycle, "_pid_alive", return_value=True)
+    def test_reconnect_carries_credential_into_health_check(self, _pa):
+        state = {"pid": 12345, "port": 8888, **_AUTH_STATE}
+        with patch.object(lifecycle, "_health_check",
+                          return_value=True) as mock_hc:
+            srv = lifecycle._connect_existing(state)
+        self.assertIsNotNone(srv)
+        self.assertEqual(srv._auth_user, "raptor")
+        self.assertEqual(srv._auth_password, "test-credential")
+        headers = mock_hc.call_args[0][1]
+        self.assertIn("Authorization", headers)
+        self.assertTrue(headers["Authorization"].startswith("Basic "))
 
 
 class TestAcquireRelease(unittest.TestCase):
@@ -118,9 +152,7 @@ class TestAcquireRelease(unittest.TestCase):
 
     @patch.object(lifecycle, "_start_fresh")
     def test_acquire_starts_fresh_and_writes_state(self, mock_start):
-        srv = MagicMock()
-        srv.pid = 12345
-        srv.port = 8888
+        srv = _mock_server()
         mock_start.return_value = srv
 
         result = lifecycle.joern_acquire()
@@ -134,9 +166,7 @@ class TestAcquireRelease(unittest.TestCase):
 
     @patch.object(lifecycle, "_start_fresh")
     def test_release_decrements_refcount(self, mock_start):
-        srv = MagicMock()
-        srv.pid = 12345
-        srv.port = 8888
+        srv = _mock_server()
         mock_start.return_value = srv
 
         lifecycle.joern_acquire()
@@ -157,9 +187,7 @@ class TestAcquireRelease(unittest.TestCase):
     @patch.object(lifecycle, "_kill_server")
     @patch.object(lifecycle, "_start_fresh")
     def test_release_stops_server_at_zero(self, mock_start, mock_kill):
-        srv = MagicMock()
-        srv.pid = 12345
-        srv.port = 8888
+        srv = _mock_server()
         mock_start.return_value = srv
 
         lifecycle.joern_acquire()
@@ -204,9 +232,7 @@ class TestAcquireRelease(unittest.TestCase):
         with lifecycle._locked() as fd:
             lifecycle._write_state(fd, state)
 
-        new_srv = MagicMock()
-        new_srv.pid = 99999
-        new_srv.port = 7777
+        new_srv = _mock_server(pid=99999, port=7777)
         mock_start.return_value = new_srv
 
         result = lifecycle.joern_acquire()
@@ -260,9 +286,7 @@ class TestContextManager(unittest.TestCase):
     @patch.object(lifecycle, "_kill_server")
     @patch.object(lifecycle, "_start_fresh")
     def test_session_releases_on_exit(self, mock_start, mock_kill):
-        srv = MagicMock()
-        srv.pid = 12345
-        srv.port = 8888
+        srv = _mock_server()
         mock_start.return_value = srv
 
         with lifecycle.joern_session() as s:
@@ -278,14 +302,11 @@ class TestContextManager(unittest.TestCase):
     @patch.object(lifecycle, "_kill_server")
     @patch.object(lifecycle, "_start_fresh")
     def test_session_releases_on_exception(self, mock_start, mock_kill):
-        srv = MagicMock()
-        srv.pid = 12345
-        srv.port = 8888
+        srv = _mock_server()
         mock_start.return_value = srv
 
-        with self.assertRaises(ValueError):
-            with lifecycle.joern_session():
-                raise ValueError("boom")
+        with self.assertRaises(ValueError), lifecycle.joern_session():
+            raise ValueError("boom")
 
         mock_kill.assert_called_once()
 
@@ -309,9 +330,7 @@ class TestStaleRecycle(unittest.TestCase):
         with lifecycle._locked() as fd:
             lifecycle._write_state(fd, state)
 
-        new_srv = MagicMock()
-        new_srv.pid = 99999
-        new_srv.port = 7777
+        new_srv = _mock_server(pid=99999, port=7777)
         mock_start.return_value = new_srv
 
         result = lifecycle.joern_acquire()
@@ -348,6 +367,83 @@ class TestHeapMismatchWarning(unittest.TestCase):
             lifecycle.joern_acquire(tunables)
 
         self.assertTrue(any("8192" in msg and "2048" in msg for msg in cm.output))
+
+
+class TestStateFilePermissions(unittest.TestCase):
+    def setUp(self):
+        self._ts = _TmpState()
+        self._ts.install()
+
+    def tearDown(self):
+        self._ts.cleanup()
+
+    def test_write_state_creates_file_with_0600(self):
+        state = {"pid": 123, "port": 9999, "refcount": 1, **_AUTH_STATE}
+        with lifecycle._locked() as fd:
+            lifecycle._write_state(fd, state)
+        mode = self._ts.state_file.stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_rewrite_over_loose_tmp_stays_0600(self):
+        # A leftover .tmp with loose permissions must not leak through
+        # the rename.
+        tmp = self._ts.state_file.with_suffix(".tmp")
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text("{}", encoding="utf-8")
+        os.chmod(tmp, 0o644)
+        state = {"pid": 123, "port": 9999, "refcount": 1, **_AUTH_STATE}
+        with lifecycle._locked() as fd:
+            lifecycle._write_state(fd, state)
+        mode = self._ts.state_file.stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_read_state_tightens_legacy_permissions(self):
+        self._ts.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._ts.state_file.write_text('{"pid": 1}', encoding="utf-8")
+        os.chmod(self._ts.state_file, 0o644)
+        with lifecycle._locked() as fd:
+            loaded = lifecycle._read_state(fd)
+        self.assertEqual(loaded["pid"], 1)
+        mode = self._ts.state_file.stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+
+class TestAuthCredentialPersistence(unittest.TestCase):
+    def setUp(self):
+        self._ts = _TmpState()
+        self._ts.install()
+
+    def tearDown(self):
+        self._ts.cleanup()
+
+    @patch.object(lifecycle, "_start_fresh")
+    def test_acquire_persists_credential(self, mock_start):
+        srv = _mock_server()
+        mock_start.return_value = srv
+
+        lifecycle.joern_acquire()
+
+        with lifecycle._locked() as fd:
+            state = lifecycle._read_state(fd)
+        self.assertEqual(state["auth_user"], "raptor")
+        self.assertEqual(state["auth_password"], "test-credential")
+        mode = self._ts.state_file.stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_acquire_returns_none_when_auth_unsupported(self):
+        # start() raises when the launcher lacks --server-auth-* —
+        # the lifecycle must surface None (subprocess-per-query
+        # fallback) rather than an unauthenticated server.
+        from packages.joern.server import JoernServer
+
+        with patch.object(
+            JoernServer, "start",
+            side_effect=RuntimeError("joern launcher lacks --server-auth-*"),
+        ):
+            result = lifecycle.joern_acquire()
+        self.assertIsNone(result)
+        with lifecycle._locked() as fd:
+            self.assertIsNone(lifecycle._read_state(fd))
 
 
 if __name__ == "__main__":

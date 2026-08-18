@@ -48,7 +48,6 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +77,13 @@ _KIND_PATH_PROBLEM_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Match `@id <ns>/<rest>` — used for stable identification of which
-# discovered query handled a particular finding (audit trail).
-_ID_RE = re.compile(r"@id\s+([\w.\-/]+)")
-
 # Bound how much of each .ql file we read when checking metadata. Real
 # headers fit in ~1 KB; reading more wastes IO on large dataflow query
 # bodies. 4 KB gives slack for queries with long descriptions.
 _METADATA_READ_BYTES = 4096
 
 
-def _pack_roots() -> List[Path]:
+def _pack_roots() -> list[Path]:
     """Resolve all CodeQL pack roots in priority order.
 
     Returns extras (from RaptorConfig.EXTRA_CODEQL_PACK_ROOTS) first,
@@ -102,7 +97,7 @@ def _pack_roots() -> List[Path]:
     initialised. Tests can also monkeypatch _DEFAULT_PACK_ROOT
     directly to point at fixtures.
     """
-    extras: List[Path] = []
+    extras: list[Path] = []
     try:
         from core.config import RaptorConfig
         extras = list(RaptorConfig.EXTRA_CODEQL_PACK_ROOTS or [])
@@ -117,7 +112,7 @@ _RESOLVE_TIMEOUT_SECS = 30
 _QUERIES_PACK_NAME_RE = re.compile(r"^codeql/([A-Za-z0-9-]+)-queries$")
 
 
-def _resolved_pack_pointers() -> Dict[str, Path]:
+def _resolved_pack_pointers() -> dict[str, Path]:
     """Ask the `codeql` CLI for the canonical install paths of all
     published query packs. Returns {language: pack_path} for the
     `codeql/<lang>-queries` namespace; non-queries packs (libs,
@@ -145,7 +140,7 @@ def _resolved_pack_pointers() -> Dict[str, Path]:
         proc = subprocess.run(
             [binary, "resolve", "qlpacks", "--format=json"],
             capture_output=True, text=True,
-            timeout=_RESOLVE_TIMEOUT_SECS,
+            timeout=_RESOLVE_TIMEOUT_SECS, check=False,
             env=RaptorConfig.get_safe_env(),
             preexec_fn=set_pdeathsig(),
         )
@@ -164,7 +159,7 @@ def _resolved_pack_pointers() -> Dict[str, Path]:
         logger.debug("codeql resolve qlpacks JSON parse failed: %s", e)
         return {}
 
-    out: Dict[str, Path] = {}
+    out: dict[str, Path] = {}
     for pack_name, paths in (data or {}).items():
         m = _QUERIES_PACK_NAME_RE.match(pack_name)
         if not m or not paths:
@@ -180,7 +175,7 @@ def _resolved_pack_pointers() -> Dict[str, Path]:
     return out
 
 
-def _read_metadata(ql_path: Path) -> Optional[str]:
+def _read_metadata(ql_path: Path) -> str | None:
     """Return the first ~4KB of a .ql file as text, or None on read failure.
 
     Comment-block parsing is naive on purpose: we just look for tag
@@ -197,7 +192,7 @@ def _read_metadata(ql_path: Path) -> Optional[str]:
         return None
 
 
-def _extract_cwes(metadata: str) -> List[str]:
+def _extract_cwes(metadata: str) -> list[str]:
     """All CWE-NNN tags found in the metadata block (canonical form).
 
     CodeQL packs zero-pad to three digits (`cwe-022`); the canonical
@@ -214,12 +209,7 @@ def _is_path_problem(metadata: str) -> bool:
     return bool(_KIND_PATH_PROBLEM_RE.search(metadata))
 
 
-def _query_id(metadata: str) -> Optional[str]:
-    m = _ID_RE.search(metadata)
-    return m.group(1) if m else None
-
-
-def _language_from_pack_dir(pack_dir: Path) -> Optional[str]:
+def _language_from_pack_dir(pack_dir: Path) -> str | None:
     """Extract language tag from a `<lang>-queries` directory name.
 
     Examples: `python-queries` → "python", `cpp-queries` → "cpp".
@@ -233,7 +223,7 @@ def _language_from_pack_dir(pack_dir: Path) -> Optional[str]:
 
 
 @functools.lru_cache(maxsize=1)
-def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
+def discover_prebuilt_queries() -> dict[tuple[str, str], Path]:
     """Walk installed CodeQL query packs to build the (lang, CWE) → path map.
 
     Scans `<pack_root>/<lang>-queries/<version>/Security/CWE-*/*.ql` and
@@ -253,7 +243,7 @@ def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
     default root so RAPTOR-shipped packs win on collisions. Within a
     single root, iteration is alphabetical for determinism.
     """
-    out: Dict[Tuple[str, str], Path] = {}
+    out: dict[tuple[str, str], Path] = {}
 
     # Build the priority-ordered list of (language, pack_dir) pairs:
     #   1. Extras roots (RaptorConfig.EXTRA_CODEQL_PACK_ROOTS) — RAPTOR-
@@ -265,7 +255,7 @@ def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
     #      `~/.codeql/packages/codeql/` install. May overlap with (2);
     #      `seen_dirs` dedupes by resolved absolute path.
     seen_dirs: set = set()
-    pack_dirs: List[Tuple[str, Path]] = []
+    pack_dirs: list[tuple[str, Path]] = []
 
     def _add_pack_dir(language: str, pack_dir: Path) -> None:
         try:
@@ -312,7 +302,7 @@ def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
     #                                                    checkout — handled
     #                                                    by rglob below)
     for language, pack_dir in pack_dirs:
-        search_dirs: List[Path] = []
+        search_dirs: list[Path] = []
         flat_security = pack_dir / "Security"
         if flat_security.is_dir():
             search_dirs.append(flat_security)
@@ -341,7 +331,7 @@ def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
     return out
 
 
-def discover_prebuilt_query(language: str, cwe: str) -> Optional[Path]:
+def discover_prebuilt_query(language: str, cwe: str) -> Path | None:
     """Look up a prebuilt path-problem query for (language, CWE).
 
     Both args are normalised before lookup. Returns the absolute .ql
@@ -362,7 +352,7 @@ def discover_prebuilt_query(language: str, cwe: str) -> Optional[Path]:
 #
 # These match the modern ConfigSig + TaintTracking::Global<> API found
 # in current python-all / java-all / cpp-all / javascript-all packs.
-_TAINT_TEMPLATES: Dict[str, str] = {
+_TAINT_TEMPLATES: dict[str, str] = {
     "python": """\
 /**
  * @name IRIS validation: {query_id}
@@ -531,7 +521,7 @@ def build_template_query(
     source_predicate_body: str,
     sink_predicate_body: str,
     query_id: str = "raptor/iris-validation",
-) -> Optional[str]:
+) -> str | None:
     """Assemble a Tier 2 query from the template + LLM-supplied predicates.
 
     Args:
@@ -543,7 +533,8 @@ def build_template_query(
         query_id: Stable identifier embedded in the query metadata.
 
     Returns:
-        Full .ql text, or None when the language has no template.
+        Full .ql text, or None when the language has no template or
+        when either predicate body is empty / blank.
     """
     template = _TAINT_TEMPLATES.get(language.lower())
     if template is None:
@@ -653,7 +644,7 @@ _RULE_ID_TO_CWE: list = [
 ]
 
 
-def infer_cwe_from_rule_id(rule_id: str) -> Optional[str]:
+def infer_cwe_from_rule_id(rule_id: str) -> str | None:
     """Infer a CWE tag from a Semgrep rule_id when the finding lacks one.
 
     Many Semgrep rules don't set the `cwe_id` field explicitly but have
@@ -676,10 +667,10 @@ def infer_cwe_from_rule_id(rule_id: str) -> Optional[str]:
 
 
 __all__ = [
+    "TEMPLATE_PREDICATE_SCHEMA",
+    "build_template_query",
     "discover_prebuilt_queries",
     "discover_prebuilt_query",
-    "build_template_query",
-    "supported_languages_for_template",
-    "TEMPLATE_PREDICATE_SCHEMA",
     "infer_cwe_from_rule_id",
+    "supported_languages_for_template",
 ]

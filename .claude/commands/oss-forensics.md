@@ -48,6 +48,9 @@ Key outputs:
 ## Requirements
 
 - **GOOGLE_APPLICATION_CREDENTIALS**: BigQuery credentials for GH Archive queries
+  - Use a service account holding only the read-only `BigQuery User` role
+  - Queries run through the typed wrapper `libexec/raptor-bq-query`
+    (read-only statement validation, bytes-billed cap, egress-pinned sandbox)
   - See `.claude/skills/oss-forensics/github-archive/SKILL.md` for setup
 - **Internet access**: For GitHub API and Wayback Machine queries
 

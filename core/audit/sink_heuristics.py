@@ -125,7 +125,10 @@ def discover_project_sinks(
         When present, upgrades wrapper confidence from MEDIUM to HIGH.
     min_callers_for_wrapper
         A wrapper function must have at least this many callers to be
-        considered a project-specific sink.  Avoids promoting single-use
+        considered a project-specific sink.  Callers are counted by
+        bare function name aggregated across all files (per-file call
+        edges do not resolve the callee's defining file), so same-name
+        functions share one count.  Reduces promotion of single-use
         internal helpers.
     """
     result = SinkHeuristicsResult()
@@ -386,7 +389,7 @@ def _discover_side_effect_wrappers(
                 function=func,
                 reason="side_effect",
                 confidence="medium",
-                wraps=side_effects[:5],
+                wraps=sorted(side_effects),
             ))
             result.side_effect_count += 1
             seen.add(key)

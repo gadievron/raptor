@@ -56,9 +56,9 @@ def isolated_env(monkeypatch):
     from a clean slate. Covers all the alternative-provider triggers
     plus the regional knobs."""
     for var in (
-        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
-        "CLAUDE_CODE_USE_FOUNDRY",
-        "AWS_REGION", "AWS_DEFAULT_REGION",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+        "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE",
         "CLOUD_ML_REGION", "VERTEX_LOCATION",
         "ANTHROPIC_BASE_URL", "AZURE_OPENAI_ENDPOINT",
     ):
@@ -392,7 +392,23 @@ class TestReadablePathsForCCDispatch:
         assert any(p == home + "/.claude.json" for p in paths)
         assert any(p == home + "/.local/share/claude" for p in paths)
 
-    def test_calibrated_paths_used_when_present(
+    def test_python_runtime_paths_included(
+        self, isolated_env, no_override_config, no_calibrate, monkeypatch,
+    ):
+        # The CLI child's Bash tools run RAPTOR's `#!/usr/bin/env
+        # python3` scripts; when RAPTOR runs from a virtualenv, the
+        # interpreter's boot reads <venv>/pyvenv.cfg. Without the
+        # runtime paths, every python child died at startup
+        # (/validate post-pass exit 1, PermissionError pyvenv.cfg).
+        monkeypatch.setattr(
+            "core.sandbox.python_paths.python_runtime_tool_paths",
+            lambda: ["/fake/venv", "/fake/venv/bin"],
+        )
+        paths = readable_paths_for_cc_dispatch()
+        assert "/fake/venv" in paths
+        assert "/fake/venv/bin" in paths
+
+    def test_calibrated_paths_extend_the_floor(
         self, isolated_env, no_override_config, monkeypatch,
     ):
         prof = _fake_profile(
@@ -402,16 +418,18 @@ class TestReadablePathsForCCDispatch:
         )
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: prof)
         paths = readable_paths_for_cc_dispatch()
-        # Calibrated values replace the defaults; the union of
-        # paths_read + paths_stat is exposed (sandbox needs read
-        # access for both opens AND stats).
+        # Calibrated values are exposed; the union of paths_read +
+        # paths_stat (sandbox needs read access for both opens AND
+        # stats).
         assert "/opt/custom/claude/bin/claude" in paths
         assert "/opt/custom/claude/lib" in paths
         assert "/etc/raptor/claude.conf" in paths
-        # Default install-layout paths are NOT in the result —
-        # calibration is authoritative when present.
+        # The static floor SURVIVES calibration. Calibration observes
+        # open()/stat(), never the execve of the binary itself — a
+        # calibrated-only policy can't exec the CLI (exit 126).
         home = str(Path.home())
-        assert home + "/.claude" not in paths
+        assert home + "/.claude" in paths
+        assert home + "/.local/bin" in paths
 
     def test_calibrated_paths_dedupe_across_read_and_stat(
         self, isolated_env, no_override_config, monkeypatch,
@@ -426,7 +444,8 @@ class TestReadablePathsForCCDispatch:
         )
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: prof)
         paths = readable_paths_for_cc_dispatch()
-        assert paths == ["/path/A", "/path/B", "/path/C"]
+        calibrated_part = [p for p in paths if p.startswith("/path/")]
+        assert calibrated_part == ["/path/A", "/path/B", "/path/C"]
 
     def test_empty_calibrated_paths_falls_through(
         self, isolated_env, no_override_config, monkeypatch,
@@ -435,6 +454,36 @@ class TestReadablePathsForCCDispatch:
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: prof)
         paths = readable_paths_for_cc_dispatch()
         # Falls through to the default install layout.
+        home = str(Path.home())
+        assert home + "/.claude" in paths
+
+    def test_binary_exec_paths_included(
+        self, isolated_env, no_override_config, no_calibrate,
+        tmp_path, monkeypatch,
+    ):
+        # A launcher symlink outside the default install layout:
+        # both the link's dir and the resolved target's dir must be
+        # readable or the sandboxed child can't execve the CLI.
+        target_dir = tmp_path / "versions" / "9.9.9"
+        target_dir.mkdir(parents=True)
+        real_bin = target_dir / "claude"
+        real_bin.write_text("#!/bin/sh\n")
+        link_dir = tmp_path / "bin"
+        link_dir.mkdir()
+        link = link_dir / "claude"
+        link.symlink_to(real_bin)
+
+        paths = readable_paths_for_cc_dispatch(str(link))
+        assert str(link_dir) in paths
+        assert str(target_dir) in paths
+
+    def test_binary_exec_paths_missing_binary_tolerated(
+        self, isolated_env, no_override_config, no_calibrate,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+        paths = readable_paths_for_cc_dispatch()
+        # No binary found — floor is just the default layout.
         home = str(Path.home())
         assert home + "/.claude" in paths
 
@@ -671,6 +720,7 @@ class TestBuildDetectorMigration:
 
     def test_build_detector_imports_proxy_hosts_for_cc_dispatch(self):
         import inspect
+
         from core.build import build_detector
         src = inspect.getsource(build_detector)
         assert "proxy_hosts_for_cc_dispatch" in src, (
@@ -683,6 +733,7 @@ class TestBuildDetectorMigration:
 
     def test_build_detector_no_longer_hardcodes_anthropic_host(self):
         import inspect
+
         from core.build import build_detector
         src = inspect.getsource(build_detector)
         # The pre-migration literal. If this returns, the call
@@ -695,3 +746,117 @@ class TestBuildDetectorMigration:
             "hardcoded proxy_hosts literal — call site should use "
             "proxy_hosts_for_cc_dispatch(claude_bin) instead"
         )
+
+
+class TestBedrockMantle:
+
+    def test_mantle_flag_switches_host(
+        self, isolated_env, no_override_config, no_calibrate,
+    ):
+        isolated_env.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        isolated_env.setenv("CLAUDE_CODE_USE_MANTLE", "1")
+        isolated_env.setenv("AWS_REGION", "us-east-1")
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert _hostname_in(hosts, "bedrock-mantle.us-east-1.api.aws")
+        assert not _hostname_in(
+            hosts, "bedrock-runtime.us-east-1.amazonaws.com",
+        )
+
+    def test_regional_sts_included(
+        self, isolated_env, no_override_config, no_calibrate,
+    ):
+        """botocore defaults to the regional STS endpoint — both the
+        global and regional hosts must be allowed or credential
+        refresh dies behind the proxy."""
+        isolated_env.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        isolated_env.setenv("AWS_REGION", "eu-west-2")
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert _hostname_in(hosts, "sts.amazonaws.com")
+        assert _hostname_in(hosts, "sts.eu-west-2.amazonaws.com")
+
+    def test_profile_region_resolved_when_env_absent(
+        self, isolated_env, no_override_config, no_calibrate, tmp_path,
+    ):
+        """No env region → the profile's shared-config region is used
+        instead of a silent wrong-region guess."""
+        config = tmp_path / "aws-config"
+        config.write_text(
+            "[profile bedrock-access]\nregion = eu-central-1\n",
+        )
+        isolated_env.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        isolated_env.setenv("AWS_PROFILE", "bedrock-access")
+        isolated_env.setenv("AWS_CONFIG_FILE", str(config))
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert _hostname_in(
+            hosts, "bedrock-runtime.eu-central-1.amazonaws.com",
+        )
+
+    def test_profile_region_resolved_without_botocore(
+        self, isolated_env, no_override_config, no_calibrate, tmp_path,
+        monkeypatch,
+    ):
+        """botocore is optional — the shared config file is plain INI,
+        so profile-region resolution must survive on a botocore-less
+        host via the stdlib configparser fallback (simulated here by
+        forcing the import to fail)."""
+        import sys
+        monkeypatch.setitem(sys.modules, "botocore", None)
+        monkeypatch.setitem(sys.modules, "botocore.session", None)
+        config = tmp_path / "aws-config"
+        config.write_text(
+            "[profile bedrock-access]\nregion = eu-central-1\n",
+        )
+        isolated_env.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        isolated_env.setenv("AWS_PROFILE", "bedrock-access")
+        isolated_env.setenv("AWS_CONFIG_FILE", str(config))
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert _hostname_in(
+            hosts, "bedrock-runtime.eu-central-1.amazonaws.com",
+        )
+
+    def test_default_profile_region_resolved_without_botocore(
+        self, isolated_env, no_override_config, no_calibrate, tmp_path,
+        monkeypatch,
+    ):
+        """The default profile lives in a bare [default] section (no
+        'profile ' prefix) — the textual fallback must read it too."""
+        import sys
+        monkeypatch.setitem(sys.modules, "botocore", None)
+        monkeypatch.setitem(sys.modules, "botocore.session", None)
+        config = tmp_path / "aws-config"
+        config.write_text("[default]\nregion = eu-west-3\n")
+        isolated_env.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        isolated_env.setenv("AWS_CONFIG_FILE", str(config))
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert _hostname_in(
+            hosts, "bedrock-runtime.eu-west-3.amazonaws.com",
+        )
+
+
+class TestCredentialProxyMode:
+    """credential_mode="proxy": loopback-only allowlist — the child
+    talks solely to the local LLM dispatcher, so every remote host is
+    denied at the chokepoint. Highest priority: beats the operator
+    override, calibration, and every provider env var."""
+
+    def test_loopback_only(self, isolated_env, no_override_config,
+                           no_calibrate):
+        hosts = proxy_hosts_for_cc_dispatch(credential_mode="proxy")
+        assert hosts == ["127.0.0.1", "localhost"]
+
+    def test_beats_provider_env_and_override(
+        self, isolated_env, monkeypatch, tmp_path, no_calibrate,
+    ):
+        import core.llm.cc_proxy_hosts as mod
+        override = tmp_path / "override.json"
+        override.write_text('{"proxy_hosts": ["evil.example.com"]}')
+        monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", override)
+        isolated_env.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        isolated_env.setenv("AWS_REGION", "us-east-1")
+        hosts = proxy_hosts_for_cc_dispatch(credential_mode="proxy")
+        assert hosts == ["127.0.0.1", "localhost"]
+
+    def test_env_mode_unchanged(self, isolated_env, no_override_config,
+                                no_calibrate):
+        hosts = proxy_hosts_for_cc_dispatch(credential_mode="env")
+        assert "api.anthropic.com" in hosts

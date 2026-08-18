@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from core.analysis.typestate import (
     TypeStateViolation,
     build_builtin_models,
@@ -24,17 +26,20 @@ class TestBuildBuiltinModels:
         models = build_builtin_models()
         assert "pthread_mutex_lock/pthread_mutex_unlock" in models
 
-    def test_has_ssl(self):
+    def test_openssl_pairs_removed_from_builtins(self):
+        # OpenSSL pairs follow the _new/_free convention and are
+        # covered by pattern discovery — no longer hardcoded.
         models = build_builtin_models()
-        assert "SSL_new/SSL_free" in models
+        assert not any(k.startswith("SSL_new/") for k in models)
+        assert not any(k.startswith("EVP_") for k in models)
 
     def test_malloc_model_structure(self):
         models = build_builtin_models()
         m = models["malloc/free"]
         assert "allocated" in m.states
         assert "freed" in m.states
-        assert len(m.transitions) >= 2
-        assert len(m.forbidden) >= 1
+        assert m.alloc_methods == ["malloc"]
+        assert m.free_methods == ["free"]
 
     def test_lock_model_structure(self):
         models = build_builtin_models()
@@ -227,6 +232,25 @@ class TestFormatTypestateForContext:
         assert "double_free" in text
         assert "malloc/free" in text
         assert "line 10" in text
+        # The machine-checked state evidence is part of the rendered
+        # bullet — the LLM shouldn't have to re-infer it from prose.
+        assert "state: freed" in text
+        assert "requires: allocated" in text
+
+    def test_renders_multiple_required_states_sorted(self):
+        violations = [
+            TypeStateViolation(
+                type_name="lock",
+                operation="unlock",
+                current_state="unlocked",
+                required_states={"locked", "armed"},
+                location="line 3",
+                path_description="unlock without lock",
+                violation_kind="lock_not_held",
+            ),
+        ]
+        text = format_typestate_for_context(violations)
+        assert "requires: armed/locked" in text
 
     def test_empty_violations(self):
         assert format_typestate_for_context([]) == ""
@@ -246,3 +270,89 @@ class TestFormatTypestateForContext:
         ]
         text = format_typestate_for_context(violations)
         assert text.count("double_free") <= 8
+
+
+class TestConventionDiscoveryCoversOpenSSL:
+    """The deleted OpenSSL builtin pairs stay covered mechanically.
+
+    _INIT_DESTROY_PATTERNS' `_new`/`_free` rule matches every pair the
+    builtin table used to hardcode; discovery now also runs over (a)
+    Joern callee names at model-extraction time and (b) the analyzed
+    source's own call names at check time, so OpenSSL *consumers*
+    (which never define SSL_new in their checklist) keep coverage.
+    """
+
+    _DELETED_PAIRS: ClassVar[list] = [
+        ("SSL_new", "SSL_free"),
+        ("SSL_CTX_new", "SSL_CTX_free"),
+        ("EVP_CIPHER_CTX_new", "EVP_CIPHER_CTX_free"),
+        ("EVP_MD_CTX_new", "EVP_MD_CTX_free"),
+        ("BIO_new", "BIO_free"),
+        ("BN_new", "BN_free"),
+        ("X509_new", "X509_free"),
+        ("RSA_new", "RSA_free"),
+        ("EC_KEY_new", "EC_KEY_free"),
+        ("HMAC_CTX_new", "HMAC_CTX_free"),
+    ]
+
+    def test_patterns_pair_every_deleted_builtin(self):
+        from core.analysis.typestate import _discover_lifecycle_pairs
+
+        names = [n for pair in self._DELETED_PAIRS for n in pair]
+        discovered = {
+            (alloc, free)
+            for alloc, free, _ in _discover_lifecycle_pairs(names)
+        }
+        for pair in self._DELETED_PAIRS:
+            assert pair in discovered, pair
+
+    def test_double_ssl_free_flagged_without_builtin_model(self):
+        # An OpenSSL *consumer*: SSL_new is not in its checklist, so
+        # only check-time source discovery can supply the model.
+        src = (
+            "void handler(void) {\n"
+            "    SSL *s = SSL_new(ctx);\n"
+            "    SSL_free(s);\n"
+            "    SSL_free(s);\n"
+            "}\n"
+        )
+        violations = check_typestate_violations(src, build_builtin_models())
+        assert any(
+            v.violation_kind == "double_free"
+            and v.type_name == "SSL_new/SSL_free"
+            for v in violations
+        )
+
+    def test_use_after_evp_ctx_free_flagged(self):
+        src = (
+            "int digest(void) {\n"
+            "    EVP_MD_CTX *c = EVP_MD_CTX_new();\n"
+            "    EVP_MD_CTX_free(c);\n"
+            "    return EVP_MD_CTX_new_id(c);\n"
+            "}\n"
+        )
+        violations = check_typestate_violations(src, build_builtin_models())
+        assert any(
+            v.violation_kind == "use_after_free" for v in violations
+        )
+
+    def test_joern_callees_feed_extraction_discovery(self):
+        from core.analysis.typestate import extract_typestate_models
+
+        checklist = {"items": [{"name": "handler"}]}
+        summaries = {
+            "src/tls.c:handler": {
+                "callees": ["SSL_new", "SSL_free", "memcpy"],
+            },
+        }
+        models = extract_typestate_models(
+            checklist, joern_summaries=summaries,
+        )
+        assert "SSL_new/SSL_free" in models
+
+    def test_caller_models_dict_not_mutated(self):
+        models = build_builtin_models()
+        before = set(models)
+        src = "void f(void) { SSL *s = SSL_new(c); SSL_free(s); }\n"
+        check_typestate_violations(src, models)
+        assert set(models) == before

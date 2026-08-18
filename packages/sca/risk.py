@@ -49,7 +49,7 @@ from .models import Dependency, VulnFinding
 # fallback is applied below in ``compute_risk_estimate``.
 _CVSS_MISSING_DEFAULT = 5.0
 
-# KEV — known-exploited get a floor + multiplier. Floor of 80 means a
+# KEV — known-exploited get a floor + multiplier. The floor means a
 # KEV CVE with low CVSS still ranks above a non-KEV high-CVSS finding,
 # matching the "active exploitation > theoretical severity" priority.
 _KEV_FLOOR = 96.8
@@ -102,15 +102,17 @@ _SSVC_POC_MULTIPLIER = 1.4399
 # CISA's intent: a PoC + automation potential is materially
 # scarier than a PoC alone — the EternalBlue / Log4Shell class
 # of bug fans out across the internet because each step CAN be
-# automated. Modest 10% bonus to avoid double-counting (the
-# tier multiplier already reflects "exploit code exists"). Only
+# automated. The bonus is kept smaller than the tier multipliers
+# to avoid double-counting (the tier multiplier already reflects
+# "exploit code exists"). Only
 # applies when ``Automatable=yes``; ``no`` / ``None`` carry no
 # multiplier (the SSVC tier alone applies).
 _SSVC_AUTOMATABLE_BONUS = 1.331
 
-# EPSS — exploit probability in the wild. Even a 0% EPSS leaves 30%
-# weight (a vuln with no observed exploitation isn't impossible to
-# exploit; the floor reflects "unknown is not zero").
+# EPSS — exploit probability in the wild. Even a 0% EPSS leaves the
+# floor multiplier's ~40% weight (a vuln with no observed exploitation
+# isn't impossible to exploit; the floor reflects "unknown is not
+# zero").
 _EPSS_FLOOR_MULTIPLIER = 0.3993
 _EPSS_RANGE_MULTIPLIER = 0.5103
 _EPSS_MISSING_DEFAULT = 0.5
@@ -132,9 +134,9 @@ _EXPO_RANGE_MULTIPLIER = 0.50
 # but reflects the longer chain to actually trigger it.
 _DEPTH_DECAY_BASE = 0.70
 
-# Final clamp — keeps the score in 0..100 even if the multipliers
-# briefly compose above 100 (KEV floor × KEV multiplier = 96 before
-# the rest, so 0..120 inputs are possible).
+# Final clamp — keeps the score in 0..100 even when the multipliers
+# compose well above 100 (KEV floor × KEV multiplier alone is ~170
+# before the rest apply).
 _SCORE_MIN = 0.0
 _SCORE_MAX = 100.0
 
@@ -346,6 +348,10 @@ def compute_risk_estimate(
 
 # Names of the multiplier constants the refitter grid-searches over.
 # Exported so the refitter doesn't have to introspect the module.
+# ``_CVSS_MISSING_DEFAULT`` / ``_EPSS_MISSING_DEFAULT`` are also
+# reachable through ``compute_risk_estimate(overrides=...)`` but are
+# missing-input fallbacks, not multipliers, and are not listed here —
+# so the refitter never searches them.
 TUNABLE_CONSTANTS = (
     "_KEV_FLOOR",
     "_KEV_MULTIPLIER",
@@ -375,8 +381,8 @@ def current_constants() -> Dict[str, float]:
     constants. The refitter compares its proposed values against
     these."""
     # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
-    # ``name`` iterates ``TUNABLE_CONSTANTS`` (module-level literal
-    # tuple, line 245). Not attacker-controlled. The refitter
+    # ``name`` iterates ``TUNABLE_CONSTANTS`` (the module-level
+    # literal tuple above). Not attacker-controlled. The refitter
     # introspects via globals() to avoid hard-coding the list twice.
     return {
         name: globals()[name] for name in TUNABLE_CONSTANTS

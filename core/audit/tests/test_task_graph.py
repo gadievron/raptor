@@ -208,7 +208,7 @@ class TestCycleBreaking:
         scores = {"a.py:high": 0.9, "a.py:low": 0.1}
         dropped = _break_cycles(adj, scores)
         assert len(dropped) == 1
-        caller, callee = next(iter(dropped))
+        _caller, callee = next(iter(dropped))
         assert callee == "a.py:low"
 
     def test_cycle_preserves_tree_edges(self) -> None:
@@ -633,3 +633,153 @@ class TestSameBareCrossEdge:
         ready = g.pop_ready(10)
         assert len(ready) == 1
         assert ready[0].key == "sql.go:helper:100"
+
+
+class TestCostSchedule:
+    """LPT ordering: with schedule="cost", the ready set pops the
+    longest-predicted review first; priority breaks duration ties;
+    priority mode (the default) is untouched."""
+
+    @staticmethod
+    def _hints(**by_name):
+        return {f"a.py:{n}:0": v for n, v in by_name.items()}
+
+    def test_longest_first_within_ready_set(self) -> None:
+        wq = [
+            _gap("a.py", "small", priority=0.9),
+            _gap("a.py", "big", priority=0.1),
+            _gap("a.py", "medium", priority=0.5),
+        ]
+        g = TaskGraph.from_workqueue(
+            wq, [],
+            duration_hints=self._hints(small=100, big=50000, medium=6000),
+            schedule="cost",
+        )
+        order = [t.gap["name"] for t in g.pop_ready(3)]
+        assert order == ["big", "medium", "small"]
+
+    def test_priority_breaks_duration_ties(self) -> None:
+        wq = [
+            _gap("a.py", "low", priority=0.1),
+            _gap("a.py", "high", priority=0.9),
+        ]
+        g = TaskGraph.from_workqueue(
+            wq, [],
+            duration_hints=self._hints(low=6000, high=6000),
+            schedule="cost",
+        )
+        order = [t.gap["name"] for t in g.pop_ready(2)]
+        assert order == ["high", "low"]
+
+    def test_missing_hint_sorts_last(self) -> None:
+        wq = [_gap("a.py", "hinted"), _gap("a.py", "unhinted")]
+        g = TaskGraph.from_workqueue(
+            wq, [],
+            duration_hints=self._hints(hinted=500),
+            schedule="cost",
+        )
+        order = [t.gap["name"] for t in g.pop_ready(2)]
+        assert order == ["hinted", "unhinted"]
+
+    def test_default_schedule_is_priority(self) -> None:
+        wq = [
+            _gap("a.py", "small", priority=0.9),
+            _gap("a.py", "big", priority=0.1),
+        ]
+        g = TaskGraph.from_workqueue(
+            wq, [],
+            duration_hints=self._hints(small=100, big=50000),
+        )
+        order = [t.gap["name"] for t in g.pop_ready(2)]
+        assert order == ["small", "big"], (
+            "without schedule='cost', duration hints must not reorder"
+        )
+
+    def test_unknown_schedule_falls_back_to_priority(self) -> None:
+        wq = [
+            _gap("a.py", "small", priority=0.9),
+            _gap("a.py", "big", priority=0.1),
+        ]
+        g = TaskGraph.from_workqueue(
+            wq, [],
+            duration_hints=self._hints(small=100, big=50000),
+            schedule="bogus",
+        )
+        order = [t.gap["name"] for t in g.pop_ready(2)]
+        assert order == ["small", "big"]
+
+    def test_newly_ready_respects_cost_order(self) -> None:
+        # caller_big and caller_small unlock together when leaf
+        # completes — big must pop first under cost scheduling.
+        wq = [
+            _gap("a.py", "leaf"),
+            _gap("a.py", "caller_small", priority=0.9),
+            _gap("a.py", "caller_big", priority=0.1),
+        ]
+        edges = [
+            _edge("a.py", "caller_small", "a.py", "leaf"),
+            _edge("a.py", "caller_big", "a.py", "leaf"),
+        ]
+        g = TaskGraph.from_workqueue(
+            wq, edges,
+            duration_hints=self._hints(
+                leaf=100, caller_small=500, caller_big=50000,
+            ),
+            schedule="cost",
+        )
+        first = g.pop_ready(1)[0]
+        assert first.gap["name"] == "leaf"
+        g.mark_complete(first.key)
+        order = [t.gap["name"] for t in g.pop_ready(2)]
+        assert order == ["caller_big", "caller_small"]
+
+    def test_injected_task_jumps_cost_queue(self) -> None:
+        wq = [_gap("a.py", "big"), _gap("a.py", "medium")]
+        g = TaskGraph.from_workqueue(
+            wq, [],
+            duration_hints=self._hints(big=50000, medium=6000),
+            schedule="cost",
+        )
+        g.inject_task("a.py:chain:0", _gap("a.py", "chain"), 5.0)
+        order = [t.gap["name"] for t in g.pop_ready(3)]
+        assert order[0] == "chain", (
+            "chain-followed tasks stay urgent under cost scheduling"
+        )
+
+
+class TestDurationHints:
+    def test_orchestrator_hint_derivation(self) -> None:
+        from core.audit.orchestrator import _review_duration_hints
+
+        class _TR:
+            def __init__(self, budget):
+                self.token_budget = budget
+
+        wq = [
+            {"file": "a.py", "name": "deep", "line_start": 1,
+             "line_end": 200, "sloc": 200},
+            {"file": "a.py", "name": "glance", "line_start": 300,
+             "line_end": 305, "sloc": 6},
+            {"file": "a.py", "name": "untriaged", "line_start": 400,
+             "line_end": 449},
+        ]
+        triage = {
+            "a.py:deep:1": _TR(50000),
+            "a.py:glance:300": _TR(500),
+        }
+        hints = _review_duration_hints(wq, triage)
+        assert hints["a.py:deep:1"] == 50200.0
+        assert hints["a.py:glance:300"] == 506.0
+        # no triage entry: SLOC derived from the span
+        assert hints["a.py:untriaged:400"] == 50.0
+        assert hints["a.py:deep:1"] > hints["a.py:glance:300"]
+
+    def test_bare_key_fallback(self) -> None:
+        from core.audit.orchestrator import _review_duration_hints
+
+        class _TR:
+            token_budget = 6000
+
+        wq = [{"file": "a.py", "name": "f", "line_start": 1, "sloc": 10}]
+        hints = _review_duration_hints(wq, {"a.py:f": _TR()})
+        assert hints["a.py:f:1"] == 6010.0

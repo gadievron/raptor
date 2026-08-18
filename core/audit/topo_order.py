@@ -8,22 +8,23 @@ is by priority score so higher-risk functions are summarised first.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
 class SCC:
     """A strongly connected component in the call graph."""
 
-    members: FrozenSet[str]
+    members: frozenset[str]
     is_cycle: bool
 
     def __len__(self) -> int:
         return len(self.members)
 
 
-def detect_sccs(adj: Dict[str, List[str]]) -> List[SCC]:
+def detect_sccs(adj: dict[str, list[str]]) -> list[SCC]:
     """Tarjan's algorithm for strongly connected components.
 
     Args:
@@ -33,7 +34,7 @@ def detect_sccs(adj: Dict[str, List[str]]) -> List[SCC]:
     Returns:
         SCCs in reverse topological order (leaves first).
     """
-    index_counter = [0]
+    index_counter = 0
     stack: list[str] = []
     on_stack: set[str] = set()
     indices: dict[str, int] = {}
@@ -44,42 +45,71 @@ def detect_sccs(adj: Dict[str, List[str]]) -> List[SCC]:
     for targets in adj.values():
         all_nodes.update(targets)
 
-    def strongconnect(v: str) -> None:
-        indices[v] = lowlinks[v] = index_counter[0]
-        index_counter[0] += 1
-        stack.append(v)
-        on_stack.add(v)
+    # Iterative Tarjan with an explicit work stack (same pattern as
+    # task_graph._break_cycles' DFS). The recursive formulation blew
+    # the interpreter recursion limit on call chains deeper than
+    # ~1000 edges — a linear chain in a large target killed the audit
+    # from both orchestrator call sites. Each work-stack frame is
+    # ``(node, next_neighbour_index)`` so a child visit suspends the
+    # parent exactly where recursion would.
+    for root in sorted(all_nodes):
+        if root in indices:
+            continue
 
-        for w in adj.get(v, []):
-            if w not in indices:
-                strongconnect(w)
-                lowlinks[v] = min(lowlinks[v], lowlinks[w])
-            elif w in on_stack:
-                lowlinks[v] = min(lowlinks[v], indices[w])
+        work: list[list] = [[root, 0]]
+        while work:
+            frame = work[-1]
+            v, edge_idx = frame
 
-        if lowlinks[v] == indices[v]:
-            members: list[str] = []
-            while True:
-                w = stack.pop()
-                on_stack.discard(w)
-                members.append(w)
-                if w == v:
+            if edge_idx == 0:
+                indices[v] = lowlinks[v] = index_counter
+                index_counter += 1
+                stack.append(v)
+                on_stack.add(v)
+
+            neighbours = adj.get(v, [])
+            descended = False
+            while edge_idx < len(neighbours):
+                w = neighbours[edge_idx]
+                edge_idx += 1
+                if w not in indices:
+                    frame[1] = edge_idx
+                    work.append([w, 0])
+                    descended = True
                     break
-            frozen = frozenset(members)
-            result.append(SCC(members=frozen, is_cycle=len(frozen) > 1))
+                if w in on_stack:
+                    lowlinks[v] = min(lowlinks[v], indices[w])
+            if descended:
+                continue
 
-    for node in sorted(all_nodes):
-        if node not in indices:
-            strongconnect(node)
+            # All neighbours explored — this is the point where the
+            # recursive strongconnect(v) would return.
+            work.pop()
+            if lowlinks[v] == indices[v]:
+                members: list[str] = []
+                while True:
+                    w = stack.pop()
+                    on_stack.discard(w)
+                    members.append(w)
+                    if w == v:
+                        break
+                frozen = frozenset(members)
+                is_cycle = len(frozen) > 1 or (
+                    len(frozen) == 1 and v in adj.get(v, [])
+                )
+                result.append(SCC(members=frozen, is_cycle=is_cycle))
+            if work:
+                parent = work[-1][0]
+                lowlinks[parent] = min(lowlinks[parent], lowlinks[v])
 
     return result
 
 
 def topological_sort(
-    adj: Dict[str, List[str]],
+    adj: dict[str, list[str]],
     *,
-    priority_scores: Optional[Dict[str, float]] = None,
-) -> List[str]:
+    priority_scores: dict[str, float] | None = None,
+) -> list[str]:
     """Return functions in bottom-up order (leaves first, roots last).
 
     Within the same topological level, functions are ordered by priority
@@ -114,10 +144,9 @@ def topological_sort(
             continue
         for nb in neighbours:
             dst = node_to_scc.get(nb)
-            if dst is not None and dst != src:
-                if src not in rev_adj[dst]:
-                    rev_adj[dst].add(src)
-                    in_degree[src] += 1
+            if dst is not None and dst != src and src not in rev_adj[dst]:
+                rev_adj[dst].add(src)
+                in_degree[src] += 1
 
     def _scc_score(idx: int) -> float:
         return max((scores.get(m, 0) for m in sccs[idx].members), default=0)
@@ -146,11 +175,11 @@ def topological_sort(
 
 def resolve_scc_summaries(
     scc: SCC,
-    adj: Dict[str, List[str]],
+    adj: dict[str, list[str]],
     build_fn: Any,
     *,
     max_iterations: int = 3,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Iterative fixed-point convergence for summaries within an SCC.
 
     For mutually-recursive functions (A calls B, B calls A), summaries
@@ -215,7 +244,7 @@ def resolve_scc_summaries(
     }
 
 
-def _serialise_summaries(summaries: Dict[str, Any]) -> str:
+def _serialise_summaries(summaries: dict[str, Any]) -> str:
     """Serialise summaries for comparison between iterations."""
     import json
     stable = {}
@@ -230,8 +259,8 @@ def _serialise_summaries(summaries: Dict[str, Any]) -> str:
 
 
 def build_adjacency_from_gaps(
-    gaps: Sequence[Dict[str, Any]],
-) -> Dict[str, List[str]]:
+    gaps: Sequence[dict[str, Any]],
+) -> dict[str, list[str]]:
     """Build a call-graph adjacency list from gap dicts.
 
     Each gap dict should have 'file', 'name', and optionally 'callees'
@@ -251,11 +280,11 @@ def build_adjacency_from_gaps(
 
 
 def merge_with_priority(
-    adj: Dict[str, List[str]],
-    gaps: Sequence[Dict[str, Any]],
+    adj: dict[str, list[str]],
+    gaps: Sequence[dict[str, Any]],
     *,
-    priority_scores: Optional[Dict[str, float]] = None,
-) -> List[Dict[str, Any]]:
+    priority_scores: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
     """Reorder gaps in topological (bottom-up) order.
 
     Returns the same gap dicts, reordered so callees come before callers.

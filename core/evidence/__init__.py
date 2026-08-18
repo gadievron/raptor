@@ -26,8 +26,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Evidence tier vocabulary
@@ -82,7 +81,7 @@ class BinaryEvidenceRecord:
     confidence: str
     reproducible: bool
     tool: str
-    location: Optional[str] = None
+    location: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -126,8 +125,8 @@ def make_evidence(
     confidence: str,
     reproducible: bool,
     tool: str,
-    location: Optional[str] = None,
-    data: Optional[dict[str, Any]] = None,
+    location: str | None = None,
+    data: dict[str, Any] | None = None,
 ) -> BinaryEvidenceRecord:
     payload = dict(data or {})
     return BinaryEvidenceRecord(
@@ -167,6 +166,16 @@ def _safe_name(name: str) -> str:
     if not name or not _is_valid_identifier(name):
         return "<invalid-name>"
     return name.replace("\n", "").replace("\r", "")[:_NAME_CAP]
+
+
+_CWE_TAG_RE = re.compile(r"CWE-\d{1,5}$")
+
+
+def _safe_cwe(value: Any) -> str:
+    """Charset-pinned CWE tag ("CWE-NNN") or empty string."""
+    if isinstance(value, str) and _CWE_TAG_RE.fullmatch(value):
+        return value
+    return ""
 
 
 def _safe_text(text: str, max_len: int = 120) -> str:
@@ -219,43 +228,43 @@ class EvidenceRecord:
     line_end: int = 0
 
     sink_unreachable: bool = False
-    sink_narrowed_classes: List[str] = field(default_factory=list)
+    sink_narrowed_classes: list[str] = field(default_factory=list)
 
-    taint_approx: Optional[Any] = None
+    taint_approx: Any | None = None
 
-    taint_summary: Optional[Any] = None
+    taint_summary: Any | None = None
 
-    joern_flows: List[Any] = field(default_factory=list)
+    joern_flows: list[Any] = field(default_factory=list)
 
-    imported_joern_flows: List[Any] = field(default_factory=list)
+    imported_joern_flows: list[Any] = field(default_factory=list)
 
-    joern_unguarded_sinks: List[Dict[str, Any]] = field(default_factory=list)
+    joern_unguarded_sinks: list[dict[str, Any]] = field(default_factory=list)
 
-    joern_sink_args: List[Dict[str, Any]] = field(default_factory=list)
+    joern_sink_args: list[dict[str, Any]] = field(default_factory=list)
 
-    codeql_alerts: List[Dict[str, Any]] = field(default_factory=list)
+    codeql_alerts: list[dict[str, Any]] = field(default_factory=list)
 
-    semgrep_hits: List[Dict[str, Any]] = field(default_factory=list)
+    semgrep_hits: list[dict[str, Any]] = field(default_factory=list)
 
-    prefilter: Optional[Any] = None
+    prefilter: Any | None = None
 
-    context_map_sink: Optional[ContextMapSink] = None
+    context_map_sink: ContextMapSink | None = None
 
-    transitive_taint: Optional[Any] = None
+    transitive_taint: Any | None = None
 
-    app_sink_targets: List[str] = field(default_factory=list)
+    app_sink_targets: list[str] = field(default_factory=list)
 
-    sanitizer_calls: List[Dict[str, str]] = field(default_factory=list)
+    sanitizer_calls: list[dict[str, str]] = field(default_factory=list)
 
-    binary_sink_edges: List[Dict[str, str]] = field(default_factory=list)
+    binary_sink_edges: list[dict[str, str]] = field(default_factory=list)
 
-    binary_surface_category: Optional[str] = None
+    binary_surface_category: str | None = None
 
     binary_parser_boundary: bool = False
 
-    negative_space: List[Any] = field(default_factory=list)
+    negative_space: list[Any] = field(default_factory=list)
 
-    binary_layer0_findings: List[Any] = field(default_factory=list)
+    binary_layer0_findings: list[Any] = field(default_factory=list)
 
     def has_any_evidence(self) -> bool:
         return bool(
@@ -289,7 +298,7 @@ class EvidenceRecord:
 
 def format_evidence_prose(
     record: EvidenceRecord,
-    target_path: Optional[str] = None,
+    target_path: str | None = None,
 ) -> str:
     """Format an EvidenceRecord as prose for the LLM prompt.
 
@@ -297,7 +306,7 @@ def format_evidence_prose(
     FlowStep.code snippets. See design §"Prompt injection defense for
     pre-evidence".
     """
-    lines: List[str] = []
+    lines: list[str] = []
 
     approx = record.taint_approx
     if approx is not None and hasattr(approx, "dangerous_flows"):
@@ -422,18 +431,26 @@ def format_evidence_prose(
         )
 
     for alert in record.codeql_alerts:
-        rule_id = alert.get("rule_id", "unknown")
-        message = alert.get("message", "")[:200]
+        rule_id = _safe_name(alert.get("rule_id", "unknown"))
+        message = _safe_text(alert.get("message", ""), 200)
         line = alert.get("line", 0)
+        provenance = " (prior scan run)" if alert.get("_sarif_sibling") else ""
+        cwe = _safe_cwe(alert.get("_sarif_cwe", ""))
+        cwe_note = f" [{cwe}]" if cwe else ""
         lines.append(
-            f"- CodeQL {rule_id} at line {line}: {message}"
+            f"- CodeQL {rule_id}{cwe_note} at line {line}{provenance}: "
+            f"{message}"
         )
 
     for hit in record.semgrep_hits:
-        rule_id = hit.get("rule_id", "unknown")
+        rule_id = _safe_name(hit.get("rule_id", "unknown"))
         line = hit.get("line", 0)
+        provenance = " (prior scan run)" if hit.get("_sarif_sibling") else ""
+        cwe = _safe_cwe(hit.get("_sarif_cwe", ""))
+        cwe_note = f" [{cwe}]" if cwe else ""
         lines.append(
-            f"- Semgrep {rule_id} matched at line {line}"
+            f"- Semgrep {rule_id}{cwe_note} matched at line "
+            f"{line}{provenance}"
         )
 
     if record.context_map_sink is not None:
@@ -490,7 +507,7 @@ def format_evidence_prose(
     return header + "\n".join(lines)
 
 
-_TOOL_TIER_MAP: Dict[str, str] = {
+_TOOL_TIER_MAP: dict[str, str] = {
     "taint_approx": "xref_backed",
     "taint_summary": "xref_backed",
     "joern": "xref_backed",
@@ -504,13 +521,13 @@ _TOOL_TIER_MAP: Dict[str, str] = {
 
 def format_evidence_structured(
     record: EvidenceRecord,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Build the structured evidence list for downstream validation.
 
     Not injected into the LLM prompt — used by the review schema
     cross-referencer and tier diagnostic counters.
     """
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
 
     approx = record.taint_approx
     if approx is not None and hasattr(approx, "dangerous_flows"):
@@ -585,26 +602,36 @@ def format_evidence_structured(
         })
 
     for alert in record.codeql_alerts:
-        entries.append({
+        entry = {
             "tier": "codeql",
             "evidence_tier": "xref_backed",
             "rule_id": alert.get("rule_id", ""),
             "line": alert.get("line", 0),
-            "source": "this_run",
-        })
+            "source": (
+                "sibling_run" if alert.get("_sarif_sibling") else "this_run"
+            ),
+        }
+        if alert.get("_sarif_cwe"):
+            entry["cwe"] = alert["_sarif_cwe"]
+        entries.append(entry)
 
     for hit in record.semgrep_hits:
-        entries.append({
+        entry = {
             "tier": "semgrep",
             "evidence_tier": "header_backed",
             "rule_id": hit.get("rule_id", ""),
             "line": hit.get("line", 0),
-            "source": "this_run",
-        })
+            "source": (
+                "sibling_run" if hit.get("_sarif_sibling") else "this_run"
+            ),
+        }
+        if hit.get("_sarif_cwe"):
+            entry["cwe"] = hit["_sarif_cwe"]
+        entries.append(entry)
 
     if record.context_map_sink is not None:
         cms = record.context_map_sink
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "tier": "context_map_sink",
             "evidence_tier": "header_backed",
             "sink_type": cms.sink_type,
@@ -618,7 +645,7 @@ def format_evidence_structured(
 
 
 def strongest_evidence_tier(
-    entries: List[Dict[str, Any]],
+    entries: list[dict[str, Any]],
 ) -> EvidenceTier:
     """Return the strongest ``evidence_tier`` across structured entries.
 
@@ -645,17 +672,17 @@ def strongest_evidence_tier(
 def build_evidence_index(
     *,
     checklist: dict,
-    sink_results: Optional[Any] = None,
-    taint_approx_results: Optional[Dict[str, Any]] = None,
-    taint_summary_results: Optional[Dict[str, Any]] = None,
-    joern_flows: Optional[Dict[str, list]] = None,
-    imported_joern_flows: Optional[Dict[str, list]] = None,
-    sarif_cache: Optional[Any] = None,
-    prefilter_results: Optional[Dict[str, Any]] = None,
-    context_map_sinks: Optional[List[Dict[str, Any]]] = None,
-    binary_bridge: Optional[Any] = None,
-    scope: "Optional[str | list[str]]" = None,
-) -> Dict[str, EvidenceRecord]:
+    sink_results: Any | None = None,
+    taint_approx_results: dict[str, Any] | None = None,
+    taint_summary_results: dict[str, Any] | None = None,
+    joern_flows: dict[str, list] | None = None,
+    imported_joern_flows: dict[str, list] | None = None,
+    sarif_cache: Any | None = None,
+    prefilter_results: dict[str, Any] | None = None,
+    context_map_sinks: list[dict[str, Any]] | None = None,
+    binary_bridge: Any | None = None,
+    scope: str | list[str] | None = None,
+) -> dict[str, EvidenceRecord]:
     """Build the per-function evidence index from pre-sweep outputs.
 
     Keys are "file:function". Each value aggregates all available
@@ -666,13 +693,13 @@ def build_evidence_index(
     running downstream layer0 scans) for thousands of out-of-scope
     functions when auditing a single file or subdirectory.
     """
-    scope_tuple: "tuple[str, ...] | None" = None
+    scope_tuple: tuple[str, ...] | None = None
     if scope:
         scope_tuple = (scope,) if isinstance(scope, str) else tuple(scope)
 
-    index: Dict[str, EvidenceRecord] = {}
+    index: dict[str, EvidenceRecord] = {}
 
-    for file_entry in checklist.get("files", []):
+    for file_entry in checklist.get("files") or []:
         file_path = file_entry.get("path", "")
         if not file_path:
             continue
@@ -698,7 +725,7 @@ def build_evidence_index(
         if hasattr(sink_results, "direct_sinks"):
             for s in sink_results.direct_sinks:
                 _reachable.add(f"{s.file}:{s.function}")
-            direct_sink_index: Dict[str, List[str]] = {}
+            direct_sink_index: dict[str, list[str]] = {}
             for s in sink_results.direct_sinks:
                 key = f"{s.file}:{s.function}"
                 direct_sink_index.setdefault(key, []).append(s.target)
@@ -783,7 +810,7 @@ def build_evidence_index(
             if hits is None:
                 continue
             for hit in hits:
-                source = hit.get("_sarif_source", "")
+                source = hit.get("_sarif_source", "semgrep")
                 if source == "codeql":
                     rec.codeql_alerts.append(hit)
                 else:
@@ -799,8 +826,8 @@ def build_evidence_index(
 
 
 def _attach_context_map_sinks(
-    index: Dict[str, EvidenceRecord],
-    sinks: List[Dict[str, Any]],
+    index: dict[str, EvidenceRecord],
+    sinks: list[dict[str, Any]],
 ) -> None:
     """Match context-map sink_details entries to evidence records."""
     for sink in sinks:
@@ -823,11 +850,11 @@ def _attach_context_map_sinks(
 
 
 def _attach_binary_bridge(
-    index: Dict[str, EvidenceRecord],
+    index: dict[str, EvidenceRecord],
     bridge: Any,
 ) -> None:
     """Enrich evidence records with binary analysis data."""
-    func_to_keys: Dict[str, List[str]] = {}
+    func_to_keys: dict[str, list[str]] = {}
     for key in index:
         func_name = key.split(":")[-1]
         func_to_keys.setdefault(func_name, []).append(key)
@@ -856,11 +883,11 @@ def _attach_binary_bridge(
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    "TIER_RANK",
     "BinaryEvidenceRecord",
     "ContextMapSink",
     "EvidenceRecord",
     "EvidenceTier",
-    "TIER_RANK",
     "_safe_name",
     "_safe_text",
     "build_evidence_index",

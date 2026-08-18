@@ -1,25 +1,30 @@
 """/validate → /audit feedback loop (Reflexion pattern).
 
 Reads a /validate report (Stage-D ``stage-d.json`` or final
-``findings.json``), matches findings back to audit annotations
-by file+function, and updates:
+``findings.json``), matches findings back to prior audit review
+verdicts (from the review journal) by file+function, and writes:
 
-1. **Annotation status** — downgrades disproven findings, upgrades
-   missed ones, appends corroboration notes for confirmed findings.
-2. **Annotation body** — appends a ``### /validate feedback`` block
-   with the validation verdict, reason, and extracted lesson.
-3. **coverage-audit.json** — syncs the status change so the gap
-   list reflects the corrected state.
-4. **Audit log** — records each feedback action for the critique
-   pass and reporting.
+1. **Journal correction entries** — a NEW append-only
+   ``ReviewJournalEntry`` per corrected verdict, carrying the
+   validation verdict, ``prior_review`` provenance, and the
+   extracted lesson. ``latest_entries`` then returns the corrected
+   verdict on the next read; nothing is mutated in place.
+2. **Audit log** — a ``feedback`` event per transition for the
+   critique pass and reporting.
 
-Status transitions:
-  - ``ruled_out`` or ``is_true_positive=False`` → annotation
+Annotations are read-only veto inputs here: a human-authored
+annotation with a conclusion status blocks the Reflexion downgrade,
+but annotation files are never written back (amendment §1 D3 + A5),
+and coverage-audit.json no longer exists — the journal is
+authoritative.
+
+Verdict transitions (recorded in the correction entry):
+  - ``ruled_out`` or ``is_true_positive=False`` → prior
     ``finding``/``suspicious`` downgraded to ``clean``
-  - ``confirmed``/``exploitable`` when annotation was ``clean`` →
+  - ``confirmed``/``exploitable`` when prior verdict was ``clean`` →
     upgraded to ``finding``
-  - ``confirmed``/``exploitable`` when annotation was already
-    ``finding`` → no status change, corroboration appended
+  - ``confirmed``/``exploitable`` when prior verdict was already
+    ``finding`` → no status change, corroboration recorded
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -44,15 +49,16 @@ def import_validation_results(
     *,
     validation_report: Path,
     annotations_dir: Path,
-    audit_out_dir: Optional[Path] = None,
-    target_path: Optional[Path] = None,
-) -> Dict[str, int]:
+    audit_out_dir: Path | None = None,
+    target_path: Path | None = None,
+) -> dict[str, int]:
     """Import /validate results into the review journal.
 
     Args:
         validation_report: Path to /validate output — accepts
-            ``findings.json`` (flat list or ``{"findings": [...]}``)
-            or ``stage-d.json`` (``{"findings": [...],"summary":...}``).
+            ``findings.json`` (flat list or ``{"findings": [...]}``),
+            ``stage-d.json`` (``{"findings": [...],"summary":...}``),
+            or a ``{"results": [...]}`` wrapper.
         annotations_dir: Path to the audit annotations directory.
             Consulted for human-source annotation vetoes only.
         audit_out_dir: If provided, appends correction journal
@@ -73,10 +79,16 @@ def import_validation_results(
     # human-authored annotation is still consulted so operator notes
     # with a conclusion status can veto Reflexion — but no annotation
     # is ever written back (see amendment §1 D3 + A5).
+    from core.annotations import is_human_grade
     from core.annotations.storage import read_annotation
+
     from .journal import (
-        ReviewJournalEntry, VALID_VERDICTS, append_entry,
-        latest_entries, now_iso,
+        VALID_VERDICTS,
+        ReviewJournalEntry,
+        append_entry,
+        latest_entries,
+        make_function_key,
+        now_iso,
     )
     from .record import _compute_hash
 
@@ -100,12 +112,24 @@ def import_validation_results(
 
     # Load prior LLM verdicts once — one journal read per audit-out
     # dir instead of per finding.
-    prior_by_key: Dict[str, ReviewJournalEntry] = {}
+    prior_by_key: dict[str, ReviewJournalEntry] = {}
     if audit_out_dir:
         try:
             prior_by_key = latest_entries(audit_out_dir)
         except Exception:  # noqa: BLE001
             prior_by_key = {}
+
+    # Keys that received a confirmed verdict in THIS import. A later
+    # disproven finding for the same function must not downgrade past
+    # them (dedup no longer collapses same-function findings, so both
+    # can appear in one report).
+    confirmed_keys: set = set()
+
+    # Reliability records for the VALIDATE_FEEDBACK scorecard producer
+    # — the live writer of audit:<CWE> cells (see
+    # core/llm/scorecard/validate_feedback.py). Collected in the loop,
+    # recorded once at the end; never blocks the import.
+    scorecard_records: list[dict[str, Any]] = []
 
     for finding in findings:
         file_path = finding.get("file", "")
@@ -115,13 +139,18 @@ def import_validation_results(
             continue
 
         # Human notes with a conclusion-status veto Reflexion — the
-        # operator's judgement stands. Amendment A5: only annotations
-        # whose status matches the LLM's verdict vocabulary
-        # (``VALID_VERDICTS``) veto; non-conclusion statuses
-        # (``todo``, ``investigating``, free-form) don't block
-        # Reflexion because the operator hasn't asserted anything.
+        # operator's judgement stands. The veto requires human GRADE
+        # (source=human plus an interactive-TTY provenance stamp, or
+        # a legacy pre-stamp note), not just the caller-asserted
+        # source string — a non-interactive add claiming human is
+        # the laundering shape and gets machine tier below instead.
+        # Amendment A5: only annotations whose status matches the
+        # LLM's verdict vocabulary (``VALID_VERDICTS``) veto;
+        # non-conclusion statuses (``todo``, ``investigating``,
+        # free-form) don't block Reflexion because the operator
+        # hasn't asserted anything.
         human_ann = read_annotation(annotations_dir, file_path, function_name)
-        if human_ann and human_ann.metadata.get("source") == "human":
+        if human_ann and is_human_grade(human_ann.metadata):
             hstatus = (human_ann.metadata.get("status") or "").strip().lower()
             if hstatus in VALID_VERDICTS:
                 logger.info(
@@ -132,20 +161,21 @@ def import_validation_results(
                 counts["skipped"] += 1
                 continue
 
-        key = f"{file_path}:{function_name}"
+        key = make_function_key(file_path, function_name)
         prior_entry = prior_by_key.get(key)
         audit_status = prior_entry.verdict if prior_entry else ""
         prior_body = prior_entry.body if prior_entry else ""
 
-        # Legacy path: run dirs created before the annotation → journal
-        # migration still carry LLM verdicts as annotations. When
-        # there's no journal entry, fall back to the LLM annotation
-        # so the Reflexion loop still fires on pre-migration state.
-        # The corrected verdict is still written to the journal
-        # (never back to the annotation) — annotations remain
-        # human-only for new writes.
-        if not audit_status and human_ann and (
-            human_ann.metadata.get("source") == "llm"
+        # Machine-tier path: annotations without human grade — legacy
+        # pre-migration LLM verdicts, agent-sourced notes, and human
+        # claims stamped non-interactive — don't veto, but they stay
+        # useful: when there's no journal entry, their status serves
+        # as the prior claim so the Reflexion loop still fires. The
+        # corrected verdict is still written to the journal (never
+        # back to the annotation) — annotations remain human-only
+        # for new writes.
+        if not audit_status and human_ann and not is_human_grade(
+            human_ann.metadata,
         ):
             audit_status = human_ann.metadata.get("status", "")
             prior_body = human_ann.body
@@ -160,6 +190,37 @@ def import_validation_results(
 
         validate_verdict = _classify_verdict(finding)
         transition = _compute_transition(audit_status, validate_verdict)
+
+        # A downgrade to clean must refer to the SAME finding the
+        # journal entry records, and can never override a confirmed
+        # verdict for the same function within this import — a
+        # disproven decoy (different CWE/line, or processed after a
+        # confirmed sibling) must not erase real feedback.
+        decoy_vetoed = False
+        if transition.get("new_status") == "clean":
+            if key in confirmed_keys:
+                transition = {
+                    "kind": "corroborated",
+                    "new_status": None,
+                    "description": (
+                        "/validate disproved one finding but another "
+                        "was confirmed for this function in the same "
+                        f"import — keeping {audit_status!r}"
+                    ),
+                }
+            elif not _disproven_matches_entry(finding, prior_entry):
+                transition = {
+                    "kind": "corroborated",
+                    "new_status": None,
+                    "description": (
+                        "/validate disproved a finding whose CWE/line "
+                        "does not match the journal entry — keeping "
+                        f"{audit_status!r}"
+                    ),
+                }
+                decoy_vetoed = True
+        if validate_verdict == "confirmed":
+            confirmed_keys.add(key)
 
         reason = _sanitize_markdown(_extract_reason(finding))
         lesson = _extract_lesson(finding, audit_status, validate_verdict)
@@ -212,7 +273,7 @@ def import_validation_results(
         )
         try:
             append_entry(audit_out_dir or annotations_dir.parent, new_entry)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "journal append failed for %s:%s",
                 file_path, function_name, exc_info=True,
@@ -221,24 +282,116 @@ def import_validation_results(
         counts["updated"] += 1
         counts[transition["kind"]] += 1
 
+        # Reliability event for the model that made the prior claim.
+        # Decoy-vetoed disprovals carry no signal about THIS verdict
+        # (the disproven finding wasn't the one the journal records).
+        prior_model = prior_entry.model if prior_entry else None
+        if prior_model and not decoy_vetoed:
+            scorecard_records.append({
+                "model": prior_model,
+                "cwe": prior_entry.cwe if prior_entry else None,
+                "prior_verdict": audit_status,
+                "validate_verdict": validate_verdict,
+                "file": file_path,
+                "function": function_name,
+                "reason": reason,
+            })
+
         if audit_out_dir:
             _update_audit_state(
                 audit_out_dir, file_path, function_name,
                 transition, validate_verdict, reason,
             )
 
+    if scorecard_records:
+        try:
+            from core.llm.scorecard.validate_feedback import (
+                record_validate_feedback_outcomes,
+            )
+            record_validate_feedback_outcomes(scorecard_records)
+        except Exception:
+            logger.debug("validate-feedback scorecard recording failed",
+                         exc_info=True)
+
     return counts
 
 
 def _deduplicate_findings(
-    findings: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Keep only the last finding per (file, function) pair."""
-    seen: Dict[tuple, int] = {}
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep only the last finding per finding identity.
+
+    Identity is the finding id when present, else
+    ``(file, function, cwe, line)``. Keying on ``(file, function)``
+    alone discarded the feedback of a confirmed finding whenever a
+    later disproven finding (a different CWE or line in the same
+    function) shared the pair — the transition logic then only ever
+    saw the decoy.
+    """
+    seen: dict[tuple, int] = {}
     for idx, finding in enumerate(findings):
-        key = (finding.get("file", ""), finding.get("function", ""))
+        fid = finding.get("id") or finding.get("finding_id")
+        if fid:
+            key = ("id", str(fid))
+        else:
+            key = (
+                finding.get("file", ""),
+                finding.get("function", ""),
+                _finding_cwe(finding),
+                _finding_line(finding),
+            )
         seen[key] = idx
     return [findings[i] for i in sorted(seen.values())]
+
+
+def _finding_cwe(finding: dict[str, Any]) -> str:
+    """Normalised CWE number from a finding ('787' from 'CWE-787')."""
+    raw = finding.get("cwe") or finding.get("cwe_id") or ""
+    digits = "".join(c for c in str(raw) if c.isdigit())
+    return digits
+
+
+def _finding_line(finding: dict[str, Any]) -> int | None:
+    """Line number from a finding, or None when absent."""
+    for field in ("line", "line_start"):
+        value = finding.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def _disproven_matches_entry(
+    finding: dict[str, Any],
+    prior_entry: Any | None,
+) -> bool:
+    """Whether a disproven finding refers to the journal entry's finding.
+
+    A downgrade to clean is only justified when /validate disproved
+    the SAME finding the journal entry records. When both sides carry
+    a CWE and they differ — or both carry line data and the finding's
+    line falls outside the entry's span — the disproven finding is a
+    different issue (e.g. a decoy in the same function) and must not
+    erase the entry's verdict. Missing data on either side stays
+    lenient: the historical downgrade behaviour is preserved when
+    there is nothing to compare.
+    """
+    if prior_entry is None:
+        return True
+
+    finding_cwe = _finding_cwe(finding)
+    entry_cwe = "".join(
+        c for c in str(prior_entry.cwe or "") if c.isdigit()
+    )
+    if finding_cwe and entry_cwe and finding_cwe != entry_cwe:
+        return False
+
+    line = _finding_line(finding)
+    start = prior_entry.line_start or 0
+    end = prior_entry.line_end
+    has_span = start > 0 and isinstance(end, int) and end >= start
+    if line is None or not has_span:
+        return True
+    return start <= line <= end
 
 
 def _sanitize_markdown(text: str) -> str:
@@ -258,7 +411,7 @@ def _sanitize_markdown(text: str) -> str:
     return "\n".join(lines)
 
 
-def _extract_findings(report: Any) -> List[Dict[str, Any]]:
+def _extract_findings(report: Any) -> list[dict[str, Any]]:
     """Normalise different /validate output shapes into a flat list."""
     if isinstance(report, list):
         return report
@@ -270,7 +423,7 @@ def _extract_findings(report: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _classify_verdict(finding: Dict[str, Any]) -> str:
+def _classify_verdict(finding: dict[str, Any]) -> str:
     """Map /validate's various status fields to a canonical verdict.
 
     Returns one of: ``disproven``, ``confirmed``, ``unknown``.
@@ -297,7 +450,7 @@ def _classify_verdict(finding: Dict[str, Any]) -> str:
 def _compute_transition(
     audit_status: str,
     validate_verdict: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Decide what status transition to make.
 
     Returns dict with ``kind`` (downgraded/upgraded/corroborated),
@@ -354,7 +507,7 @@ def _compute_transition(
     }
 
 
-def _extract_reason(finding: Dict[str, Any]) -> str:
+def _extract_reason(finding: dict[str, Any]) -> str:
     """Pull the human-readable reason from the /validate finding."""
     ruling = finding.get("ruling", {})
     if isinstance(ruling, dict):
@@ -377,7 +530,7 @@ def _extract_reason(finding: Dict[str, Any]) -> str:
 
 
 def _extract_lesson(
-    finding: Dict[str, Any],
+    finding: dict[str, Any],
     audit_status: str,
     validate_verdict: str,
 ) -> str:
@@ -411,28 +564,11 @@ def _extract_lesson(
     return ""
 
 
-def _format_feedback_block(
-    validate_verdict: str,
-    reason: str,
-    lesson: str,
-    transition: Dict[str, Any],
-) -> str:
-    """Format the feedback block appended to the annotation body."""
-    lines = ["### /validate feedback"]
-    lines.append(f"Verdict: {validate_verdict}")
-    lines.append(f"Transition: {transition['description']}")
-    if reason:
-        lines.append(f"Reason: {reason}")
-    if lesson:
-        lines.append(lesson)
-    return "\n".join(lines)
-
-
 def _update_audit_state(
     audit_out_dir: Path,
     file_path: str,
     function_name: str,
-    transition: Dict[str, Any],
+    transition: dict[str, Any],
     validate_verdict: str,
     reason: str,
 ) -> None:

@@ -12,7 +12,6 @@ from core.concepts.reading_list import (
     ReadingListItem,
 )
 
-
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------
@@ -180,6 +179,69 @@ class TestReadingListResolve:
     def test_resolve_nonexistent_returns_false(self) -> None:
         rl = ReadingList()
         assert not rl.resolve("nonexistent", "page_ownership")
+
+
+# ------------------------------------------------------------------
+# ReadingList — unresolvable semantics
+# ------------------------------------------------------------------
+
+class TestReadingListUnresolvable:
+    """An unresolvable item was attempted and cannot be answered from
+    the source.  It must leave pending() (never re-studied) while
+    NEVER counting as resolved — the assumption stays unverified."""
+
+    def test_mark_unresolvable(self) -> None:
+        rl = ReadingList()
+        rl.queue(_item("rl-001"))
+        assert rl.mark_unresolvable("rl-001", "monkey-patched at runtime")
+        item = rl.items[0]
+        assert item.unresolvable
+        assert item.unresolvable_reason == "monkey-patched at runtime"
+
+    def test_unresolvable_leaves_pending(self) -> None:
+        rl = ReadingList()
+        rl.queue(_item("rl-001"))
+        rl.mark_unresolvable("rl-001", "reason")
+        assert rl.pending() == []
+
+    def test_unresolvable_is_not_resolved(self) -> None:
+        rl = ReadingList()
+        rl.queue(_item("rl-001"))
+        rl.mark_unresolvable("rl-001", "reason")
+        assert rl.resolved() == []
+        assert rl.items[0].resolved_concept_id is None
+        assert len(rl.unresolvable_items()) == 1
+
+    def test_resolved_item_cannot_become_unresolvable(self) -> None:
+        rl = ReadingList()
+        rl.queue(_item("rl-001"))
+        rl.resolve("rl-001", "some_concept")
+        assert not rl.mark_unresolvable("rl-001", "reason")
+        assert rl.items[0].resolved
+
+    def test_mark_nonexistent_returns_false(self) -> None:
+        rl = ReadingList()
+        assert not rl.mark_unresolvable("nope", "reason")
+
+    def test_requeue_does_not_revive_unresolvable(self) -> None:
+        rl = ReadingList()
+        rl.queue(_item("rl-001", question="q1"))
+        rl.mark_unresolvable("rl-001", "reason")
+        rl.queue(_item("rl-002", question="q1"))
+        assert rl.pending() == []
+        assert len(rl.items) == 1
+
+    def test_unresolvable_round_trips(self, tmp_path: Path) -> None:
+        p = tmp_path / "reading-list.json"
+        rl = ReadingList()
+        rl.queue(_item("rl-001"))
+        rl.mark_unresolvable("rl-001", "dynamic dispatch")
+        rl.save(p)
+        loaded = ReadingList.load(p)
+        assert loaded.items[0].unresolvable
+        assert loaded.items[0].unresolvable_reason == "dynamic dispatch"
+        assert loaded.pending() == []
+        assert loaded.resolved() == []
 
 
 # ------------------------------------------------------------------

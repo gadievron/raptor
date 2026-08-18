@@ -133,14 +133,22 @@ def _walk_top_level(
     node,
     results: Dict[str, CTaintApprox],
 ) -> None:
-    """Walk top-level nodes looking for function definitions."""
-    if node.type == _FUNCTION_DEFINITION:
-        approx = _analyze_function(node)
-        if approx is not None:
-            results[approx.function] = approx
-        return
-    for child in node.children:
-        _walk_top_level(child, results)
+    """Walk top-level nodes looking for function definitions.
+
+    Iterative (explicit stack) — the walk runs on target-controlled
+    parse trees, so recursion depth must not scale with nesting depth
+    (a crafted deeply-nested file would otherwise abort the whole
+    multi-file prep pass with RecursionError).
+    """
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == _FUNCTION_DEFINITION:
+            approx = _analyze_function(cur)
+            if approx is not None:
+                results[approx.function] = approx
+            continue
+        stack.extend(reversed(cur.children))
 
 
 def _analyze_function(fn_node) -> Optional[CTaintApprox]:
@@ -191,14 +199,16 @@ def _declarator_name(fn_declarator_node) -> Optional[str]:
 
 
 def _find_function_declarator(node) -> Optional[object]:
-    """Recursively find a function_declarator under pointer/paren wrappers."""
-    if node.type == _FUNCTION_DECLARATOR:
-        return node
-    for c in node.children:
-        if c.is_named:
-            result = _find_function_declarator(c)
-            if result is not None:
-                return result
+    """Find the first function_declarator under pointer/paren wrappers
+    (pre-order, iterative — depth is target-controlled)."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == _FUNCTION_DECLARATOR:
+            return cur
+        stack.extend(
+            c for c in reversed(cur.children) if c.is_named
+        )
     return None
 
 
@@ -252,13 +262,14 @@ def _param_name(param_decl) -> Optional[str]:
 
 
 def _find_identifier(node) -> Optional[str]:
-    """Find the first identifier leaf in a subtree."""
-    if node.type == _IDENTIFIER:
-        return node.text.decode("utf-8", errors="replace")
-    for c in node.children:
-        result = _find_identifier(c)
-        if result is not None:
-            return result
+    """Find the first identifier leaf in a subtree (pre-order,
+    iterative — depth is target-controlled)."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == _IDENTIFIER:
+            return cur.text.decode("utf-8", errors="replace")
+        stack.extend(reversed(cur.children))
     return None
 
 
@@ -276,15 +287,19 @@ def _scan_calls(
     param_index: Dict[str, int],
     approx: CTaintApprox,
 ) -> None:
-    """Recursively scan for call_expressions, checking if any argument
-    is a direct use of a function parameter."""
-    if node.type == _CALL_EXPRESSION:
-        callee_chain = _callee_chain(node)
-        if callee_chain is not None:
-            _check_arguments(node, callee_chain, param_set, param_index, approx)
-
-    for child in node.children:
-        _scan_calls(child, param_set, param_index, approx)
+    """Scan for call_expressions, checking if any argument is a direct
+    use of a function parameter (pre-order, iterative — depth is
+    target-controlled)."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == _CALL_EXPRESSION:
+            callee_chain = _callee_chain(cur)
+            if callee_chain is not None:
+                _check_arguments(
+                    cur, callee_chain, param_set, param_index, approx,
+                )
+        stack.extend(reversed(cur.children))
 
 
 def _check_arguments(
@@ -349,7 +364,21 @@ def _callee_chain(call_node) -> Optional[List[str]]:
 
 
 def _resolve_callee(node) -> Optional[List[str]]:
-    """Resolve an expression node to a dotted name chain."""
+    """Resolve an expression node to a dotted name chain.
+
+    Paren / pointer wrappers are unwrapped with a loop (not
+    recursion) — nesting depth is target-controlled.
+    """
+    while node.type in (_PARENTHESIZED_EXPRESSION, _POINTER_EXPRESSION):
+        inner = None
+        for c in node.children:
+            if c.is_named:
+                inner = c
+                break
+        if inner is None:
+            return None
+        node = inner
+
     if node.type == _IDENTIFIER:
         return [node.text.decode("utf-8", errors="replace")]
 
@@ -373,24 +402,6 @@ def _resolve_callee(node) -> Optional[List[str]]:
             return list(reversed(parts))
         return None
 
-    if node.type == _PARENTHESIZED_EXPRESSION:
-        inner = None
-        for c in node.children:
-            if c.is_named:
-                inner = c
-                break
-        if inner is not None:
-            return _resolve_callee(inner)
-
-    if node.type == _POINTER_EXPRESSION:
-        inner = None
-        for c in node.children:
-            if c.is_named:
-                inner = c
-                break
-        if inner is not None:
-            return _resolve_callee(inner)
-
     return None
 
 
@@ -400,46 +411,50 @@ def _scan_opaque_assignments(
     approx: CTaintApprox,
 ) -> None:
     """Scan for assignments where a parameter flows through a non-trivial
-    LHS (pointer deref, struct member, cast). Sets has_opaque_flow."""
-    if approx.has_opaque_flow:
-        return
+    LHS (pointer deref, struct member, cast). Sets has_opaque_flow.
 
-    if node.type == _ASSIGNMENT_EXPRESSION:
-        rhs = None
-        children = list(node.children)
-        for i, c in enumerate(children):
-            if not c.is_named:
-                continue
-            if c.text and c.text.decode("utf-8", errors="replace") == "=":
-                continue
-            rhs = c
+    Iterative (explicit stack) — depth is target-controlled."""
+    stack = [node]
+    while stack:
+        if approx.has_opaque_flow:
+            return
+        cur = stack.pop()
 
-        if rhs is not None and rhs.type == _IDENTIFIER:
-            name = rhs.text.decode("utf-8", errors="replace")
-            if name in param_set:
-                lhs = None
-                for c in children:
-                    if c.is_named and c != rhs:
-                        lhs = c
-                        break
-                if lhs is not None and lhs.type != _IDENTIFIER:
-                    approx.has_opaque_flow = True
-                    return
+        if cur.type == _ASSIGNMENT_EXPRESSION:
+            rhs = None
+            children = list(cur.children)
+            for c in children:
+                if not c.is_named:
+                    continue
+                if c.text and c.text.decode("utf-8", errors="replace") == "=":
+                    continue
+                rhs = c
 
-    if node.type == _INIT_DECLARATOR:
-        for c in node.children:
-            if c.is_named and c.type == _IDENTIFIER:
-                continue
-            if c.is_named and c.type == _POINTER_DECLARATOR:
-                for sc in node.children:
-                    if sc.is_named and sc.type == _IDENTIFIER:
-                        name = sc.text.decode("utf-8", errors="replace")
-                        if name in param_set:
-                            approx.has_opaque_flow = True
-                            return
+            if rhs is not None and rhs.type == _IDENTIFIER:
+                name = rhs.text.decode("utf-8", errors="replace")
+                if name in param_set:
+                    lhs = None
+                    for c in children:
+                        if c.is_named and c != rhs:
+                            lhs = c
+                            break
+                    if lhs is not None and lhs.type != _IDENTIFIER:
+                        approx.has_opaque_flow = True
+                        return
 
-    for child in node.children:
-        _scan_opaque_assignments(child, param_set, approx)
+        if cur.type == _INIT_DECLARATOR:
+            for c in cur.children:
+                if c.is_named and c.type == _IDENTIFIER:
+                    continue
+                if c.is_named and c.type == _POINTER_DECLARATOR:
+                    for sc in cur.children:
+                        if sc.is_named and sc.type == _IDENTIFIER:
+                            name = sc.text.decode("utf-8", errors="replace")
+                            if name in param_set:
+                                approx.has_opaque_flow = True
+                                return
+
+        stack.extend(reversed(cur.children))
 
 
 # ---------------------------------------------------------------------------

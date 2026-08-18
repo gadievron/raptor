@@ -1166,7 +1166,7 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
     var_in_if = re.compile(
         r"\bif\s*\(.*?" + var_rel_re.pattern,
     )
-    has_relational = re.compile(r"[<>](?!=)|[<>]=")
+    has_relational = re.compile(r"(?<![<>])[<>](?![<>=])|[<>]=")
     early_exit = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
 
     start = sink_line  # next line after sink (0-indexed; sink_line itself excluded)
