@@ -94,13 +94,17 @@ class TestResolvedIpEscalation:
 
 
 class TestHostReconEscalation:
+    # Live recon state is lane-scoped (mirroring _record's buffer
+    # fan-out): counting happens per registered sandbox context. A
+    # lane-less registration owns the run-global bucket; laned events
+    # count toward their lane's bucket AND the run-global one.
 
     def test_escalates_once_at_threshold(self, reset_proxy, monkeypatch):
         writes = []
         monkeypatch.setattr(proxy_mod, "_stderr_write",
                             lambda msg: writes.append(msg))
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        proxy._live_recon_threshold = 3
+        proxy.register_sandbox(host_recon_threshold=3)
         try:
             proxy._record(_denied_host_event("a.example"))
             assert writes == []
@@ -121,7 +125,7 @@ class TestHostReconEscalation:
         monkeypatch.setattr(proxy_mod, "_stderr_write",
                             lambda msg: writes.append(msg))
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        proxy._live_recon_threshold = 2
+        proxy.register_sandbox(host_recon_threshold=2)
         try:
             proxy._record({"host": "a.example", "result": "would_deny_host"})
             proxy._record({"host": "b.example", "result": "would_deny_host"})
@@ -135,7 +139,7 @@ class TestHostReconEscalation:
         monkeypatch.setattr(proxy_mod, "_stderr_write",
                             lambda msg: writes.append(msg))
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        proxy._live_recon_threshold = 2
+        proxy.register_sandbox(host_recon_threshold=2)
         try:
             for _ in range(10):
                 proxy._record(_denied_host_event("a.example"))
@@ -143,17 +147,90 @@ class TestHostReconEscalation:
         finally:
             proxy.stop()
 
-    def test_register_sandbox_tightens_threshold(self, reset_proxy):
+    def test_register_sandbox_tightens_threshold_within_bucket(
+            self, reset_proxy):
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
         try:
-            assert (proxy._live_recon_threshold
-                    == proxy_mod.DEFAULT_HOST_RECON_THRESHOLD)
             proxy.register_sandbox(host_recon_threshold=2)
-            assert proxy._live_recon_threshold == 2
-            # A looser threshold from a second registration must NOT
-            # weaken the already-tighter setting (min-semantics).
+            assert proxy._live_recon[None]["threshold"] == 2
+            # A looser threshold from a second registration on the
+            # SAME bucket must NOT weaken the already-tighter setting
+            # (min-semantics within the bucket).
             proxy.register_sandbox(host_recon_threshold=10)
-            assert proxy._live_recon_threshold == 2
+            assert proxy._live_recon[None]["threshold"] == 2
+        finally:
+            proxy.stop()
+
+    def test_no_registration_no_live_counting(self, reset_proxy,
+                                              monkeypatch):
+        # Matches the buffer semantics: events outside any register/
+        # unregister window aren't captured live; triage still sees
+        # persisted events post-hoc.
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            for i in range(20):
+                proxy._record(_denied_host_event(f"h{i}.example"))
+            assert writes == []
+        finally:
+            proxy.stop()
+
+    def test_unregister_tears_down_recon_state(self, reset_proxy,
+                                               monkeypatch):
+        # Sequential runs on the same proxy singleton must each start
+        # from a clean distinct-host count — 2+1 hosts across two runs
+        # is NOT recon at threshold 3.
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            token = proxy.register_sandbox(host_recon_threshold=3)
+            proxy._record(_denied_host_event("a.example"))
+            proxy._record(_denied_host_event("b.example"))
+            proxy.unregister_sandbox(token)
+            assert None not in proxy._live_recon
+
+            proxy.register_sandbox(host_recon_threshold=3)
+            proxy._record(_denied_host_event("c.example"))
+            assert writes == [], "counts do not accumulate across runs"
+        finally:
+            proxy.stop()
+
+    def test_refcounted_teardown_survives_sibling_unregister(
+            self, reset_proxy, monkeypatch):
+        # Two registrations share the run-global bucket (per-spawn +
+        # cm-block pattern): the first unregister must not clear the
+        # survivor's state.
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            t1 = proxy.register_sandbox(host_recon_threshold=3)
+            proxy.register_sandbox(host_recon_threshold=3)
+            proxy._record(_denied_host_event("a.example"))
+            proxy._record(_denied_host_event("b.example"))
+            proxy.unregister_sandbox(t1)
+            proxy._record(_denied_host_event("c.example"))
+            assert len(writes) == 1, "surviving registration still counts"
+        finally:
+            proxy.stop()
+
+    def test_unknown_token_unregister_does_not_break_bucket(
+            self, reset_proxy, monkeypatch):
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            proxy.register_sandbox(host_recon_threshold=2)
+            proxy.unregister_sandbox(999999)  # idempotent no-op
+            proxy._record(_denied_host_event("a.example"))
+            proxy._record(_denied_host_event("b.example"))
+            assert len(writes) == 1
         finally:
             proxy.stop()
 
@@ -281,5 +358,64 @@ class TestEscalationKillSwitchParsing:
         try:
             proxy._record(_denied_resolved_ip_event())
             assert writes == []
+        finally:
+            proxy.stop()
+
+
+class TestHostReconLaneIsolation:
+
+    def test_concurrent_lanes_do_not_conflate(self, reset_proxy,
+                                              monkeypatch, tmp_path):
+        # Two concurrent runs each probing a couple of hosts must not
+        # jointly trip a threshold neither reached alone.
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        path_a = str(tmp_path / "a.sock")
+        path_b = str(tmp_path / "b.sock")
+        try:
+            proxy.bind_unix(path_a, label="run-a")
+            proxy.bind_unix(path_b, label="run-b")
+            proxy.register_sandbox(caller_label="run-a", lane_key=path_a,
+                                   host_recon_threshold=3)
+            proxy.register_sandbox(caller_label="run-b", lane_key=path_b,
+                                   host_recon_threshold=3)
+            lane_a = proxy._unix_lanes[path_a].lane_id
+            lane_b = proxy._unix_lanes[path_b].lane_id
+
+            for host in ("a1.example", "a2.example"):
+                proxy._record({"host": host, "result": "denied_host",
+                               "lane_id": lane_a})
+            for host in ("b1.example", "b2.example"):
+                proxy._record({"host": host, "result": "denied_host",
+                               "lane_id": lane_b})
+            assert writes == [], "2+2 across lanes is not 4 in one lane"
+
+            proxy._record({"host": "a3.example", "result": "denied_host",
+                           "lane_id": lane_a})
+            assert len(writes) == 1, "lane A alone crossed its threshold"
+        finally:
+            proxy.stop()
+
+    def test_laned_events_also_count_toward_global_bucket(
+            self, reset_proxy, monkeypatch, tmp_path):
+        # Over-capture direction, mirroring the buffer fan-out: a
+        # lane-less registration sees the whole run.
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        path_a = str(tmp_path / "a.sock")
+        try:
+            proxy.bind_unix(path_a, label="run-a")
+            proxy.register_sandbox(caller_label="global",
+                                   host_recon_threshold=2)
+            lane_a = proxy._unix_lanes[path_a].lane_id
+            proxy._record({"host": "a1.example", "result": "denied_host",
+                           "lane_id": lane_a})
+            proxy._record({"host": "a2.example", "result": "denied_host",
+                           "lane_id": lane_a})
+            assert len(writes) == 1
         finally:
             proxy.stop()
