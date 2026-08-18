@@ -528,6 +528,13 @@ def _cli_main(argv: Optional[list] = None) -> int:
         help="print the full triage report as JSON on stdout "
              "(the report is also written to sandbox-triage.json)",
     )
+    parser.add_argument(
+        "--deep", action="store_true",
+        help="after the rules pass, run the LLM deeper-reasoning pass "
+             "over any non-clean verdict (uses the configured default "
+             "model; writes sandbox-triage-deep.json; advisory only — "
+             "never changes the rules verdict or the exit code)",
+    )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     except SystemExit as exc:
@@ -557,9 +564,29 @@ def _cli_main(argv: Optional[list] = None) -> int:
             # a file inside the run dir — which the sandboxed target
             # may have write access to. Sanitise before a terminal.
             print(f"  ⚠️  {sanitise_for_terminal(caveat)}")
+    if args.deep:
+        if result["verdict"] == VERDICT_CLEAN:
+            print("(clean verdict — deep pass has nothing to assess)")
+        else:
+            from core.sandbox.triage_deep import deep_analyse
+            deep = deep_analyse(target)
+            if deep is None:
+                print("(deep pass unavailable — no LLM configured, or "
+                      "the triage report failed provenance "
+                      "verification; see log)", file=sys.stderr)
+            elif not args.json:
+                print(f"Deep assessment ({deep['model'] or 'LLM'}) — "
+                      f"advisory, rules verdict stands:")
+                for a in deep["assessments"]:
+                    print(f"  - {a['signal_type']}: {a['judgement']} "
+                          f"(confidence {a['confidence']:.2f}) — "
+                          f"{a['rationale']}")
+                if deep.get("overall_note"):
+                    print(f"  note: {deep['overall_note']}")
     # Verdict-reflecting exit codes for scripting/CI gates:
     #   0 clean (or no telemetry), 1 error, 2 usage,
-    #   3 notable, 4 suspicious.
+    #   3 notable, 4 suspicious. --deep never changes the code — the
+    #   deterministic rules verdict is the gate.
     return {VERDICT_CLEAN: 0, VERDICT_NOTABLE: 3,
             VERDICT_SUSPICIOUS: 4}[result["verdict"]]
 
