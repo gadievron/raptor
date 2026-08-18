@@ -1006,6 +1006,73 @@ hook fires:
    libexec/raptor-sandbox-summary --sweep <project_dir>
    ```
 
+### Sandbox triage and live escalation
+
+On every terminal-state transition (complete/fail/cancel/interrupt) the
+lifecycle also runs a rules-based classifier over the run's sandbox
+telemetry and writes `{run_dir}/sandbox-triage.json`: a
+clean / notable / suspicious verdict distinguishing escape / recon /
+credential-theft signatures from ordinary "tool needed something the
+profile didn't allow" denial noise. Pure and offline — no LLM call, no
+network, no cost. The verdict also lands in `.raptor-run.json` under
+`extra.sandbox_triage` for cross-run views.
+
+Signals (definitions shared with the live hooks via
+`core/sandbox/escalation_signatures.py`):
+
+| Signal | Severity | Source |
+|--------|----------|--------|
+| `escape_primitive_denied` | high | audit-mode syscall denials matching the seccomp block sets (ptrace, bpf, keyctl, io_uring_*, ...) |
+| `hostile_syscall_argument` | high | audit-mode socket()/ioctl() denials whose decoded arguments are themselves primitives (TIOCSTI/TIOCCONS/TIOCSCTTY tty hijack, AF_PACKET/SOCK_RAW) — plain AF_UNIX/AF_NETLINK denials stay noise |
+| `telemetry_tampering` | high | a triage input failed provenance verification (see below) |
+| `resolved_ip_screened` | high | proxy gate 2: CONNECT resolved into a blocked IP range |
+| `credential_path_touch` | high | denial paths matching credential signatures (boundary-aware, not bare substring) |
+| `host_recon_pattern` | medium | distinct denied hosts ≥ threshold (default 5; per-profile overrides in `core/sandbox/profiles.py`) |
+| `volume_anomaly` | medium | denial volume near the per-run cap, or audit budget markers present |
+| `seccomp_denied_unattributed` | low | non-audit run: a seccomp denial happened, syscall identity unknown |
+
+The same HIGH-severity signals also escalate LIVE to stderr the moment
+they fire (tracer: escape-primitive syscalls; seatbelt: credential-path
+touches; proxy: blocked resolved IPs and per-sandbox-context host-recon
+threshold crossings) — escalate-only, no enforcement change, no
+auto-kill. Attacker-influenced strings in banners are sanitised and
+length-bounded; banner volume is capped. Set
+`RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED=1` to silence the live banners
+(the post-hoc `sandbox-triage.json` is unaffected).
+
+**Telemetry provenance.** The run dir is writable by the sandboxed
+target while it runs, so every triage input it could forge —
+`proxy-events.jsonl` lines, `sandbox-summary.json`,
+`sandbox-audit-degraded.json`, and `sandbox-triage.json` itself — is
+stamped at write time with an HMAC token
+(`core/sandbox/telemetry_mac.py`; key at
+`$XDG_DATA_HOME/raptor/telemetry-mac.key`, outside every
+sandbox-readable tree, lazily created, deliberately separate from
+SAGE's rowmac key). Triage verifies before anything drives a verdict:
+unstamped legacy inputs are accepted with an explicit low-confidence
+caveat; content failing verification is excluded and fires the
+`telemetry_tampering` HIGH signal. Per-input state is recorded under
+`inputs.integrity` in the report. The raw denials stream is covered
+separately by the evidence-fd machinery (`core/sandbox/evidence.py`);
+`.raptor-run.json` remains outside this scheme.
+
+Re-run triage by hand (stranded runs, scripted gates), optionally with
+the LLM deeper-reasoning pass:
+
+```bash
+libexec/raptor-sandbox-triage <run_dir> [--json] [--deep]
+# exit codes: 0 clean/no telemetry, 1 error, 2 usage, 3 notable, 4 suspicious
+```
+
+`--deep` sends the (provenance-verified) triage report plus up to 20
+denial command lines — all in untrusted-content envelopes — to the
+configured default LLM, which judges each signal as attack attempt vs
+tool noise with a rationale. Advisory only: output goes to
+`sandbox-triage-deep.json`, the rules verdict and exit code never
+change, model output is grounded (invented signal types dropped),
+sanitised, and length-capped, and a tampered triage report is refused
+before any LLM call. Requires a configured LLM; skipped otherwise.
+
 ---
 
 ## `SandboxSetupError`

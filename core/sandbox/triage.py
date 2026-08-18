@@ -7,11 +7,13 @@ signature pattern resembling an escape/recon/credential-theft attempt fired,
 as distinct from ordinary "tool needed something the profile didn't allow"
 denial noise.
 
-Pure, rules-based, offline: no LLM call, no network, no cost. Opt-in,
-manually invoked (see libexec/raptor-sandbox-triage) — NOT wired into
-core/run/metadata.py's complete_run/fail_run/cancel_run lifecycle. This is
-the cheap deterministic pre-filter a future LLM-based deeper-reasoning pass
-would consume, not a replacement for one.
+Pure, rules-based, offline: no LLM call, no network, no cost — cheap
+enough that core/run/metadata.py runs it unconditionally on every
+terminal-state transition (complete/fail/cancel/interrupt), right after
+the sandbox-summary finalise it reads from. libexec/raptor-sandbox-triage
+re-runs it by hand (stranded runs, post-hoc re-classification after
+editing telemetry). This is the cheap deterministic pre-filter a future
+LLM-based deeper-reasoning pass would consume, not a replacement for one.
 
 Known limitation: socket()/ioctl() denials collapse to a generic
 syscall="socket"/"ioctl" under audit tracing (see
@@ -343,6 +345,11 @@ def _cli_main(argv: Optional[list] = None) -> int:
                     "telemetry for escape/recon/credential-theft signatures.",
     )
     parser.add_argument("run_dir", help="run directory to triage")
+    parser.add_argument(
+        "--json", action="store_true",
+        help="print the full triage report as JSON on stdout "
+             "(the report is also written to sandbox-triage.json)",
+    )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     except SystemExit as exc:
@@ -358,17 +365,25 @@ def _cli_main(argv: Optional[list] = None) -> int:
         print(f"(no sandbox telemetry found for {target})")
         return 0
 
-    print(f"Verdict: {result['verdict'].title()}  "
-          f"({len(result['signals'])} signal(s)) -> {target / TRIAGE_FILE}")
-    for signal in result["signals"]:
-        print(f"  - {signal['type']} [{signal['severity']}] "
-              f"count={signal['count']}")
-    for caveat in result.get("caveats", []):
-        # Caveat text embeds the audit-degraded reason, read from a
-        # file inside the run dir — which the sandboxed target may
-        # have write access to. Sanitise before it hits a terminal.
-        print(f"  ⚠️  {sanitise_for_terminal(caveat)}")
-    return 0
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=True))
+    else:
+        print(f"Verdict: {result['verdict'].title()}  "
+              f"({len(result['signals'])} signal(s)) -> "
+              f"{target / TRIAGE_FILE}")
+        for signal in result["signals"]:
+            print(f"  - {signal['type']} [{signal['severity']}] "
+                  f"count={signal['count']}")
+        for caveat in result.get("caveats", []):
+            # Caveat text embeds the audit-degraded reason, read from
+            # a file inside the run dir — which the sandboxed target
+            # may have write access to. Sanitise before a terminal.
+            print(f"  ⚠️  {sanitise_for_terminal(caveat)}")
+    # Verdict-reflecting exit codes for scripting/CI gates:
+    #   0 clean (or no telemetry), 1 error, 2 usage,
+    #   3 notable, 4 suspicious.
+    return {VERDICT_CLEAN: 0, VERDICT_NOTABLE: 3,
+            VERDICT_SUSPICIOUS: 4}[result["verdict"]]
 
 
 if __name__ == "__main__":

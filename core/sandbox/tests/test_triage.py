@@ -1,6 +1,7 @@
 """Tests for core.sandbox.triage — rules-based sandbox-telemetry triage."""
 
 import json
+import os
 
 import pytest
 
@@ -344,8 +345,10 @@ class TestAuditDegradedCaveat:
         _write_audit_degraded(tmp_path)
         result = triage_mod.triage_run(tmp_path)
         assert result["audit_degraded"] is True
-        assert len(result["caveats"]) == 1
-        assert "syscall-level attribution" in result["caveats"][0]
+        # Hand-written (unstamped) fixtures also earn the legacy-
+        # provenance caveat alongside the degraded-attribution one.
+        assert any("syscall-level attribution" in c
+                   for c in result["caveats"])
 
     def test_no_caveat_when_degraded_file_absent(self, tmp_path):
         _write_summary(tmp_path, [
@@ -353,7 +356,8 @@ class TestAuditDegradedCaveat:
         ])
         result = triage_mod.triage_run(tmp_path)
         assert result["audit_degraded"] is False
-        assert result["caveats"] == []
+        assert not any("syscall-level attribution" in c
+                       for c in result["caveats"])
 
     def test_degraded_caveat_coexists_with_suspicious_verdict(self, tmp_path):
         _write_proxy_events(tmp_path, [
@@ -436,6 +440,27 @@ class TestCliMain:
         assert rc == 1
         err = capsys.readouterr().err
         assert "not a directory" in err
+
+    def test_cli_exit_codes_reflect_verdict(self, tmp_path, capsys):
+        # notable -> 3 (scriptable CI gate; suspicious -> 4 is pinned
+        # by TestCliOutputSanitisation).
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "profile": "full"},
+        ])
+        rc = triage_mod._cli_main([str(tmp_path)])
+        assert rc == 3
+        assert "Notable" in capsys.readouterr().out
+
+    def test_cli_json_output(self, tmp_path, capsys):
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
+        ])
+        rc = triage_mod._cli_main([str(tmp_path), "--json"])
+        assert rc == 4
+        report = json.loads(capsys.readouterr().out)
+        assert report["verdict"] == "suspicious"
+        assert any(s["type"] == "escape_primitive_denied"
+                   for s in report["signals"])
 
 
 class TestEndToEndWithRealSummaryApi:
@@ -622,7 +647,277 @@ class TestCliOutputSanitisation:
         ])
         _write_audit_degraded(tmp_path, reason="evil\x1b]0;pwned\x07reason")
         rc = triage_mod._cli_main([str(tmp_path)])
-        assert rc == 0
+        assert rc == 4, "ptrace denial -> suspicious -> exit 4"
         out = capsys.readouterr().out
         assert "\x1b" not in out
         assert "\\x1b" in out
+
+
+class TestVerdictSurfacedInRunStatus:
+    @pytest.fixture(autouse=True)
+    def _isolate_active_run(self):
+        summary_mod.set_active_run_dir(None)
+        yield
+        summary_mod.set_active_run_dir(None)
+
+    def _run_with_denial(self, tmp_path, name):
+        from core.run.metadata import start_run
+        from core.sandbox.observe import _check_blocked
+
+        run_dir = tmp_path / name
+        start_run(run_dir, command="agentic")
+        _check_blocked(
+            stderr="cannot create '/root/.ssh/id_rsa': Permission denied\n",
+            cmd_display="cat /root/.ssh/id_rsa",
+            returncode=1,
+            sandbox_info={},
+            landlock_engaged=True,
+        )
+        return run_dir
+
+    @staticmethod
+    def _status(run_dir):
+        return json.loads((run_dir / ".raptor-run.json").read_text())
+
+    @classmethod
+    def _extra(cls, run_dir):
+        return cls._status(run_dir).get("extra", {})
+
+    def test_complete_run_surfaces_verdict(self, tmp_path):
+        from core.run.metadata import complete_run
+
+        run_dir = self._run_with_denial(tmp_path, "r-complete")
+        complete_run(run_dir)
+        assert self._extra(run_dir)["sandbox_triage"] == "suspicious"
+
+    def test_caller_extra_wins_on_conflict(self, tmp_path):
+        from core.run.metadata import complete_run
+
+        run_dir = self._run_with_denial(tmp_path, "r-conflict")
+        complete_run(run_dir, extra={"sandbox_triage": "operator-override"})
+        assert (self._extra(run_dir)["sandbox_triage"]
+                == "operator-override")
+
+    def test_clean_run_has_no_verdict_key(self, tmp_path):
+        from core.run.metadata import complete_run, start_run
+
+        run_dir = tmp_path / "r-clean"
+        start_run(run_dir, command="scan")
+        complete_run(run_dir)
+        assert "sandbox_triage" not in self._extra(run_dir)
+
+    def test_interrupt_run_writes_triage_and_verdict(self, tmp_path):
+        from core.run.metadata import interrupt_run
+
+        run_dir = self._run_with_denial(tmp_path, "r-interrupt")
+        interrupt_run(run_dir, reason="supervisor drain")
+        assert (run_dir / triage_mod.TRIAGE_FILE).exists()
+        status = self._status(run_dir)
+        assert status["status"] == "interrupted"
+        assert status["extra"]["sandbox_triage"] == "suspicious"
+
+
+class TestHostileSyscallArguments:
+    def test_tiocsti_and_raw_socket_fire_high(self, tmp_path):
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "ioctl",
+             "args": [0, 0x5412, 0, 0, 0, 0], "profile": "full"},
+            {"type": "seccomp", "syscall": "socket",
+             "args": [17, 3, 768, 0, 0, 0], "profile": "full"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "hostile_syscall_argument")
+        assert signal["severity"] == "high"
+        assert signal["evidence"] == [
+            "ioctl(TIOCSTI)", "socket(AF_PACKET)"]
+        assert result["verdict"] == triage_mod.VERDICT_SUSPICIOUS
+
+    def test_af_unix_noise_does_not_fire(self, tmp_path):
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "socket",
+             "args": [1, 1, 0, 0, 0, 0], "profile": "full"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert not any(s["type"] == "hostile_syscall_argument"
+                       for s in result["signals"])
+
+    def test_record_without_args_tolerated(self, tmp_path):
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "ioctl", "profile": "full"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert not any(s["type"] == "hostile_syscall_argument"
+                       for s in result["signals"])
+
+
+class TestTelemetryProvenance:
+    """The run dir is target-writable during the run — triage verifies
+    every input's provenance token before it may drive a verdict."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        yield
+
+    @staticmethod
+    def _stamped_event(event):
+        from core.sandbox import telemetry_mac
+        return {**event,
+                "mac": telemetry_mac.mint(
+                    telemetry_mac.proxy_event_fields(event))}
+
+    def _denied_host(self, host):
+        return {"t": 1.0, "host": host, "port": 443,
+                "result": "denied_host", "reason": "not in allowlist",
+                "resolved_ip": None}
+
+    def test_stamped_stream_verifies_clean(self, tmp_path):
+        _write_proxy_events(tmp_path, [
+            self._stamped_event(self._denied_host(f"h{i}.example"))
+            for i in range(5)
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["proxy_events"] == "verified"
+        assert any(s["type"] == "host_recon_pattern"
+                   for s in result["signals"])
+        assert not any(s["type"] == "telemetry_tampering"
+                       for s in result["signals"])
+
+    def test_forged_line_in_stamped_stream_rejected_and_flagged(
+            self, tmp_path):
+        events = [self._stamped_event(self._denied_host(f"h{i}.example"))
+                  for i in range(4)]
+        # Target-appended line: no token. It must not be able to tip
+        # host_recon over its threshold of 5 — and its presence in an
+        # otherwise-stamped stream is itself the HIGH signal.
+        events.append(self._denied_host("attacker-forged.example"))
+        _write_proxy_events(tmp_path, events)
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["proxy_events"] == "tampered"
+        assert not any(s["type"] == "host_recon_pattern"
+                       for s in result["signals"])
+        tamper = next(s for s in result["signals"]
+                      if s["type"] == "telemetry_tampering")
+        assert tamper["severity"] == "high"
+        assert result["verdict"] == triage_mod.VERDICT_SUSPICIOUS
+
+    def test_unstamped_stream_is_legacy_with_caveat(self, tmp_path):
+        _write_proxy_events(tmp_path, [self._denied_host("a.example")])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["proxy_events"] == "legacy"
+        assert not any(s["type"] == "telemetry_tampering"
+                       for s in result["signals"])
+        assert any("provenance token" in c for c in result["caveats"])
+
+    def test_planted_summary_dropped_and_flagged(self, tmp_path):
+        # A pre-planted summary carrying a bogus token: its denials
+        # must not reach the signal checks.
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
+        ])
+        import json as _json
+        summary_path = tmp_path / summary_mod.SUMMARY_FILE
+        payload = _json.loads(summary_path.read_text())
+        payload["mac"] = "0" * 64
+        summary_path.write_text(_json.dumps(payload))
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["sandbox_summary"] == "tampered"
+        assert not any(s["type"] == "escape_primitive_denied"
+                       for s in result["signals"])
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in result["signals"])
+
+    def test_real_summary_writer_roundtrips_verified(self, tmp_path):
+        summary_mod.set_active_run_dir(tmp_path)
+        try:
+            summary_mod.record_denial(
+                "cat /root/.ssh/id_rsa", 1, "write",
+                path="/root/.ssh/id_rsa")
+            summary_mod.summarize_and_write(tmp_path)
+        finally:
+            summary_mod.set_active_run_dir(None)
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["sandbox_summary"] == "verified"
+        assert result["verdict"] == triage_mod.VERDICT_SUSPICIOUS
+        assert not any("provenance token" in c for c in result["caveats"])
+
+    def test_forged_audit_degraded_marker_ignored(self, tmp_path):
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
+        ])
+        import json as _json
+        marker = {"audit_requested": True, "audit_engaged": False,
+                  "degraded": True, "reason": "planted doubt",
+                  "instructions": "", "mac": "0" * 64,
+                  "generated_at": "2026-07-23T00:00:00Z"}
+        (tmp_path / summary_mod.AUDIT_DEGRADED_FILE).write_text(
+            _json.dumps(marker))
+        result = triage_mod.triage_run(tmp_path)
+        assert result["audit_degraded"] is False
+        assert not any("planted doubt" in c for c in result["caveats"])
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in result["signals"])
+
+    def test_report_self_stamp_roundtrips(self, tmp_path):
+        _write_proxy_events(tmp_path, [self._denied_host("a.example")])
+        triage_mod.triage_run(tmp_path)
+        import json as _json
+        on_disk = _json.loads(
+            (tmp_path / triage_mod.TRIAGE_FILE).read_text())
+        assert triage_mod.verify_triage_report(on_disk) == "verified"
+        on_disk["verdict"] = "suspicious"  # launder a verdict upward/downward
+        assert triage_mod.verify_triage_report(on_disk) == "tampered"
+        del on_disk["mac"]
+        assert triage_mod.verify_triage_report(on_disk) == "legacy"
+
+
+class TestHostileArtifactReads:
+    """The run dir is target-writable: triage's readers must survive
+    planted FIFOs (lifecycle hang), symlinks (boundary escape), and
+    oversized files (memory lever) — same discipline as the writers."""
+
+    def test_planted_fifo_does_not_hang_lifecycle(self, tmp_path):
+        os.mkfifo(tmp_path / summary_mod.SUMMARY_FILE)
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "a.example", "port": 443,
+             "result": "denied_host", "reason": "x", "resolved_ip": None},
+        ])
+        # A plain open() would block forever on a writerless FIFO —
+        # this call returning at all is the assertion; a wall-clock
+        # guard would only turn a hang into a slow failure.
+        result = triage_mod.triage_run(tmp_path)
+        assert result is not None
+        assert result["inputs"]["sandbox_summary_present"] is False
+
+    def test_planted_symlink_not_followed(self, tmp_path):
+        secret = tmp_path / "outside" / "secret.json"
+        secret.parent.mkdir()
+        secret.write_text('{"denials": [], "total_denials": 0}')
+        os.symlink(secret, tmp_path / summary_mod.SUMMARY_FILE)
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "a.example", "port": 443,
+             "result": "denied_host", "reason": "x", "resolved_ip": None},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["sandbox_summary_present"] is False
+
+    def test_oversized_planted_file_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(triage_mod, "_MAX_INPUT_BYTES", 4096)
+        (tmp_path / summary_mod.SUMMARY_FILE).write_text(
+            '{"denials": [' + '"x",' * 5000 + '"x"]}')
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "a.example", "port": 443,
+             "result": "denied_host", "reason": "x", "resolved_ip": None},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["sandbox_summary_present"] is False
+
+    def test_non_dict_json_refused(self, tmp_path):
+        (tmp_path / summary_mod.SUMMARY_FILE).write_text('["not", "a", "dict"]')
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "a.example", "port": 443,
+             "result": "denied_host", "reason": "x", "resolved_ip": None},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["sandbox_summary_present"] is False

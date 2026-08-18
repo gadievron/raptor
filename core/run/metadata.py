@@ -694,10 +694,12 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
             set_active_run_dir(None)
 
 
-def _finalize_sandbox_triage(output_dir: Path) -> None:
+def _finalize_sandbox_triage(output_dir: Path) -> str | None:
     """Best-effort: classify this run's sandbox telemetry
     (sandbox-summary.json / proxy-events.jsonl) into a clean / notable /
-    suspicious verdict and write sandbox-triage.json.
+    suspicious verdict and write sandbox-triage.json. Returns the
+    verdict string (or None: no telemetry / triage failed) so the
+    terminal-state transitions can surface it in .raptor-run.json.
 
     Must run AFTER _finalize_sandbox_summary — triage reads
     sandbox-summary.json, which that call just wrote. Rules-based, no LLM
@@ -724,11 +726,13 @@ def _finalize_sandbox_triage(output_dir: Path) -> None:
                 result["verdict"], len(result["signals"]),
                 output_dir / TRIAGE_FILE,
             )
+        return None if result is None else result["verdict"]
     except Exception:  # noqa: BLE001 — never fail lifecycle on triage error
         log.debug(
             "_finalize_sandbox_triage: triage_run failed",
             exc_info=True,
         )
+        return None
 
 
 # Sandbox summary + triage are finalized BEFORE the status update in every
@@ -758,7 +762,14 @@ def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
     Callers still win on conflict: an explicitly-passed key is never clobbered.
     """
     _finalize_sandbox_summary(output_dir)
-    _finalize_sandbox_triage(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        # Surface the verdict in .raptor-run.json so cross-run views
+        # (/project status, /review) can flag non-clean runs without
+        # opening every sandbox-triage.json. Callers win on conflict,
+        # matching the extra-merge contract above.
+        extra = dict(extra or {})
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_COMPLETED, extra, manifest=manifest)
     # Materialise the LLM read-coverage record from the plugin's .reads-manifest
     # FIRST, so the snapshot below imports it alongside the scanner records.
@@ -878,14 +889,19 @@ def fail_run(output_dir: Path, error: str | None = None,
     if error:
         extra["error"] = error
     _finalize_sandbox_summary(output_dir)
-    _finalize_sandbox_triage(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_FAILED, extra, record_timing=record_timing)
 
 
 def cancel_run(output_dir: Path, extra: dict[str, Any] | None = None) -> None:
     """Update .raptor-run.json to status=cancelled."""
     _finalize_sandbox_summary(output_dir)
-    _finalize_sandbox_triage(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        extra = dict(extra or {})
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_CANCELLED, extra)
 
 
@@ -903,6 +919,9 @@ def interrupt_run(output_dir: Path, reason: str | None = None,
     if reason:
         extra["interrupt_reason"] = reason
     _finalize_sandbox_summary(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_INTERRUPTED, extra)
 
 
