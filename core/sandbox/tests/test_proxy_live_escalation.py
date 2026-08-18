@@ -16,6 +16,10 @@ test_proxy_perf.py.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from core.sandbox import proxy as proxy_mod
@@ -26,6 +30,20 @@ def reset_proxy():
     proxy_mod._reset_for_tests()
     yield
     proxy_mod._reset_for_tests()
+
+
+@pytest.fixture
+def short_sock_dir():
+    """A directory short enough that AF_UNIX socket paths fit
+    sun_path (~104 bytes on macOS, 108 on Linux). pytest's
+    ``tmp_path`` on CI runners can exceed that once a socket name is
+    appended, making ``bind()`` fail with "AF_UNIX path too long" —
+    derive socket paths from this fixture instead."""
+    d = tempfile.mkdtemp(prefix="raptor-sk-", dir="/tmp")
+    try:
+        yield Path(d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _denied_resolved_ip_event(resolved_ip="169.254.169.254", host="evil.example"):
@@ -365,15 +383,16 @@ class TestEscalationKillSwitchParsing:
 class TestHostReconLaneIsolation:
 
     def test_concurrent_lanes_do_not_conflate(self, reset_proxy,
-                                              monkeypatch, tmp_path):
+                                              monkeypatch,
+                                              short_sock_dir):
         # Two concurrent runs each probing a couple of hosts must not
         # jointly trip a threshold neither reached alone.
         writes = []
         monkeypatch.setattr(proxy_mod, "_stderr_write",
                             lambda msg: writes.append(msg))
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        path_a = str(tmp_path / "a.sock")
-        path_b = str(tmp_path / "b.sock")
+        path_a = str(short_sock_dir / "a.sock")
+        path_b = str(short_sock_dir / "b.sock")
         try:
             proxy.bind_unix(path_a, label="run-a")
             proxy.bind_unix(path_b, label="run-b")
@@ -399,14 +418,14 @@ class TestHostReconLaneIsolation:
             proxy.stop()
 
     def test_laned_events_also_count_toward_global_bucket(
-            self, reset_proxy, monkeypatch, tmp_path):
+            self, reset_proxy, monkeypatch, short_sock_dir):
         # Over-capture direction, mirroring the buffer fan-out: a
         # lane-less registration sees the whole run.
         writes = []
         monkeypatch.setattr(proxy_mod, "_stderr_write",
                             lambda msg: writes.append(msg))
         proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
-        path_a = str(tmp_path / "a.sock")
+        path_a = str(short_sock_dir / "a.sock")
         try:
             proxy.bind_unix(path_a, label="run-a")
             proxy.register_sandbox(caller_label="global",
