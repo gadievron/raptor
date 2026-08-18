@@ -21,6 +21,15 @@ typer==0.25.1
 # transitively; none clash with raptor's existing pins.
 claude-agent-sdk==0.1.71
 
+# claude-agent-sdk 0.1.71 declares an uncapped `mcp` dependency, but its
+# create_sdk_mcp_server() decorates the low-level
+# mcp.server.Server.list_tools() / call_tool() API, which mcp 2.0.0
+# removed — a fresh resolve pulling 2.x fails with AttributeError as soon
+# as an in-process MCP server is assembled. Pin the newest compatible 1.x
+# (1.29.0 still ships the decorator API). Unpin path: claude-agent-sdk
+# >=0.2 declares mcp>=1.23,<3 and supports the 2.x server API.
+mcp==1.29.0
+
 # Structured output (works with both OpenAI and Anthropic SDKs).
 # 1.15.1+ moves ``diskcache`` from an unconditional runtime dep
 # to the ``[diskcache]`` extra — this bump drops diskcache from
