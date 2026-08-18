@@ -36,6 +36,7 @@ from core.atomic_fs import write_text_atomically
 from core.sandbox.escalation_signatures import (
     DEFAULT_HOST_RECON_THRESHOLD,
     ESCAPE_PRIMITIVE_SYSCALLS,
+    hostile_arg_label,
     is_credential_path,
 )
 from core.sandbox.profiles import host_recon_threshold_for_profile
@@ -148,6 +149,7 @@ def triage_run(run_dir: Path, *,
 
     signals: List[Dict[str, Any]] = []
     signals += _check_escape_primitive(enforcement_denials)
+    signals += _check_hostile_syscall_args(enforcement_denials)
     signals += _check_seccomp_unattributed(enforcement_denials)
     signals += _check_resolved_ip_screened(proxy_events)
     signals += _check_host_recon(proxy_events, host_recon_threshold)
@@ -195,6 +197,30 @@ def _check_escape_primitive(denials: List[dict]) -> List[dict]:
         "severity": SEVERITY_HIGH,
         "count": len(hits),
         "evidence": _cap_evidence(sorted({h["syscall"] for h in hits})),
+    }]
+
+
+def _check_hostile_syscall_args(denials: List[dict]) -> List[dict]:
+    # socket()/ioctl() are argument-filtered by seccomp; the generic
+    # syscall name alone cannot distinguish a TIOCSTI tty-injection or
+    # SOCK_RAW attempt from ordinary AF_UNIX noise. Decode from the
+    # record's raw `args` (present on every audit-mode tracer record),
+    # so the check works on both enriched and pre-enrichment records.
+    # Audit-mode only, like escape_primitive_denied: plain enforcement
+    # ERRNOs these in-kernel with no argument capture.
+    labels = []
+    for d in denials:
+        if d.get("syscall") in ("socket", "ioctl"):
+            label = hostile_arg_label(d["syscall"], d.get("args") or [])
+            if label is not None:
+                labels.append(label)
+    if not labels:
+        return []
+    return [{
+        "type": "hostile_syscall_argument",
+        "severity": SEVERITY_HIGH,
+        "count": len(labels),
+        "evidence": _cap_evidence(sorted(set(labels))),
     }]
 
 
