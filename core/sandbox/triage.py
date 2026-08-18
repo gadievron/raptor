@@ -31,6 +31,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.atomic_fs import write_text_atomically
+from core.sandbox.escalation_signatures import (
+    DEFAULT_HOST_RECON_THRESHOLD,
+    ESCAPE_PRIMITIVE_SYSCALLS,
+    is_credential_path,
+)
 from core.sandbox.profiles import host_recon_threshold_for_profile
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.sandbox.proxy import PROXY_EVENTS_FILENAME
@@ -42,16 +47,6 @@ from core.sandbox.summary import (
 
 TRIAGE_FILE = "sandbox-triage.json"
 
-# Known escape-primitive syscalls, verified against
-# core/sandbox/seccomp.py's _SECCOMP_BLOCK_ALWAYS + _SECCOMP_BLOCK_UNLESS_DEBUG.
-_ESCAPE_PRIMITIVE_SYSCALLS = frozenset({
-    "keyctl", "add_key", "request_key", "bpf", "userfaultfd",
-    "perf_event_open", "io_uring_setup", "io_uring_enter",
-    "io_uring_register", "pidfd_getfd", "kcmp",
-    "open_by_handle_at", "name_to_handle_at",
-    "ptrace", "process_vm_readv", "process_vm_writev",
-})
-
 # Control-plane record types written into the same denials stream by
 # core/sandbox/audit_budget.py — not enforcement denials, must be excluded
 # from the enforcement-oriented signal checks below.
@@ -59,16 +54,6 @@ _BUDGET_MARKER_TYPES = frozenset({
     "pid_budget_exceeded", "category_budget_exceeded",
     "category_budget_exceeded_sampling", "audit_summary",
 })
-
-# Credential-looking path fragments (case-sensitive substring match).
-_CREDENTIAL_PATH_PATTERNS = (
-    ".ssh", "id_rsa", "id_ed25519", ".aws/credentials", ".aws/config",
-    ".netrc", ".git-credentials", "/etc/shadow", "/etc/gshadow",
-    ".config/raptor", ".npmrc", ".pypirc", ".docker/config.json",
-    ".kube/config", ".gnupg", "credentials.json", ".env",
-)
-
-DEFAULT_HOST_RECON_THRESHOLD = 5
 
 VERDICT_CLEAN = "clean"
 VERDICT_NOTABLE = "notable"
@@ -200,7 +185,7 @@ def triage_run(run_dir: Path, *,
 
 def _check_escape_primitive(denials: List[dict]) -> List[dict]:
     hits = [d for d in denials
-            if d.get("syscall") in _ESCAPE_PRIMITIVE_SYSCALLS]
+            if d.get("syscall") in ESCAPE_PRIMITIVE_SYSCALLS]
     if not hits:
         return []
     return [{
@@ -268,7 +253,7 @@ def _check_credential_path_touch(denials: List[dict]) -> List[dict]:
         path = d.get("path")
         if not path:
             continue
-        if any(pattern in path for pattern in _CREDENTIAL_PATH_PATTERNS):
+        if is_credential_path(path):
             hits.append(path)
     if not hits:
         return []
