@@ -563,3 +563,66 @@ class TestLifecycleIntegration:
         # Summary still wrote fine; triage failed silently.
         assert (run_dir / summary_mod.SUMMARY_FILE).exists()
         assert not (run_dir / triage_mod.TRIAGE_FILE).exists()
+
+
+class TestEvidenceBounds:
+    """Evidence values are attacker-controlled — bound list size and
+    item length so a hostile target can't bloat sandbox-triage.json or
+    stuff content into a report a human or LLM pass later reads."""
+
+    def _events_for_hosts(self, hosts):
+        return [
+            {"t": float(i), "host": h, "port": 443, "result": "denied_host",
+             "reason": "host not in allowlist", "resolved_ip": None}
+            for i, h in enumerate(hosts)
+        ]
+
+    def test_host_recon_evidence_list_capped(self, tmp_path):
+        n = triage_mod._MAX_EVIDENCE_ITEMS + 100
+        _write_proxy_events(
+            tmp_path, self._events_for_hosts([f"h{i:04d}.example"
+                                              for i in range(n)]))
+        result = triage_mod.triage_run(tmp_path)
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "host_recon_pattern")
+        # True count preserved; illustrative list capped with an
+        # explicit elision marker (never masquerades as complete).
+        assert signal["count"] == n
+        assert len(signal["evidence"]) == triage_mod._MAX_EVIDENCE_ITEMS + 1
+        assert signal["evidence"][-1] == "...[+100 more]"
+
+    def test_oversized_evidence_item_truncated(self, tmp_path):
+        long_path = "/home/x/.ssh/" + "A" * 5000
+        _write_summary(tmp_path, [
+            {"type": "landlock", "path": long_path, "profile": "full"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "credential_path_touch")
+        item = signal["evidence"][0]
+        assert len(item) < triage_mod._MAX_EVIDENCE_ITEM_LEN + 32
+        assert item.endswith("chars]"), "explicit elision marker"
+
+    def test_small_evidence_untouched(self, tmp_path):
+        _write_proxy_events(tmp_path, self._events_for_hosts(
+            ["a.com", "b.com", "c.com", "d.com", "e.com"]))
+        result = triage_mod.triage_run(tmp_path)
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "host_recon_pattern")
+        assert signal["evidence"] == [
+            "a.com", "b.com", "c.com", "d.com", "e.com"]
+
+
+class TestCliOutputSanitisation:
+    def test_caveat_with_control_chars_escaped(self, tmp_path, capsys):
+        # The audit-degraded reason is read from a file inside the run
+        # dir, which the sandboxed target may have write access to.
+        _write_summary(tmp_path, [
+            {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
+        ])
+        _write_audit_degraded(tmp_path, reason="evil\x1b]0;pwned\x07reason")
+        rc = triage_mod._cli_main([str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "\\x1b" in out

@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 
 from core.atomic_fs import write_text_atomically
 from core.sandbox.profiles import host_recon_threshold_for_profile
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.sandbox.proxy import PROXY_EVENTS_FILENAME
 from core.sandbox.summary import (
     AUDIT_DEGRADED_FILE,
@@ -80,6 +81,29 @@ SEVERITY_LOW = "low"
 # Fraction of MAX_DENIALS_PER_RUN that counts as "near the cap" for
 # volume_anomaly's cap-proximity check.
 _VOLUME_ANOMALY_CAP_FRACTION = 0.9
+
+# Evidence bounds. Evidence values (hostnames, paths) are attacker-
+# controlled: a hostile target can mint thousands of distinct denied
+# hosts, each an arbitrarily long string, to bloat sandbox-triage.json
+# or to stuff content into a report a human or LLM pass later reads.
+# Signals keep the true `count`; only the illustrative evidence list
+# is capped, with an explicit elision marker so a capped list never
+# masquerades as complete.
+_MAX_EVIDENCE_ITEMS = 32
+_MAX_EVIDENCE_ITEM_LEN = 512
+
+
+def _cap_evidence(items: List[str]) -> List[str]:
+    capped = [
+        item if len(item) <= _MAX_EVIDENCE_ITEM_LEN
+        else item[:_MAX_EVIDENCE_ITEM_LEN]
+        + f"...[+{len(item) - _MAX_EVIDENCE_ITEM_LEN} chars]"
+        for item in items
+    ]
+    if len(capped) > _MAX_EVIDENCE_ITEMS:
+        dropped = len(capped) - _MAX_EVIDENCE_ITEMS
+        capped = capped[:_MAX_EVIDENCE_ITEMS] + [f"...[+{dropped} more]"]
+    return capped
 
 
 def triage_run(run_dir: Path, *,
@@ -183,7 +207,7 @@ def _check_escape_primitive(denials: List[dict]) -> List[dict]:
         "type": "escape_primitive_denied",
         "severity": SEVERITY_HIGH,
         "count": len(hits),
-        "evidence": sorted({h["syscall"] for h in hits}),
+        "evidence": _cap_evidence(sorted({h["syscall"] for h in hits})),
     }]
 
 
@@ -219,8 +243,8 @@ def _check_resolved_ip_screened(proxy_events: List[dict]) -> List[dict]:
         "type": "resolved_ip_screened",
         "severity": SEVERITY_HIGH,
         "count": len(hits),
-        "evidence": sorted({e["resolved_ip"] for e in hits
-                             if e.get("resolved_ip")}),
+        "evidence": _cap_evidence(sorted({e["resolved_ip"] for e in hits
+                                          if e.get("resolved_ip")})),
     }]
 
 
@@ -234,7 +258,7 @@ def _check_host_recon(proxy_events: List[dict], threshold: int) -> List[dict]:
         "type": "host_recon_pattern",
         "severity": SEVERITY_MEDIUM,
         "count": len(hosts),
-        "evidence": sorted(hosts),
+        "evidence": _cap_evidence(sorted(hosts)),
     }]
 
 
@@ -252,7 +276,7 @@ def _check_credential_path_touch(denials: List[dict]) -> List[dict]:
         "type": "credential_path_touch",
         "severity": SEVERITY_HIGH,
         "count": len(hits),
-        "evidence": sorted(set(hits)),
+        "evidence": _cap_evidence(sorted(set(hits))),
     }]
 
 
@@ -355,7 +379,10 @@ def _cli_main(argv: Optional[list] = None) -> int:
         print(f"  - {signal['type']} [{signal['severity']}] "
               f"count={signal['count']}")
     for caveat in result.get("caveats", []):
-        print(f"  ⚠️  {caveat}")
+        # Caveat text embeds the audit-degraded reason, read from a
+        # file inside the run dir — which the sandboxed target may
+        # have write access to. Sanitise before it hits a terminal.
+        print(f"  ⚠️  {sanitise_for_terminal(caveat)}")
     return 0
 
 

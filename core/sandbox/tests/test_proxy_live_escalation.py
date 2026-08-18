@@ -175,3 +175,111 @@ class TestEscalationNeverRaises:
             proxy._record(_denied_resolved_ip_event())
         finally:
             proxy.stop()
+
+
+class TestResolvedIpBannerCap:
+
+    def test_banner_flood_capped_with_suppression_notice(
+            self, reset_proxy, monkeypatch):
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            cap = proxy_mod._LIVE_RESOLVED_IP_BANNER_CAP
+            # A DNS-rebinding target can mint unlimited distinct
+            # resolved IPs — each attacker-paced. Well past the cap:
+            for i in range(cap + 20):
+                proxy._record(
+                    _denied_resolved_ip_event(resolved_ip=f"10.9.0.{i}"))
+            # cap per-IP banners + exactly one suppression notice.
+            assert len(writes) == cap + 1
+            assert "suppressed" in writes[-1]
+            # Dedup-set memory is bounded at the cap too.
+            assert len(proxy._live_resolved_ip_escalated) == cap
+        finally:
+            proxy.stop()
+
+    def test_suppression_notice_fires_once(self, reset_proxy, monkeypatch):
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            cap = proxy_mod._LIVE_RESOLVED_IP_BANNER_CAP
+            for i in range(cap + 1):
+                proxy._record(
+                    _denied_resolved_ip_event(resolved_ip=f"10.9.1.{i}"))
+            n = len(writes)
+            proxy._record(
+                _denied_resolved_ip_event(resolved_ip="10.9.2.99"))
+            assert len(writes) == n, "no further alerts past the notice"
+        finally:
+            proxy.stop()
+
+
+class TestBannerSanitisation:
+
+    def test_hostname_control_chars_escaped_in_banner(
+            self, reset_proxy, monkeypatch):
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            # The hostname is attacker-controlled: a crafted name could
+            # otherwise inject terminal escape sequences (ESC is ASCII,
+            # so ascii/replace encoding alone does not strip it).
+            proxy._record(_denied_resolved_ip_event(
+                host="evil\x1b]0;pwned\x07.example"))
+            assert len(writes) == 1
+            assert "\x1b" not in writes[0]
+            assert "\x07" not in writes[0]
+            assert "\\x1b" in writes[0]
+        finally:
+            proxy.stop()
+
+    def test_oversized_hostname_truncated_in_banner(
+            self, reset_proxy, monkeypatch):
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            proxy._record(_denied_resolved_ip_event(
+                host="a" * 10_000 + ".example"))
+            assert len(writes) == 1
+            assert len(writes[0]) < 1_000
+            assert "chars]" in writes[0], "explicit elision marker"
+        finally:
+            proxy.stop()
+
+
+class TestEscalationKillSwitchParsing:
+
+    def test_zero_value_does_not_disable(self, reset_proxy, monkeypatch):
+        # =0 must mean "not disabled" — a bare bool(value) would treat
+        # it as disabling a security notification.
+        monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "0")
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            proxy._record(_denied_resolved_ip_event())
+            assert len(writes) == 1
+        finally:
+            proxy.stop()
+
+    @pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+    def test_truthy_values_disable(self, reset_proxy, monkeypatch, value):
+        monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", value)
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            proxy._record(_denied_resolved_ip_event())
+            assert writes == []
+        finally:
+            proxy.stop()

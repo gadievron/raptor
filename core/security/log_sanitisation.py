@@ -53,6 +53,24 @@ def escape_nonprintable(s: str, *, preserve_newlines: bool = False) -> str:
     )
 
 
+def sanitise_for_terminal(s: str, *, max_len: int = 256) -> str:
+    """Escape non-printables AND bound length — for attacker-influenced
+    strings interpolated into operator-facing terminal output (e.g. the
+    sandbox live-escalation stderr banners).
+
+    `escape_nonprintable` alone is not enough there: printable content
+    is unbounded (a hostile target can pick a 100 KB "hostname" or path
+    to flood the operator's terminal, or to stuff instructions into a
+    banner an LLM harness may later read), so the escaped string is
+    truncated at `max_len` with an explicit elision marker rather than
+    silently.
+    """
+    out = escape_nonprintable(s)
+    if len(out) > max_len:
+        out = out[:max_len] + f"...[+{len(out) - max_len} chars]"
+    return out
+
+
 def _escape_char(c: str) -> str:
     o = ord(c)
     if o <= 0xFF:

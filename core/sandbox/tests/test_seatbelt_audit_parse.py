@@ -461,3 +461,35 @@ def test_credential_path_escalation_survives_stderr_write_failure(
     # test_escalation_never_raises_out_of_hot_path.
     streamer._maybe_escalate_credential_path(record)
     assert record["path"] in streamer._escalated_paths
+
+
+def test_credential_path_banner_sanitises_control_chars(
+        tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    # The path is attacker-controlled (the target chose what to touch);
+    # ESC/BEL are ASCII so ascii/replace encoding alone keeps them.
+    record = {"type": "read",
+              "path": "/Users/x/.ssh/\x1b]0;pwned\x07id_rsa",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1
+    assert b"\x1b" not in writes[0][1]
+    assert b"\x07" not in writes[0][1]
+    assert b"\\x1b" in writes[0][1]
+
+
+def test_credential_path_escalation_tolerates_missing_target_pid(
+        tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    # never-raise-out-of-the-hot-path: a record shape without
+    # target_pid must not KeyError the read loop.
+    record = {"type": "read", "path": "/Users/x/.ssh/id_rsa"}
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1
+    assert b"pid=-1" in writes[0][1]

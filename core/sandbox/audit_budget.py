@@ -77,10 +77,21 @@ from typing import Callable, Dict, Optional, Tuple
 # would silently disable escalation on only one platform.
 #
 # Escalation is print-only (no enforcement change, no auto-kill), so
-# it defaults to on; set to disable for scripted/CI/batch sandboxed
-# jobs that don't want the extra stderr noise.
+# it defaults to on; set to 1/true/yes/on to disable for scripted/CI/
+# batch sandboxed jobs that don't want the extra stderr noise.
+#
+# Truthy-set parsing (mirrors core.config.env_flag's _ENV_FLAG_TRUTHY;
+# inlined rather than imported so this module stays a leaf for the
+# tracer subprocess): a bare bool(value) would treat
+# RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED=0 as "disabled" — an operator
+# writing =0 to mean "not disabled" would silently turn a security
+# notification off.
+_LIVE_ESCALATION_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
 def live_escalation_disabled() -> bool:
-    return bool(os.environ.get("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED"))
+    value = os.environ.get("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "")
+    return value.strip().lower() in _LIVE_ESCALATION_TRUTHY
 
 
 # ---------------------------------------------------------------------
